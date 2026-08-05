@@ -68,13 +68,24 @@ fun AssistantSettingsPage(
     var saving by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // A failed load must never present an editable soul.md with a working Save: an empty editor
+    // over a failed fetch would overwrite the real file with "". null from load() = not loaded.
+    var loadFailed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
+    suspend fun runLoad() {
+        loading = true
+        loadFailed = false
         val pair = load()
-        paName = pair?.first ?: ""
-        soul = pair?.second ?: ""
+        if (pair == null) {
+            loadFailed = true
+        } else {
+            paName = pair.first
+            soul = pair.second
+        }
         loading = false
     }
+
+    LaunchedEffect(Unit) { runLoad() }
 
     BackHandler { onBack() }
 
@@ -95,6 +106,21 @@ fun AssistantSettingsPage(
         if (loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = cs.primary)
+            }
+        } else if (loadFailed) {
+            // Error state, NOT an empty editor — Save is not composed here at all, so a failed
+            // fetch cannot be turned into an overwrite of the real soul.md.
+            Column(
+                Modifier.fillMaxSize().padding(padding).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Couldn't load the assistant settings.", color = cs.error, fontSize = 14.sp)
+                SettingsCaption("soul.md was not loaded, so it can't be saved from here yet.")
+                Button(
+                    onClick = { scope.launch { runLoad() } },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
+                ) { Text("Retry", color = cs.onPrimary) }
             }
         } else {
             Column(

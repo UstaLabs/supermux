@@ -1348,10 +1348,24 @@ class BrokerApi(
         return out
     }
 
-    /** GET /settings/soul → soul.md text ("" on any failure — never throws). */
+    /**
+     * GET /settings/soul → soul.md text.
+     * Empty string is a legitimate empty soul; non-2xx throws [CancellationException]
+     * (same SKIE-safe contract as [decode]) so callers can distinguish fetch-failure from
+     * an intentionally blank soul — critical so a failed load never becomes a blank Save.
+     */
     suspend fun getSoul(): String {
         val resp = http.get("$httpBase/settings/soul") { header("Authorization", bearerHeader()) }
-        return if (resp.status.isSuccess()) resp.bodyAsText() else ""
+        if (resp.status.isSuccess()) return resp.bodyAsText()
+        val text = try {
+            resp.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Throwable) {
+            ""
+        }
+        println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+        throw CancellationException("BrokerApi request unavailable")
     }
 
     /** PUT /settings/soul (text/plain body) → true on success. */
@@ -1533,11 +1547,11 @@ class BrokerApi(
             setBody(json.encodeToString(config))
         })
 
-    /** POST /settings/curator/run-now */
+    /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
     suspend fun runCuratorNow() {
-        http.post("$httpBase/settings/curator/run-now") {
+        ensureMutationSuccess(http.post("$httpBase/settings/curator/run-now") {
             header("Authorization", bearerHeader())
-        }
+        })
     }
 
     /** GET /usage → raw JSON string */
@@ -1674,11 +1688,11 @@ class BrokerApi(
     suspend fun setProxyPublic(domain: String, isPublic: Boolean) =
         patchJson("$httpBase/proxies/${urlEncode(domain)}", SetProxyPublicBody(isPublic))
 
-    /** DELETE /proxies/<domain> */
+    /** DELETE /proxies/<domain> — non-2xx throws (same contract as [revokeDevice]/postJson). */
     suspend fun removeProxy(domain: String) {
-        http.delete("$httpBase/proxies/${urlEncode(domain)}") {
+        ensureMutationSuccess(http.delete("$httpBase/proxies/${urlEncode(domain)}") {
             header("Authorization", bearerHeader())
-        }
+        })
     }
 
     /**

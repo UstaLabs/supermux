@@ -18,10 +18,14 @@ import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
+import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.BrokerClient
 import dev.supermux.net.ChunkSource
+import dev.supermux.net.CreateProxyResponse
+import dev.supermux.net.CuratorConfig
+import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
@@ -624,6 +628,128 @@ class DesktopAppState(
      *  any failure. */
     suspend fun proxies(): List<ProxyDto> =
         runApi("proxies") { api.proxies() } ?: emptyList()
+
+    // ── Proxies management (desktop-parity Task 5) ─────────────────────────────────────────────
+    // Session-links menu only *reads* proxies; the Settings Proxies section creates/toggles/removes.
+    // [proxiesForSettings] returns null on failure so the UI can distinguish Error from Empty
+    // (same contract as [devices]).
+
+    /**
+     * GET /proxies for the Settings Proxies section.
+     * `null` = transport/decode failure; empty list = none configured.
+     */
+    suspend fun proxiesForSettings(): List<ProxyDto>? =
+        runApi("proxiesForSettings") { api.proxies() }
+
+    /** POST /proxies {sessionName, port, domain?} — null on failure. */
+    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse? =
+        runApi("createProxy") { api.createProxy(sessionName, port, domain) }
+
+    /** PATCH /proxies/<domain> {isPublic}. False on failure. */
+    suspend fun setProxyPublic(domain: String, isPublic: Boolean): Boolean =
+        runApi("setProxyPublic") { api.setProxyPublic(domain, isPublic); true } ?: false
+
+    /** DELETE /proxies/<domain>. False on failure. */
+    suspend fun removeProxy(domain: String): Boolean =
+        runApi("removeProxy") { api.removeProxy(domain); true } ?: false
+
+    // ── Assistant identity + curator (desktop-parity Task 5) ───────────────────────────────────
+    // Backs the Assistant section: PA name + soul.md + nightly curator. Mirrors AppViewModel
+    // assistantLoad/assistantSave/curatorSettings/saveCurator/runCuratorNow.
+
+    /**
+     * Load PA name + soul.md together.
+     * `null` = config **or** soul load failed (do not enter Ready — empty soul is only valid
+     * when the GET succeeded). Pair of empty strings is a legitimate empty assistant.
+     */
+    suspend fun assistantLoad(): Pair<String, String>? {
+        val cfg = runApi("assistantLoadConfig") { api.getConfig() } ?: return null
+        val soul = runApi("assistantLoadSoul") { api.getSoul() } ?: return null
+        return cfg.paName to soul
+    }
+
+    /**
+     * PUT /settings/config {paName} then PUT /settings/soul.
+     * Returns null on full success; a human-readable error when either write fails
+     * (config failure is reported before soul is attempted).
+     */
+    suspend fun assistantSave(paName: String, soul: String): String? {
+        val configOk = runApi("assistantSaveConfig") { api.saveConfig(paName = paName); true } ?: false
+        if (!configOk) return "Couldn't save PA name — check connection and try again"
+        val soulOk = runApi("assistantSaveSoul") { api.putSoul(soul) } ?: false
+        if (!soulOk) return "Couldn't save soul.md — check connection and try again"
+        return null
+    }
+
+    /** GET /settings/curator. Null on failure. */
+    suspend fun curatorSettings(): CuratorSettingsResponse? =
+        runApi("curatorSettings") { api.getCuratorSettings() }
+
+    /** PUT /settings/curator. Null on failure. */
+    suspend fun saveCurator(
+        enabled: Boolean,
+        hour: Int,
+        minute: Int,
+        agent: String = "claude",
+        model: String? = null,
+        reasoningLevel: String? = null,
+    ): CuratorSettingsResponse? =
+        runApi("saveCurator") {
+            api.saveCuratorSettings(
+                CuratorConfig(
+                    enabled = enabled,
+                    hour = hour,
+                    minute = minute,
+                    agent = agent,
+                    model = model,
+                    reasoningLevel = reasoningLevel,
+                ),
+            )
+        }
+
+    /** POST /settings/curator/run-now. False on failure. */
+    suspend fun runCuratorNow(): Boolean =
+        runApi("runCuratorNow") { api.runCuratorNow(); true } ?: false
+
+    // ── Voice settings (desktop-parity Task 5) ─────────────────────────────────────────────────
+    // STT / TTS / cleanup engines + glossary. MessageTts already reads voiceTtsEngine via
+    // getConfig() (init above); Dictation posts multipart audio. Saving config here integrates —
+    // do not reimplement speak/transcribe in the settings UI.
+
+    /** GET /settings/config. Null on failure. */
+    suspend fun appConfig(): AppConfigDto? =
+        runApi("appConfig") { api.getConfig() }
+
+    /** Persist STT engine (null = broker default). False on failure. */
+    suspend fun saveVoiceStt(engine: String?): Boolean =
+        runApi("saveVoiceStt") { api.saveConfig(voiceSttEngine = engine); true } ?: false
+
+    /** Persist read-aloud engine (platform | codex). False on failure. */
+    suspend fun saveVoiceTts(engine: String?): Boolean =
+        runApi("saveVoiceTts") { api.saveConfig(voiceTtsEngine = engine); true } ?: false
+
+    /** Persist cleanup engine and/or model. False on failure. */
+    suspend fun saveVoiceCleanup(engine: String?, model: String?): Boolean =
+        runApi("saveVoiceCleanup") {
+            api.saveConfig(voiceCleanupEngine = engine, voiceCleanupModel = model)
+            true
+        } ?: false
+
+    /**
+     * GET /config/voice-glossary.
+     * `null` = transport/decode failure (UI Error + Retry); empty list = no terms yet.
+     * Never collapse failure into empty — adding a term after a failed load would overwrite
+     * the real glossary.
+     */
+    suspend fun fetchGlossary(): List<String>? =
+        runApi("fetchGlossary") { api.fetchGlossary() }
+
+    /**
+     * PUT /config/voice-glossary. Returns the persisted list, or null on failure so the UI can
+     * revert (Android VoiceGlossaryPage parity).
+     */
+    suspend fun updateGlossary(terms: List<String>): List<String>? =
+        runApi("updateGlossary") { api.updateGlossary(terms) }
 
     // ── Finish flow (M4b; mirrors AppViewModel.finish/finishReadiness/verifySuggest/verifySave) ──
     // The FinishDialog drives the whole job lifecycle off the [finishJobs] StateFlow; [finish] only

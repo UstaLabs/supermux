@@ -14,12 +14,28 @@ struct AssistantSettingsView: View {
     @State private var saving = false
     @State private var saved = false
     @State private var error: String?
+    /// A failed load must never present an editable soul.md with a working Save — see `load()`.
+    @State private var loadFailed = false
 
     var body: some View {
         Group {
             if loading {
                 ProgressView("Loading…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if loadFailed {
+                // Error state, NOT an empty editor: the form (and its Save) is not built at all, so
+                // a failed fetch cannot be turned into an overwrite of the real soul.md.
+                VStack(spacing: 12) {
+                    Text("Couldn't load the assistant settings.")
+                        .foregroundStyle(.red)
+                    Text("soul.md was not loaded, so it can't be saved from here yet.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") { Task { await load() } }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 form
             }
@@ -78,11 +94,18 @@ struct AssistantSettingsView: View {
 
     private func load() async {
         loading = true
+        loadFailed = false
         defer { loading = false }
         async let configResult = broker.config()
-        async let soulResult = broker.getSoul()
+        // `loadSoul()` (not `getSoul()`) so a transport failure stays distinguishable from an empty
+        // soul.md. Flattening it to "" would show a blank editor whose Save overwrites the real file.
+        async let soulResult = broker.loadSoul()
         let (cfg, soulText) = await (configResult, soulResult)
-        paName = cfg?.paName ?? ""
+        guard let cfg, let soulText else {
+            loadFailed = true
+            return
+        }
+        paName = cfg.paName
         soul = soulText
         error = nil
     }

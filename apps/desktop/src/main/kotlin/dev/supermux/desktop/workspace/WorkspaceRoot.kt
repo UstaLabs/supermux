@@ -74,13 +74,20 @@ import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Sections of the Settings hub (left rail): Agents (Task 1), Devices (Task 2), System (Task 3),
- *  Git hosting (Task 4); Editor/LSP and Personal Assistants are pre-existing folded screens. */
+/**
+ * Sections of the Settings hub (left rail), in rail order: Agents (Task 1), Devices (Task 2),
+ * System (Task 3), Git hosting (Task 4), Proxies / Identity / Voice (Task 5). Editor/LSP and
+ * Personal Assistants are the pre-existing screens folded into the hub.
+ */
 enum class SettingsSection(val label: String) {
     Agents("Agents"),
     Devices("Devices"),
     System("System"),
     GitHosting("Git hosting"),
+    Proxies("Proxies"),
+    /** Identity (PA name + soul.md + curator) — distinct from [PersonalAssistants] fleet. */
+    Assistant("Identity"),
+    Voice("Voice"),
     EditorLsp("Editor / LSP"),
     PersonalAssistants("Personal assistants"),
 }
@@ -822,7 +829,16 @@ fun WorkspaceRoot(
                     SettingsSection.Agents, SettingsSection.Devices -> "settings_overlay"
                     SettingsSection.Agents, SettingsSection.GitHosting -> "settings_overlay"
                     SettingsSection.Agents, SettingsSection.Devices, SettingsSection.System -> "settings_overlay"
+                    SettingsSection.Agents,
+                    SettingsSection.Devices,
+                    SettingsSection.Proxies,
+                    SettingsSection.Assistant,
+                    SettingsSection.Voice,
+                    -> "settings_overlay"
                 }
+                // Escape is handled inside SettingsHub (dirty-soul discard confirm). The outer
+                // box only owns focus so keys reach the hub; it does not close unconditionally.
+                var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -831,7 +847,7 @@ fun WorkspaceRoot(
                         .focusable()
                         .onPreviewKeyEvent { e ->
                             if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.settingsOpen = false
+                                settingsTryClose?.invoke() ?: run { ui.settingsOpen = false }
                                 true
                             } else {
                                 false
@@ -846,6 +862,7 @@ fun WorkspaceRoot(
                                     section = ui.settingsSection,
                                     onSectionChange = { ui.settingsSection = it },
                                     onBack = { ui.settingsOpen = false },
+                                    onRegisterCloseHandler = { settingsTryClose = it },
                                     agentStatuses = { hostApp.agentStatuses() },
                                     agentStartLogin = { hostApp.startAgentLogin(it) },
                                     agentPollLogin = { hostApp.agentLoginState(it) },
@@ -865,6 +882,35 @@ fun WorkspaceRoot(
                                     checkUpdate = { hostApp.checkUpdate() },
                                     runUpdate = { hostApp.runUpdate() },
                                     restartBroker = { hostApp.restartBroker() }, // suspend→Boolean
+                                    proxiesLoad = { hostApp.proxiesForSettings() },
+                                    proxySessionNames = { hostApp.sessions.value.map { it.name } },
+                                    proxyCreate = { session, port, domain ->
+                                        hostApp.createProxy(session, port, domain)
+                                    },
+                                    proxySetPublic = { domain, isPublic ->
+                                        hostApp.setProxyPublic(domain, isPublic)
+                                    },
+                                    proxyRemove = { domain -> hostApp.removeProxy(domain) },
+                                    assistantLoad = { hostApp.assistantLoad() },
+                                    assistantSave = { paName, soul -> hostApp.assistantSave(paName, soul) },
+                                    curatorLoad = { hostApp.curatorSettings() },
+                                    curatorSave = { enabled, hour, minute, agent, model, reasoning ->
+                                        hostApp.saveCurator(enabled, hour, minute, agent, model, reasoning)
+                                    },
+                                    curatorRunNow = { hostApp.runCuratorNow() },
+                                    curatorLoadModels = { agent -> hostApp.launcherModels(agent) },
+                                    curatorLoadReasoning = { agent, model ->
+                                        hostApp.launcherReasoning(agent, model)
+                                    },
+                                    voiceLoadConfig = { hostApp.appConfig() },
+                                    voiceLoadModels = { family -> hostApp.launcherModels(family) },
+                                    voiceSaveStt = { engine -> hostApp.saveVoiceStt(engine) },
+                                    voiceSaveTts = { engine -> hostApp.saveVoiceTts(engine) },
+                                    voiceSaveCleanup = { engine, model ->
+                                        hostApp.saveVoiceCleanup(engine, model)
+                                    },
+                                    glossaryLoad = { hostApp.fetchGlossary() },
+                                    glossarySave = { terms -> hostApp.updateGlossary(terms) },
                                     lspLoad = { hostApp.lspLoad() },
                                     lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
                                     lspInstall = { id -> hostApp.lspInstall(id) },
