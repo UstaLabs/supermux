@@ -462,8 +462,27 @@ sealed interface ClientFrame {
      *  NO default — kotlinx omits a property that equals its default, and the broker rejects a
      *  frame with a MISSING `session`; a null session (on the list) MUST serialize as
      *  `"session":null`. */
+    /**
+     * Which chat(s) this device is looking at, so the broker can suppress their
+     * pushes.
+     *
+     * [session] deliberately has NO default — the broker rejects a frame without
+     * it, and a null session (sitting on the list) must serialize as
+     * `"session":null` rather than vanish.
+     *
+     * [sessions] is the multi-chat form: a client that shows several chats at
+     * once (the desktop workspace layout) sends the whole visible set here, and
+     * the broker replaces its set atomically. Senders should ALSO fill [session]
+     * with one of them — an older broker ignores [sessions] and still gets
+     * correct single-chat behaviour. Bare `Viewing(s, true)` always means
+     * "viewing exactly s", so single-session clients need no change.
+     */
     @Serializable @SerialName("viewing")
-    data class Viewing(val session: String?, val visible: Boolean) : ClientFrame
+    data class Viewing(
+        val session: String?,
+        val visible: Boolean,
+        val sessions: List<String>? = null,
+    ) : ClientFrame
 
     @Serializable @SerialName("send")
     data class Send(

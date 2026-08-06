@@ -101,17 +101,32 @@ import java.time.Instant
 /**
  * The Viewing frames to send for the currently visible chat views (spec §11).
  *
- * Before workspaces there was exactly one open chat, so one frame was enough.
- * A workspace can show two chats at once, so the broker gets one frame per
- * visible chat SESSION — never a workspace id, and never a chat that is sitting
- * in an inactive tab.
+ * Before workspaces there was exactly one open chat. A workspace can show two at
+ * once, so the whole visible set goes out in ONE frame via [ClientFrame.Viewing.sessions]
+ * — never a workspace id, and never a chat sitting in an inactive tab.
  *
- * With nothing visible, send the single null-session frame the list view sends,
- * so the broker clears this device's viewing state instead of keeping a stale one.
+ * One frame, not one per chat: bare `Viewing(s, true)` means "viewing exactly s"
+ * and REPLACES the broker's set, because every other client switches chats that
+ * way. Sending two such frames would leave only the last one. `session` is still
+ * filled with the first id so an older broker that ignores `sessions` degrades to
+ * correct single-chat behaviour instead of nothing.
+ *
+ * With nothing visible, send the null-session frame the list view sends, so the
+ * broker clears this device's state instead of keeping a stale one.
  */
-fun viewingFramesFor(visibleChatSessionIds: List<String>): List<ClientFrame.Viewing> =
-    if (visibleChatSessionIds.isEmpty()) listOf(ClientFrame.Viewing(null, false))
-    else visibleChatSessionIds.map { ClientFrame.Viewing(it, true) }
+fun viewingFramesFor(visibleChatSessionIds: List<String>): List<ClientFrame.Viewing> = when {
+    visibleChatSessionIds.isEmpty() -> listOf(ClientFrame.Viewing(null, false))
+    else -> listOf(
+        ClientFrame.Viewing(
+            session = visibleChatSessionIds.first(),
+            visible = true,
+            // Only when there really are several. One visible chat — the case
+            // every client and every existing test already covers — puts the
+            // exact same bytes on the wire as before workspaces existed.
+            sessions = visibleChatSessionIds.takeIf { it.size > 1 },
+        ),
+    )
+}
 
 /**
  * @param connectOnInit when false (tests), the constructor does NOT collect frames, launch the
@@ -618,30 +633,15 @@ class DesktopAppState(
     private fun sendViewingIfChanged() {
         val next = currentViewingFrames()
         if (lastSentViewing == next) return
-        val prev = lastSentViewing
         lastSentViewing = next
         stateScope.launch {
-            // Diff against the last sent list. The broker's ViewingTracker ADDs on
-            // Viewing(s,true) and REMOVEs on Viewing(s,false), so a switch is a remove
-            // of the old id plus an add of the new one, and two concurrent chats are
-            // two adds. Spec §11.
-            val prevIds = prev?.mapNotNull { f -> f.session?.takeIf { f.visible } }?.toSet() ?: emptySet()
-            val nextIds = next.mapNotNull { f -> f.session?.takeIf { f.visible } }.toSet()
-            val nextOnList = next.any { it.session == null && it.visible }
-            val nextBackground = next.any { it.session == null && !it.visible }
-            for (id in prevIds - nextIds) {
-                runApi("viewing remove") { sendFrame(ClientFrame.Viewing(id, false)) }
-            }
-            when {
-                nextBackground ->
-                    runApi("viewing send") { sendFrame(ClientFrame.Viewing(null, false)) }
-                nextOnList ->
-                    runApi("viewing send") { sendFrame(ClientFrame.Viewing(null, true)) }
-                else -> {
-                    for (id in nextIds - prevIds) {
-                        runApi("viewing send") { sendFrame(ClientFrame.Viewing(id, true)) }
-                    }
-                }
+            // No diffing: each frame carries the COMPLETE current state, because
+            // `Viewing(s, true)` replaces the broker's set and the multi-chat form
+            // sets it atomically. Sending the whole truth every time is also what
+            // makes the 60s heartbeat and the reconnect re-assert correct by
+            // construction. Spec §11.
+            for (frame in next) {
+                runApi("viewing send") { sendFrame(frame) }
             }
         }
     }

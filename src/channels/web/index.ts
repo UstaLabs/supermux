@@ -957,9 +957,22 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "viewing") {
-      const session = typeof frame.session === "string" || frame.session === null ? frame.session : undefined
       const visible = typeof frame.visible === "boolean" ? frame.visible : undefined
-      if (session === undefined || visible === undefined) {
+      if (visible === undefined) {
+        log.warn("ws.viewing.bad_frame", { device: ws.data.deviceName })
+        return
+      }
+      // Multi-chat form: a client showing several chats at once (the desktop
+      // workspace layout) sends the whole set in ONE frame. Single-session
+      // clients keep sending `session` and keep replace-on-true semantics.
+      if (Array.isArray(frame.sessions)) {
+        const many = frame.sessions.filter((s: unknown): s is string => typeof s === "string" && s.length > 0)
+        this.opts.viewingTracker?.setSessions(ws.data.deviceName, many, visible)
+        if (visible) for (const s of many) this.opts.markRead?.(s)
+        return
+      }
+      const session = typeof frame.session === "string" || frame.session === null ? frame.session : undefined
+      if (session === undefined) {
         log.warn("ws.viewing.bad_frame", { device: ws.data.deviceName })
         return
       }

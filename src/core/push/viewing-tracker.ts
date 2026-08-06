@@ -27,16 +27,15 @@ export class ViewingTracker {
    *
    * - `session=null, visible=false` → clear (background / nothing open)
    * - `session=null, visible=true`  → on the list (suppress all, exact none)
-   * - `session=S, visible=true`     → ADD S to the set
+   * - `session=S, visible=true`     → the device is viewing exactly S (REPLACE)
    * - `session=S, visible=false`    → REMOVE S from the set
    *
-   * Classic single-session clients that switch s1→s2 by only sending
-   * Viewing(s2,true) would leave s1 under pure ADD. The desktop client rebuilds
-   * by sending Viewing(null,false) first, then one Viewing(s,true) per visible
-   * chat — so a switch is clear+add, and two concurrent chats are clear+add+add.
-   * Other clients that still REPLACE-by-overwrite should send a clear (or an
-   * explicit false for the previous session) before the new true; pure true
-   * without a clear accumulates (the multi-session model).
+   * Replace-on-true is deliberate and load-bearing: every shipped client
+   * switches chats by sending only `Viewing(s2, true)`.
+   *
+   * A client viewing several chats at once (the desktop workspace layout) sends
+   * them together — `{"type":"viewing","sessions":[...],"visible":true}` — which
+   * routes to [setSessions] and sets the whole set atomically.
    */
   update(device: string, partial: { session: string | null; visible: boolean }): void {
     const now = Date.now()
@@ -49,13 +48,28 @@ export class ViewingTracker {
       })
       return
     }
+    if (partial.visible) {
+      // REPLACE, not add. Every shipped client (web useViewing, iOS, Android,
+      // macOS) switches chats by sending only Viewing(s2, true) and relies on it
+      // overwriting s1. Under add-semantics s1 would stay in the set forever and
+      // its push notifications would be silently suppressed on that device for
+      // the rest of the session — a regression invisible until someone notices
+      // they stopped being notified about a chat they once opened.
+      //
+      // A client that really is viewing several chats at once sends the whole
+      // set in one frame instead; see setSessions and the `sessions` field on
+      // the viewing frame.
+      this.states.set(device, {
+        sessions: new Set([partial.session]),
+        onList: false,
+        visible: true,
+        updatedAt: now,
+      })
+      return
+    }
     const cur = this.states.get(device)
     const sessions = new Set(cur?.sessions ?? [])
-    if (partial.visible) {
-      sessions.add(partial.session)
-    } else {
-      sessions.delete(partial.session)
-    }
+    sessions.delete(partial.session)
     this.states.set(device, {
       sessions,
       onList: false,
