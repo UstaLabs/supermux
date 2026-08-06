@@ -10,13 +10,9 @@
 //     GitBadgeMenu awaits the op's GitOpResult directly and shows a small transient inline label next
 //     to the badge (cleared on the next menu-open). A proper snackbar host is a documented M4-polish
 //     follow-up.
-//   • Management-nav rows (Settings/Usage/Devices/Proxies/Archived): those screens don't exist on
-//     desktop yet (Settings/Devices/Proxies/Appearance later) — OMITTED here rather than adding
-//     dead nav. Usage (M4f) and Archived (M4e) now DO exist as desktop overlays, so those two rows
-//     are wired: the overflow's "Usage" item + the SAME File ▸ "Archived…" menu item's
-//     ui.openArchived() (Archived isn't itself an overflow row — File-menu only, matching how it
-//     shipped in M4e). The overflow otherwise keeps the session-scoped Rename/Mute/Kill (parity
-//     with the session list's right-click menu).
+//   • Management nav: overflow "Usage" → openUsage(); File ▸ Archived… → openArchived();
+//     Settings hub sections via File menu / sidebar footer. Overflow keeps session-scoped
+//     Rename/Mute/Kill (parity with the session list right-click menu).
 //   • Link opening: Android uses LocalUriHandler.openUri; desktop opens via the shared
 //     ui.openInBrowser (java.awt.Desktop.browse on a daemon thread) — injected as onOpenUrl so tests
 //     can capture the URL without spawning a browser.

@@ -44,8 +44,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LightMode
@@ -921,7 +921,7 @@ private fun SidebarFooter(
             horizontalArrangement = Arrangement.End,
         ) {
             FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
-            FooterIcon(Icons.Filled.AutoAwesome, "Usage", "sidebar_footer_usage", onUsage)
+            FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
             FooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
             FooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
         }

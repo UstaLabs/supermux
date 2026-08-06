@@ -50,7 +50,7 @@ class WorkspaceUiStateTest {
     // stale one surfacing when the other closes. openLauncher()/openArchived() enforce exclusivity.
 
     @Test fun openLauncherClosesTheArchivedOverlay() {
-        val ui = WorkspaceUiState().apply { archivedOpen = true }
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Archived) }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
@@ -75,14 +75,14 @@ class WorkspaceUiStateTest {
         assertFalse(ui.archivedOpen)
         assertTrue(ui.overlayOpen)
 
-        val ui2 = WorkspaceUiState().apply { archivedOpen = true }
+        val ui2 = WorkspaceUiState().apply { navigate(DesktopRoute.Archived) }
         ui2.openUsage()
         assertTrue(ui2.usageOpen)
         assertFalse(ui2.archivedOpen)
     }
 
     @Test fun openLauncherClosesTheUsageOverlay() {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Usage) }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.usageOpen)
@@ -90,7 +90,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openArchivedClosesTheUsageOverlay() {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Usage) }
         ui.openArchived()
         assertTrue(ui.archivedOpen)
         assertFalse(ui.usageOpen)
@@ -100,9 +100,9 @@ class WorkspaceUiStateTest {
     @Test fun openPersonalAssistantsClosesEveryOtherOverlay() {
         val ui = WorkspaceUiState().apply {
             launcherOpen = true
-            archivedOpen = true
-            usageOpen = true
-            lspSettingsOpen = true
+            navigate(DesktopRoute.Archived)
+            navigate(DesktopRoute.Usage)
+            openLspSettings()
         }
         ui.openPersonalAssistants()
         assertTrue(ui.personalAssistantsOpen)
@@ -117,7 +117,7 @@ class WorkspaceUiStateTest {
 
     @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
         val ui = WorkspaceUiState().apply {
-            usageOpen = true
+            navigate(DesktopRoute.Usage)
             openLspSettings()
         }
         ui.openSettings(SettingsSection.Agents)
@@ -134,5 +134,45 @@ class WorkspaceUiStateTest {
         assertTrue(ui.settingsOpen)
         assertTrue(ui.lspSettingsOpen)
         assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
+    }
+
+    // ── Nav3 back stack is the source of truth ──────────────────────────────────────────────────
+
+    @Test fun backStackStartsAtHomeOnly() {
+        val ui = WorkspaceUiState()
+        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        assertEquals(DesktopRoute.Home, ui.currentRoute)
+        assertFalse(ui.overlayOpen)
+    }
+
+    @Test fun navigatePushesOverlayAboveHome() {
+        val ui = WorkspaceUiState()
+        ui.navigate(DesktopRoute.Settings(SettingsSection.Devices))
+        assertEquals(
+            listOf(DesktopRoute.Home, DesktopRoute.Settings(SettingsSection.Devices)),
+            ui.backStack.toList(),
+        )
+        assertTrue(ui.overlayOpen)
+        assertTrue(ui.settingsOpen)
+        assertEquals(SettingsSection.Devices, ui.settingsSection)
+    }
+
+    @Test fun goBackPopsToHome() {
+        val ui = WorkspaceUiState()
+        ui.navigate(DesktopRoute.Usage)
+        assertTrue(ui.goBack())
+        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        assertFalse(ui.goBack()) // already at Home
+        assertFalse(ui.usageOpen)
+    }
+
+    @Test fun navigateIsExclusiveSingleOverlay() {
+        val ui = WorkspaceUiState()
+        ui.navigate(DesktopRoute.Archived)
+        ui.navigate(DesktopRoute.Usage)
+        // Exclusive policy: stack is [Home, Usage], not [Home, Archived, Usage]
+        assertEquals(listOf(DesktopRoute.Home, DesktopRoute.Usage), ui.backStack.toList())
+        assertFalse(ui.archivedOpen)
+        assertTrue(ui.usageOpen)
     }
 }

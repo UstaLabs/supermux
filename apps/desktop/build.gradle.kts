@@ -31,6 +31,9 @@ dependencies {
     implementation(libs.jediterm.ui)
     implementation(libs.kcef) // M3 editor: embedded Chromium (JCEF) hosting the shared cm6 bundle (jogamp repo above)
     implementation(libs.zxing.core) // Plan 3 Task 3: pure-Java QR encoder for the first-run host wizard's pairing QR
+    // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub, Usage,
+    // Archived, AppUpdate). Workspace shell stays outside the stack so chat/editor/term keep state.
+    implementation(libs.jetbrains.navigation3.ui)
 
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
