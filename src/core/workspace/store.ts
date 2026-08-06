@@ -125,9 +125,17 @@ export class WorkspaceStore {
 
   // ── views ────────────────────────────────────────────────────────────────
 
+  /**
+   * Views in creation order.
+   *
+   * The tiebreak is rowid, not id: created_at has millisecond resolution, so two
+   * views added in the same millisecond would otherwise order by random UUID —
+   * and "the oldest chat view" is what picks a workspace's primary session.
+   * rowid is monotonic per insert, so insertion order is preserved exactly.
+   */
   listViews(workspaceId: string): ViewRecord[] {
     return (this.db
-      .query("SELECT * FROM views WHERE workspace_id = ? ORDER BY created_at ASC, id ASC")
+      .query("SELECT * FROM views WHERE workspace_id = ? ORDER BY created_at ASC, rowid ASC")
       .all(workspaceId) as ViewRow[]).map(rowToView)
   }
 

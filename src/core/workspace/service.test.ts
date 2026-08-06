@@ -44,7 +44,7 @@ test("addChatSession attaches a second session to an existing workspace", () => 
   const v = svc.addChatSession(w.id, "s2")
 
   // Order is created_at then id; same-ms inserts can reverse UUID order.
-  expect(store.chatSessionIds(w.id).sort()).toEqual(["s1", "s2"])
+  expect(store.chatSessionIds(w.id)).toEqual(["s1", "s2"])
   expect(v.kind).toBe("chat")
   const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's2'").get() as any
   expect(link.workspace_id).toBe(w.id)
@@ -129,7 +129,7 @@ test("closing the primary session's chat repoints the primary at the next chat",
   svc.addChatSession(w.id, "s2")
   // listViews orders by created_at then id; two views in the same ms can put s2 first.
   // Select the primary chat explicitly so the test asserts the behaviour, not UUID order.
-  const primaryView = store.listViews(w.id).find((v) => v.kind === "chat" && (v.state as { sessionId: string }).sessionId === "s1")!
+  const primaryView = store.listViews(w.id)[0]!
 
   await svc.closeView(primaryView.id)
 

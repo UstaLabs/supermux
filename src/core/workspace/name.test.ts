@@ -70,12 +70,8 @@ test("repointPrimarySession moves the pointer to the oldest remaining chat sessi
   const { db, ws } = store()
   seedSessions(db, "s1", "s2", "s3")
   const w = ws.create({ name: "n", workdir: "/w", primary_session_id: "s1" })
-  const v2 = ws.addView(w.id, { kind: "chat", state: { sessionId: "s2" } })
-  const v3 = ws.addView(w.id, { kind: "chat", state: { sessionId: "s3" } })
-  // Force distinct created_at so listViews order is insertion order even when
-  // both addView calls land in the same millisecond (ORDER BY created_at, id).
-  db.run("UPDATE views SET created_at = '2026-01-01T00:00:01.000Z' WHERE id = ?", [v2.id])
-  db.run("UPDATE views SET created_at = '2026-01-01T00:00:02.000Z' WHERE id = ?", [v3.id])
+  ws.addView(w.id, { kind: "chat", state: { sessionId: "s2" } })
+  ws.addView(w.id, { kind: "chat", state: { sessionId: "s3" } })
 
   expect(repointPrimarySession(ws, w.id)).toBe("s2")
   expect(ws.getById(w.id)!.primary_session_id).toBe("s2")
