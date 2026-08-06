@@ -3,6 +3,7 @@ package dev.supermux.workspace
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
+import dev.supermux.session.PA_GROUP_KEY
 import dev.supermux.session.formatWorkdir
 
 /**
@@ -43,18 +44,43 @@ fun workspaceActivity(w: WorkspaceDto, agentState: Map<String, AgentStatus>): Wo
  * Groups are ordered by label; rows inside a group follow sortOrder then id, so a
  * new message never reshuffles the list. Only an explicit user drag changes
  * sortOrder — the same rule SessionGrouping documents.
+ *
+ * [isPersonalAssistant] pins matching workspaces under a "Personal Assistants"
+ * group (same [PA_GROUP_KEY] as SessionGrouping). [WorkspaceDto] has no role, so
+ * the caller decides from the primary session's [dev.supermux.proto.SessionInfo.role].
+ * Default is nobody is a PA, so existing tests stay green.
  */
-fun groupWorkspaces(workspaces: List<WorkspaceDto>, home: String): List<WorkspaceGroup> {
+fun groupWorkspaces(
+    workspaces: List<WorkspaceDto>,
+    home: String,
+    isPersonalAssistant: (WorkspaceDto) -> Boolean = { false },
+): List<WorkspaceGroup> {
     val live = workspaces.filter { it.status != "archived" }
 
-    val byPath = LinkedHashMap<String, MutableList<WorkspaceDto>>()
-    for (w in live) byPath.getOrPut(w.repoRoot ?: w.workdir) { mutableListOf() }.add(w)
+    val pas = live.filter(isPersonalAssistant)
+    val rest = live.filterNot(isPersonalAssistant)
 
-    return byPath.map { (key, list) ->
+    val byPath = LinkedHashMap<String, MutableList<WorkspaceDto>>()
+    for (w in rest) byPath.getOrPut(w.repoRoot ?: w.workdir) { mutableListOf() }.add(w)
+
+    val projectGroups = byPath.map { (key, list) ->
         WorkspaceGroup(
             key = key,
             label = formatWorkdir(key, home),
             workspaces = list.sortedWith(compareBy({ it.sortOrder }, { it.id })),
         )
     }.sortedBy { it.label }
+
+    val result = ArrayList<WorkspaceGroup>(projectGroups.size + 1)
+    if (pas.isNotEmpty()) {
+        result.add(
+            WorkspaceGroup(
+                key = PA_GROUP_KEY,
+                label = "Personal Assistants",
+                workspaces = pas.sortedWith(compareBy({ it.sortOrder }, { it.id })),
+            ),
+        )
+    }
+    result.addAll(projectGroups)
+    return result
 }

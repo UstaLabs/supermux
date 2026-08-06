@@ -3,6 +3,7 @@ package dev.supermux.workspace
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.session.PA_GROUP_KEY
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
@@ -86,5 +87,36 @@ class WorkspaceGroupingTest {
     fun chatSessionIdsReadsTheStateObject() {
         val w = ws("w1", "a", "/p", views = listOf(chatView("v1", "s1"), chatView("v2", "s2")))
         assertEquals(listOf("s1", "s2"), w.chatSessionIds())
+    }
+
+    @Test
+    fun personalAssistantWorkspacesPinInTheirOwnGroup() {
+        // WorkspaceDto has no role — the caller looks up the primary session's role
+        // (SessionInfo.role == "personal_assistant") and passes isPersonalAssistant.
+        val pa = ws(
+            "w-pa", "My Assistant", "/home/u/.mux/personal",
+            views = listOf(chatView("v1", "s-pa", "w-pa")),
+        ).copy(primarySessionId = "s-pa")
+        val proj = ws("w1", "Fix Renaming", "/home/u/projects/app")
+
+        val groups = groupWorkspaces(listOf(pa, proj), home = "/home/u") { w ->
+            w.primarySessionId == "s-pa"
+        }
+
+        assertEquals(2, groups.size)
+        assertEquals(PA_GROUP_KEY, groups[0].key)
+        assertEquals("Personal Assistants", groups[0].label)
+        assertEquals(listOf("w-pa"), groups[0].workspaces.map { it.id })
+        assertEquals(listOf("w1"), groups[1].workspaces.map { it.id })
+    }
+
+    @Test
+    fun personalAssistantGroupIsAbsentWhenNobodyIsAPa() {
+        // Default isPersonalAssistant = { false }: existing callers and empty PA
+        // fleets stay on plain project groups only.
+        val proj = ws("w1", "a", "/home/u/projects/app")
+        val groups = groupWorkspaces(listOf(proj), home = "/home/u")
+        assertEquals(1, groups.size)
+        assertEquals(false, groups.any { it.key == PA_GROUP_KEY })
     }
 }
