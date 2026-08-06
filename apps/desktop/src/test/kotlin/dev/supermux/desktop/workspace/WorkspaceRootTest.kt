@@ -46,7 +46,7 @@ import kotlin.test.assertTrue
  * [WorkspaceUiState] + [WorkspaceStateStore]/[LauncherStore] pointed at a scratch temp file each,
  * so no test ever touches the developer's real ~/.config/supermux-desktop.
  *
- * Covers: onNewSession (rail `+`, and by extension Ctrl+N/the menu item, which just flip the SAME
+ * Covers: onNewSession (rail `+` → detail-pane launcher; Ctrl+N/menu flip the SAME
  * `ui.launcherOpen`) opens the overlay; a submit whose `createSessionWithFirstMessage` resolves
  * selects the session, sends the first message, and closes the overlay; a submit that resolves to
  * null (invalid workdir) keeps the overlay open and surfaces the inline error; Escape closes

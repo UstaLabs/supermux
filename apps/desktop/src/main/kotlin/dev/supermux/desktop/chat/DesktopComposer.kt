@@ -88,6 +88,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.session.AgentLogo
+import dev.supermux.desktop.session.hasAgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.upload.FileChunkSource
@@ -655,6 +657,8 @@ internal fun composerPickFiles(): List<File> {
  *   [onPickReasoning].
  * @param sessionModel the session's last-known model from [dev.supermux.proto.SessionInfo] — the
  *   fallback for the pill's current label until [models] loads (`models?.current ?: sessionModel`).
+ * @param sessionAgent the session's agent kind (`claude`/`codex`/…); drives the text-height brand
+ *   mark on the model pill (launcher parity).
  * @param onPickModel fired with the picked model id — the empty string for the "Default" (no
  *   explicit model) row. [ChatPanel] binds this to `app.switchModel(session.id, …)`.
  * @param onPickReasoning fired with the picked reasoning-level id. [ChatPanel] binds this to
@@ -691,6 +695,7 @@ fun DesktopComposer(
     models: ModelsResponse? = null,
     reasoning: ReasoningResponse? = null,
     sessionModel: String? = null,
+    sessionAgent: String? = null,
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
     /**
@@ -1023,6 +1028,7 @@ fun DesktopComposer(
                             label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
                             testTag = "composer-model-pill",
                             onClick = { modelMenu = true },
+                            agent = sessionAgent,
                         )
                         DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                             val selectedId = composerModelSelectedId(modelCurrent)
@@ -1289,10 +1295,15 @@ private fun ComposerChip(
 }
 
 /** A compact rounded chip (label + chevron) that opens a [DropdownMenu] — the desktop model/reasoning
- *  pill. Mirrors the launcher's `LauncherPill` look (surfaceContainer + outline + chevron) plus a
- *  hand hover cursor, so the in-composer pickers read the same as the launcher's. */
+ *  pill. Mirrors the launcher's agent/model chips (surfaceContainer + outline + chevron) plus a
+ *  hand hover cursor. Optional [agent] shows a text-height brand mark (launcher parity). */
 @Composable
-private fun ComposerPill(label: String, testTag: String, onClick: () -> Unit) {
+private fun ComposerPill(
+    label: String,
+    testTag: String,
+    onClick: () -> Unit,
+    agent: String? = null,
+) {
     val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
@@ -1304,8 +1315,12 @@ private fun ComposerPill(label: String, testTag: String, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        if (agent != null && hasAgentLogo(agent)) {
+            // Match 11.sp label line height — same rule as the launcher agent pill.
+            AgentLogo(agent, size = 12.dp)
+        }
         Text(label.take(20), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
     }

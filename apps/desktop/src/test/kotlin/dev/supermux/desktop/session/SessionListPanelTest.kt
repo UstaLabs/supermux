@@ -11,9 +11,9 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * The in-list "Start a new session" affordance ([NewSessionListRow]) rendered by [SessionListPanel]
- * — the desktop port of Android's `NewSessionListRow`. It must render + fire `onNewSession` in BOTH
- * the populated list and the empty (zero-session) state so session creation is always reachable.
+ * Sidebar "Start a new session" card ([NewSessionListRow]) + footer chrome rendered by
+ * [SessionListPanel]. Must render + fire `onNewSession` in BOTH the populated list and the empty
+ * (zero-session) state so session creation is always reachable.
  */
 @OptIn(ExperimentalTestApi::class)
 class SessionListPanelTest {
@@ -52,5 +52,23 @@ class SessionListPanelTest {
         onNodeWithTag("new_session_row").assertIsDisplayed()
         onNodeWithTag("new_session_row").performClick()
         assertTrue(fired, "clicking the new-session row should fire onNewSession in the empty state")
+    }
+
+    @Test fun footer_rendersAndFiresThemeToggle() = runComposeUiTest {
+        var toggled = false
+        setContent {
+            SessionListPanel(
+                sessions = emptyList(),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                onToggleTheme = { toggled = true },
+            )
+        }
+        onNodeWithTag("sidebar_footer").assertIsDisplayed()
+        // Add project was removed — new session lives only in the header card.
+        onNodeWithTag("sidebar_add_project").assertDoesNotExist()
+        onNodeWithTag("sidebar_footer_theme").performClick()
+        assertTrue(toggled)
     }
 }

@@ -239,7 +239,7 @@ fun mdAnnotated(
                     SpanStyleKind.CODE -> withStyle(
                         SpanStyle(
                             fontFamily = MonoFontFamily,
-                            fontSize = 13.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Normal,
                         )
                     ) { append(s.text) } // never linkify inside inline code
@@ -327,8 +327,8 @@ fun FencedCodeBlock(code: String) {
                 Text(
                     text = code,
                     fontFamily = MonoFontFamily,
-                    fontSize = 13.sp,
-                    lineHeight = 19.5.sp,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
                     color = cs.onSurface.copy(alpha = 0.9f),
                 )
             }

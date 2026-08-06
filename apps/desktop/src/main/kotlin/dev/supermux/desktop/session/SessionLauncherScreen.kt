@@ -6,8 +6,7 @@
 //     (worktree).
 //   - Android's media/document/camera pickers → ONE java.awt.FileDialog (multi-select) building
 //     [dev.supermux.desktop.upload.FileChunkSource]s; the MIME is guessed via Files.probeContentType.
-//   - Brand agent logos (Android drawables) → a letter tile ([AgentLetterTile]); desktop ships no
-//     per-agent brand assets.
+//   - Brand agent logos → [AgentLogo] (paths ported from Android/iOS agent artwork).
 //   - Voice dictation (M5-1): the SAME MicButton/DesktopDictationController the chat composer uses
 //     (dev.supermux.desktop.chat.Dictation.kt), wired to the id-less /transcribe path (no session
 //     yet). The Forge omnibox (clone/create via ProjectPicker, desktop-parity Task 4) is wired.
@@ -34,6 +33,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,6 +44,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -52,7 +53,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -217,6 +217,12 @@ internal fun filterProjects(projects: List<String>, home: String, query: String)
         path.lowercase().contains(q) || formatWorkdir(path, home).lowercase().contains(q)
     }
 }
+
+/**
+ * Max content width for the launcher form on desktop. Matches chat's reading column roughly so
+ * the detail pane doesn't leave a thin ribbon of fields on ultra-wide layouts.
+ */
+private val LAUNCHER_MAX_WIDTH = 720.dp
 
 /** One attachment staged before any session exists (uploaded post-spawn by the caller's onSubmit). */
 private data class StagedChip(val id: Long, val name: String, val source: ChunkSource, val mime: String)
@@ -596,25 +602,31 @@ fun SessionLauncherScreen(
         }
     }
 
-    Column(
+    // Cap reading width + center (horizontal + vertical). minHeight = viewport so short forms
+    // sit in the middle; when content is taller, the column scrolls normally.
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
-            .background(cs.surfaceContainerHigh)
+            .background(cs.surfaceContainerHigh),
+    ) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = maxHeight)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = Space.lg, vertical = Space.xl),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+    Column(
+        Modifier
+            .widthIn(max = LAUNCHER_MAX_WIDTH)
+            .fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(Space.lg),
     ) {
-        // ── Top bar: back + title ──
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("launcher_back")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = cs.onSurface, modifier = Modifier.size(18.dp))
-            }
-            Spacer(Modifier.width(Space.sm))
-            Text("New session", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            // Multi-host: which broker this session spawns on (defaults to the active host). Hidden
-            // with one host. Sits end-aligned in the top bar so it reads as scoping the whole flow.
-            if (hosts.size > 1) {
-                Spacer(Modifier.weight(1f))
+        // Multi-host: which broker this session spawns on (defaults to the active host).
+        if (hosts.size > 1) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 LauncherHostPicker(hosts = hosts, selected = selectedHost, enabled = !launcherRestoring, onSelect = onSelectHost)
             }
         }
@@ -770,7 +782,7 @@ fun SessionLauncherScreen(
                         agents.forEach { a ->
                             DropdownMenuItem(
                                 text = { Text(a.replaceFirstChar { it.uppercase() }) },
-                                leadingIcon = { AgentLetterTile(a, size = 20.dp) },
+                                leadingIcon = { AgentLogo(a, size = 14.dp) },
                                 modifier = Modifier.testTag("agent_$a"),
                                 onClick = {
                                     agent = a
@@ -913,7 +925,9 @@ fun SessionLauncherScreen(
             Spacer(Modifier.width(6.dp))
             Text(formatWorkdir(workdir, home), color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
         }
-    }
+    } // form column
+    } // scroll + vertical center shell
+    } // BoxWithConstraints
 
     if (showWorktreeDialog) {
         WorktreeDialog(
@@ -928,24 +942,6 @@ fun SessionLauncherScreen(
                 showWorktreeDialog = false
             },
             onDismiss = { showWorktreeDialog = false },
-        )
-    }
-}
-
-/** Per-agent letter tile (desktop ships no brand logos — the Android AgentLogo fallback path). */
-@Composable
-private fun AgentLetterTile(agent: String?, size: Dp) {
-    val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(size * 0.28f)
-    Box(
-        modifier = Modifier.size(size).clip(shape).background(cs.primary),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            (agent?.take(1) ?: "?").uppercase(),
-            color = cs.onPrimary,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = (size.value * 0.5f).sp,
         )
     }
 }
@@ -1012,12 +1008,13 @@ private fun AgentPill(agent: String, enabled: Boolean, onClick: () -> Unit, modi
             .background(cs.surfaceContainer)
             .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
             .clickable(interactionSource = interaction, indication = null, enabled = enabled) { onClick() }
-            .padding(start = 5.dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
+            .padding(start = 8.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        AgentLetterTile(agent, size = 17.dp)
-        Text(agent.replaceFirstChar { it.uppercase() }, color = cs.onSurface, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        // Cap to label line height (~13.sp) so the mark reads as text-adjacent, not a badge.
+        AgentLogo(agent, size = 14.dp)
+        Text(agent.replaceFirstChar { it.uppercase() }, color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
     }
 }

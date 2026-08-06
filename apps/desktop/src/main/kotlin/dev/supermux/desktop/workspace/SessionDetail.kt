@@ -91,7 +91,7 @@ fun ComingSoonPane(title: String, milestone: String, testTagName: String, modifi
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(title, color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(Space.xs))
             Text(
                 "arrives in $milestone",
@@ -431,7 +431,8 @@ fun SessionDetail(
                 .padding(horizontal = Space.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SessionAvatar(name = session.name, agent = session.agent, modifier = Modifier.size(30.dp))
+            // Match title line height (~titleLarge) — same text-adjacent mark size as the launcher pill.
+            SessionAvatar(name = session.name, agent = session.agent, size = 18.dp)
             Spacer(Modifier.width(Space.sm))
             // git/sync status + working spinner (git comes off SessionInfo).
             SessionStatusRail(git = session.git, working = agent?.working == true)

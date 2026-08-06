@@ -44,9 +44,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ViewAgenda
+import dev.supermux.desktop.theme.AppearanceMode
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -69,6 +79,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.host.HostBadge
@@ -115,110 +126,97 @@ fun relTime(ts: String?): String {
     }
 }
 
-/** Per-agent letter + brand tile color. `null` (unrecognised agent) falls back to name initials,
- *  matching Android's `agentDrawableRes(agent) == null` path. */
-private data class AgentBrand(val letter: String, val tile: Color, val ink: Color)
-
-private fun agentBrand(agent: String?): AgentBrand? = when (agent?.lowercase()) {
-    // Claude "Kraft" terracotta.
-    "claude" -> AgentBrand("c", Color(0xFFCC785C), Color.White)
-    // OpenAI/Codex teal-green.
-    "codex" -> AgentBrand("x", Color(0xFF10A37F), Color.White)
-    // Cursor's mark is near-black on white; a near-black tile would vanish against a dark-mode
-    // background, so invert to a light tile with near-black ink for legibility in both themes.
-    "cursor" -> AgentBrand("▲", Color(0xFFF2F1EC), Color(0xFF111111))
-    "opencode" -> AgentBrand("o", Color(0xFF4C6FFF), Color.White)
-    // Grok/xAI mark is a near-black X; invert to a light tile like cursor so it stays
-    // legible in dark mode.
-    "grok" -> AgentBrand("g", Color(0xFFF2F1EC), Color(0xFF111111))
-    else -> null
-}
-
 /**
- * Session avatar: agent letter mark in a brand-tinted circle, or the session's name initials when
- * the agent isn't recognised. Same composable shape as Android's `SessionAvatar`, minus the
- * shared-element params (no Android-style shared-element nav on desktop) and the drawable lookup
- * (desktop has no bundled per-agent logo art yet).
+ * Session avatar: real agent brand mark ([AgentLogo]) on a cream tile, or the session's name
+ * initials when the agent isn't recognised. Android parity (no shared-element params on desktop).
  *
  * NOT used in [SessionRow] — matching Android, where list rows deliberately stay lean (the small
- * [SessionStatusRail] IS the row's leading visual; a per-row avatar column was tried on Android
- * and reverted as a heavy, repetitive wall of near-identical marks). Currently unused on desktop:
- * its Android call sites — collapsed sessions rail, chat header, workspace detail — arrive with
- * Task 9+ and will use this.
- *
- * TODO(M4): swap the letter tile for real per-agent logo marks once desktop ships bundled agent
- * artwork (Android uses `R.drawable.agent_*`; this is a placeholder for the M1 port).
+ * [SessionStatusRail] IS the row's leading visual).
  */
 @Composable
-fun SessionAvatar(name: String, agent: String? = null, modifier: Modifier = Modifier) {
+fun SessionAvatar(
+    name: String,
+    agent: String? = null,
+    modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
+) {
     val cs = MaterialTheme.colorScheme
-    val brand = agentBrand(agent)
-    if (brand != null) {
-        Box(
-            modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(brand.tile)
-                .border(1.dp, cs.outline.copy(alpha = 0.7f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(brand.letter, color = brand.ink, fontFamily = MonoFontFamily, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-        }
+    if (hasAgentLogo(agent)) {
+        AgentLogo(agent = agent, size = size, modifier = modifier)
     } else {
         Box(
             modifier
-                .size(40.dp)
-                .clip(CircleShape)
+                .size(size)
+                .clip(RoundedCornerShape(size * 0.3f))
                 .background(cs.primary)
-                .border(1.dp, cs.outline.copy(alpha = 0.7f), CircleShape),
+                .border(1.dp, cs.outline.copy(alpha = 0.7f), RoundedCornerShape(size * 0.3f)),
             contentAlignment = Alignment.Center,
         ) {
             val initials = name.take(2).uppercase()
-            Text(initials, color = cs.onPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(
+                initials,
+                color = cs.onPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = (size.value * 0.32f).sp,
+            )
         }
     }
 }
 
-/** Path-group header with a leading chevron + session count, matching the web app's group
- *  headers. [collapsed] mirrors the Android source: rendered (rotated -90°) but never triggered —
- *  group collapse is not wired up yet on either platform. */
+/** Path-group header — workspace-style: colored letter tile + label (Cursor-like rail). */
 @Composable
 fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
     val cs = MaterialTheme.colorScheme
+    val leaf = label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+    val letter = leaf.firstOrNull()?.uppercaseChar()?.toString() ?: "·"
+    // Stable-ish pastel from label hash so adjacent groups don't all share the same tile.
+    val hue = ((leaf.hashCode() ushr 1) % 360).toFloat()
+    val tile = Color.hsl(hue, 0.45f, 0.42f)
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // Android uses R.drawable.ic_chevron_down; desktop has no bundled icon set, so the
-        // materialIconsExtended equivalent stands in.
-        Icon(
-            imageVector = Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier
-                .size(14.dp)
-                .rotate(if (collapsed) -90f else 0f),
-        )
+        Box(
+            Modifier
+                .size(18.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(tile),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                letter,
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
         Text(
-            label,
-            color = cs.onSurfaceVariant,
-            fontFamily = MonoFontFamily,
-            fontSize = 11.sp,
+            leaf,
+            color = cs.onSurface,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.weight(1f),
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         if (count > 1) {
             Text(
                 "$count",
-                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
-                fontFamily = MonoFontFamily,
+                color = cs.onSurfaceVariant.copy(alpha = 0.55f),
                 fontSize = 10.sp,
             )
         }
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier
+                .size(14.dp)
+                .rotate(if (collapsed) -90f else 0f),
+        )
     }
 }
 
@@ -298,14 +296,15 @@ fun SessionRow(
         Row(
             rowModifier
                 .testTag("session_row_${s.id}")
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                // Desktop-compact: 8dp vertical vs Android's 10dp — denser rail without touch targets.
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Top,
         ) {
             if (s.effectiveUserStatus() == "draft") {
                 Text(
                     "✎",
                     color = cs.primary.copy(alpha = 0.85f),
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.CenterVertically),
                 )
             } else {
@@ -317,7 +316,7 @@ fun SessionRow(
                     modifier = Modifier.align(Alignment.CenterVertically),
                 )
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
 
             Column(Modifier.weight(1f)) {
                 // Name row: session name + relative time aligned to end.
@@ -325,7 +324,7 @@ fun SessionRow(
                     Text(
                         s.name,
                         color = cs.onSurface,
-                        fontSize = 15.sp,
+                        fontSize = 13.sp,
                         fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -348,7 +347,7 @@ fun SessionRow(
                             timeStr,
                             color = cs.onSurfaceVariant,
                             fontFamily = MonoFontFamily,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                         )
                     }
                 }
@@ -391,7 +390,7 @@ fun SessionRow(
                         formatWorkdir(s.workdir, inferHomeDir(s.workdir)),
                         color = cs.onSurfaceVariant,
                         fontFamily = MonoFontFamily,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontStyle = FontStyle.Italic,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -432,6 +431,13 @@ fun SessionListPanel(
     hostFilter: String? = null,
     onSelectHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
+    // Sidebar footer actions (Cursor-style rail). Defaults no-op so existing tests stay green.
+    onUsage: () -> Unit = {},
+    onSettings: () -> Unit = {},
+    onDevices: () -> Unit = {},
+    /** Current app appearance — footer theme button shows the opposite affordance. */
+    appearance: AppearanceMode = AppearanceMode.DARK,
+    onToggleTheme: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -454,7 +460,8 @@ fun SessionListPanel(
     val flatSections = remember(visibleSessions, lastBySession, archived) {
         buildTaskSections(combinedTaskSessions(visibleSessions, archived), lastTs)
     }
-    var groupByProject by remember { mutableStateOf(false) }
+    // Workspace-style default (project groups), matching the Cursor-like rail mock.
+    var groupByProject by remember { mutableStateOf(true) }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
@@ -499,42 +506,41 @@ fun SessionListPanel(
         onReorder(ids)
     }
 
-    Box(
+    Column(
         modifier
             .background(cs.surfaceContainerHigh)
+            .fillMaxSize()
             .onGloballyPositioned { listRootOffset = it.positionInRoot() },
     ) {
-        // The "Start a new session" row is always the first item so session creation is reachable
-        // from both the populated list and the zero-session empty state (Android parity).
+        // ── Header: full "Start a new session" card (Android-parity affordance) ─
+        NewSessionListRow(
+            onClick = onNewSession,
+            modifier = Modifier.padding(top = Space.md),
+        )
+        if (multiHost) {
+            HostFilterChips(
+                hosts = hosts,
+                sessions = sessions,
+                sessionHost = sessionHost,
+                selected = hostFilter,
+                onSelect = onSelectHostFilter,
+                onAddHost = onAddHost,
+            )
+        }
+
+        // ── Section chrome: "Sessions" + group toggle (search reserved) ───────
+        SessionsSectionHeader(
+            groupByProject = groupByProject,
+            onToggleGroupByProject = { groupByProject = !groupByProject },
+        )
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .testTag("sessions_list")
                 .fillMaxSize(),
         ) {
-            item(key = "new_session_row") { NewSessionListRow(onClick = onNewSession) }
-            if (multiHost) {
-                item(key = "host_chips") {
-                    HostFilterChips(
-                        hosts = hosts,
-                        sessions = sessions,
-                        sessionHost = sessionHost,
-                        selected = hostFilter,
-                        onSelect = onSelectHostFilter,
-                        onAddHost = onAddHost,
-                    )
-                }
-            }
-            item(key = "group_by_toggle") {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = Space.md, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(onClick = { groupByProject = !groupByProject }) {
-                        Text(if (groupByProject) "Flat list" else "Group by project", fontSize = 11.sp)
-                    }
-                }
-            }
             if (groups.isEmpty() && flatSections.isEmpty()) {
                 item(key = "empty_hint") {
                     Text(
@@ -732,6 +738,16 @@ fun SessionListPanel(
                 }
             }
         }
+        } // end list Box
+
+        // ── Footer: theme / usage / devices / settings (no Add project — use header) ─
+        SidebarFooter(
+            appearance = appearance,
+            onToggleTheme = onToggleTheme,
+            onUsage = onUsage,
+            onDevices = onDevices,
+            onSettings = onSettings,
+        )
     }
 
     renameTarget?.let { target ->
@@ -761,10 +777,9 @@ fun SessionListPanel(
 }
 
 /**
- * Full-width "Start a new session" row — the desktop port of Android's `NewSessionListRow`
- * (surfaceContainer card, a plus tile at primary@12% alpha, title + subtitle). Uses desktop idioms:
- * an [Icons.Filled.Add] vector (no bundled drawable) and a hand hover cursor. `testTag` is
- * "new_session_row"; clicking it fires [onClick] (wired to the launcher).
+ * Full-width "Start a new session" row — desktop port of Android's `NewSessionListRow`
+ * (surfaceContainer card, plus tile at primary@12% alpha, title + subtitle). Uses desktop
+ * idioms: [Icons.Filled.Add] and a hand hover cursor. `testTag` is `new_session_row`.
  */
 @Composable
 fun NewSessionListRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -797,12 +812,131 @@ fun NewSessionListRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
             )
         }
         Column(Modifier.weight(1f)) {
-            Text("Start a new session", color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+            Text(
+                "Start a new session",
+                color = cs.onSurface,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+            )
             Text(
                 "Pick a project and send your first message",
                 color = cs.onSurfaceVariant,
                 fontSize = 11.sp,
             )
         }
+    }
+}
+
+/** "Sessions" label + search (reserved) + group-by-project toggle. */
+@Composable
+private fun SessionsSectionHeader(
+    groupByProject: Boolean,
+    onToggleGroupByProject: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Sessions",
+            color = cs.onSurfaceVariant,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+        // Search not wired yet — icon reserved for the next step so the chrome matches the mock.
+        IconButton(
+            onClick = { /* search TBD */ },
+            modifier = Modifier
+                .size(28.dp)
+                .testTag("sidebar_search"),
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = "Search sessions",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+        IconButton(
+            onClick = onToggleGroupByProject,
+            modifier = Modifier
+                .size(28.dp)
+                .testTag("sidebar_group_toggle"),
+        ) {
+            Icon(
+                Icons.Filled.ViewAgenda,
+                contentDescription = if (groupByProject) "Flat list" else "Group by project",
+                tint = if (groupByProject) cs.primary else cs.onSurfaceVariant,
+                modifier = Modifier.size(15.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Shared seam between header / list / footer.
+ *
+ * Uses [onSurface] at ~14% alpha (not [outlineVariant]): on the dark rail,
+ * `outlineVariant` is nearly the same L as `surfaceContainerHigh`, so the old
+ * dividers were effectively invisible.
+ */
+@Composable
+private fun SidebarDividerLine(modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    HorizontalDivider(
+        modifier = modifier.fillMaxWidth(),
+        thickness = 1.dp,
+        color = cs.onSurface.copy(alpha = 0.14f),
+    )
+}
+
+/**
+ * Sticky bottom bar: theme / usage / devices / settings icons.
+ * New-session lives in the header card — not duplicated here.
+ */
+@Composable
+private fun SidebarFooter(
+    appearance: AppearanceMode,
+    onToggleTheme: () -> Unit,
+    onUsage: () -> Unit,
+    onDevices: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    // Icon shows what you'll switch TO: sun when dark (go light), moon when light (go dark).
+    val darkNow = appearance != AppearanceMode.LIGHT
+    val themeIcon = if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode
+    val themeLabel = if (darkNow) "Switch to light theme" else "Switch to dark theme"
+    Column(Modifier.fillMaxWidth()) {
+        SidebarDividerLine()
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .testTag("sidebar_footer")
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+        ) {
+            FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
+            FooterIcon(Icons.Filled.AutoAwesome, "Usage", "sidebar_footer_usage", onUsage)
+            FooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
+            FooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
+        }
+    }
+}
+
+@Composable
+private fun FooterIcon(
+    image: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    IconButton(onClick = onClick, modifier = Modifier.size(30.dp).testTag(tag)) {
+        Icon(image, contentDescription = label, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
     }
 }

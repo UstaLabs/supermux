@@ -1,11 +1,16 @@
 // Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/ResizableSplit.kt —
-// keep in sync until a shared UI module exists. Pure Compose; the only desktop addition is a
-// `pointerHoverIcon(PointerIcon.Hand)` on the drag handle (mouse affordance the touch original has
-// no need for), noted inline.
+// keep in sync until a shared UI module exists. Desktop additions: col-/row-resize hover cursor
+// and primary hairline highlight on hover/drag (parity with SidebarDivider + web hover:bg-primary).
 package dev.supermux.desktop.workspace
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,7 +28,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -63,13 +67,33 @@ fun ResizableSplit(
     val currentFraction by rememberUpdatedState(fraction)
 
     val divider: @Composable () -> Unit = {
+        // Horizontal split = side-by-side panes → col-resize; vertical split → row-resize.
+        val resizeIcon = if (horizontal) ColResizeIcon else RowResizeIcon
+        val interaction = remember { MutableInteractionSource() }
+        val hovered by interaction.collectIsHoveredAsState()
+        var dragging by remember { mutableStateOf(false) }
+        val active = hovered || dragging
+        val cs = MaterialTheme.colorScheme
+        val lineColor by animateColorAsState(
+            targetValue = if (active) cs.primary.copy(alpha = 0.90f) else cs.outlineVariant,
+            animationSpec = tween(120),
+            label = "split_hairline_color",
+        )
+        val lineThickness by animateDpAsState(
+            targetValue = if (active) 2.dp else 1.dp,
+            animationSpec = tween(120),
+            label = "split_hairline_width",
+        )
         Box(
             (if (horizontal) Modifier.fillMaxHeight().width(handle) else Modifier.fillMaxWidth().height(handle))
-                // Desktop bonus: a hand cursor on hover so the drag handle reads as grabbable
-                // (the touch original has no cursor to style).
-                .pointerHoverIcon(PointerIcon.Hand)
+                .hoverable(interaction)
+                .pointerHoverIcon(resizeIcon)
                 .pointerInput(totalPx, range) {
-                    detectDragGestures { _, drag ->
+                    detectDragGestures(
+                        onDragStart = { dragging = true },
+                        onDragEnd = { dragging = false },
+                        onDragCancel = { dragging = false },
+                    ) { _, drag ->
                         if (totalPx <= 0) return@detectDragGestures
                         val delta = (if (horizontal) drag.x else drag.y) / totalPx
                         onFractionChange((currentFraction + delta).coerceIn(range.start, range.endInclusive))
@@ -79,8 +103,11 @@ fun ResizableSplit(
             contentAlignment = Alignment.Center,
         ) {
             Box(
-                (if (horizontal) Modifier.fillMaxHeight().width(1.dp) else Modifier.fillMaxWidth().height(1.dp))
-                    .background(MaterialTheme.colorScheme.outlineVariant),
+                (if (horizontal) {
+                    Modifier.fillMaxHeight().width(lineThickness)
+                } else {
+                    Modifier.fillMaxWidth().height(lineThickness)
+                }).background(lineColor),
             )
         }
     }

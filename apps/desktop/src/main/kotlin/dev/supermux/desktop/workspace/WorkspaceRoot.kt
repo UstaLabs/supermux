@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -49,6 +50,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -64,6 +66,7 @@ import dev.supermux.desktop.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
+import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
@@ -103,12 +106,10 @@ class WorkspaceUiState {
     var selectedId by mutableStateOf<String?>(null)
 
     /**
-     * Whether the New-Session launcher overlay (M4a Task 5) is showing. Flipped on by
-     * onNewSession's three entry points (Ctrl+N via [workspaceShortcuts], the File menu item in
-     * Main.kt, and the sidebar rail `+`) and by [WorkspaceRoot]'s own onNewSession; flipped off by
-     * the launcher's back/escape or a successful submit. Lives here (not local to WorkspaceRoot) so
-     * Main's MenuBar — which renders in the same FrameWindowScope but outside WorkspaceRoot's
-     * composition — can open it too, the same reason [selectedId] lives here.
+     * Whether the New-Session launcher is showing in the **detail pane** (sidebar stays mounted).
+     * Flipped on by onNewSession's entry points (Ctrl+N, File ▸ New Session, rail/list `+`);
+     * flipped off by back/escape or a successful submit. Lives here (not local to WorkspaceRoot)
+     * so Main's MenuBar can open it too, the same reason [selectedId] lives here.
      */
     var launcherOpen by mutableStateOf(false)
     /** When set, the launcher reopens this draft session (web /new?draft=). */
@@ -170,21 +171,17 @@ class WorkspaceUiState {
         }
 
     /**
-     * Any full-pane modal overlay ([launcherOpen], [archivedOpen], [usageOpen],
-     * [settingsOpen], or [appUpdateOpen]) is up. The workspace pane/sidebar shortcuts
-     * (Ctrl+B/L/E/T/D) are gated
-     * OFF while this is true, so a chord an overlay leaves unhandled can't bubble to
-     * [workspaceShortcuts] and silently mutate the layout behind it. One gate for every overlay,
-     * so new overlays don't each have to remember to extend the guard.
+     * Any modal UI that should mute workspace pane shortcuts: the detail-pane launcher
+     * ([launcherOpen]) or a full-workspace overlay ([archivedOpen], [usageOpen], [settingsOpen],
+     * [appUpdateOpen]). Ctrl+B/L/E/T/D are gated OFF while this is true so a chord left unhandled
+     * by the modal can't bubble to [workspaceShortcuts] and mutate the layout behind it.
      */
     val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || settingsOpen || appUpdateOpen
 
     /**
-     * Open the New-Session launcher, enforcing the "at most one overlay" invariant (closes the
-     * other overlays if they were up). ALL launcher open sites route through here (Ctrl+N /
-     * File ▸ New Session / the rail `+`) so the full-pane overlays can never both be open — each
-     * draws opaquely over the others, and a stale one surfacing when another closes would be a
-     * confusing back-stack. Every future overlay adds a matching openX().
+     * Open the New-Session launcher in the detail pane; closes other full-workspace overlays so
+     * they never stack. ALL launcher open sites route through here (Ctrl+N / File ▸ New Session /
+     * the rail/list `+`).
      */
     fun openLauncher(draftId: String? = null) {
         launcherDraftId = draftId
@@ -193,6 +190,16 @@ class WorkspaceUiState {
         usageOpen = false
         settingsOpen = false
         appUpdateOpen = false
+    }
+
+    /**
+     * Select a live session in the sidebar/rail. Closes the detail-pane launcher so the
+     * session's chat opens instead of staying stuck on "New session".
+     */
+    fun selectSession(id: String) {
+        selectedId = id
+        launcherOpen = false
+        launcherDraftId = null
     }
 
     /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
@@ -368,6 +375,9 @@ fun WorkspaceRoot(
     // Default null = single-host: EVERY flow/op falls back to `app`, so the existing behavior and
     // the whole WorkspaceRootTest suite are unchanged.
     fleet: FleetState? = null,
+    /** Appearance mode shown in the sidebar theme toggle; toggled via [onToggleTheme]. */
+    appearance: AppearanceMode = AppearanceMode.DARK,
+    onToggleTheme: () -> Unit = {},
 ) {
     val layout = ui.layout
     // Prefer the merged fleet flows when multi-host; else the single [app]'s. `fleet` is stable
@@ -537,14 +547,16 @@ fun WorkspaceRoot(
             Column(Modifier.fillMaxSize()) {
             AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
             Box(Modifier.weight(1f).fillMaxWidth()) {
+            // Row holds only panes — the resize/collapse control is an overlay so it never
+            // steals horizontal space and so the chip paints above both sides of the seam.
             Row(Modifier.fillMaxSize()) {
-                // ── Sidebar: collapsed rail, or the full list + a drag-resize gutter ──
+                // ── Sidebar: collapsed rail, or the full list ──
                 if (layout.sidebarCollapsed) {
                     SessionsRail(
                         sessions = sessions,
                         selectedId = ui.selectedId,
                         agentState = agentState,
-                        onSelect = { ui.selectedId = it },
+                        onSelect = { ui.selectSession(it) },
                         onExpand = { layout.sidebarCollapsed = false },
                         onNewSession = onNewSession,
                         lastBySession = lastBySession,
@@ -555,7 +567,7 @@ fun WorkspaceRoot(
                         sessions = sessions,
                         home = home,
                         activeId = ui.selectedId,
-                        onOpen = { ui.selectedId = it },
+                        onOpen = { ui.selectSession(it) },
                         lastBySession = lastBySession,
                         lastRead = lastRead,
                         agentState = agentState,
@@ -574,158 +586,152 @@ fun WorkspaceRoot(
                         hostFilter = hostFilter,
                         onSelectHostFilter = { hostFilter = it },
                         onAddHost = { addHostOpen = true },
+                        // Footer: usage/devices/settings match File menu; theme toggles [appearance].
+                        onUsage = { ui.openUsage() },
+                        onSettings = { ui.openSettings() },
+                        onDevices = { ui.openSettings(SettingsSection.Devices) },
+                        appearance = appearance,
+                        onToggleTheme = onToggleTheme,
                         modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
-                    )
-                    SidebarDivider(
-                        onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
-                        onCollapse = { layout.sidebarCollapsed = true },
                     )
                 }
 
-                // ── Detail: the multi-pane SessionDetail, or an empty prompt ──
+                // ── Detail: launcher (detail-pane only), SessionDetail, or empty prompt ──
+                // New-session is a *side* panel — sidebar + resizer stay mounted. Other modals
+                // (archived / usage / settings) remain full-workspace overlays below.
                 val id = ui.selectedId
                 val session = id?.let { sel -> sessions.firstOrNull { it.id == sel } }
-                if (session == null) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceContainerLow),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                when {
+                    ui.launcherOpen -> {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .testTag("launcher_overlay")
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                        ui.launcherOpen = false; ui.launcherDraftId = null
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                },
+                        ) {
+                            SessionLauncherScreen(
+                                sessions = activeHostSessions,
+                                home = home,
+                                onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
+                                lastBySession = lastBySession,
+                                // Host-global lookups + spawn target the ACTIVE host (`hostApp`);
+                                // the host picker below switches it. Single-host → [app].
+                                loadProjects = { hostApp.listProjects() },
+                                validatePath = { hostApp.validatePath(it) },
+                                loadModels = { hostApp.launcherModels(it) },
+                                loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
+                                loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
+                                transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
+                                loadPrefs = { launcherStore.loadPrefs() },
+                                onPrefsChange = { launcherStore.savePrefs(it) },
+                                loadDraft = { launcherStore.loadDraft() },
+                                onDraftChange = { launcherStore.saveDraft(it) },
+                                onClearDraft = { launcherStore.clearDraft() },
+                                // Spawn → select + send the first message → close. A null id is
+                                // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
+                                // turns any thrown message into the inline launcher_error text.
+                                onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
+                                    val newId = hostApp.createSessionWithFirstMessage(
+                                        workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+                                        replaceDraftId = replaceDraftId,
+                                    )
+                                    if (newId == null) {
+                                        throw IllegalStateException(
+                                            "Couldn't create the session — check the working directory and try again.",
+                                        )
+                                    }
+                                    ui.selectedId = newId
+                                    hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
+                                    ui.launcherOpen = false; ui.launcherDraftId = null
+                                },
+                                onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
+                                    hostApp.createDraftSession(
+                                        workdir, agent, model, text,
+                                        reasoningLevel = reasoningLevel,
+                                        replaceDraftId = replaceDraftId,
+                                    )
+                                },
+                                initialDraftId = ui.launcherDraftId,
+                                initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
+                                hosts = hostViews,
+                                selectedHost = activeHostId,
+                                onSelectHost = { fleet?.setActiveHost(it) },
+                                loadAgents = { hostApp.launcherAgents() },
+                                loadForges = { hostApp.listForges() },
+                                searchForge = { hostApp.searchForge(it) },
+                                cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
+                                createLocalRepo = { hostApp.createLocalRepo(it) },
+                                createForge = { cid, name -> hostApp.createForge(cid, name) },
+                            )
+                        }
                     }
-                } else {
-                    SessionDetail(
-                        // Route the detail (chat/editor/terminal/display) to the session's OWNING
-                        // host in multi-host mode; single-host → [app].
-                        app = appFor(session.id),
-                        session = session,
-                        agent = agentState[session.id],
-                        layout = layout,
-                        draft = drafts[session.id] ?: "",
-                        onDraftChange = { drafts[session.id] = it },
-                        // SM_OPEN_FILE hook (Main.kt) delivery: hand the pending external open to the
-                        // SessionDetail whose id matches, which routes it through onOpenFile.
-                        externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
-                        onExternalOpenConsumed = { ui.externalOpen = null },
-                        // SM_FINISH_TEST hook (Main.kt) delivery: open the Finish dialog (menu state)
-                        // for the SessionDetail whose id matches; consumed once opened.
-                        forceFinishDialog = ui.forceFinishDialogFor == session.id,
-                        onForceFinishConsumed = { ui.forceFinishDialogFor = null },
-                        // SM_GIT_MENU/SM_LINKS_MENU/SM_OVERFLOW_MENU hook (Main.kt) delivery — see
-                        // WorkspaceUiState's KDoc for each field.
-                        forceGitMenu = ui.forceGitMenuFor?.takeIf { it.first == session.id }?.second,
-                        onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
-                        forceLinksMenu = ui.forceLinksMenuFor == session.id,
-                        onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
-                        forceOverflowMenu = ui.forceOverflowFor == session.id,
-                        onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
-                        // SM_CHAT_ATTACH hook (Main.kt) delivery: hand the pending external
-                        // attach+send request to the SessionDetail whose id matches.
-                        externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
-                        onExternalAttachConsumed = { ui.externalAttach = null },
-                        // SM_DICTATE hook (Main.kt) delivery: hand the pending transcribe request to
-                        // the SessionDetail whose id matches.
-                        externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
-                        onExternalDictateConsumed = { ui.externalDictate = null },
-                        // Edit ▸ Paste image — only the selected session's composer responds.
-                        pasteImageRequestNonce = ui.pasteImageRequestNonce,
-                        onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                        // Overflow ⋮ "Usage" row (M4f): the SAME ui.openUsage() the File ▸
-                        // "Usage…" menu item calls.
-                        onUsage = { ui.openUsage() },
-                        // Overflow ⋮ "Editor / LSP…" row (M4g-4): the SAME ui.openLspSettings()
-                        // the File ▸ "Editor / LSP…" menu item calls.
-                        onLspSettings = { ui.openLspSettings() },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    session == null -> {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    else -> {
+                        SessionDetail(
+                            // Route the detail to the session's OWNING host in multi-host mode.
+                            app = appFor(session.id),
+                            session = session,
+                            agent = agentState[session.id],
+                            layout = layout,
+                            draft = drafts[session.id] ?: "",
+                            onDraftChange = { drafts[session.id] = it },
+                            externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
+                            onExternalOpenConsumed = { ui.externalOpen = null },
+                            forceFinishDialog = ui.forceFinishDialogFor == session.id,
+                            onForceFinishConsumed = { ui.forceFinishDialogFor = null },
+                            forceGitMenu = ui.forceGitMenuFor?.takeIf { it.first == session.id }?.second,
+                            onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
+                            forceLinksMenu = ui.forceLinksMenuFor == session.id,
+                            onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
+                            forceOverflowMenu = ui.forceOverflowFor == session.id,
+                            onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
+                            externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
+                            onExternalAttachConsumed = { ui.externalAttach = null },
+                            externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
+                            onExternalDictateConsumed = { ui.externalDictate = null },
+                            pasteImageRequestNonce = ui.pasteImageRequestNonce,
+                            onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
+                            onUsage = { ui.openUsage() },
+                            onLspSettings = { ui.openLspSettings() },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
 
-            // ── New-Session launcher: a FULL-PANE overlay above the workspace (M4a Task 5) ──
-            // Desktop takes the overlay shape rather than Android's route-navigation — there's no
-            // back stack here, and a Box drawn last (top of z-order) over the still-mounted
-            // workspace keeps the sidebar/session list state alive underneath while the launcher is
-            // up. Escape closes it (same as the back button) without spawning; the draft persists
-            // either way (SessionLauncherScreen's own dispose-flush, T4).
-            if (ui.launcherOpen) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .testTag("launcher_overlay")
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.launcherOpen = false; ui.launcherDraftId = null
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                ) {
-                    SessionLauncherScreen(
-                        sessions = activeHostSessions,
-                        home = home,
-                        onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
-                        lastBySession = lastBySession,
-                        // Host-global lookups + spawn target the ACTIVE host (`hostApp`); the host
-                        // picker below switches it. Single-host → [app].
-                        loadProjects = { hostApp.listProjects() },
-                        validatePath = { hostApp.validatePath(it) },
-                        loadModels = { hostApp.launcherModels(it) },
-                        loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
-                        loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
-                        transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
-                        loadPrefs = { launcherStore.loadPrefs() },
-                        onPrefsChange = { launcherStore.savePrefs(it) },
-                        loadDraft = { launcherStore.loadDraft() },
-                        onDraftChange = { launcherStore.saveDraft(it) },
-                        onClearDraft = { launcherStore.clearDraft() },
-                        // Spawn → select + send the first message → close. A null id (invalid
-                        // workdir / spawn failure) is surfaced by THROWING — SessionLauncherScreen's
-                        // own doSubmit try/catch turns any thrown message into the inline
-                        // launcher_error text (its onSubmit contract is Unit-returning, so a failure
-                        // has no other channel back to the screen).
-                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
-                            val id = hostApp.createSessionWithFirstMessage(
-                                workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-                                replaceDraftId = replaceDraftId,
-                            )
-                            if (id == null) {
-                                throw IllegalStateException(
-                                    "Couldn't create the session — check the working directory and try again.",
-                                )
-                            }
-                            ui.selectedId = id
-                            hostApp.sendMessage(id, text, hostApp.consumeFirstUploads(id))
-                            ui.launcherOpen = false; ui.launcherDraftId = null
-                        },
-                        onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
-                            hostApp.createDraftSession(
-                                workdir, agent, model, text,
-                                reasoningLevel = reasoningLevel,
-                                replaceDraftId = replaceDraftId,
-                            )
-                        },
-                        initialDraftId = ui.launcherDraftId,
-                        initialDraft = ui.launcherDraftId?.let { id -> sessions.find { it.id == id } },
-                        // Multi-host: pick which broker to spawn on (hidden with one host).
-                        hosts = hostViews,
-                        selectedHost = activeHostId,
-                        onSelectHost = { fleet?.setActiveHost(it) },
-                        loadAgents = { hostApp.launcherAgents() },
-                        // Forge omnibox (Task 4): clone/create lands the new path in workdir.
-                        loadForges = { hostApp.listForges() },
-                        searchForge = { hostApp.searchForge(it) },
-                        cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
-                        createLocalRepo = { hostApp.createLocalRepo(it) },
-                        createForge = { cid, name -> hostApp.createForge(cid, name) },
-                    )
-                }
+            // Resize + collapse OVERLAY on the sidebar seam (not a Row child — zero layout width,
+            // paints above both panes so the chip stays visible). Sits next to the detail-pane
+            // launcher, not over a full-workspace modal.
+            if (!layout.sidebarCollapsed) {
+                SidebarDivider(
+                    onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
+                    onCollapse = { layout.sidebarCollapsed = true },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(x = layout.sidebarWidth - SidebarDividerCenterOffset)
+                        .zIndex(20f),
+                )
             }
 
             // ── Archived-sessions: a FULL-PANE overlay above the workspace (M4e Task 2) ──
-            // Same shape as the launcher overlay (a Box drawn last, over the still-mounted
-            // workspace). The list is loaded from `app.archived()` each time the overlay opens
+            // Full-workspace overlay (unlike the detail-pane launcher). The list is loaded from
+            // `app.archived()` each time the overlay opens
             // (not kept live — an archived list is a point-in-time snapshot); reset to empty on
             // close so a re-open always re-fetches. `archivedLoading` distinguishes "still fetching"
             // (spinner) from "resolved empty" (empty text), so a slow fetch never flashes the empty

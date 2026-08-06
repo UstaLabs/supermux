@@ -151,7 +151,7 @@ private fun RailSessionItem(
         SessionAvatar(
             name = session.name,
             agent = session.agent,
-            modifier = Modifier.size(36.dp),
+            size = 36.dp,
         )
         // Status (working spinner / unread green / git), badged over the avatar's bottom-end.
         Box(

@@ -370,8 +370,10 @@ fun main() {
                 }
             }
 
-            // TODO(M4): drive from Settings/Appearance instead of a hardcoded default.
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            // Appearance lives here so the sidebar theme toggle and SupermuxTheme share one source.
+            // Not persisted yet (M4 Settings/Appearance can own that later).
+            var appearance by remember { mutableStateOf(AppearanceMode.DARK) }
+            SupermuxTheme(appearance = appearance) {
                 if (!paired) {
                     val scope = rememberCoroutineScope()
                     // First-run choice (spec §6 / D6 choice A): on every native-host desktop platform
@@ -1276,7 +1278,22 @@ fun main() {
                         }
                     }
 
-                    WorkspaceRoot(app, ui, uiStore, launcherStore, notificationController, fleet = fleet)
+                    WorkspaceRoot(
+                        app,
+                        ui,
+                        uiStore,
+                        launcherStore,
+                        notificationController,
+                        fleet = fleet,
+                        appearance = appearance,
+                        onToggleTheme = {
+                            appearance = if (appearance == AppearanceMode.DARK) {
+                                AppearanceMode.LIGHT
+                            } else {
+                                AppearanceMode.DARK
+                            }
+                        },
+                    )
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
                     // back to onboarding, which disposes `app` (DisposableEffect above).

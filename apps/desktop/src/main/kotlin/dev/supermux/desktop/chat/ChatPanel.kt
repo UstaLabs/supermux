@@ -308,6 +308,7 @@ fun ChatPanel(
                 models = modelsData,
                 reasoning = reasoningData,
                 sessionModel = session.model,
+                sessionAgent = session.agent,
                 onPickModel = { model ->
                     scope.launch {
                         if (app.switchModel(session.id, model)) {
