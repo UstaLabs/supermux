@@ -107,7 +107,7 @@ data class AddCustomLspArgs(
  * The LSP settings overlay: a back row + title, then per-server rows (enable Switch + state badge
  * + install with a streamed log + remove for custom servers) and an add-custom-server form. Owns
  * its OWN server-list state (loads via [lspLoad] on first composition, then mutates it in place on
- * toggle/install-reload/add/remove) — unlike the Usage/Archived overlays, where WorkspaceRoot owns
+ * toggle/install-reload/add/remove) — unlike the Usage/Archived overlays, where AppShell owns
  * a single point-in-time snapshot, because every mutation here needs to patch the list in place
  * (mirrors Android's EditorLspSection exactly). [lspInstallLog]/[lspInstallDone] are the LIVE
  * per-server install stream (DesktopAppState, folded from lsp_install_progress/lsp_install_done

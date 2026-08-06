@@ -1,4 +1,4 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/WorkspaceShortcuts.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/ShellShortcuts.kt —
 // keep in sync until a shared UI module exists. Pure androidx.compose.ui.input.key, available on
 // desktop, so this is a verbatim copy of the Android original except for the package name.
 //
@@ -7,16 +7,16 @@
 //   1. Different keys entirely. Ctrl+E toggles the editor PANE (this file); the bundle's own zoom
 //      binds Ctrl+Plus/Minus/0 (EDITOR_FONT_MIN..MAX, see EditorBridgeShims.kt) inside its own JS
 //      keydown handler. No letter/symbol overlaps.
-//   2. Even if they DID share a key, [Modifier.workspaceShortcuts] is attached to the outer Compose
+//   2. Even if they DID share a key, [Modifier.shellShortcuts] is attached to the outer Compose
 //      window and only fires via `onKeyEvent`'s BUBBLE phase — i.e. only for chords a focused
 //      Compose descendant left unhandled. The editor's KCEF surface is a HEAVYWEIGHT AWT child
 //      (SwingPanel, see WebCodeEditor.kt/EditorSwingHost): once it has native AWT focus, key events
 //      go straight to the embedded Chromium widget and never reach Compose's onKeyEvent dispatch at
 //      all — so a chord typed while the CodeMirror surface is focused can't be "stolen" by
-//      workspaceShortcuts, and vice versa a chord typed while a Compose control has focus (search
+//      shellShortcuts, and vice versa a chord typed while a Compose control has focus (search
 //      field, tree, etc.) never reaches the CEF-hosted bundle's own JS handler. The two shortcut
 //      surfaces are focus-partitioned by construction, not by a specific-key coincidence.
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -27,8 +27,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 
-/** Hardware-keyboard actions for the wide workspace (all gated behind Ctrl or Cmd/Meta). */
-enum class WorkspaceShortcut {
+/** Hardware-keyboard actions for the wide shell (all gated behind Ctrl or Cmd/Meta). */
+enum class ShellShortcut {
     ToggleSidebar, NewSession, ToggleChat, ToggleEditor, ToggleTerminal, ToggleDisplay,
 }
 
@@ -37,31 +37,31 @@ enum class WorkspaceShortcut {
  * device). [hasSelection] gates the per-session pane toggles — with no selected session only the
  * global B/N shortcuts resolve. Returns null when the letter is not a bound shortcut.
  */
-fun mapWorkspaceShortcut(letter: Char, hasSelection: Boolean): WorkspaceShortcut? =
+fun mapShellShortcut(letter: Char, hasSelection: Boolean): ShellShortcut? =
     when (letter.uppercaseChar()) {
-        'B' -> WorkspaceShortcut.ToggleSidebar
-        'N' -> WorkspaceShortcut.NewSession
-        'L' -> WorkspaceShortcut.ToggleChat.takeIf { hasSelection }
-        'E' -> WorkspaceShortcut.ToggleEditor.takeIf { hasSelection }
-        'T' -> WorkspaceShortcut.ToggleTerminal.takeIf { hasSelection }
-        'D' -> WorkspaceShortcut.ToggleDisplay.takeIf { hasSelection }
+        'B' -> ShellShortcut.ToggleSidebar
+        'N' -> ShellShortcut.NewSession
+        'L' -> ShellShortcut.ToggleChat.takeIf { hasSelection }
+        'E' -> ShellShortcut.ToggleEditor.takeIf { hasSelection }
+        'T' -> ShellShortcut.ToggleTerminal.takeIf { hasSelection }
+        'D' -> ShellShortcut.ToggleDisplay.takeIf { hasSelection }
         else -> null
     }
 
 /** Runs a resolved [shortcut] against the shared [layout] / [selectedId] / [onNewSession]. */
-fun applyWorkspaceShortcut(
-    shortcut: WorkspaceShortcut,
-    layout: WorkspaceLayout,
+fun applyShellShortcut(
+    shortcut: ShellShortcut,
+    layout: ShellLayout,
     selectedId: String?,
     onNewSession: () -> Unit,
 ) {
     when (shortcut) {
-        WorkspaceShortcut.ToggleSidebar -> layout.sidebarCollapsed = !layout.sidebarCollapsed
-        WorkspaceShortcut.NewSession -> onNewSession()
-        WorkspaceShortcut.ToggleChat -> selectedId?.let { layout.toggleChat(it) }
-        WorkspaceShortcut.ToggleEditor -> selectedId?.let { layout.toggleEditor(it) }
-        WorkspaceShortcut.ToggleTerminal -> selectedId?.let { layout.toggleTerminal(it) }
-        WorkspaceShortcut.ToggleDisplay -> selectedId?.let { layout.toggleDisplay(it) }
+        ShellShortcut.ToggleSidebar -> layout.sidebarCollapsed = !layout.sidebarCollapsed
+        ShellShortcut.NewSession -> onNewSession()
+        ShellShortcut.ToggleChat -> selectedId?.let { layout.toggleChat(it) }
+        ShellShortcut.ToggleEditor -> selectedId?.let { layout.toggleEditor(it) }
+        ShellShortcut.ToggleTerminal -> selectedId?.let { layout.toggleTerminal(it) }
+        ShellShortcut.ToggleDisplay -> selectedId?.let { layout.toggleDisplay(it) }
     }
 }
 
@@ -77,21 +77,21 @@ private fun Key.shortcutLetter(): Char? = when (this) {
 }
 
 /**
- * Intercepts Ctrl/Cmd + {B,N,L,E,T,D} on key-down and drives the workspace [layout]. Uses
+ * Intercepts Ctrl/Cmd + {B,N,L,E,T,D} on key-down and drives the shell [layout]. Uses
  * `onKeyEvent` (bubble phase) so focused descendants — the chat composer, the terminal — consume
- * their keys FIRST; only chords they leave unhandled reach the workspace, so terminal control keys
+ * their keys FIRST; only chords they leave unhandled reach the shell, so terminal control keys
  * (Ctrl+D/L/E/T) aren't stolen. Returns true ONLY for a handled combo.
  */
-fun Modifier.workspaceShortcuts(
-    layout: WorkspaceLayout,
+fun Modifier.shellShortcuts(
+    layout: ShellLayout,
     selectedId: String?,
     onNewSession: () -> Unit,
 ): Modifier = onKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
     if (!event.isCtrlPressed && !event.isMetaPressed) return@onKeyEvent false
     val letter = event.key.shortcutLetter() ?: return@onKeyEvent false
-    val shortcut = mapWorkspaceShortcut(letter, hasSelection = selectedId != null)
+    val shortcut = mapShellShortcut(letter, hasSelection = selectedId != null)
         ?: return@onKeyEvent false
-    applyWorkspaceShortcut(shortcut, layout, selectedId, onNewSession)
+    applyShellShortcut(shortcut, layout, selectedId, onNewSession)
     true
 }

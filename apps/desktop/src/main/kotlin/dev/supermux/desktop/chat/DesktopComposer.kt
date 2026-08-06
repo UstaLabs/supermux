@@ -169,7 +169,7 @@ data class ComposerAttachment(
 
 /**
  * One-shot "attach this file then send" request for [DesktopComposer] (M4d-T3), delivered from
- * outside the composer's own state (WorkspaceUiState.externalAttach → SessionDetail → ChatPanel).
+ * outside the composer's own state (ShellUiState.externalAttach → SessionDetail → ChatPanel).
  * Drives the SAME `stageFiles`/`sendWith` funnel the Attach dialog + Send button use — see
  * [DesktopComposer]'s `externalAttach` param KDoc. Set by the off-by-default `SM_CHAT_ATTACH`
  * headless hook in Main.kt so the attach→upload→send round-trip can be proven under Xvfb with no
@@ -179,7 +179,7 @@ data class ComposerExternalAttach(val filePath: String, val text: String)
 
 /** One-shot "transcribe this WAV file and append its cleaned text to the draft" request for
  *  [DesktopComposer] (M5-1), delivered from outside the composer's own mic-click state
- *  (WorkspaceUiState.externalDictate -> SessionDetail -> ChatPanel), mirroring
+ *  (ShellUiState.externalDictate -> SessionDetail -> ChatPanel), mirroring
  *  [ComposerExternalAttach]. Drives the SAME [DesktopComposer]'s `onTranscribeAudio` seam the mic
  *  button uses — only the TRIGGER differs (a file already on disk instead of a live TargetDataLine
  *  capture) — so it proves the real POST->append round-trip under Xvfb, where there is no real mic.
@@ -613,7 +613,7 @@ internal fun composerPickFiles(): List<File> {
 /**
  * Chat composer with attachment chips.
  *
- * @param draft current draft text (hoisted — per-session in [ChatPanel]/WorkspaceRoot).
+ * @param draft current draft text (hoisted — per-session in [ChatPanel]/AppShell).
  * @param sending true while the client-local "Sending…" marker is up (blocks re-send).
  * @param agentWorking true while the broker says the agent is busy — flips the trailing icon to
  *   Stop so the user can interrupt without leaving the composer.
@@ -820,7 +820,7 @@ fun DesktopComposer(
         }
     }
 
-    // Edit ▸ Paste image / WorkspaceUiState.pasteImageRequestNonce — same funnel as the Attach menu.
+    // Edit ▸ Paste image / ShellUiState.pasteImageRequestNonce — same funnel as the Attach menu.
     LaunchedEffect(pasteImageRequestNonce) {
         if (pasteImageRequestNonce > 0L) {
             launchPasteImages()
@@ -880,7 +880,7 @@ fun DesktopComposer(
     // the upload seam to suspend on directly) until that chip reaches a TERMINAL state, then —  on
     // success — [sendWith] the requested text through the SAME gather-and-send path the Send button
     // uses. Deliberately does NOT go through onDraftChange+doSend(): draft is hoisted OUTSIDE this
-    // composable (WorkspaceRoot's draft map), so writing it here and immediately calling the
+    // composable (AppShell's draft map), so writing it here and immediately calling the
     // (stale-closure) doSend would race the recomposition that updates `draft` — sendWith(text)
     // sidesteps that entirely. Keyed on [externalAttach] (not Unit) so a new request re-runs.
     LaunchedEffect(externalAttach) {

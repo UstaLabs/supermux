@@ -1,7 +1,7 @@
 // The desktop Archived-sessions screen — a faithful port of
 // apps/android/.../settings/MoreScreens.kt's `ArchivedScreen` + its internal `ArchivedChatScreen`
 // (the read-only transcript view). A full-pane overlay (mirroring the New-Session launcher, see
-// WorkspaceRoot): a project-filtered, searchable, flat list of archived sessions (most-recently-
+// AppShell): a project-filtered, searchable, flat list of archived sessions (most-recently-
 // killed first, in the order the broker returns them), each row → a read-only chat view of that
 // session's transcript + a Resume button. Desktop deltas from Android:
 //   - ModalBottomSheet / TopAppBar → a plain Column header + a Compose DropdownMenu (project filter).
@@ -9,7 +9,7 @@
 //     keeps the chat view internal.
 //   - Read-only transcript reuses the desktop chat Timeline (mergeTimeline over the archived logs +
 //     TimelineItemRow), with NO composer and onOpenFile wired to a no-op (nothing to edit here).
-// Resume → onResume(id) → the whole archived overlay closes (WorkspaceRoot's onBack); the resumed
+// Resume → onResume(id) → the whole archived overlay closes (AppShell's onBack); the resumed
 // session arrives live via a session_added/snapshot WS frame, not from this screen.
 package dev.supermux.desktop.session
 
@@ -92,7 +92,7 @@ fun archivedMatchesQuery(dto: ArchivedDto, query: String): Boolean {
 }
 
 /**
- * The archived-sessions overlay. [archived] is loaded by the caller (WorkspaceRoot loads
+ * The archived-sessions overlay. [archived] is loaded by the caller (AppShell loads
  * `app.archived()` when the overlay opens) and passed in whole; the screen applies the project
  * filter ([filterArchivedByProject] over [archivedProjects]) + the client-side search
  * ([archivedMatchesQuery]) on top. Tapping a row opens [ArchivedChatView] (internal nav via
@@ -115,7 +115,7 @@ fun ArchivedScreen(
     // an empty state (mirrors Android's `loading` flag + ArchivedChatView's own spinner).
     loading: Boolean = false,
     // One-shot "open this archived session's read-only transcript" request (an id from [archived]),
-    // set by the off-by-default `SM_ARCHIVED_OPEN` headless hook (via WorkspaceUiState.forceArchivedOpenFor,
+    // set by the off-by-default `SM_ARCHIVED_OPEN` headless hook (via ShellUiState.forceArchivedOpenFor,
     // M4e-T3 live verification) so the chat view renders without a click. Consumed (→ [onForceOpenConsumed])
     // the same run it's applied, so it never re-fires on an unrelated recomposition. Null/no-op in
     // normal operation.

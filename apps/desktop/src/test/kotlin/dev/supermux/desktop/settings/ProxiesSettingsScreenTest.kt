@@ -13,10 +13,10 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.SettingsSection
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.SettingsSection
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto
@@ -534,13 +534,13 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun settings_hub_opens_proxies_section() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Proxies) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Proxies) }
         val (app, _) = appForProxies()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }

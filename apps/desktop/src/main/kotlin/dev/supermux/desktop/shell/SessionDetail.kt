@@ -1,4 +1,4 @@
-// Modeled on apps/android/src/main/kotlin/dev/supermux/android/workspace/SessionWorkspaceDetail.kt —
+// Modeled on apps/android/src/main/kotlin/dev/supermux/android/shell/SessionShellDetail.kt —
 // the wide-screen detail for ONE session: a minimal identity header + the nested, drag-resizable
 // split tree of live panes driven by [layout].panesFor([session].id).
 //
@@ -17,7 +17,7 @@
 //   RightArea:  work + display → [ WorkColumn | Display ]   (horizontal, workDisplayFraction)
 //   WorkColumn: editor + terminal → [ Editor / Terminal ]  (vertical, editorTermFraction)
 // ```
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -168,7 +168,7 @@ fun SessionDetail(
     app: DesktopAppState,
     session: SessionInfo,
     agent: AgentStatus?,
-    layout: WorkspaceLayout,
+    layout: ShellLayout,
     draft: String,
     onDraftChange: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -192,11 +192,11 @@ fun SessionDetail(
     onForceLinksMenuConsumed: () -> Unit = {},
     forceOverflowMenu: Boolean = false,
     onForceOverflowMenuConsumed: () -> Unit = {},
-    // Opens the Usage overlay (WorkspaceUiState.openUsage()) — threaded down to the header's
+    // Opens the Usage overlay (ShellUiState.openUsage()) — threaded down to the header's
     // OverflowMenu "Usage" row (M4f). Defaults to a no-op so existing callers/tests that don't
     // exercise it keep compiling.
     onUsage: () -> Unit = {},
-    // Opens the LSP settings overlay (WorkspaceUiState.openLspSettings()) — threaded down to the
+    // Opens the LSP settings overlay (ShellUiState.openLspSettings()) — threaded down to the
     // header's OverflowMenu "Editor / LSP…" row (M4g-4). Defaults to a no-op so existing callers/
     // tests that don't exercise it keep compiling.
     onLspSettings: () -> Unit = {},
@@ -262,7 +262,7 @@ fun SessionDetail(
 ) {
     val cs = MaterialTheme.colorScheme
 
-    // Chat-tap → editor-at-line (Android ChatScreen:221 / SessionWorkspaceDetail:174 parity): a tap
+    // Chat-tap → editor-at-line (Android ChatScreen:221 / SessionShellDetail:174 parity): a tap
     // on a file-path ref in the transcript converts to a workdir-relative [PendingEditorOpen], flips
     // the editor pane on, and hands the target to EditorPanel via the seam above. `remember(session.id)`
     // so a session switch starts with a clean slate (no stale reveal leaking into the new session).
@@ -313,7 +313,7 @@ fun SessionDetail(
     //   • Native is LAZY: not composed at all until the user first opens it (Android openedPanels
     //     parity), then kept alive across flips so its agent PTY / grid survive.
     //   • key(session.id) wraps the Native panel: [DesktopTerminalPanel]'s `remember { connect() }`
-    //     is deliberately unkeyed, and WorkspaceRoot renders ONE SessionDetail in the same
+    //     is deliberately unkeyed, and AppShell renders ONE SessionDetail in the same
     //     composition slot for ui.selectedId — so on a session switch this slot recomposes with a
     //     new `session`. Without the key, the reused `remember` would bind the WRONG session's
     //     agent PTY into the new session's chat slot.
@@ -391,7 +391,7 @@ fun SessionDetail(
                 axis = SplitAxis.Vertical,
                 fraction = layout.editorTermFraction,
                 onFractionChange = layout::setEditorTermFraction,
-                range = WorkspaceLayout.EDITORTERM_MIN..WorkspaceLayout.EDITORTERM_MAX,
+                range = ShellLayout.EDITORTERM_MIN..ShellLayout.EDITORTERM_MAX,
                 testTag = "divider_editor_terminal",
                 first = editorPane,
                 second = if (p.terminal) terminalPane else null,
@@ -408,7 +408,7 @@ fun SessionDetail(
                 axis = SplitAxis.Horizontal,
                 fraction = layout.workDisplayFraction,
                 onFractionChange = layout::setWorkDisplayFraction,
-                range = WorkspaceLayout.WORKDISP_MIN..WorkspaceLayout.WORKDISP_MAX,
+                range = ShellLayout.WORKDISP_MIN..ShellLayout.WORKDISP_MAX,
                 testTag = "divider_work_display",
                 first = workColumn,
                 second = if (p.display) displayPane else null,
@@ -479,7 +479,7 @@ fun SessionDetail(
             }
             // Finish — worktree-backed sessions only (same gate/badge as Android's header). The
             // button opens a FinishDialog driven by the live finishJobs[session.id]; the unacked dot
-            // shows a background result the user hasn't opened yet (Android SessionWorkspaceDetail
+            // shows a background result the user hasn't opened yet (Android SessionShellDetail
             // parity — ackedStartedAt latches "seen" per session).
             if (session.session_branch != null) {
                 val finishScope = rememberCoroutineScope()
@@ -566,7 +566,7 @@ fun SessionDetail(
                     axis = SplitAxis.Horizontal,
                     fraction = layout.chatFraction,
                     onFractionChange = layout::setChatFraction,
-                    range = WorkspaceLayout.CHAT_MIN..WorkspaceLayout.CHAT_MAX,
+                    range = ShellLayout.CHAT_MIN..ShellLayout.CHAT_MAX,
                     testTag = "divider_chat_work",
                     first = chatOrNative,
                     second = if (p.hasWork) rightArea else null,

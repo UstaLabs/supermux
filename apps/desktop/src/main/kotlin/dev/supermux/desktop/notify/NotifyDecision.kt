@@ -1,6 +1,6 @@
 // M5-3: the pure "should this agent reply raise a desktop toast" decision. Mirrors the broker's
 // src/core/push/hook.ts:firePushForReply guard (op==="reply" && !muted && !anyPresent), adapted to
-// desktop's LOCAL viewing signal — WorkspaceRoot's (ui.selectedId, LocalWindowInfo focus) IS
+// desktop's LOCAL viewing signal — AppShell's (ui.selectedId, LocalWindowInfo focus) IS
 // presence here; there's no cross-device tracker to query since this client IS the live
 // connection. See this milestone's plan Goal for why closed-app push parity is explicitly out of
 // scope — this file only ever runs while the desktop process is alive.

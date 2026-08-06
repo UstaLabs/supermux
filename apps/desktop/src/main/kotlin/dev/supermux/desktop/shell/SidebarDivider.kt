@@ -1,4 +1,4 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/SidebarDivider.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/SidebarDivider.kt —
 // keep in sync until a shared UI module exists.
 //
 // Desktop: this is an OVERLAY on the sidebar↔detail seam, not a Row child that steals width.
@@ -7,7 +7,7 @@
 // sibling was clipped/covered and the chip vanished). Drag strip uses AWT col-resize cursor
 // (PointerIcon.Hand is only for the collapse chip). Hover/drag lights the hairline in primary
 // (parity with the web app's hover:bg-primary/25 on resize handles).
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -51,7 +51,7 @@ import java.awt.Cursor
  * Overlay on the sidebar↔detail seam: 1dp hairline + drag hit strip + floating collapse chip.
  *
  * **Does not participate in Row layout** — the caller must place this in a parent [Box] above the
- * workspace [androidx.compose.foundation.layout.Row], offset so its center sits on
+ * shell [androidx.compose.foundation.layout.Row], offset so its center sits on
  * `sidebarWidth`. That way the chip is visible (drawn last / high z-index) without fattening the gap.
  *
  * Drag reports a width delta in dp via [onDragDelta]. [onStartDrag]/[onEndDrag] bracket a drag

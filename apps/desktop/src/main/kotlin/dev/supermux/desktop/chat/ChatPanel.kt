@@ -1,7 +1,7 @@
 // The desktop chat panel: header (session name + a thin live status line / dead banner), the keyed
 // timeline, and the composer. Structure mirrors Android's ChatPanel (header / status / keyed list /
 // autoscroll) but the composer is the lean desktop one (see DesktopComposer.kt) — no upload/
-// dictation surface in M1. Drafts are hoisted (per-session) by WorkspaceRoot so switching sessions
+// dictation surface in M1. Drafts are hoisted (per-session) by AppShell so switching sessions
 // keeps each draft; broker-side draft sync is M4.
 package dev.supermux.desktop.chat
 
@@ -70,12 +70,12 @@ private fun timelineItemKey(item: TimelineItem): String = when (item) {
  * Full chat surface for [session]. Reads the live StateFlows off [app], merges the timeline, and
  * wires the composer's send/interrupt to the real send path.
  *
- * @param draft hoisted per-session draft text (kept in WorkspaceRoot's draft map so a session
+ * @param draft hoisted per-session draft text (kept in AppShell's draft map so a session
  *   switch preserves it). [onDraftChange] writes back into that map; a send clears it via
  *   `onDraftChange("")`.
  *
  * NOTE: the task's sketch signature was `(app, session, modifier)`; [draft]/[onDraftChange] are
- * added because the draft state is deliberately hoisted to WorkspaceRoot (in-memory, M1) rather
+ * added because the draft state is deliberately hoisted to AppShell (in-memory, M1) rather
  * than owned here — a `remember(session.id)` would drop the draft on switch.
  */
 @Composable
@@ -85,7 +85,7 @@ fun ChatPanel(
     draft: String,
     onDraftChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    // When embedded in the workspace SessionDetail (M1 Task 9), that composable owns the identity
+    // When embedded in the shell SessionDetail (M1 Task 9), that composable owns the identity
     // header (name + status rail + pane toggles), so the chat pane suppresses its own name header
     // to avoid a duplicate title bar. The dead banner is always shown regardless. Defaults to true
     // for standalone use.
@@ -208,7 +208,7 @@ fun ChatPanel(
     val statusColor = if (agent?.waiting == true && !working && !sending) sem.warning else cs.primary
 
     Column(modifier.fillMaxSize().background(cs.surfaceContainerLow)) {
-        // Header (suppressed when embedded in the workspace SessionDetail, which owns the identity bar).
+        // Header (suppressed when embedded in the shell SessionDetail, which owns the identity bar).
         if (showHeader) {
             Column(
                 Modifier

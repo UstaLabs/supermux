@@ -1,8 +1,8 @@
 // Desktop editor settings persistence: soft-wrap + font-size, written to `editor-settings.json` next
-// to the token / ui-state stores (WorkspaceStateStore precedent). This is the desktop analog of the
+// to the token / ui-state stores (ShellStateStore precedent). This is the desktop analog of the
 // Android `cmux-editor-settings` SharedPreferences (EditorScreen.kt:145-173): the SAME two keys
 // (`lineWrap`, `fontSize`) so the mental model matches across platforms. Not a secret — a plain
-// writeString is fine (mirrors WorkspaceStateStore).
+// writeString is fine (mirrors ShellStateStore).
 //
 // M3-T4 lands the plumbing: the persisted values are pushed on engine init (cmInit args) and the
 // editor's own font-zoom (Ctrl+/−/0 / pinch) writes fontSize back. The chat-tap reveal that also

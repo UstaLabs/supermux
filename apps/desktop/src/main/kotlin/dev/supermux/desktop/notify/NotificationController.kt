@@ -11,10 +11,10 @@ import androidx.compose.runtime.setValue
 import dev.supermux.proto.LogEntry
 
 /**
- * Plain (non-`@Composable`) class exactly like [dev.supermux.desktop.workspace.WorkspaceUiState] —
+ * Plain (non-`@Composable`) class exactly like [dev.supermux.desktop.shell.ShellUiState] —
  * `mutableStateOf` works fine outside composition; it only needs a Composer to trigger
  * RECOMPOSITION on change, not to be read/written. [lastNotifiedSession] is `Stable`-shaped for the
- * same reason `WorkspaceUiState.selectedId` is.
+ * same reason `ShellUiState.selectedId` is.
  */
 class NotificationController(
     private val manager: NotificationManager,
@@ -29,7 +29,7 @@ class NotificationController(
     /**
      * Evaluate one agent-reply event and fire a notification if [NotifyDecision.shouldNotify] and
      * [NotificationDedup] both allow it. Resolving [sessionName]/[selectedId]/[windowFocused]/
-     * [muted] is the CALLER's job (`WorkspaceRoot` already has `app.sessions`/`ui.selectedId`/
+     * [muted] is the CALLER's job (`AppShell` already has `app.sessions`/`ui.selectedId`/
      * `focused` in scope) — this function stays a thin, fully-parameterized decision + dispatch so
      * it's testable with a fake [NotificationManager] and no Compose/coroutine context of its own.
      */

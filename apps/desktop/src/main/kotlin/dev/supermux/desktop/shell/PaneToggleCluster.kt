@@ -1,4 +1,4 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/PaneToggleCluster.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/PaneToggleCluster.kt —
 // keep in sync until a shared UI module exists.
 //
 // Icon substitutions (Android uses bundled vector drawables; desktop has no bundled icon set for
@@ -7,7 +7,7 @@
 //   ic_terminal → Icons.Filled.Terminal      (terminal)
 //   ic_code     → Icons.Filled.Code          (editor, the `</>` glyph)
 //   ic_monitor  → Icons.Filled.Monitor       (display)
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,18 +36,18 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
 /**
- * Compact pane show/hide capsule for the workspace header — a native match for the iOS/Android
+ * Compact pane show/hide capsule for the shell header — a native match for the iOS/Android
  * `PaneToggleCluster`: four inline icon toggles (chat · terminal · editor · display) in one rounded
  * capsule, teal-filled when the pane is open, quiet when closed. Order + icons mirror the mobile
  * clients (editor is `</>`, not a file glyph).
  *
- * Each toggle drives the matching `layout.toggleX`; the [WorkspaceLayout] never-empty invariant
+ * Each toggle drives the matching `layout.toggleX`; the [ShellLayout] never-empty invariant
  * auto-reopens Chat when the last work pane closes, and Chat is disabled while it is the only open
  * pane (parity with the mobile `chatToggleDisabled`).
  */
 @Composable
 fun PaneToggleCluster(
-    layout: WorkspaceLayout,
+    layout: ShellLayout,
     sessionId: String,
     modifier: Modifier = Modifier,
 ) {

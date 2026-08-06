@@ -185,7 +185,7 @@ class DesktopAppState(
     // Which finish result the user has "seen" (acked), per session id → the job's startedAt. The
     // header's unacked dot derives from this vs the live finishJobs entry. It lives HERE (not as
     // SessionDetail Compose state) because desktop reuses ONE SessionDetail across session
-    // selections (WorkspaceRoot renders it without key(session.id)), so a switch A→B→A would reset
+    // selections (AppShell renders it without key(session.id)), so a switch A→B→A would reset
     // per-composable ack state and wrongly re-show A's already-seen dot. Android sidesteps this via
     // its NavHost backstack; on desktop the ack must survive the switch — so it's app state.
     private val _ackedFinish = MutableStateFlow<Map<String, Double>>(emptyMap())
@@ -207,7 +207,7 @@ class DesktopAppState(
 
     // ── Notifications (M5-3) ────────────────────────────────────────────────────────
     // Raw agent-reply pulses (direction="outbound", op="reply" MessageAppend entries only),
-    // folded by [reduce] and consumed by WorkspaceRoot's NotificationController — see
+    // folded by [reduce] and consumed by AppShell's NotificationController — see
     // NotifyDecision.kt for the PURE viewed/muted decision this flow feeds. Same replay-0 +
     // bounded-buffer shape as [fsChanges]: DROP_OLDEST keeps the freshest reply flowing rather
     // than suspending the reducer on a full buffer — a burst of replies while the collector is
@@ -387,7 +387,7 @@ class DesktopAppState(
                     current + (frame.session to (pruned + frame.entry))
                 }
                 // M5-3: broadcast AGENT REPLIES ONLY (direction="outbound", op="reply" — mirrors
-                // the broker's push/hook.ts firePushForReply guard) so WorkspaceRoot's
+                // the broker's push/hook.ts firePushForReply guard) so AppShell's
                 // NotificationController can decide whether to raise a tray toast. The user's own
                 // echoed message (direction="inbound") and non-reply outbound entries
                 // (op="react"/"edit_message") never reach this flow.

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import dev.supermux.ui.TestIds
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -38,12 +38,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M4a Task 5 — wiring the launcher into the app shell. [WorkspaceRoot] wasn't previously
+ * M4a Task 5 — wiring the launcher into the app shell. [AppShell] wasn't previously
  * UI-tested (its detail pane, [SessionDetail], drags in the KCEF-backed editor); this suite adds
  * the minimal harness needed to exercise the launcher overlay without ever selecting a session
  * (so [SessionDetail]/KCEF never mounts): a real [DesktopAppState] (connectOnInit=false, HTTP via
  * a ktor MockEngine, outbound WS frames captured through `sendFrameOverride`) and a real
- * [WorkspaceUiState] + [WorkspaceStateStore]/[LauncherStore] pointed at a scratch temp file each,
+ * [ShellUiState] + [ShellStateStore]/[LauncherStore] pointed at a scratch temp file each,
  * so no test ever touches the developer's real ~/.config/supermux-desktop.
  *
  * Covers: onNewSession (rail `+` → detail-pane launcher; Ctrl+N/menu flip the SAME
@@ -53,12 +53,12 @@ import kotlin.test.assertTrue
  * without spawning and leaves the draft on disk.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
-class WorkspaceRootTest {
+class AppShellTest {
 
     private val tempFiles = mutableListOf<java.nio.file.Path>()
 
     private fun tempPath(name: String): java.nio.file.Path {
-        val f = Files.createTempFile("workspace_root_test_$name", ".json")
+        val f = Files.createTempFile("shell_root_test_$name", ".json")
         Files.deleteIfExists(f) // the stores create-on-write; start absent like a fresh profile
         tempFiles.add(f)
         return f
@@ -97,11 +97,11 @@ class WorkspaceRootTest {
     }
 
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { layout.sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
+        val ui = ShellUiState().apply { layout.sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
         val app = appFor(mutableListOf())
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -118,11 +118,11 @@ class WorkspaceRootTest {
     @Test fun submit_with_a_resolved_id_selects_sends_and_closes() = runComposeUiTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent, spawnId = "sess-new")
-        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        val ui = ShellUiState().apply { launcherOpen = true }
         val launcherStore = LauncherStore(tempPath("launcher"))
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), launcherStore)
+                AppShell(app, ui, ShellStateStore(tempPath("state")), launcherStore)
             }
         }
         waitForIdle()
@@ -153,10 +153,10 @@ class WorkspaceRootTest {
     @Test fun submit_with_a_null_id_keeps_the_overlay_open_and_surfaces_the_error() = runComposeUiTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent, validateOk = false) // invalid workdir → createSessionWithFirstMessage returns null
-        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        val ui = ShellUiState().apply { launcherOpen = true }
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -176,11 +176,11 @@ class WorkspaceRootTest {
     @Test fun escape_closes_without_spawning_and_the_draft_survives_on_disk() = runComposeUiTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent)
-        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        val ui = ShellUiState().apply { launcherOpen = true }
         val launcherStore = LauncherStore(tempPath("launcher"))
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), launcherStore)
+                AppShell(app, ui, ShellStateStore(tempPath("state")), launcherStore)
             }
         }
         waitForIdle()
@@ -193,29 +193,29 @@ class WorkspaceRootTest {
         assertFalse(ui.launcherOpen)
         assertNull(ui.selectedId) // no session was ever created
         onNodeWithTag("launcher_overlay").assertDoesNotExist()
-        // Never spawned/sent — WorkspaceRoot's own viewing-presence heartbeat may still emit a
+        // Never spawned/sent — AppShell's own viewing-presence heartbeat may still emit a
         // Viewing frame (unrelated to the launcher), so check the Send frame specifically.
         assertTrue(sent.filterIsInstance<ClientFrame.Send>().isEmpty())
         // The dispose-flush (T4) persists the in-progress text on the way out.
         assertEquals("a draft in progress", launcherStore.loadDraft().text)
     }
 
-    @Test fun workspace_shortcuts_are_gated_off_while_the_launcher_overlay_is_up() = runComposeUiTest {
+    @Test fun shell_shortcuts_are_gated_off_while_the_launcher_overlay_is_up() = runComposeUiTest {
         // The overlay is modal — a pane/sidebar chord (Ctrl+B) it leaves unhandled must NOT bubble
-        // to workspaceShortcuts and silently mutate the layout behind it. Ctrl+B typed while the
+        // to shellShortcuts and silently mutate the layout behind it. Ctrl+B typed while the
         // launcher's message field is focused should be a no-op on ui.layout.sidebarCollapsed.
         val app = appFor(mutableListOf())
-        val ui = WorkspaceUiState().apply { launcherOpen = true } // sidebarCollapsed defaults false
+        val ui = ShellUiState().apply { launcherOpen = true } // sidebarCollapsed defaults false
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
         assertFalse(ui.layout.sidebarCollapsed) // precondition
 
         // Focus a node inside the overlay, then send Ctrl+B — it bubbles up to the root Box, where
-        // workspaceShortcuts is gated OFF (…else Modifier) while launcherOpen.
+        // shellShortcuts is gated OFF (…else Modifier) while launcherOpen.
         onNodeWithTag("launcher_message").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
         waitForIdle()
 
@@ -246,12 +246,12 @@ class WorkspaceRootTest {
                 sessions = listOf(dev.supermux.proto.SessionInfo(id = "s1", name = "worker-1", workdir = "/w", agent = "claude")),
             ),
         )
-        val ui = WorkspaceUiState().apply { selectedId = "other-session" } // s1 is NOT selected
+        val ui = ShellUiState().apply { selectedId = "other-session" } // s1 is NOT selected
         val fakeManager = RecordingNotificationManager()
         val notify = dev.supermux.desktop.notify.NotificationController(fakeManager)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
             }
         }
         waitForIdle()
@@ -279,12 +279,12 @@ class WorkspaceRootTest {
                 ),
             ),
         )
-        val ui = WorkspaceUiState().apply { selectedId = "other-session" }
+        val ui = ShellUiState().apply { selectedId = "other-session" }
         val fakeManager = RecordingNotificationManager()
         val notify = dev.supermux.desktop.notify.NotificationController(fakeManager)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
             }
         }
         waitForIdle()

@@ -46,7 +46,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.workspace.SettingsSection
+import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
@@ -79,7 +79,7 @@ fun SettingsHub(
     section: SettingsSection,
     onSectionChange: (SettingsSection) -> Unit,
     onBack: () -> Unit,
-    /** Register Escape/close path that honors identity dirty-state (WorkspaceRoot wires this). */
+    /** Register Escape/close path that honors identity dirty-state (AppShell wires this). */
     onRegisterCloseHandler: ((() -> Unit) -> Unit)? = null,
     // Agents — null list means load failure (distinct from empty).
     agentStatuses: suspend () -> List<AgentInstallStatus>?,

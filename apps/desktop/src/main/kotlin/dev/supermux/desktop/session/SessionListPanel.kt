@@ -6,7 +6,7 @@
 //    `SessionListPanel` and trimmed to just the grouped session list. The overflow destinations
 //    (Archived/Usage/Proxies/Appearance/Settings/Devices) and the new-session flow
 //    (SessionLauncherScreen/ProjectPickerSheet) aren't ported to desktop yet — there is no router
-//    or session-creation API surface on DesktopAppState to wire them to. WorkspaceRoot (M1 Task 9)
+//    or session-creation API surface on DesktopAppState to wire them to. AppShell (M1 Task 9)
 //    will own the app-level chrome once those land.
 //  - Shared-element transition params (sharedScope/animScope) are dropped — desktop has no
 //    Android-style shared-element navigation.
@@ -163,7 +163,7 @@ fun SessionAvatar(
     }
 }
 
-/** Path-group header — workspace-style: colored letter tile + label (Cursor-like rail). */
+/** Path-group header — shell-style: colored letter tile + label (Cursor-like rail). */
 @Composable
 fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
     val cs = MaterialTheme.colorScheme
@@ -460,7 +460,7 @@ fun SessionListPanel(
     val flatSections = remember(visibleSessions, lastBySession, archived) {
         buildTaskSections(combinedTaskSessions(visibleSessions, archived), lastTs)
     }
-    // Workspace-style default (project groups), matching the Cursor-like rail mock.
+    // Shell-style default (project groups), matching the Cursor-like rail mock.
     var groupByProject by remember { mutableStateOf(true) }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }

@@ -30,10 +30,10 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.SettingsSection
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.SettingsSection
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -772,13 +772,13 @@ class DevicesSettingsScreenTest {
     // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
 
     @Test fun settings_hub_opens_devices_section_and_loads() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Devices) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
         val harness = appForDevices()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     harness.app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -800,7 +800,7 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun rail_switches_from_agents_to_devices() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when (req.url.encodedPath) {
@@ -828,9 +828,9 @@ class DevicesSettingsScreenTest {
         )
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("rail-state")),
+                    ShellStateStore(tempPath("rail-state")),
                     LauncherStore(tempPath("rail-launcher")),
                 )
             }
@@ -914,13 +914,13 @@ class DevicesSettingsScreenTest {
                 )
             },
         )
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Devices) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     primary, ui,
-                    WorkspaceStateStore(tempPath("mh-state")),
+                    ShellStateStore(tempPath("mh-state")),
                     LauncherStore(tempPath("mh-launcher")),
                     fleet = fleet,
                 )
@@ -949,7 +949,7 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun open_settings_devices_selects_section() {
-        val ui = WorkspaceUiState()
+        val ui = ShellUiState()
         ui.openSettings(SettingsSection.Devices)
         assertTrue(ui.settingsOpen)
         assertEquals(SettingsSection.Devices, ui.settingsSection)

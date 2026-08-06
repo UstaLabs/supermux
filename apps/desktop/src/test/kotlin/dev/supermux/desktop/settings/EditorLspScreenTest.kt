@@ -17,9 +17,9 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
@@ -51,7 +51,7 @@ import kotlin.test.assertTrue
  * `EditorLspScreen.kt`. Pure helpers ([stateLabel]/[extSummary]/[slugId]) are tested directly;
  * the composables are tested via [runComposeUiTest] with faked lspLoad/lspToggle/lspInstall/
  * lspAddCustom/lspRemoveCustom suspend lambdas + a controllable installLog/installDone
- * MutableStateFlow — no broker, no WorkspaceRoot (that's the overlay-wiring section below).
+ * MutableStateFlow — no broker, no AppShell (that's the overlay-wiring section below).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class EditorLspScreenTest {
@@ -332,7 +332,7 @@ class EditorLspScreenTest {
         assertTrue(backCalled)
     }
 
-    // ── (5) overlay wiring into WorkspaceRoot ─────────────────────────────────────────────────────
+    // ── (5) overlay wiring into AppShell ─────────────────────────────────────────────────────
 
     private val tempFiles = mutableListOf<Path>()
 
@@ -378,13 +378,13 @@ class EditorLspScreenTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun lsp_settings_overlay_opens_from_ui_and_loads_the_server_list() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { lspSettingsOpen = true }
+        val ui = ShellUiState().apply { lspSettingsOpen = true }
         val app = appForLspSettings()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -398,13 +398,13 @@ class EditorLspScreenTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun escape_closes_the_lsp_settings_overlay() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { lspSettingsOpen = true }
+        val ui = ShellUiState().apply { lspSettingsOpen = true }
         val app = appForLspSettings()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -417,14 +417,14 @@ class EditorLspScreenTest {
     }
 
     @OptIn(ExperimentalTestApi::class)
-    @Test fun workspace_shortcuts_are_gated_off_while_the_lsp_settings_overlay_is_up() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { lspSettingsOpen = true }
+    @Test fun shell_shortcuts_are_gated_off_while_the_lsp_settings_overlay_is_up() = runComposeUiTest {
+        val ui = ShellUiState().apply { lspSettingsOpen = true }
         val app = appForLspSettings()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -442,7 +442,7 @@ class EditorLspScreenTest {
     }
 
     @Test fun opening_lsp_settings_closes_any_other_open_overlay() {
-        val ui = WorkspaceUiState()
+        val ui = ShellUiState()
         ui.openUsage()
         ui.openLspSettings()
         assertFalse(ui.usageOpen)

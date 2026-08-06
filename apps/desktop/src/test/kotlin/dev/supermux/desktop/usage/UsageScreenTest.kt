@@ -16,9 +16,9 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.ClaudeExtraUsage
 import dev.supermux.net.ClaudeUsage
@@ -50,7 +50,7 @@ import kotlin.test.assertTrue
 /**
  * M4f Task 2 — the UsageScreen overlay, its three provider cards (ClaudeUsageCard/CodexUsageCard/
  * CursorUsageCard) fed from a typed `UsageResponse`, the Codex banked-reset redeem flow, and the
- * overlay wiring into WorkspaceRoot (`ui.usageOpen`). Pure reset-formatter tests live in
+ * overlay wiring into AppShell (`ui.usageOpen`). Pure reset-formatter tests live in
  * [UsageResetFormatTest]; this file exercises the composables + the overlay via [runComposeUiTest],
  * mirroring [dev.supermux.desktop.session.ArchivedScreenTest]'s two-layer shape.
  */
@@ -350,7 +350,7 @@ class UsageScreenTest {
         assertEquals("Reset request completed", codexResetNote(CodexResetResult(code = "something_else")))
     }
 
-    // ── (6) overlay wiring into WorkspaceRoot ───────────────────────────────────────────────────────
+    // ── (6) overlay wiring into AppShell ───────────────────────────────────────────────────────
 
     private val tempFiles = mutableListOf<java.nio.file.Path>()
 
@@ -421,11 +421,11 @@ class UsageScreenTest {
     }
 
     @Test fun overlay_opens_from_ui_usage_open_and_loads_the_usage_data() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { usageOpen = true }
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -438,11 +438,11 @@ class UsageScreenTest {
     }
 
     @Test fun escape_closes_the_usage_overlay() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { usageOpen = true }
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -452,12 +452,12 @@ class UsageScreenTest {
         onNodeWithTag("usage_overlay").assertDoesNotExist()
     }
 
-    @Test fun workspace_shortcuts_are_gated_off_while_the_usage_overlay_is_up() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true } // sidebarCollapsed defaults false
+    @Test fun shell_shortcuts_are_gated_off_while_the_usage_overlay_is_up() = runComposeUiTest {
+        val ui = ShellUiState().apply { usageOpen = true } // sidebarCollapsed defaults false
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -471,11 +471,11 @@ class UsageScreenTest {
     }
 
     @Test fun a_successful_redeem_updates_the_codex_card_in_place() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { usageOpen = true }
         val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -485,7 +485,7 @@ class UsageScreenTest {
         waitForIdle()
         onNodeWithTag("codex_redeem_confirm").performClick()
         waitForIdle()
-        // After a code=="reset" redeem: WorkspaceRoot swapped in the refreshed CodexUsage — the
+        // After a code=="reset" redeem: AppShell swapped in the refreshed CodexUsage — the
         // window resets to 0% used and the banked-reset count drops from 3 to 2, all WITHOUT a
         // second GET /usage (the card updated "in place"). The inline note survives the swap too.
         onNodeWithText("0% used").assertIsDisplayed()

@@ -1,10 +1,10 @@
-// Desktop UI-state persistence: the workspace layout ([WorkspaceSnapshot]) + the selected session,
+// Desktop UI-state persistence: the shell layout ([ShellSnapshot]) + the selected session,
 // written to `ui-state.json` next to the token store. There is no `rememberSaveable` process-death
-// persistence on desktop (that's an Android/config-change concept), so WorkspaceRoot hydrates from
+// persistence on desktop (that's an Android/config-change concept), so AppShell hydrates from
 // this store at startup and debounce-persists to it as the layout changes.
 //
 // Unlike DesktopTokenStore, this is NOT a secret — a plain (non-atomic) writeString is fine here.
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import dev.supermux.desktop.auth.DesktopTokenStore
 import kotlinx.serialization.Serializable
@@ -12,14 +12,14 @@ import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** The persisted UI state: the workspace [layout] snapshot + the last-selected session id. */
+/** The persisted UI state: the shell [layout] snapshot + the last-selected session id. */
 @Serializable
 data class PersistedUiState(
-    val layout: WorkspaceSnapshot? = null,
+    val layout: ShellSnapshot? = null,
     val selectedId: String? = null,
 )
 
-class WorkspaceStateStore(val path: Path = defaultPath()) {
+class ShellStateStore(val path: Path = defaultPath()) {
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     fun load(): PersistedUiState =
@@ -28,7 +28,7 @@ class WorkspaceStateStore(val path: Path = defaultPath()) {
             // anything else is a corrupt/unreadable ui-state.json — log it, fall back to empty.
             .onFailure {
                 if (it !is java.nio.file.NoSuchFileException) {
-                    println("[WorkspaceStateStore] corrupt ui-state.json ignored: $it")
+                    println("[ShellStateStore] corrupt ui-state.json ignored: $it")
                 }
             }
             .getOrDefault(PersistedUiState())

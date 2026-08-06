@@ -1,7 +1,7 @@
 // The desktop Usage panel — a port of apps/android/.../settings/MoreScreens.kt's `UsageScreen` +
 // its provider cards (ClaudeUsageCard/CodexUsageCard/CursorUsageCard) + UsageWindowRow/
 // UsageFooterRow/UsageCard/formatReset/money/dollars/codexResetNote. A full-pane overlay (the
-// third one, mirroring the launcher + archived overlays — see WorkspaceRoot), reached from a
+// third one, mirroring the launcher + archived overlays — see AppShell), reached from a
 // File ▸ "Usage…" menu item + the SessionDetail overflow ⋮ row (M4f).
 //
 // Desktop deltas from Android:
@@ -21,7 +21,7 @@
 //     So [formatResetIso]/[formatResetEpochSeconds] inject a `java.time.Instant now` instead —
 //     same determinism property the plan asked for, just the type actually on the classpath.
 //   - TopAppBar → the overlay's own back row (Icon + "Usage" title); nav route → overlay Box.
-//   - Redeem: `onRedeem` updates the codex card in place at the WorkspaceRoot level (the overlay
+//   - Redeem: `onRedeem` updates the codex card in place at the AppShell level (the overlay
 //     owns `usageData` and replaces `.codex` with the refreshed value on `code == "reset"`) rather
 //     than Android's `onRefresh` re-fetching the whole usage payload.
 //   - No opencode card — Android's UsageScreen doesn't render one either (not in the parity
@@ -252,10 +252,10 @@ fun ClaudeUsageCard(claude: ClaudeUsage?, error: String?) {
 /**
  * `onRedeem` — null hides the "Use a reset" affordance entirely (kept optional, mirroring
  * Android, though [UsageScreen] always supplies one). On confirm: spends 1 banked reset via
- * [onRedeem], shows the resulting [codexResetNote] inline. The CALLER (WorkspaceRoot) is
+ * [onRedeem], shows the resulting [codexResetNote] inline. The CALLER (AppShell) is
  * responsible for swapping in the refreshed `CodexUsage` on `code == "reset"` — this card only
  * renders whatever `codex` it's given, so a parent-level re-composition after a successful redeem
- * is what makes the numbers move (see [UsageScreen]'s KDoc + the WorkspaceRoot wiring).
+ * is what makes the numbers move (see [UsageScreen]'s KDoc + the AppShell wiring).
  */
 @Composable
 fun CodexUsageCard(
@@ -439,10 +439,10 @@ fun GrokUsageCard(grok: GrokUsage?, error: String?) {
 /**
  * The Usage overlay: a back row + title, then either a spinner (still loading), "Unable to load
  * usage data." (resolved to null), or the three provider cards fed from [usage]. [loading] and
- * [usage] are both owned by the caller (WorkspaceRoot fetches `app.usage()` once per open) — this
+ * [usage] are both owned by the caller (AppShell fetches `app.usage()` once per open) — this
  * screen renders whatever point-in-time snapshot it's given. [onRedeem] is threaded straight to
  * [CodexUsageCard]; the caller is responsible for swapping in the refreshed codex usage on
- * `code == "reset"` (see WorkspaceRoot's `usageData = usageData?.copy(codex = r.codex)`).
+ * `code == "reset"` (see AppShell's `usageData = usageData?.copy(codex = r.codex)`).
  */
 @Composable
 fun UsageScreen(

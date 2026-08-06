@@ -1,4 +1,4 @@
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.ui.unit.dp
 import java.nio.file.Files
@@ -8,14 +8,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Persistence proof for the desktop UI-state store: a WorkspaceLayout snapshot + selected session
- * survive a save→load round-trip through ui-state.json (the same path WorkspaceRoot debounce-writes
+ * Persistence proof for the desktop UI-state store: a ShellLayout snapshot + selected session
+ * survive a save→load round-trip through ui-state.json (the same path AppShell debounce-writes
  * and Main hydrates on startup).
  */
-class WorkspaceStateStoreTest {
-    private fun tempStore(): WorkspaceStateStore {
+class ShellStateStoreTest {
+    private fun tempStore(): ShellStateStore {
         val dir = Files.createTempDirectory("smx-ui-state")
-        return WorkspaceStateStore(dir.resolve("ui-state.json"))
+        return ShellStateStore(dir.resolve("ui-state.json"))
     }
 
     @Test fun missingFileLoadsEmptyDefault() {
@@ -27,7 +27,7 @@ class WorkspaceStateStoreTest {
 
     @Test fun snapshotAndSelectionRoundTrip() {
         val store = tempStore()
-        val layout = WorkspaceLayout().apply {
+        val layout = ShellLayout().apply {
             sidebarCollapsed = true
             setSidebarWidth(440.dp)
             setChatFraction(0.3f)
@@ -42,7 +42,7 @@ class WorkspaceStateStoreTest {
         assertEquals("s1", loaded.selectedId)
         val snap = loaded.layout
         assertTrue(snap != null)
-        val restored = WorkspaceLayout().apply { restore(snap) }
+        val restored = ShellLayout().apply { restore(snap) }
         assertTrue(restored.sidebarCollapsed)
         assertEquals(440.dp, restored.sidebarWidth)
         assertEquals(0.3f, restored.chatFraction)

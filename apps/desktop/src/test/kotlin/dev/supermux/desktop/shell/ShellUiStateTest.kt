@@ -1,4 +1,4 @@
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -7,14 +7,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Regression tests for [WorkspaceUiState.reconcileSessions] — the startup-order bug: app.sessions
+ * Regression tests for [ShellUiState.reconcileSessions] — the startup-order bug: app.sessions
  * starts EMPTY until the first WS Snapshot arrives, and reconciling against that transient [] used
  * to wipe the hydrated selection + per-session panes (which the debounced save then persisted back
  * to ui-state.json permanently). An empty live set must be treated as "not loaded yet", not
  * "everything died".
  */
-class WorkspaceUiStateTest {
-    private fun hydrated(): WorkspaceUiState = WorkspaceUiState().apply {
+class ShellUiStateTest {
+    private fun hydrated(): ShellUiState = ShellUiState().apply {
         selectedId = "s1"
         layout.toggleEditor("s1")
         layout.toggleTerminal("s2")
@@ -50,7 +50,7 @@ class WorkspaceUiStateTest {
     // stale one surfacing when the other closes. openLauncher()/openArchived() enforce exclusivity.
 
     @Test fun openLauncherClosesTheArchivedOverlay() {
-        val ui = WorkspaceUiState().apply { archivedOpen = true }
+        val ui = ShellUiState().apply { archivedOpen = true }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
@@ -58,7 +58,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openArchivedClosesTheLauncherOverlay() {
-        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        val ui = ShellUiState().apply { launcherOpen = true }
         ui.openArchived()
         assertTrue(ui.archivedOpen)
         assertFalse(ui.launcherOpen)
@@ -68,21 +68,21 @@ class WorkspaceUiStateTest {
     // ── Usage overlay (M4f Task 2) — the same "at most one overlay" invariant, three-way now ────────
 
     @Test fun openUsageClosesTheLauncherAndArchivedOverlays() {
-        val ui = WorkspaceUiState().apply { launcherOpen = true }
+        val ui = ShellUiState().apply { launcherOpen = true }
         ui.openUsage()
         assertTrue(ui.usageOpen)
         assertFalse(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
         assertTrue(ui.overlayOpen)
 
-        val ui2 = WorkspaceUiState().apply { archivedOpen = true }
+        val ui2 = ShellUiState().apply { archivedOpen = true }
         ui2.openUsage()
         assertTrue(ui2.usageOpen)
         assertFalse(ui2.archivedOpen)
     }
 
     @Test fun openLauncherClosesTheUsageOverlay() {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { usageOpen = true }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.usageOpen)
@@ -90,7 +90,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openArchivedClosesTheUsageOverlay() {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { usageOpen = true }
         ui.openArchived()
         assertTrue(ui.archivedOpen)
         assertFalse(ui.usageOpen)
@@ -98,7 +98,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openPersonalAssistantsClosesEveryOtherOverlay() {
-        val ui = WorkspaceUiState().apply {
+        val ui = ShellUiState().apply {
             launcherOpen = true
             archivedOpen = true
             usageOpen = true
@@ -116,7 +116,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
-        val ui = WorkspaceUiState().apply {
+        val ui = ShellUiState().apply {
             usageOpen = true
             openLspSettings()
         }
@@ -129,7 +129,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openLspSettingsRoutesThroughTheSettingsHub() {
-        val ui = WorkspaceUiState()
+        val ui = ShellUiState()
         ui.openLspSettings()
         assertTrue(ui.settingsOpen)
         assertTrue(ui.lspSettingsOpen)

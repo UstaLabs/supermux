@@ -1,11 +1,11 @@
-// Root of the paired app shell. M1 Task 9 (this) is the workspace chrome: a collapsible,
+// Root of the paired app shell. M1 Task 9 (this) is the shell chrome: a collapsible,
 // drag-resizable sidebar, the multi-pane SessionDetail with pane toggles, keyboard shortcuts, and
-// UI-state persistence (WorkspaceStateStore → ui-state.json).
+// UI-state persistence (ShellStateStore → ui-state.json).
 //
-// State that the menu bar (Main.kt) also needs — the WorkspaceLayout + the selected session id —
-// lives in a small [WorkspaceUiState] holder created in Main and passed down here, so File/View
+// State that the menu bar (Main.kt) also needs — the ShellLayout + the selected session id —
+// lives in a small [ShellUiState] holder created in Main and passed down here, so File/View
 // menu actions and the in-app shortcuts drive the same state.
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -96,19 +96,19 @@ enum class SettingsSection(val label: String) {
 }
 
 /**
- * Holder for the workspace UI state that both [WorkspaceRoot] and the window MenuBar (Main.kt) act
- * on: the shared [WorkspaceLayout] and the selected session id. Created once in Main (so the menu
- * can reach it), hydrated from [WorkspaceStateStore] at startup.
+ * Holder for the shell UI state that both [AppShell] and the window MenuBar (Main.kt) act
+ * on: the shared [ShellLayout] and the selected session id. Created once in Main (so the menu
+ * can reach it), hydrated from [ShellStateStore] at startup.
  */
 @Stable
-class WorkspaceUiState {
-    val layout = WorkspaceLayout()
+class ShellUiState {
+    val layout = ShellLayout()
     var selectedId by mutableStateOf<String?>(null)
 
     /**
      * Whether the New-Session launcher is showing in the **detail pane** (sidebar stays mounted).
      * Flipped on by onNewSession's entry points (Ctrl+N, File ▸ New Session, rail/list `+`);
-     * flipped off by back/escape or a successful submit. Lives here (not local to WorkspaceRoot)
+     * flipped off by back/escape or a successful submit. Lives here (not local to AppShell)
      * so Main's MenuBar can open it too, the same reason [selectedId] lives here.
      */
     var launcherOpen by mutableStateOf(false)
@@ -119,8 +119,8 @@ class WorkspaceUiState {
      * Whether the Archived-sessions overlay (M4e Task 2) is showing. Flipped on by the File ▸
      * "Archived…" menu item in Main.kt (which reaches this shared state the same way New-Session
      * does); flipped off by the screen's back/escape or a Resume. Lives here (not local to
-     * [WorkspaceRoot]) for the SAME reason as [launcherOpen] — Main's MenuBar renders outside
-     * WorkspaceRoot's composition but must open it.
+     * [AppShell]) for the SAME reason as [launcherOpen] — Main's MenuBar renders outside
+     * AppShell's composition but must open it.
      */
     var archivedOpen by mutableStateOf(false)
 
@@ -128,8 +128,8 @@ class WorkspaceUiState {
      * Whether the Usage overlay (M4f Task 2) is showing. Flipped on by the File ▸ "Usage…" menu
      * item in Main.kt and the SessionDetail overflow ⋮ "Usage" row (both reach this shared state
      * the same way New-Session/Archived do); flipped off by the screen's back/escape. Lives here
-     * (not local to [WorkspaceRoot]) for the SAME reason as [launcherOpen]/[archivedOpen] — Main's
-     * MenuBar renders outside WorkspaceRoot's composition but must open it.
+     * (not local to [AppShell]) for the SAME reason as [launcherOpen]/[archivedOpen] — Main's
+     * MenuBar renders outside AppShell's composition but must open it.
      */
     var usageOpen by mutableStateOf(false)
 
@@ -137,8 +137,8 @@ class WorkspaceUiState {
      * Whether the LSP settings overlay (M4g-4) is showing. Flipped on by the File ▸
      * "Editor / LSP…" menu item in Main.kt and the SessionDetail overflow ⋮ row (both reach this
      * shared state the same way New-Session/Archived/Usage do); flipped off by the screen's own
-     * back button or Escape. Lives here (not local to [WorkspaceRoot]) for the SAME reason as
-     * [launcherOpen]/[archivedOpen]/[usageOpen] — Main's MenuBar renders outside WorkspaceRoot's
+     * back button or Escape. Lives here (not local to [AppShell]) for the SAME reason as
+     * [launcherOpen]/[archivedOpen]/[usageOpen] — Main's MenuBar renders outside AppShell's
      * composition but must open it.
      */
     /**
@@ -171,15 +171,15 @@ class WorkspaceUiState {
         }
 
     /**
-     * Any modal UI that should mute workspace pane shortcuts: the detail-pane launcher
-     * ([launcherOpen]) or a full-workspace overlay ([archivedOpen], [usageOpen], [settingsOpen],
+     * Any modal UI that should mute shell pane shortcuts: the detail-pane launcher
+     * ([launcherOpen]) or a full-shell overlay ([archivedOpen], [usageOpen], [settingsOpen],
      * [appUpdateOpen]). Ctrl+B/L/E/T/D are gated OFF while this is true so a chord left unhandled
-     * by the modal can't bubble to [workspaceShortcuts] and mutate the layout behind it.
+     * by the modal can't bubble to [shellShortcuts] and mutate the layout behind it.
      */
     val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || settingsOpen || appUpdateOpen
 
     /**
-     * Open the New-Session launcher in the detail pane; closes other full-workspace overlays so
+     * Open the New-Session launcher in the detail pane; closes other full-shell overlays so
      * they never stack. ALL launcher open sites route through here (Ctrl+N / File ▸ New Session /
      * the rail/list `+`).
      */
@@ -334,7 +334,7 @@ class WorkspaceUiState {
      * off-by-default `SM_ARCHIVED_OPEN` headless hook in Main.kt (which also flips [archivedOpen] via
      * [openArchived] so the overlay is showing); null in normal operation. Cleared once
      * [dev.supermux.desktop.session.ArchivedScreen] consumes it (mirrors [forceLinksMenuFor]'s
-     * consumed-callback pattern — see [WorkspaceRoot]'s wiring).
+     * consumed-callback pattern — see [AppShell]'s wiring).
      */
     var forceArchivedOpenFor by mutableStateOf<String?>(null)
 
@@ -358,22 +358,22 @@ class WorkspaceUiState {
 }
 
 @Composable
-fun WorkspaceRoot(
+fun AppShell(
     app: DesktopAppState,
-    ui: WorkspaceUiState,
-    store: WorkspaceStateStore,
+    ui: ShellUiState,
+    store: ShellStateStore,
     // Injected (not `remember`-ed internally) for the SAME reason as [store]: production (Main.kt)
     // constructs the real default-path file, while tests pass a temp path so they never touch the
     // developer's real ~/.config/supermux-desktop/launcher-state.json.
     launcherStore: LauncherStore,
     // M5-3: injectable so production (Main.kt) passes the real Tray-backed controller while the
-    // existing WorkspaceRootTest suite (and any other caller that doesn't care about
+    // existing AppShellTest suite (and any other caller that doesn't care about
     // notifications) keeps compiling unmodified with the null-object default.
     notify: NotificationController = NotificationController(NoopNotificationManager),
     // Multi-host fleet (spec §5): when present, the merged session list + per-row host badges + the
     // `All · <host…> · +` chip row + add-host + per-session/active-host routing come from here.
     // Default null = single-host: EVERY flow/op falls back to `app`, so the existing behavior and
-    // the whole WorkspaceRootTest suite are unchanged.
+    // the whole AppShellTest suite are unchanged.
     fleet: FleetState? = null,
     /** Appearance mode shown in the sidebar theme toggle; toggled via [onToggleTheme]. */
     appearance: AppearanceMode = AppearanceMode.DARK,
@@ -420,9 +420,9 @@ fun WorkspaceRoot(
 
     val focused = LocalWindowInfo.current.isWindowFocused
 
-    // New-Session launcher (M4a Task 5): Ctrl+N (workspaceShortcuts below), the rail `+`
+    // New-Session launcher (M4a Task 5): Ctrl+N (shellShortcuts below), the rail `+`
     // (SessionsRail/SessionListPanel — already wired to onNewSession) and Main's File menu item
-    // (which flips ui.launcherOpen directly, since WorkspaceUiState is shared with Main) all reach
+    // (which flips ui.launcherOpen directly, since ShellUiState is shared with Main) all reach
     // the SAME overlay via ui.launcherOpen.
     val onNewSession: () -> Unit = { ui.openLauncher() }
 
@@ -435,7 +435,7 @@ fun WorkspaceRoot(
     val drafts = remember { mutableStateMapOf<String, String>() }
 
     // Headless-verification hook (no input injection on CI boxes); harmless in production (off by
-    // default). With SM_AUTOSELECT=1 we auto-select a session so the workspace renders under Xvfb
+    // default). With SM_AUTOSELECT=1 we auto-select a session so the shell renders under Xvfb
     // without a pointer: the SM_SMOKE_SEND target if one is set, otherwise the most-recently-active
     // session. Skips if a (valid) persisted selection already exists.
     if (System.getenv("SM_AUTOSELECT") == "1") {
@@ -501,7 +501,7 @@ fun WorkspaceRoot(
     }
 
     // Sessions changed: reconcile selection + pane state against the live set (empty-guarded — see
-    // WorkspaceUiState.reconcileSessions) and prune stale drafts.
+    // ShellUiState.reconcileSessions) and prune stale drafts.
     LaunchedEffect(sessions) {
         if (sessions.isEmpty()) return@LaunchedEffect // first Snapshot not in yet — don't wipe state
         val live = sessions.mapTo(mutableSetOf()) { it.id }
@@ -510,7 +510,7 @@ fun WorkspaceRoot(
     }
 
     // Debounced persistence, observed through snapshotFlow rather than a composition-scope
-    // layout.snapshot() read — the latter would subscribe the whole WorkspaceRoot to every
+    // layout.snapshot() read — the latter would subscribe the whole AppShell to every
     // fraction/pane change and recompose the root per frame during split drags. collectLatest +
     // delay(500) = settle 500ms after the last change; the file write runs off the UI thread.
     LaunchedEffect(Unit) {
@@ -525,7 +525,7 @@ fun WorkspaceRoot(
         inferHomeDir(sessions.firstOrNull()?.workdir) ?: System.getProperty("user.home").orEmpty()
     }
 
-    // Root focus so the workspace shortcuts (Ctrl/Cmd B/N/L/E/T/D) resolve even before the user
+    // Root focus so the shell shortcuts (Ctrl/Cmd B/N/L/E/T/D) resolve even before the user
     // clicks into a pane; once the composer/terminal is focused, key events still bubble up here.
     val rootFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
@@ -542,7 +542,7 @@ fun WorkspaceRoot(
                 // toggles the user can't see). Each overlay handles its own Escape; Ctrl+N is
                 // idempotent and reopening an already-open launcher is a no-op, so dropping it here
                 // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
-                .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.workspaceShortcuts(layout, ui.selectedId, onNewSession)),
+                .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.shellShortcuts(layout, ui.selectedId, onNewSession)),
         ) {
             Column(Modifier.fillMaxSize()) {
             AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
@@ -598,7 +598,7 @@ fun WorkspaceRoot(
 
                 // ── Detail: launcher (detail-pane only), SessionDetail, or empty prompt ──
                 // New-session is a *side* panel — sidebar + resizer stay mounted. Other modals
-                // (archived / usage / settings) remain full-workspace overlays below.
+                // (archived / usage / settings) remain full-shell overlays below.
                 val id = ui.selectedId
                 val session = id?.let { sel -> sessions.firstOrNull { it.id == sel } }
                 when {
@@ -717,7 +717,7 @@ fun WorkspaceRoot(
 
             // Resize + collapse OVERLAY on the sidebar seam (not a Row child — zero layout width,
             // paints above both panes so the chip stays visible). Sits next to the detail-pane
-            // launcher, not over a full-workspace modal.
+            // launcher, not over a full-shell modal.
             if (!layout.sidebarCollapsed) {
                 SidebarDivider(
                     onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
@@ -729,8 +729,8 @@ fun WorkspaceRoot(
                 )
             }
 
-            // ── Archived-sessions: a FULL-PANE overlay above the workspace (M4e Task 2) ──
-            // Full-workspace overlay (unlike the detail-pane launcher). The list is loaded from
+            // ── Archived-sessions: a FULL-PANE overlay above the shell (M4e Task 2) ──
+            // Full-shell overlay (unlike the detail-pane launcher). The list is loaded from
             // `app.archived()` each time the overlay opens
             // (not kept live — an archived list is a point-in-time snapshot); reset to empty on
             // close so a re-open always re-fetches. `archivedLoading` distinguishes "still fetching"
@@ -771,7 +771,7 @@ fun WorkspaceRoot(
                 }
             }
 
-            // ── Usage: a FULL-PANE overlay above the workspace (M4f Task 2) ──
+            // ── Usage: a FULL-PANE overlay above the shell (M4f Task 2) ──
             // Same shape as the launcher/archived overlays. `app.usage()` is loaded fresh each time
             // the overlay opens (a point-in-time snapshot, not kept live) and reset to null on
             // close so a re-open always re-fetches; `usageLoading` distinguishes "still fetching"
@@ -978,7 +978,7 @@ fun WorkspaceRoot(
                 }
             }
 
-            // ── Add host: a FULL-PANE overlay above the workspace (multi-host, spec §3.4/§5) ──
+            // ── Add host: a FULL-PANE overlay above the shell (multi-host, spec §3.4/§5) ──
             // Opened by the fleet chip row's `+`. Wired to the fleet's claim seams; a successful
             // add closes the overlay and jumps the filter to the new host so its (soon-arriving)
             // sessions are front-and-center. Only reachable when `fleet != null`.

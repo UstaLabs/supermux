@@ -12,10 +12,10 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.SettingsSection
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.SettingsSection
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.ForgeAccount
 import dev.supermux.net.ForgeCliPresence
@@ -600,13 +600,13 @@ class GitHostingScreenTest {
         val body = """
             {"connections":[{"id":"live1","kind":"github","host":"github.com","account":{"login":"liveuser"},"source":"pat","transport":"https","status":"ok"}],"cli":null}
         """.trimIndent()
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.GitHosting) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.GitHosting) }
         val app = appWithForges(body)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -629,13 +629,13 @@ class GitHostingScreenTest {
 
     @Test fun rail_can_switch_to_git_hosting_from_agents() = runComposeUiTest {
         val body = """{"connections":[],"cli":null}"""
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val app = appWithForges(body)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state-rail")),
+                    ShellStateStore(tempPath("state-rail")),
                     LauncherStore(tempPath("launcher-rail")),
                 )
             }

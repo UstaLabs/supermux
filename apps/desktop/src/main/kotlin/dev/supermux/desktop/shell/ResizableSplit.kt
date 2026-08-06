@@ -1,7 +1,7 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/ResizableSplit.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/ResizableSplit.kt —
 // keep in sync until a shared UI module exists. Desktop additions: col-/row-resize hover cursor
 // and primary hairline highlight on hover/drag (parity with SidebarDivider + web hover:bg-primary).
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState

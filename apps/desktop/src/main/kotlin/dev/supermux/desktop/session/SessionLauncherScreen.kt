@@ -564,7 +564,7 @@ fun SessionLauncherScreen(
 
     // Mic dictation (M5-1): the pre-spawn launcher has no live session yet, so [transcribeAudio]
     // always routes through the id-less `/transcribe` path (bound by the caller —
-    // WorkspaceRoot binds this to `app.transcribeAudio(null, bytes, name)`). resetKey = Unit since
+    // AppShell binds this to `app.transcribeAudio(null, bytes, name)`). resetKey = Unit since
     // there's only ever one launcher instance (no per-session scoping needed here).
     val dictation = rememberDesktopDictation(
         resetKey = Unit,

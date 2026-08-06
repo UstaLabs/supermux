@@ -1,4 +1,4 @@
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -37,9 +37,9 @@ import kotlin.test.assertTrue
 
 /**
  * Compose UI test proving the SessionDetail split tree reacts to the pane toggles the model owns:
- * flipping editor/terminal/display on the [WorkspaceLayout] mounts the matching ComingSoonPane
+ * flipping editor/terminal/display on the [ShellLayout] mounts the matching ComingSoonPane
  * (tagged `pane_editor` / `pane_terminal` / `pane_display`). This is the headless counterpart to
- * the manual "toggle panes via the menu" check — the model is covered by WorkspaceLayoutTest, and
+ * the manual "toggle panes via the menu" check — the model is covered by ShellLayoutTest, and
  * this asserts the rendering wired off it. The chat pane (`pane_chat`) is present by default.
  *
  * DesktopAppState is built with `connectOnInit = false` so no WebSocket/HTTP is opened.
@@ -89,7 +89,7 @@ class SessionDetailTest {
 
     @Test
     fun togglingWorkPanesMountsPanes() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(
@@ -157,7 +157,7 @@ class SessionDetailTest {
 
     @Test
     fun chatTapOpensTheEditorPaneAndDeliversAWorkdirRelativePendingOpen() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         val theApp = app()
         seedFileRefMessage(theApp, "s1", "m1", "src/main.kt:42")
         val ledger = PendingOpenLedger()
@@ -176,7 +176,7 @@ class SessionDetailTest {
         onNodeWithText("src/main.kt:42").performTouchInput { click(Offset(4f, 4f)) }
         waitForIdle()
 
-        // Pane flips on (Android SessionWorkspaceDetail:174 parity: layout.setPanes(... editor = true)).
+        // Pane flips on (Android SessionShellDetail:174 parity: layout.setPanes(... editor = true)).
         assertEquals(true, layout.panesFor("s1").editor)
         onNodeWithTag("pane_editor").assertIsDisplayed()
         // ...and the target is workdir-relative (session.workdir = "/w/s1"), with the parsed line.
@@ -193,7 +193,7 @@ class SessionDetailTest {
 
     @Test
     fun aTapWhileThePaneIsAlreadyOpenUpdatesThePendingOpen() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         layout.toggleEditor("s1") // pane already open BEFORE any tap
         val theApp = app()
         seedFileRefMessage(theApp, "s1", "m1", "src/a.kt:1")
@@ -225,7 +225,7 @@ class SessionDetailTest {
 
     @Test
     fun aTapOnAPathOutsideTheWorkdirIsDroppedWithoutOpeningThePane() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         val theApp = app()
         seedFileRefMessage(theApp, "s1", "m1", "/etc/motd.txt:5")
         val ledger = PendingOpenLedger()
@@ -262,7 +262,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = session, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {})
+                    layout = ShellLayout(), draft = "", onDraftChange = {})
             }
         }
         // claude → the labelled pill is present.
@@ -275,7 +275,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = codexSession, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {})
+                    layout = ShellLayout(), draft = "", onDraftChange = {})
             }
         }
         onNodeWithTag("agent_view_chat").assertDoesNotExist()
@@ -286,7 +286,7 @@ class SessionDetailTest {
 
     @Test
     fun togglingSwapsContentButKeepsChatInTree() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = session, agent = null,
@@ -312,7 +312,7 @@ class SessionDetailTest {
 
     @Test
     fun onExitFlipsBackToChatAndClearsNativeView() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         layout.setNativeView("s1", true) // start in Native
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -333,7 +333,7 @@ class SessionDetailTest {
 
     @Test
     fun clickingNativePillPersistsPreferenceViaLayout() = runComposeUiTest {
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = session, agent = null,
@@ -342,7 +342,7 @@ class SessionDetailTest {
             }
         }
         onNodeWithTag("agent_view_native").performClick()
-        // The choice is persisted on the layout (which the workspace snapshot serializes).
+        // The choice is persisted on the layout (which the shell snapshot serializes).
         assertEquals(true, layout.nativeView("s1"))
         assertTrue(layout.snapshot().native["s1"] == true)
 
@@ -352,12 +352,12 @@ class SessionDetailTest {
 
     @Test
     fun sessionSwitchDisposesOldNativePanelAndMountsFresh() = runComposeUiTest {
-        // The hard constraint behind key(session.id): WorkspaceRoot renders ONE SessionDetail in
+        // The hard constraint behind key(session.id): AppShell renders ONE SessionDetail in
         // the same composition slot for the selection, so a session switch recomposes this test's
         // single SessionDetail with a new `session` — exactly the reuse that would bind the wrong
         // session's agent PTY without the key. The mount/dispose ledger proves DISTINCT panel
         // instances: a mere recomposition of a reused panel would re-run neither effect.
-        val layout = WorkspaceLayout()
+        val layout = ShellLayout()
         layout.setNativeView("s1", true)
         layout.setNativeView("s2", true)
         val sessionB = SessionInfo(id = "s2", name = "demo2", workdir = "/w/s2", agent = "claude")
@@ -400,7 +400,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = session, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    layout = ShellLayout(), draft = "", onDraftChange = {},
                     editorPanelContent = fakeEditor)
             }
         }
@@ -412,7 +412,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = branchedSession, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    layout = ShellLayout(), draft = "", onDraftChange = {},
                     editorPanelContent = fakeEditor)
             }
         }
@@ -429,7 +429,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = branchedSession, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    layout = ShellLayout(), draft = "", onDraftChange = {},
                     editorPanelContent = fakeEditor,
                     forceFinishDialog = force,
                     onForceFinishConsumed = { consumed++ })
@@ -455,7 +455,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = gitSession, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    layout = ShellLayout(), draft = "", onDraftChange = {},
                     editorPanelContent = fakeEditor,
                     forceGitMenu = force,
                     onForceGitMenuConsumed = { consumed++ })
@@ -475,7 +475,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = session, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    layout = ShellLayout(), draft = "", onDraftChange = {},
                     editorPanelContent = fakeEditor,
                     loadProxies = { listOf(ProxyDto(domain = "d.example", sessionName = "demo", port = 3000)) },
                     forceLinksMenu = force,
@@ -496,7 +496,7 @@ class SessionDetailTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionDetail(app = app(), session = session, agent = null,
-                    layout = WorkspaceLayout(), draft = "", onDraftChange = {},
+                    layout = ShellLayout(), draft = "", onDraftChange = {},
                     editorPanelContent = fakeEditor,
                     forceOverflowMenu = force,
                     onForceOverflowMenuConsumed = { consumed++ })

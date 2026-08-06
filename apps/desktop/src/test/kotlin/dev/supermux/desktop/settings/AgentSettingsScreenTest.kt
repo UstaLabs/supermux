@@ -21,10 +21,10 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.openInBrowserOverride
-import dev.supermux.desktop.workspace.SettingsSection
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.SettingsSection
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -1216,13 +1216,13 @@ class AgentSettingsScreenTest {
     // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
 
     @Test fun settings_hub_opens_from_ui_and_loads_agents() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val app = appForAgents()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -1242,13 +1242,13 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun escape_closes_the_settings_hub() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings() }
+        val ui = ShellUiState().apply { openSettings() }
         val app = appForAgents()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -1260,14 +1260,14 @@ class AgentSettingsScreenTest {
         onNodeWithTag("settings_overlay").assertDoesNotExist()
     }
 
-    @Test fun workspace_shortcuts_are_gated_off_while_settings_hub_is_up() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings() }
+    @Test fun shell_shortcuts_are_gated_off_while_settings_hub_is_up() = runComposeUiTest {
+        val ui = ShellUiState().apply { openSettings() }
         val app = appForAgents()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -1283,7 +1283,7 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun opening_settings_closes_any_other_open_overlay() {
-        val ui = WorkspaceUiState()
+        val ui = ShellUiState()
         ui.openUsage()
         ui.openSettings()
         assertFalse(ui.usageOpen)
@@ -1292,7 +1292,7 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun rail_switches_to_editor_lsp_without_nested_back() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val app = DesktopAppState(
             baseUrl = "ws://test:9898",
             token = "t",
@@ -1319,9 +1319,9 @@ class AgentSettingsScreenTest {
         )
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state2")),
+                    ShellStateStore(tempPath("state2")),
                     LauncherStore(tempPath("launcher2")),
                 )
             }
@@ -1346,7 +1346,7 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun multi_host_keying_reloads_per_active_host() = runComposeUiTest {
-        // Go through Fleet + WorkspaceRoot (key(activeHostId) + hostApp), not a manual remount.
+        // Go through Fleet + AppShell (key(activeHostId) + hostApp), not a manual remount.
         val statusA =
             """[{"kind":"claude","installed":true,"authed":true}]"""
         val statusB =
@@ -1403,13 +1403,13 @@ class AgentSettingsScreenTest {
                 )
             },
         )
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     primary, ui,
-                    WorkspaceStateStore(tempPath("mh-state")),
+                    ShellStateStore(tempPath("mh-state")),
                     LauncherStore(tempPath("mh-launcher")),
                     fleet = fleet,
                 )

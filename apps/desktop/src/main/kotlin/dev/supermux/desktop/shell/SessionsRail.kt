@@ -1,4 +1,4 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/SessionsRail.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/SessionsRail.kt —
 // keep in sync until a shared UI module exists.
 //
 // Desktop adaptations vs. the Android source:
@@ -7,7 +7,7 @@
 //     ic_plus → Icons.Filled.Add.
 //   - Desktop `SessionAvatar(name, agent, modifier)` has no `sessionId` param (see SessionListPanel).
 //   - `pointerHoverIcon(PointerIcon.Hand)` on the tappable avatars (mouse affordance).
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import dev.supermux.ui.TestIds
 import androidx.compose.foundation.background
@@ -52,7 +52,7 @@ import dev.supermux.session.sessionsByUserOrder
 
 /**
  * Slim (~64dp) collapsed sidebar shown in place of the session list when
- * [WorkspaceLayout.sidebarCollapsed] is true. Top: an expand chevron ([onExpand]) and a "+"
+ * [ShellLayout.sidebarCollapsed] is true. Top: an expand chevron ([onExpand]) and a "+"
  * new-session button ([onNewSession]); below, a vertical scrollable column of session
  * [SessionAvatar]s. Tapping one calls [onSelect]; the active session is ringed. Each avatar carries
  * its [SessionStatusRail] status at the bottom-end corner (working spinner / unread green / git).

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -378,7 +378,7 @@ class SessionHeaderMenusTest {
                 )
             }
         }
-        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("shell_overflow").performClick()
         onNodeWithTag("overflow_usage").assertIsDisplayed()
         onNodeWithTag("overflow_usage").performClick()
         assertTrue(usageOpened)
@@ -398,7 +398,7 @@ class SessionHeaderMenusTest {
                 )
             }
         }
-        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("shell_overflow").performClick()
         onNodeWithTag("overflow_lsp_settings").assertIsDisplayed()
         onNodeWithTag("overflow_lsp_settings").performClick()
         assertTrue(opened)
@@ -417,7 +417,7 @@ class SessionHeaderMenusTest {
                 )
             }
         }
-        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("shell_overflow").performClick()
         onNodeWithTag("overflow_rename").performClick()
         // The dialog opens seeded with the current name.
         onNodeWithTag("overflow_rename_field").assertIsDisplayed()
@@ -440,7 +440,7 @@ class SessionHeaderMenusTest {
                 )
             }
         }
-        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("shell_overflow").performClick()
         // Not muted → the item reads "Mute" and requests the muted=true state.
         onNodeWithText("Mute").assertIsDisplayed()
         onNodeWithTag("overflow_mute").performClick()
@@ -460,7 +460,7 @@ class SessionHeaderMenusTest {
                 )
             }
         }
-        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("shell_overflow").performClick()
         onNodeWithText("Unmute").assertIsDisplayed()
         onNodeWithTag("overflow_mute").performClick()
         assertEquals(false, next)
@@ -479,7 +479,7 @@ class SessionHeaderMenusTest {
                 )
             }
         }
-        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("shell_overflow").performClick()
         onNodeWithTag("overflow_kill").performClick()
         assertFalse(killed) // opening the confirm dialog does not kill yet
         onNodeWithTag("overflow_kill_confirm").performClick()

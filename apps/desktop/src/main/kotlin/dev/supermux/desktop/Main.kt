@@ -58,9 +58,9 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import java.io.File
 
 /**
@@ -73,8 +73,8 @@ private val MAC_TITLE_BAR_INSET = 28.dp
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
 //   SM_PAIR_TOKEN + SM_PAIR_BASE  — seed a pairing without onboarding (both required)   [main, below]
-//   SM_AUTOSELECT=1               — auto-select a session so a pane renders             [WorkspaceRoot]
-//   SM_PANES=etd                  — force Editor/Terminal/Display panes on              [WorkspaceRoot]
+//   SM_AUTOSELECT=1               — auto-select a session so a pane renders             [AppShell]
+//   SM_PANES=etd                  — force Editor/Terminal/Display panes on              [AppShell]
 //   SM_SMOKE_SEND="name:text"     — send a chat message to a session                    [main]
 //   SM_TERM_INPUT="name:text"     — type into a session's scratch terminal (M2)         [main]
 //   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
@@ -240,10 +240,10 @@ fun main() {
         val windowState = rememberWindowState(width = 1440.dp, height = 900.dp)
         val trayState = rememberTrayState()
         // Published once pairing completes (below, inside Window's content) so the tray icon's
-        // click handler can select a session on the live WorkspaceUiState. null before pairing
-        // and after unpair, when there is no workspace to select into — the click handler
+        // click handler can select a session on the live ShellUiState. null before pairing
+        // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
-        var pairedUi by remember { mutableStateOf<WorkspaceUiState?>(null) }
+        var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
         val notificationController = remember {
             NotificationController(TrayNotificationManager(trayState))
         }
@@ -307,24 +307,24 @@ fun main() {
                     window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
                 }
             }
-            // Paired flag + workspace UI state are hoisted to the Window (FrameWindowScope) so the
+            // Paired flag + shell UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
-            // can reach the same WorkspaceLayout/selection the shortcuts drive.
+            // can reach the same ShellLayout/selection the shortcuts drive.
             // Paired once the fleet holds a host (legacy single-host users were migrated to
             // PairedHost[0] above; onboarding seeds it via the same migration on success).
             var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
-            val uiStore = remember { WorkspaceStateStore() }
+            val uiStore = remember { ShellStateStore() }
             val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
             // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
-            // against live sessions inside WorkspaceRoot once the first snapshot lands).
+            // against live sessions inside AppShell once the first snapshot lands).
             val ui = remember {
-                WorkspaceUiState().apply {
+                ShellUiState().apply {
                     val persisted = uiStore.load()
                     persisted.layout?.let { layout.restore(it) }
                     selectedId = persisted.selectedId
                 }
             }
-            // M5-3: publish this pairing's WorkspaceUiState up to the tray icon's onAction
+            // M5-3: publish this pairing's ShellUiState up to the tray icon's onAction
             // handler (declared above, outside Window) so a click can select the last-notified
             // session. Cleared on dispose (unpair / window teardown) so a stale ui never lingers.
             DisposableEffect(ui) {
@@ -334,12 +334,12 @@ fun main() {
             var showUnpairConfirm by remember { mutableStateOf(false) }
 
             // Menu bar (paired only). DEDUPE DECISION: the View toggle items are clickable-only —
-            // they carry NO KeyShortcut, because the in-app `Modifier.workspaceShortcuts` already
+            // they carry NO KeyShortcut, because the in-app `Modifier.shellShortcuts` already
             // owns Ctrl/Cmd+B/E/T/D; registering the same accelerator on the menu would risk a
             // double-toggle (menu action + the key event still bubbling to the modifier). File ▸
             // New Session keeps its conventional Ctrl+N accelerator too — it and the in-app shortcut
             // both just flip `ui.launcherOpen`, which is idempotent, so a double-fire (menu action +
-            // the key event still bubbling to workspaceShortcuts) is harmless.
+            // the key event still bubbling to shellShortcuts) is harmless.
             if (paired) {
                 MenuBar {
                     Menu("File", mnemonic = 'F') {
@@ -444,11 +444,11 @@ fun main() {
                     }
                 } else {
                     val scope = rememberCoroutineScope()
-                    // The multi-host fleet: one connection per paired host, merged into WorkspaceRoot.
+                    // The multi-host fleet: one connection per paired host, merged into AppShell.
                     val fleet = remember { FleetState(hostStore, scope) }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
                     // The active host's app backs the single-host headless hooks below and is
-                    // WorkspaceRoot's fallback; WorkspaceRoot itself routes through `fleet`. Non-null
+                    // AppShell's fallback; AppShell itself routes through `fleet`. Non-null
                     // because `paired` ⟹ the store holds a host ⟹ FleetState opened its connection.
                     val app = remember(fleet) { fleet.activeApp() } ?: return@Box
 
@@ -545,7 +545,7 @@ fun main() {
                     // Headless editor-verification hook (M3): SM_OPEN_FILE="<session-name>:<path>[:line]"
                     // resolves the named session after the first snapshot, SELECTS it, flips its
                     // editor pane on, and delivers a PendingEditorOpen(path, line) through the SAME
-                    // handler chain a chat file-path tap uses (WorkspaceUiState.externalOpen →
+                    // handler chain a chat file-path tap uses (ShellUiState.externalOpen →
                     // SessionDetail.onOpenFile → toWorkdirRelativePath → the pending-open holder →
                     // openFileAtLine → cmRevealLine). <path> is workdir-relative or absolute-within-
                     // workdir; the optional trailing :<line> reveals+centers that 1-based line. So a
@@ -816,12 +816,12 @@ fun main() {
                             val parts = gitMenuTest.split(":", limit = 2)
                             val name = parts[0]
                             val op = when (parts.getOrNull(1)?.trim()?.lowercase()) {
-                                "fetch" -> dev.supermux.desktop.workspace.GitMenuForceOp.FETCH
-                                "pull" -> dev.supermux.desktop.workspace.GitMenuForceOp.PULL
-                                null, "" -> dev.supermux.desktop.workspace.GitMenuForceOp.OPEN
+                                "fetch" -> dev.supermux.desktop.shell.GitMenuForceOp.FETCH
+                                "pull" -> dev.supermux.desktop.shell.GitMenuForceOp.PULL
+                                null, "" -> dev.supermux.desktop.shell.GitMenuForceOp.OPEN
                                 else -> {
                                     println("[gitmenu] unknown SM_GIT_MENU suffix '${parts[1]}' — falling back to open-only")
-                                    dev.supermux.desktop.workspace.GitMenuForceOp.OPEN
+                                    dev.supermux.desktop.shell.GitMenuForceOp.OPEN
                                 }
                             }
                             // Wait (≤30s) for the snapshot to carry the named session.
@@ -895,7 +895,7 @@ fun main() {
                     // Headless chat-attach-verification hook (M4d): SM_CHAT_ATTACH=
                     // "<session-name>|<file-path>|<text>" resolves the named session after the first
                     // snapshot, SELECTS it, and hands (filePath, text) to the matching ChatPanel via
-                    // WorkspaceUiState.externalAttach — DesktopComposer's LaunchedEffect(externalAttach)
+                    // ShellUiState.externalAttach — DesktopComposer's LaunchedEffect(externalAttach)
                     // then stages the file through the SAME stageFiles() funnel the Attach dialog and
                     // drag-drop use (so the chip uploads through the real uploadResumable seam), polls
                     // until that chip reaches a terminal state, and — on Done — sends through the SAME
@@ -936,7 +936,7 @@ fun main() {
                     // Headless dictation-verification hook (M5-1): SM_DICTATE=
                     // "<session-name>|<wav-path>" resolves the named session after the first
                     // snapshot, SELECTS it, and hands <wav-path> to the matching ChatPanel via
-                    // WorkspaceUiState.externalDictate — DesktopComposer's LaunchedEffect(externalDictate)
+                    // ShellUiState.externalDictate — DesktopComposer's LaunchedEffect(externalDictate)
                     // reads the WAV bytes off disk and feeds them through the SAME onTranscribeAudio
                     // seam the mic button uses (app.transcribeAudio(session.id, bytes, filename) -> a
                     // REAL POST to the broker's whisper endpoint), then appends the cleaned text to
@@ -1012,14 +1012,14 @@ fun main() {
 
                     // Headless Archived-sessions verification hook (M4e): SM_ARCHIVED=1 opens the
                     // Archived overlay on start via the SAME `ui.openArchived()` the File ▸
-                    // "Archived…" menu item calls, so `WorkspaceRoot`'s own LaunchedEffect(ui.archivedOpen)
+                    // "Archived…" menu item calls, so `AppShell`'s own LaunchedEffect(ui.archivedOpen)
                     // loads the real `app.archived()` list and the screen renders under Xvfb without a
                     // menu click. SM_ARCHIVED_OPEN=<archived-session-name> ALSO opens the overlay, then
                     // resolves <name> against a fresh `app.archived()` fetch (polled — a separate fetch
-                    // from WorkspaceRoot's own, to avoid racing it) and seeds `ui.forceArchivedOpenFor`
+                    // from AppShell's own, to avoid racing it) and seeds `ui.forceArchivedOpenFor`
                     // with its id, so that row's read-only ArchivedChatView (transcript, no composer)
                     // renders with no click. SM_ARCHIVED_RESUME=<archived-session-name> instead drives the
-                    // SAME resume path `ArchivedScreen`'s onResume callback uses in WorkspaceRoot: a
+                    // SAME resume path `ArchivedScreen`'s onResume callback uses in AppShell: a
                     // fire-and-forget `app.resume(id)` immediately followed by closing the overlay
                     // (`ui.archivedOpen = false`) — the resumed session then arrives back in the live
                     // sidebar via a WS frame, same as a real click. SM_ARCHIVED_OPEN and SM_ARCHIVED_RESUME
@@ -1038,7 +1038,7 @@ fun main() {
                             println("[archived] opened the Archived overlay")
 
                             // Resolve <name> against a fresh archived() fetch, polling ≤30s (the fetch
-                            // is a separate call from WorkspaceRoot's own list load).
+                            // is a separate call from AppShell's own list load).
                             suspend fun resolveArchived(name: String): dev.supermux.net.ArchivedDto? {
                                 var found = app.archived().firstOrNull { it.name == name }
                                 val deadline = System.currentTimeMillis() + 30_000
@@ -1080,7 +1080,7 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Agents)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Agents)
                             println("[settings] opened the Settings hub (Agents)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
@@ -1097,7 +1097,7 @@ fun main() {
                     if (devicesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Devices)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Devices)
                             println("[devices] opened the Settings hub (Devices)")
                             val devices = app.devices()
                             println(
@@ -1116,7 +1116,7 @@ fun main() {
                     if (gitHostingHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.GitHosting)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.GitHosting)
                             println("[git-hosting] opened the Settings hub (Git hosting)")
                             val forges = app.forgesLoad()
                             val conns = forges?.connections.orEmpty()
@@ -1136,7 +1136,7 @@ fun main() {
                     if (proxiesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Proxies)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Proxies)
                             println("[proxies] opened the Settings hub (Proxies)")
                             val proxies = app.proxiesForSettings()
                             println(
@@ -1156,7 +1156,7 @@ fun main() {
                     if (systemHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.System)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.System)
                             println("[system] opened the Settings hub (System)")
                             val st = app.updateStatus()
                             println(
@@ -1175,7 +1175,7 @@ fun main() {
                     if (assistantHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Assistant)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Assistant)
                             println("[assistant] opened the Settings hub (Assistant)")
                             val pair = app.assistantLoad()
                             val curator = app.curatorSettings()
@@ -1194,7 +1194,7 @@ fun main() {
                     if (voiceHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.workspace.SettingsSection.Voice)
+                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Voice)
                             println("[voice] opened the Settings hub (Voice)")
                             val cfg = app.appConfig()
                             val glossary = app.fetchGlossary()
@@ -1210,7 +1210,7 @@ fun main() {
 
                     // Headless Usage-panel verification hook (M4f): SM_USAGE=1 opens the Usage
                     // overlay on start via the SAME `ui.openUsage()` the File ▸ "Usage…" menu item
-                    // calls, so WorkspaceRoot's own LaunchedEffect(ui.usageOpen) loads the real
+                    // calls, so AppShell's own LaunchedEffect(ui.usageOpen) loads the real
                     // `app.usage()` (GET /usage) and the provider cards render under Xvfb without a
                     // menu click. Read-only by construction: this hook NEVER calls
                     // app.redeemCodexReset() — that burns a real banked Codex reset (irreversible);
@@ -1311,7 +1311,7 @@ fun main() {
                         }
                     }
 
-                    WorkspaceRoot(
+                    AppShell(
                         app,
                         ui,
                         uiStore,
@@ -1356,7 +1356,7 @@ fun main() {
 
             // First-run intro cinematic ("mux boot": boot log → 2×2 agent-pane split → particle
             // converge → the logo mark draws itself → fade into the app). Emitted LAST inside
-            // SupermuxTheme so it stacks above the already-composed wizard/workspace — the exit
+            // SupermuxTheme so it stacks above the already-composed wizard/shell — the exit
             // fade is a real reveal, not a cut. Shown once ever; SM_INTRO/SM_INTRO_FREEZE hooks
             // in the catalog at the top of this file.
             val introStore = remember { IntroStateStore() }

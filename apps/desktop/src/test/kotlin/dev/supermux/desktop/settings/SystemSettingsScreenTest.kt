@@ -14,10 +14,10 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.SettingsSection
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.SettingsSection
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -985,13 +985,13 @@ class SystemSettingsScreenTest {
     // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
 
     @Test fun settings_hub_opens_system_section_and_loads() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.System) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
         val app = appForSystem()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("state")),
+                    ShellStateStore(tempPath("state")),
                     LauncherStore(tempPath("launcher")),
                 )
             }
@@ -1012,7 +1012,7 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun rail_switches_from_agents_to_system() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.Agents) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when (req.url.encodedPath) {
@@ -1039,9 +1039,9 @@ class SystemSettingsScreenTest {
         )
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     app, ui,
-                    WorkspaceStateStore(tempPath("rail-state")),
+                    ShellStateStore(tempPath("rail-state")),
                     LauncherStore(tempPath("rail-launcher")),
                 )
             }
@@ -1124,13 +1124,13 @@ class SystemSettingsScreenTest {
                 )
             },
         )
-        val ui = WorkspaceUiState().apply { openSettings(SettingsSection.System) }
+        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(
+                AppShell(
                     primary, ui,
-                    WorkspaceStateStore(tempPath("mh-state")),
+                    ShellStateStore(tempPath("mh-state")),
                     LauncherStore(tempPath("mh-launcher")),
                     fleet = fleet,
                 )
@@ -1159,7 +1159,7 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun open_settings_system_selects_section() {
-        val ui = WorkspaceUiState()
+        val ui = ShellUiState()
         ui.openSettings(SettingsSection.System)
         assertTrue(ui.settingsOpen)
         assertEquals(SettingsSection.System, ui.settingsSection)
@@ -1169,7 +1169,7 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun open_settings_system_closes_app_update_overlay() {
-        val ui = WorkspaceUiState()
+        val ui = ShellUiState()
         ui.openAppUpdate()
         assertTrue(ui.appUpdateOpen)
         ui.openSettings(SettingsSection.System)

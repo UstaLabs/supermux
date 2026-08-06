@@ -1,4 +1,4 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/AgentViewToggle.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/AgentViewToggle.kt —
 // keep in sync until a shared UI module exists. This is terminal UX (it flips the chat column to
 // the raw agent PTY), so the M2 terminal plan pulls it forward from the deferred M4 header chrome.
 //
@@ -6,7 +6,7 @@
 // compose.materialIconsExtended stand-ins already established by PaneToggleCluster):
 //   ic_sparkle  → Icons.Filled.AutoAwesome   (Chat)
 //   ic_terminal → Icons.Filled.Terminal      (Native)
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * The workspace header's Chat ⇄ Native main-view switch — a two-segment rounded pill (native match
+ * The shell header's Chat ⇄ Native main-view switch — a two-segment rounded pill (native match
  * for the iOS/Android `AgentViewToggle`) that flips the chat column between the transcript and the
  * agent's raw ("Native") terminal. The caller shows it only for agents that have a native view
  * (claude) and only while the chat pane is visible.

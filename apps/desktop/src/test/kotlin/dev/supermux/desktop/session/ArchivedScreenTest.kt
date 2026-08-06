@@ -14,9 +14,9 @@ import androidx.compose.ui.test.withKeyDown
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.workspace.WorkspaceRoot
-import dev.supermux.desktop.workspace.WorkspaceStateStore
-import dev.supermux.desktop.workspace.WorkspaceUiState
+import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.ShellStateStore
+import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.LogEntry
@@ -41,13 +41,13 @@ import kotlin.test.assertTrue
 /**
  * M4e Task 2 — the ArchivedScreen (project-filtered, searchable list of archived sessions), the
  * read-only ArchivedChatView (a Timeline over the transcript, no composer), Resume, and the
- * overlay wiring into WorkspaceRoot (open from `ui.archivedOpen`, shortcuts gated while up).
+ * overlay wiring into AppShell (open from `ui.archivedOpen`, shortcuts gated while up).
  *
  * Two layers, like the launcher suite:
  *  1. The PURE search predicate [archivedMatchesQuery] is unit-tested directly (no Compose).
  *  2. The screen is exercised via [runComposeUiTest] with a faked archived list + loadLogs lambda;
- *     the overlay + shortcut-gating are exercised through the real [WorkspaceRoot] with a
- *     MockEngine-backed [DesktopAppState] (mirrors WorkspaceRootTest).
+ *     the overlay + shortcut-gating are exercised through the real [AppShell] with a
+ *     MockEngine-backed [DesktopAppState] (mirrors AppShellTest).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class ArchivedScreenTest {
@@ -276,7 +276,7 @@ class ArchivedScreenTest {
         onNodeWithTag("archived_screen").assertIsDisplayed()
     }
 
-    // ── (2c) overlay wiring into WorkspaceRoot ────────────────────────────────────────────────────
+    // ── (2c) overlay wiring into AppShell ────────────────────────────────────────────────────
 
     private val tempFiles = mutableListOf<java.nio.file.Path>()
 
@@ -320,11 +320,11 @@ class ArchivedScreenTest {
     }
 
     @Test fun overlay_opens_from_ui_archived_open_and_loads_the_list() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { archivedOpen = true }
+        val ui = ShellUiState().apply { archivedOpen = true }
         val app = appForArchived()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -334,14 +334,14 @@ class ArchivedScreenTest {
         onNodeWithTag("archived_row_a1").assertIsDisplayed()
     }
 
-    @Test fun workspace_shortcuts_are_gated_off_while_the_archived_overlay_is_up() = runComposeUiTest {
+    @Test fun shell_shortcuts_are_gated_off_while_the_archived_overlay_is_up() = runComposeUiTest {
         // Mirrors the launcher gating test: Ctrl+B while the archived overlay is up must NOT toggle
-        // the sidebar behind it (ui.overlayOpen gates workspaceShortcuts OFF).
-        val ui = WorkspaceUiState().apply { archivedOpen = true } // sidebarCollapsed defaults false
+        // the sidebar behind it (ui.overlayOpen gates shellShortcuts OFF).
+        val ui = ShellUiState().apply { archivedOpen = true } // sidebarCollapsed defaults false
         val app = appForArchived()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -355,11 +355,11 @@ class ArchivedScreenTest {
     }
 
     @Test fun resume_from_the_overlay_closes_it() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { archivedOpen = true }
+        val ui = ShellUiState().apply { archivedOpen = true }
         val app = appForArchived()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                WorkspaceRoot(app, ui, WorkspaceStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()

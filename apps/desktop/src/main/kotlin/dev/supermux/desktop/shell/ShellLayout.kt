@@ -1,7 +1,7 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/workspace/WorkspaceLayout.kt —
+// Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/ShellLayout.kt —
 // keep in sync until a shared UI module exists. Pure Compose runtime + kotlinx.serialization, so
 // this file is a verbatim copy of the Android original except for the package name.
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -26,7 +26,7 @@ data class PaneVisibility(
 }
 
 @Serializable
-data class WorkspaceSnapshot(
+data class ShellSnapshot(
     val sidebarCollapsed: Boolean,
     val sidebarWidthDp: Float,
     val chatFraction: Float,
@@ -37,7 +37,7 @@ data class WorkspaceSnapshot(
 )
 
 @Stable
-class WorkspaceLayout {
+class ShellLayout {
     var sidebarCollapsed by mutableStateOf(false)
 
     // NOTE: these four use a private backing MutableState + read-only computed property (rather
@@ -76,11 +76,11 @@ class WorkspaceLayout {
         (native.keys - liveIds).toList().forEach { native.remove(it) }
     }
 
-    fun snapshot() = WorkspaceSnapshot(
+    fun snapshot() = ShellSnapshot(
         sidebarCollapsed, sidebarWidth.value, chatFraction, workDisplayFraction, editorTermFraction,
         panes.toMap(), native.toMap(),
     )
-    fun restore(s: WorkspaceSnapshot) {
+    fun restore(s: ShellSnapshot) {
         sidebarCollapsed = s.sidebarCollapsed
         setSidebarWidth(s.sidebarWidthDp.dp)
         setChatFraction(s.chatFraction); setWorkDisplayFraction(s.workDisplayFraction); setEditorTermFraction(s.editorTermFraction)
@@ -94,9 +94,9 @@ class WorkspaceLayout {
         const val WORKDISP_MIN = 0.25f; const val WORKDISP_MAX = 0.75f
         const val EDITORTERM_MIN = 0.2f; const val EDITORTERM_MAX = 0.8f
         private val json = Json { ignoreUnknownKeys = true }
-        val Saver: Saver<WorkspaceLayout, String> = Saver(
-            save = { json.encodeToString(WorkspaceSnapshot.serializer(), it.snapshot()) },
-            restore = { WorkspaceLayout().apply { restore(json.decodeFromString(WorkspaceSnapshot.serializer(), it)) } },
+        val Saver: Saver<ShellLayout, String> = Saver(
+            save = { json.encodeToString(ShellSnapshot.serializer(), it.snapshot()) },
+            restore = { ShellLayout().apply { restore(json.decodeFromString(ShellSnapshot.serializer(), it)) } },
         )
     }
 }

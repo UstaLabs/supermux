@@ -326,7 +326,7 @@ fun EditorPanel(
     // cancellation tears down the prior connection on a fast tab switch — same pattern as Android's
     // engine.failed re-key.
     // NOTE — `sessionId` MUST be in the key list. Desktop reuses ONE SessionDetail/EditorPanel across
-    // session switches (WorkspaceRoot renders SessionDetail WITHOUT key(session.id) — see
+    // session switches (AppShell renders SessionDetail WITHOUT key(session.id) — see
     // DesktopAppState.kt:130-135's comment), unlike Android which recreates EditorScreen via NavHost.
     // Without `sessionId` here, two sessions whose (activeTabPath, showPreview, showDiff, engineReady)
     // tuple coincides across a switch (realistic: same relative path, both no-tab, or both mid-load

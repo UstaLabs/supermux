@@ -1,7 +1,7 @@
-// Ported from apps/android/.../workspace/SessionWorkspaceDetail.kt — the three header affordances the
+// Ported from apps/android/.../shell/SessionShellDetail.kt — the three header affordances the
 // desktop TODO(M4c) called out: the git-badge count menu (Fetch/Pull/Publish-or-Push), the
 // session-links (proxies) menu, and the ⋮ overflow (Rename/Mute/Kill). Android threads these through
-// SessionWorkspaceDetail's params + an onGitOp(op) string; desktop splits them into three focused,
+// SessionShellDetail's params + an onGitOp(op) string; desktop splits them into three focused,
 // individually runComposeUiTest-able composables that SessionDetail composes into its header.
 //
 // Differences from Android worth noting:
@@ -22,7 +22,7 @@
 //     can capture the URL without spawning a browser.
 //
 // Headless verification (M4c Task 3): there is no xdotool/input-injection under Xvfb, so each menu
-// takes an optional one-shot force-open param (WorkspaceUiState.forceGitMenuFor/forceLinksMenuFor/
+// takes an optional one-shot force-open param (ShellUiState.forceGitMenuFor/forceLinksMenuFor/
 // forceOverflowFor, set by the off-by-default SM_GIT_MENU/SM_LINKS_MENU/SM_OVERFLOW_MENU env hooks
 // in Main.kt) that expands its DropdownMenu exactly the way a real click would. GitBadgeMenu's hook
 // additionally accepts [GitMenuForceOp.FETCH]/[PULL] to fire that op live through the SAME `run(...)`
@@ -30,7 +30,7 @@
 // being auto-fired. SessionLinksMenu/OverflowMenu are open-ONLY: opening a URL or renaming/muting/
 // killing a session from a hook is left to a real user (or a direct DesktopAppState call in a test
 // harness) rather than simulating a click through a dialog/text field neither hook can drive.
-package dev.supermux.desktop.workspace
+package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -91,7 +91,7 @@ import kotlinx.coroutines.launch
 // ── Pure, testable bits (no Compose) ──────────────────────────────────────────────────
 
 /** The header label for a rendered [GitBadge]: BASE-kind badges prefix the compare ref (e.g.
- *  `main +2 ·1`), every other kind is just the glyph text (Android SessionWorkspaceDetail:400). */
+ *  `main +2 ·1`), every other kind is just the glyph text (Android SessionShellDetail:400). */
 fun headerGitBadgeLabel(badge: GitBadge): String =
     if (badge.kind == GitBadgeKind.BASE && badge.compareRef.isNotEmpty())
         "${badge.compareRef} ${badge.text}"
@@ -309,7 +309,7 @@ fun SessionLinksMenu(
  * is no longer one of them (M4g-4).
  *
  * [onToggleMute] receives the DESIRED next mute state (Android passes `!(session.mute ?: false)`).
- * [onUsage] opens the Usage overlay (WorkspaceUiState.openUsage()); defaults to a no-op so
+ * [onUsage] opens the Usage overlay (ShellUiState.openUsage()); defaults to a no-op so
  * existing call sites/tests that don't care about it keep compiling.
  */
 @Composable
@@ -319,7 +319,7 @@ fun OverflowMenu(
     onToggleMute: (Boolean) -> Unit,
     onKill: () -> Unit,
     onUsage: () -> Unit = {},
-    // Opens the LSP settings overlay (WorkspaceUiState.openLspSettings()) — threaded down to the
+    // Opens the LSP settings overlay (ShellUiState.openLspSettings()) — threaded down to the
     // header's OverflowMenu "Editor / LSP…" row (M4g-4). Defaults to a no-op so existing callers/
     // tests that don't exercise it keep compiling.
     onLspSettings: () -> Unit = {},
@@ -343,7 +343,7 @@ fun OverflowMenu(
     LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
 
     Box(modifier) {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("workspace_overflow")) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("shell_overflow")) {
             Icon(
                 Icons.Filled.MoreVert,
                 contentDescription = "More",

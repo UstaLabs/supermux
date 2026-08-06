@@ -107,7 +107,7 @@ class FleetState(
     private val _activeHost = MutableStateFlow<String?>(null)
     val activeHost: StateFlow<String?> = _activeHost.asStateFlow()
 
-    // Agent replies merged across every host, for WorkspaceRoot's NotificationController. Same
+    // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as DesktopAppState.agentReplies.
     private val _agentReplies = MutableSharedFlow<AgentReplyEvent>(
         extraBufferCapacity = 64,
