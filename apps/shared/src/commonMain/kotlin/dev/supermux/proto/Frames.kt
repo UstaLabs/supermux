@@ -6,6 +6,10 @@ import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class SessionInfo(
@@ -163,6 +167,71 @@ data class SlashCommand(
     val action: ControlAction? = null,
 )
 
+/**
+ * The workspace layout tree (spec §5.3). A polymorphic sealed interface keyed by
+ * the "type" discriminator, which is exactly how the broker writes it.
+ */
+@Serializable
+sealed interface LayoutNodeDto {
+    @Serializable @SerialName("group")
+    data class Group(
+        val id: String,
+        val viewIds: List<String> = emptyList(),
+        val activeViewId: String? = null,
+    ) : LayoutNodeDto
+
+    @Serializable @SerialName("split")
+    data class Split(
+        val direction: String,
+        val sizes: List<Double> = emptyList(),
+        val children: List<LayoutNodeDto> = emptyList(),
+    ) : LayoutNodeDto
+}
+
+/**
+ * One view in a workspace.
+ *
+ * [state] stays an untyped JsonObject on purpose: its shape depends on [kind],
+ * and a sealed hierarchy here would make every unknown future kind a hard decode
+ * failure instead of a view the client simply does not draw yet. Read it with
+ * the helpers below.
+ */
+@Serializable
+data class ViewDto(
+    val id: String,
+    @SerialName("workspace_id") val workspaceId: String,
+    val kind: String,
+    val title: String? = null,
+    val state: JsonObject = JsonObject(emptyMap()),
+)
+
+/** A single string field out of [ViewDto.state], or null when absent or not a string. */
+fun ViewDto.stateString(key: String): String? =
+    (state[key] as? JsonElement)?.jsonPrimitive?.contentOrNull
+
+/** The session a chat view points at, or null for any other kind. */
+fun ViewDto.chatSessionId(): String? =
+    if (kind == "chat") stateString("sessionId") else null
+
+@Serializable
+data class WorkspaceDto(
+    val id: String,
+    val name: String,
+    val status: String = "active",
+    val workdir: String,
+    @SerialName("repo_root") val repoRoot: String? = null,
+    @SerialName("base_branch") val baseBranch: String? = null,
+    val branch: String? = null,
+    val layout: LayoutNodeDto? = null,
+    @SerialName("active_view_id") val activeViewId: String? = null,
+    @SerialName("primary_session_id") val primarySessionId: String? = null,
+    @SerialName("name_locked") val nameLocked: Boolean = false,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("archived_at") val archivedAt: String? = null,
+    val views: List<ViewDto> = emptyList(),
+)
+
 @Serializable
 sealed interface ServerFrame {
     @Serializable @SerialName("snapshot")
@@ -180,6 +249,8 @@ sealed interface ServerFrame {
          * unread store seeds from (`stores/unread.ts`).
          */
         val reads: Map<String, String> = emptyMap(),
+        /** Empty from a broker older than the workspaces change — never null. */
+        val workspaces: List<WorkspaceDto> = emptyList(),
     ) : ServerFrame
 
     @Serializable @SerialName("session_added")
@@ -204,6 +275,35 @@ sealed interface ServerFrame {
     @Serializable @SerialName("sessions_reordered")
     data class SessionsReordered(
         val orderedIds: List<String> = emptyList(),
+    ) : ServerFrame
+
+    @Serializable @SerialName("workspace_added")
+    data class WorkspaceAdded(val workspace: WorkspaceDto) : ServerFrame
+
+    @Serializable @SerialName("workspace_removed")
+    data class WorkspaceRemoved(val id: String) : ServerFrame
+
+    /** The name, the layout, the active view, or the paths changed. Full replacement. */
+    @Serializable @SerialName("workspace_changed")
+    data class WorkspaceChanged(val workspace: WorkspaceDto) : ServerFrame
+
+    @Serializable @SerialName("workspaces_reordered")
+    data class WorkspacesReordered(val orderedIds: List<String> = emptyList()) : ServerFrame
+
+    @Serializable @SerialName("view_added")
+    data class ViewAdded(val workspaceId: String, val view: ViewDto) : ServerFrame
+
+    @Serializable @SerialName("view_removed")
+    data class ViewRemoved(val workspaceId: String, val viewId: String) : ServerFrame
+
+    @Serializable @SerialName("view_changed")
+    data class ViewChanged(val workspaceId: String, val view: ViewDto) : ServerFrame
+
+    @Serializable @SerialName("view_moved")
+    data class ViewMoved(
+        val viewId: String,
+        val fromWorkspaceId: String,
+        val toWorkspaceId: String,
     ) : ServerFrame
 
     /** Per-session live config/state patch (mute toggles, shim connect, model/effort

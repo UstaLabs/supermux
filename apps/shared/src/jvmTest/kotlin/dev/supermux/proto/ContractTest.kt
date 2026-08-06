@@ -29,6 +29,14 @@ class ContractTest {
                 is ServerFrame.SessionRemoved -> {}
                 is ServerFrame.SessionRenamed -> {}
                 is ServerFrame.SessionsReordered -> {}
+                is ServerFrame.WorkspaceAdded -> {}
+                is ServerFrame.WorkspaceRemoved -> {}
+                is ServerFrame.WorkspaceChanged -> {}
+                is ServerFrame.WorkspacesReordered -> {}
+                is ServerFrame.ViewAdded -> {}
+                is ServerFrame.ViewRemoved -> {}
+                is ServerFrame.ViewChanged -> {}
+                is ServerFrame.ViewMoved -> {}
                 is ServerFrame.SessionState -> {}
                 is ServerFrame.AgentState -> {}
                 is ServerFrame.AgentError -> {}
