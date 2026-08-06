@@ -74,6 +74,8 @@ import dev.supermux.proto.SendArgs
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
@@ -152,6 +154,8 @@ class DesktopAppState(
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val sessions: StateFlow<List<SessionInfo>> = _sessions
+    private val _workspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
+    val workspaces: StateFlow<List<WorkspaceDto>> = _workspaces
     private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
     val messages: StateFlow<Map<String, List<LogEntry>>> = _messages
     private val _activity = MutableStateFlow<Map<String, List<ActivityEvent>>>(emptyMap())
@@ -303,6 +307,7 @@ class DesktopAppState(
             is ServerFrame.Snapshot -> {
                 // Straight replacement (not read-modify-write) — plain assignment is atomic.
                 _sessions.value = frame.sessions
+                _workspaces.value = frame.workspaces
                 _messages.value = frame.logs
                 _activity.value = frame.activity
                 _bgTasks.value = frame.bgTasks
@@ -373,6 +378,55 @@ class DesktopAppState(
                 if (order.isNotEmpty()) {
                     _sessions.update { current ->
                         current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }
+                    }
+                }
+            }
+            is ServerFrame.WorkspaceAdded -> {
+                // The broker re-broadcasts the same workspace (early add on spawn, then the
+                // authoritative one carrying repo_root / branch). Replace, never duplicate —
+                // the same trap SessionAdded documents above.
+                _workspaces.update { cur ->
+                    if (cur.none { it.id == frame.workspace.id }) cur + frame.workspace
+                    else cur.map { if (it.id == frame.workspace.id) frame.workspace else it }
+                }
+            }
+            is ServerFrame.WorkspaceChanged -> {
+                // Unknown id = a workspace this client never saw added. Ignore rather than
+                // append: appending would put it at the end, out of sort order.
+                _workspaces.update { cur ->
+                    cur.map { if (it.id == frame.workspace.id) frame.workspace else it }
+                }
+            }
+            is ServerFrame.WorkspaceRemoved -> {
+                _workspaces.update { cur -> cur.filter { it.id != frame.id } }
+            }
+            is ServerFrame.WorkspacesReordered -> {
+                val rank = frame.orderedIds.withIndex().associate { (i, id) -> id to i }
+                _workspaces.update { cur ->
+                    cur.map { w -> rank[w.id]?.let { w.copy(sortOrder = it) } ?: w }
+                }
+            }
+            is ServerFrame.ViewAdded -> updateViews(frame.workspaceId) { it + frame.view }
+            is ServerFrame.ViewRemoved -> updateViews(frame.workspaceId) { vs -> vs.filter { it.id != frame.viewId } }
+            is ServerFrame.ViewChanged -> updateViews(frame.workspaceId) { vs ->
+                vs.map { if (it.id == frame.view.id) frame.view else it }
+            }
+            is ServerFrame.ViewMoved -> {
+                // Do NOT rebuild either workspace's layout. The broker sends workspace_changed
+                // for both workspaces right after view_moved, carrying the authoritative trees.
+                _workspaces.update { cur ->
+                    var moved: ViewDto? = null
+                    val stripped = cur.map { w ->
+                        if (w.id != frame.fromWorkspaceId) w
+                        else {
+                            moved = w.views.firstOrNull { it.id == frame.viewId }
+                            w.copy(views = w.views.filter { it.id != frame.viewId })
+                        }
+                    }
+                    val v = moved ?: return@update stripped
+                    stripped.map { w ->
+                        if (w.id != frame.toWorkspaceId) w
+                        else w.copy(views = w.views + v.copy(workspaceId = frame.toWorkspaceId))
                     }
                 }
             }
@@ -468,6 +522,13 @@ class DesktopAppState(
             // Out of M1/M3/M4b/M5-2 scope — reduced in later milestones: agent_error (see
             // AppViewModel for the full reducer). Must still not crash.
             else -> {}
+        }
+    }
+
+    /** Replace one workspace's view list. A frame for an unknown workspace is a no-op. */
+    private fun updateViews(workspaceId: String, edit: (List<ViewDto>) -> List<ViewDto>) {
+        _workspaces.update { cur ->
+            cur.map { if (it.id == workspaceId) it.copy(views = edit(it.views)) else it }
         }
     }
 
