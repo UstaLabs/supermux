@@ -1,6 +1,7 @@
 import type { WorkspaceStore } from "./store"
 import type { WorkspaceRecord, ViewRecord, ChatViewState, TerminalViewState, DisplayViewState } from "./types"
 import { repointPrimarySession } from "./name"
+import { workspaceScope } from "./scope"
 import type { Database as Db } from "bun:sqlite"
 
 /**
@@ -26,11 +27,6 @@ export type CreateForSessionInput = {
   base_branch?: string
   branch?: string
   sort_order?: number
-}
-
-/** The tmux scope key for a workspace-owned terminal. Cannot collide with a session name. */
-export function workspaceTerminalScope(workspaceId: string): string {
-  return `w:${workspaceId}`
 }
 
 export class WorkspaceService {
@@ -86,7 +82,7 @@ export class WorkspaceService {
       }
       case "terminal": {
         const st = view.state as TerminalViewState
-        const scope = st.scope === "workspace" ? workspaceTerminalScope(workspaceId) : st.sessionId
+        const scope = st.scope === "workspace" ? workspaceScope(workspaceId) : st.sessionId
         await this.deps.closeTerminal(scope, st.terminalId)
         break
       }
