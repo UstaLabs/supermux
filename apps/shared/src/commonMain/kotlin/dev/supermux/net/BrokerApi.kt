@@ -21,13 +21,17 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
+import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SlashCommand
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -195,6 +199,47 @@ data class DraftAttachmentDto(
 
 @Serializable
 data class ReorderSessionsBody(val orderedIds: List<String>)
+
+@Serializable
+data class WorkspacesResponse(val workspaces: List<WorkspaceDto> = emptyList())
+
+@Serializable
+data class CreateWorkspaceBody(
+    val name: String? = null,
+    val workdir: String,
+    val worktree: Boolean? = null,
+    val baseBranch: String? = null,
+)
+
+@Serializable
+data class PatchWorkspaceBody(
+    val name: String? = null,
+    val layout: LayoutNodeDto? = null,
+    val activeViewId: String? = null,
+)
+
+@Serializable
+data class AddViewBody(
+    val kind: String,
+    val state: JsonObject,
+    val title: String? = null,
+    val groupId: String? = null,
+)
+
+@Serializable
+data class PatchViewBody(
+    val title: String? = null,
+    val state: JsonObject? = null,
+)
+
+@Serializable
+data class MoveViewBody(
+    val toWorkspaceId: String,
+    val toGroupId: String? = null,
+)
+
+@Serializable
+data class ReorderWorkspacesBody(val orderedIds: List<String>)
 
 @Serializable
 data class SpawnResponse(
@@ -1244,6 +1289,80 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(ReorderSessionsBody(orderedIds)))
         }
+    }
+
+    /** GET /workspaces */
+    suspend fun listWorkspaces(): List<WorkspaceDto> =
+        getJson<WorkspacesResponse>("$httpBase/workspaces").workspaces
+
+    /** POST /workspaces */
+    suspend fun createWorkspace(body: CreateWorkspaceBody): WorkspaceDto =
+        decode(http.post("$httpBase/workspaces") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        })
+
+    /** PATCH /workspaces/{id} — name, layout, or active view. */
+    suspend fun patchWorkspace(id: String, body: PatchWorkspaceBody): WorkspaceDto =
+        decode(http.patch("$httpBase/workspaces/$id") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        })
+
+    /** DELETE /workspaces/{id} — archives it and its chat sessions. */
+    suspend fun archiveWorkspace(id: String) {
+        ensureMutationSuccess(http.delete("$httpBase/workspaces/$id") {
+            header("Authorization", bearerHeader())
+        })
+    }
+
+    /** PATCH /workspaces/reorder */
+    suspend fun reorderWorkspaces(orderedIds: List<String>) {
+        ensureMutationSuccess(http.patch("$httpBase/workspaces/reorder") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ReorderWorkspacesBody(orderedIds)))
+        })
+    }
+
+    /** POST /workspaces/{id}/views */
+    suspend fun addView(workspaceId: String, body: AddViewBody): ViewDto =
+        decode(http.post("$httpBase/workspaces/$workspaceId/views") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        })
+
+    /** PATCH /workspaces/{wid}/views/{vid} */
+    suspend fun patchView(workspaceId: String, viewId: String, body: PatchViewBody): ViewDto =
+        decode(http.patch("$httpBase/workspaces/$workspaceId/views/$viewId") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        })
+
+    /**
+     * DELETE /workspaces/{wid}/views/{vid}
+     *
+     * This ENDS the work behind the view: a chat archives its session, a terminal
+     * is killed, a display is stopped (spec §9.3). The caller must have asked the
+     * user first — the broker does not confirm.
+     */
+    suspend fun closeView(workspaceId: String, viewId: String) {
+        ensureMutationSuccess(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId") {
+            header("Authorization", bearerHeader())
+        })
+    }
+
+    /** POST /views/{id}/move */
+    suspend fun moveView(viewId: String, body: MoveViewBody) {
+        ensureMutationSuccess(http.post("$httpBase/views/$viewId/move") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(body))
+        })
     }
 
     /** POST /sessions */
