@@ -16,6 +16,7 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.desktop.workspace.DesktopRoute
 import dev.supermux.desktop.workspace.WorkspaceRoot
 import dev.supermux.desktop.workspace.WorkspaceStateStore
 import dev.supermux.desktop.workspace.WorkspaceUiState
@@ -421,7 +422,7 @@ class UsageScreenTest {
     }
 
     @Test fun overlay_opens_from_ui_usage_open_and_loads_the_usage_data() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Usage) }
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -438,7 +439,7 @@ class UsageScreenTest {
     }
 
     @Test fun escape_closes_the_usage_overlay() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Usage) }
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -453,7 +454,7 @@ class UsageScreenTest {
     }
 
     @Test fun workspace_shortcuts_are_gated_off_while_the_usage_overlay_is_up() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true } // sidebarCollapsed defaults false
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Usage) } // sidebarCollapsed defaults false
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -471,7 +472,7 @@ class UsageScreenTest {
     }
 
     @Test fun a_successful_redeem_updates_the_codex_card_in_place() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { usageOpen = true }
+        val ui = WorkspaceUiState().apply { navigate(DesktopRoute.Usage) }
         val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {

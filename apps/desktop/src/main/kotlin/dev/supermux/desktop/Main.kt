@@ -1021,7 +1021,7 @@ fun main() {
                     // renders with no click. SM_ARCHIVED_RESUME=<archived-session-name> instead drives the
                     // SAME resume path `ArchivedScreen`'s onResume callback uses in WorkspaceRoot: a
                     // fire-and-forget `app.resume(id)` immediately followed by closing the overlay
-                    // (`ui.archivedOpen = false`) — the resumed session then arrives back in the live
+                    // (`ui.goBack()`) — the resumed session then arrives back in the live
                     // sidebar via a WS frame, same as a real click. SM_ARCHIVED_OPEN and SM_ARCHIVED_RESUME
                     // may both be set (open renders first, then resume fires) or used independently. This
                     // SPAWNS/UN-ARCHIVES a real session on SM_ARCHIVED_RESUME — only point it at a
@@ -1064,7 +1064,7 @@ fun main() {
                                     println("[archived] SM_ARCHIVED_RESUME session '$archivedResumeName' not found in archived() after 30s")
                                 } else {
                                     app.resume(t.id)
-                                    ui.archivedOpen = false
+                                    ui.goBack()
                                     println("[archived] resumed '$archivedResumeName' (${t.id}) and closed the overlay")
                                 }
                             }
@@ -1170,7 +1170,7 @@ fun main() {
                     }
 
                     // Headless Assistant verification hook (desktop-parity Task 5): SM_ASSISTANT=1
-                    // opens Assistant (soul + curator). Read-only — never saves or runCuratorNow.
+                    // opens Assistant (Identity: soul). Read-only — never saves.
                     val assistantHook = System.getenv("SM_ASSISTANT") == "1"
                     if (assistantHook) {
                         LaunchedEffect(app) {

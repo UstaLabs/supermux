@@ -24,6 +24,9 @@ composeMultiplatform = "1.11.1"
 # Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
 # 1.11.1 / 2.3.21), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
 composeHotReload = "1.2.0"
+# Navigation 3 (Compose Multiplatform / JetBrains fork). Stable 1.1.1 works on desktop JVM.
+# Desktop pilot: full-pane workspace overlays (Settings / Usage / Archived / AppUpdate).
+navigation3 = "1.1.1"
 jediterm = "3.73"
 kcef = "2025.03.23"
 markdown = "0.7.6"
@@ -78,6 +81,8 @@ markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+# JetBrains multiplatform Navigation 3 UI (pulls navigation3-runtime transitively).
+jetbrains-navigation3-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
 
 [plugins]
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

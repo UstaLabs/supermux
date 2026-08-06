@@ -378,7 +378,7 @@ class EditorLspScreenTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun lsp_settings_overlay_opens_from_ui_and_loads_the_server_list() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { lspSettingsOpen = true }
+        val ui = WorkspaceUiState().apply { openLspSettings() }
         val app = appForLspSettings()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -398,7 +398,7 @@ class EditorLspScreenTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun escape_closes_the_lsp_settings_overlay() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { lspSettingsOpen = true }
+        val ui = WorkspaceUiState().apply { openLspSettings() }
         val app = appForLspSettings()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -418,7 +418,7 @@ class EditorLspScreenTest {
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun workspace_shortcuts_are_gated_off_while_the_lsp_settings_overlay_is_up() = runComposeUiTest {
-        val ui = WorkspaceUiState().apply { lspSettingsOpen = true }
+        val ui = WorkspaceUiState().apply { openLspSettings() }
         val app = appForLspSettings()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {

@@ -111,14 +111,15 @@ fun SystemSettingsScreen(
 
     LaunchedEffect(Unit) { loadStatus(forceCheck = false) }
 
-    Column(
+    Box(
         modifier
             .fillMaxSize()
             .testTag("system_settings_screen"),
+        contentAlignment = Alignment.TopCenter,
     ) {
         if (loading && status == null) {
             Box(
-                Modifier.fillMaxSize().weight(1f, fill = true),
+                Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator(
@@ -131,7 +132,7 @@ fun SystemSettingsScreen(
                 Modifier
                     .widthIn(max = SettingsDetailMaxWidth)
                     .fillMaxWidth()
-                    .weight(1f, fill = true)
+                    .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(Space.lg)
                     .testTag("system_settings_body"),
