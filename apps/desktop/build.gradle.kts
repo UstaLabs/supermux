@@ -99,6 +99,16 @@ tasks.withType<Test>().configureEach {
     maxParallelForks = 1
 }
 
+// Design-approval window for WorkspaceListPanel (test-source main — never ships).
+// Run: ./gradlew :desktop:previewWorkspaceList
+tasks.register<JavaExec>("previewWorkspaceList") {
+    group = "application"
+    description = "Open WorkspaceListPanel fixture window for design screenshot (sidebar proportions)"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.WorkspaceListPreviewKt")
+}
+
 // M3 editor: ship the SAME committed CodeMirror bundle the mobile apps use (single source of
 // truth: apps/android/src/main/assets/editor/) into desktop resources under editor/. KCEF loads
 // the page from an extracted file:// path at runtime (see EditorWebAssets), but the bundle rides
