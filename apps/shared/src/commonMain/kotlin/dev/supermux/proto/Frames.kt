@@ -382,7 +382,12 @@ sealed interface ServerFrame {
     ) : ServerFrame
 
     @Serializable @SerialName("fs_changed")
-    data class FsChanged(val session: String, val paths: List<String> = emptyList()) : ServerFrame
+    data class FsChanged(
+        val session: String,
+        /** Present since the workspaces change; null from an older broker. */
+        val workspace: String? = null,
+        val paths: List<String> = emptyList(),
+    ) : ServerFrame
 
     // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
     // on every job state change (running → done|failed) — src/main.ts:onUpdate.

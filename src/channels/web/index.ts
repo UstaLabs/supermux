@@ -236,6 +236,8 @@ export interface WebChannelOpts {
   moveWorkspaceView?: (viewId: string, toWorkspaceId: string, toGroupId?: string) => void
   /** Workdir of a workspace, for the fs and terminal routes in Phase 4. */
   getWorkspaceWorkdir?: (id: string) => string | undefined
+  /** Workspace id a session belongs to (for fs_changed). */
+  getSessionWorkspaceId?: (sessionId: string) => string | undefined
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
@@ -1043,8 +1045,16 @@ export class WebChannel implements Channel {
       if (this.fsWatcher && this.opts.getSessionWorkdir) {
         const fsWorkdir = this.opts.getSessionWorkdir(frame.session)
         if (fsWorkdir) {
+          const workspaceIdForWatch = this.opts.getSessionWorkspaceId?.(frame.session)
           const cb = (paths: string[]) => {
-            try { ws.send(JSON.stringify({ type: "fs_changed", session: frame.session, paths })) } catch {}
+            try {
+              ws.send(JSON.stringify({
+                type: "fs_changed",
+                session: frame.session,
+                workspace: workspaceIdForWatch,
+                paths,
+              }))
+            } catch {}
           }
           ;(ws.data as any)._editorCb = cb
           ;(ws.data as any)._editorSession = frame.session
@@ -2054,6 +2064,81 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getSessionWorkdir?.(id)
       if (!workdir) return this.json({ error: "session not found" }, 404)
+      return this.json({ repos: listRepoRefs(workdir) })
+    }
+
+    // ── Editor filesystem routes, workspace-scoped ──────────────────────────
+    // Byte-for-byte the same handlers as the /sessions/:id/fs* block above,
+    // resolving the workdir from the workspace instead of the session. Spec §7.4.
+    //
+    // FsService enforces containment server-side: a path that escapes the root
+    // throws, and that is the security boundary. The client's own guard is
+    // redundant defense, not the real one.
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new FsService(workdir)
+      const relPath = url.searchParams.get("path") ?? "."
+      const entries = await fs.listDir(relPath)
+      return this.json(entries)
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/read$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new FsService(workdir)
+      const filePath = url.searchParams.get("path") ?? ""
+      try {
+        const content = await fs.readFile(filePath)
+        return new Response(content, { headers: { "content-type": "text/plain; charset=utf-8" } })
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        if (msg.includes("too large")) return new Response(msg, { status: 413 })
+        if (msg.includes("binary")) return new Response(msg, { status: 415 })
+        return new Response(msg, { status: 400 })
+      }
+    }
+    if (method === "PUT" && path.match(/^\/workspaces\/[^/]+\/fs\/write$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new FsService(workdir)
+      const filePath = url.searchParams.get("path") ?? ""
+      const content = await req.text()
+      try {
+        const result = await fs.writeFile(filePath, content)
+        return this.json(result)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/search$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      const fs = new FsService(workdir)
+      const query = url.searchParams.get("q") ?? ""
+      const results = await fs.searchFiles(query)
+      return this.json(results)
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/diff$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
+      // Workspace id is not a session id — base-commit / review bookkeeping stays
+      // session-keyed. Diff still works from the workdir alone with empty base commits.
+      const baseCommits: Record<string, string> = {}
+      const createdAt = undefined
+      const baseSpec = url.searchParams.get("base") ?? undefined
+      const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
+      const comments: unknown[] = []
+      return this.json({ repos, comments })
+    }
+    if (method === "GET" && path.match(/^\/workspaces\/[^/]+\/fs\/refs$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const workdir = this.opts.getWorkspaceWorkdir?.(id)
+      if (!workdir) return this.json({ error: "workspace not found" }, 404)
       return this.json({ repos: listRepoRefs(workdir) })
     }
 

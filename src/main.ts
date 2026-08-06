@@ -1680,6 +1680,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     moveWorkspaceView: (viewId, toWorkspaceId, toGroupId) =>
       registry.workspaces.moveView(viewId, toWorkspaceId, toGroupId),
     getWorkspaceWorkdir: (id) => registry.workspaces.getById(id)?.workdir,
+    // sessions.workspace_id lives on disk; SessionRecord does not expose it.
+    getSessionWorkspaceId: (id) => {
+      const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as
+        | { workspace_id: string | null }
+        | null
+      return row?.workspace_id ?? undefined
+    },
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {

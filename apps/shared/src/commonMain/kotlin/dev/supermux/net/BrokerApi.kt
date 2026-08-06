@@ -655,6 +655,9 @@ data class TerminalListResponse(val terminals: List<TerminalSummary> = emptyList
 data class TermCloseBody(val session: String, val terminal: String)
 
 @Serializable
+data class CloseWorkspaceTerminalBody(val workspace: String, val terminal: String)
+
+@Serializable
 data class DisplayStream(
     val id: String,
     val sessionName: String = "",
@@ -1254,6 +1257,14 @@ class BrokerApi(
     /** POST /api/term/close {"session","terminal"} — destroy one scratch terminal. */
     suspend fun closeTerminal(session: String, terminal: String) =
         postJson("$httpBase/api/term/close", TermCloseBody(session, terminal))
+
+    /** GET /api/term/list?workspace= */
+    suspend fun listWorkspaceTerminals(workspaceId: String): List<TerminalSummary> =
+        getJson<TerminalListResponse>("$httpBase/api/term/list?workspace=${urlEncode(workspaceId)}").terminals
+
+    /** POST /api/term/close for a workspace terminal. */
+    suspend fun closeWorkspaceTerminal(workspaceId: String, terminal: String) =
+        postJson("$httpBase/api/term/close", CloseWorkspaceTerminalBody(workspaceId, terminal))
 
     /** POST /sessions/<id>/model {"model": ...} */
     suspend fun switchModel(id: String, model: String) =
@@ -2102,6 +2113,46 @@ class BrokerApi(
     /** GET /sessions/<id>/fs/refs → { repos: RepoRefs[] } (branches + recent commits per repo). */
     suspend fun fsRefs(sessionId: String): FsRefsResult =
         getJson("$httpBase/sessions/$sessionId/fs/refs")
+
+    // ── Workspace-scoped editor filesystem (mirrors the session routes) ────────
+
+    /** GET /workspaces/<id>/fs?path=<rel> */
+    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
+        getJson("$httpBase/workspaces/$workspaceId/fs?path=${urlEncode(path)}")
+
+    /** GET /workspaces/<id>/fs/read?path=<rel> */
+    suspend fun workspaceFsRead(workspaceId: String, path: String): String {
+        val resp = http.get("$httpBase/workspaces/$workspaceId/fs/read?path=${urlEncode(path)}") {
+            header("Authorization", bearerHeader())
+        }
+        if (!resp.status.isSuccess()) {
+            val body = resp.bodyAsText()
+            throw FsException(resp.status.value, body.ifBlank { "read failed (${resp.status.value})" })
+        }
+        return resp.bodyAsText()
+    }
+
+    /** PUT /workspaces/<id>/fs/write?path=<rel> (text/plain body) */
+    suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean {
+        val resp = http.put("$httpBase/workspaces/$workspaceId/fs/write?path=${urlEncode(path)}") {
+            header("Authorization", bearerHeader())
+            contentType(ContentType.Text.Plain)
+            setBody(content)
+        }
+        return resp.status.isSuccess()
+    }
+
+    /** GET /workspaces/<id>/fs/search?q=<query> */
+    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
+        getJson("$httpBase/workspaces/$workspaceId/fs/search?q=${urlEncode(q)}")
+
+    /** GET /workspaces/<id>/fs/diff?base=<spec> */
+    suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult =
+        getJson("$httpBase/workspaces/$workspaceId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
+
+    /** GET /workspaces/<id>/fs/refs */
+    suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult =
+        getJson("$httpBase/workspaces/$workspaceId/fs/refs")
 
     /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =
