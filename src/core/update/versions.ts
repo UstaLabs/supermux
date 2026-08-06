@@ -28,7 +28,8 @@ const ChannelSchema = z.object({
   publishedAt: z.string(),
   notesUrl: z.string(),
   // record over arbitrary string keys (linux-x64 / linux-arm64 today, more later;
-  // also android / desktop-linux / desktop-windows / desktop-macos for client installers)
+  // also android / desktop-linux / desktop-windows / desktop-macos /
+  // compose-desktop-macos for client installers)
   assets: z.record(z.string(), AssetSchema),
   // Per-client marketing versions (independent of the broker/release tag). Optional for
   // backward-compat with older versions.json that only listed broker assets.

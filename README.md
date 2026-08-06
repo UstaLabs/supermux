@@ -54,7 +54,8 @@ Your subscriptions. Your repositories. Your hardware. No supermux account requir
 |---|---|---|
 | iPhone, iPad, Apple Watch | [App Store](https://apps.apple.com/app/supermux/id6782643917) | Native mobile control, multi-pane iPad workspace, push, and Watch actions |
 | Android phones, tablets, foldables | [Latest APK](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-android.apk) | Native Compose client with phone and multi-pane large-screen layouts |
-| macOS (Apple silicon) | [Latest DMG](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-macos.dmg) | Native client that can also turn this Mac into a persistent host |
+| macOS (Apple silicon) | [Latest DMG](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-macos.dmg) | Native SwiftUI client that can also turn this Mac into a persistent host |
+| macOS Desktop (Apple silicon) | [Latest DMG](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-desktop-macos.dmg) | Compose Multiplatform desktop client (same family as Linux/Windows); installs as Supermux Desktop.app |
 | Linux (x64) | [Latest DEB](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-linux.deb) | Desktop client with a bundled local broker and host onboarding |
 | Windows (x64) | [Latest MSI](https://github.com/UstaLabs/supermux/releases/latest/download/supermux-windows.msi) | Native desktop client; host agents through WSL2 or another paired machine |
 | Any modern browser | Served by your host | Installable PWA with chat, editor, diff review, terminal, and administration |

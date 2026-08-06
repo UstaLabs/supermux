@@ -92,3 +92,43 @@ test("publish-website prefers CI-baked Android client version over gradle defaul
   // Must not be the only source: old sed-from-versionName line is gone.
   expect(publishJob).not.toContain('sed -n \'s/.*versionName = "\\([^"]*\\)".*/\\1/p\' apps/android/build.gradle.kts')
 })
+
+const composeMacStart = workflow.indexOf("  build-compose-desktop-macos:")
+const composeMacEnd = workflow.indexOf("\n  build-ios-testflight:", composeMacStart)
+const composeMacJob = workflow.slice(composeMacStart, composeMacEnd)
+
+function composeMacPosition(needle: string): number {
+  const index = composeMacJob.indexOf(needle)
+  expect(index, `missing Compose macOS release step: ${needle}`).toBeGreaterThanOrEqual(0)
+  return index
+}
+
+test("Compose macOS desktop ships alongside native Swift macOS DMG", () => {
+  expect(composeMacStart).toBeGreaterThanOrEqual(0)
+  expect(composeMacEnd).toBeGreaterThan(composeMacStart)
+
+  // Still builds the native SwiftUI host app under the historical job name.
+  expect(workflow).toContain("  build-desktop-macos:")
+  expect(workflow).toContain("dist/supermux-macos.dmg")
+  // New Compose Multiplatform lane with a distinct stable asset name.
+  composeMacPosition(":desktop:packageDmg")
+  composeMacPosition("stage-desktop-binaries.sh macos-arm64")
+  composeMacPosition("dist/supermux-desktop-macos.dmg")
+  composeMacPosition("-PsmMacSignIdentity=")
+  composeMacPosition("notarytool submit")
+  // Must not clobber the native Swift artifact name.
+  expect(composeMacJob).not.toContain("dist/supermux-macos.dmg")
+})
+
+test("release job publishes both macOS DMGs", () => {
+  const releaseStart = workflow.indexOf("  release:")
+  const releaseJob = workflow.slice(releaseStart, workflow.indexOf("  publish-website:", releaseStart))
+  expect(releaseJob).toContain("build-compose-desktop-macos")
+  expect(releaseJob).toContain("dist/supermux-macos.dmg")
+  expect(releaseJob).toContain("dist/supermux-desktop-macos.dmg")
+})
+
+test("publish-website includes compose-desktop-macos sha for versions.json", () => {
+  expect(publishJob).toContain("supermux-desktop-macos.dmg.sha256")
+  expect(publishJob).toContain("SHA_COMPOSE_DESKTOP_MACOS")
+})

@@ -80,7 +80,9 @@ fun ClientPlatform.assetKey(): String = when (this) {
     ClientPlatform.ANDROID -> "android"
     ClientPlatform.DESKTOP_LINUX -> "desktop-linux"
     ClientPlatform.DESKTOP_WINDOWS -> "desktop-windows"
-    ClientPlatform.DESKTOP_MACOS -> "desktop-macos"
+    // Compose Multiplatform mac client. (Native SwiftUI Supermux.app keeps the
+    // historical `desktop-macos` → supermux-macos.dmg mapping for AppUpdateView.)
+    ClientPlatform.DESKTOP_MACOS -> "compose-desktop-macos"
     ClientPlatform.IOS -> ""
 }
 
@@ -89,7 +91,7 @@ fun ClientPlatform.githubAssetName(): String = when (this) {
     ClientPlatform.ANDROID -> "supermux-android.apk"
     ClientPlatform.DESKTOP_LINUX -> "supermux-linux.deb"
     ClientPlatform.DESKTOP_WINDOWS -> "supermux-windows.msi"
-    ClientPlatform.DESKTOP_MACOS -> "supermux-macos.dmg"
+    ClientPlatform.DESKTOP_MACOS -> "supermux-desktop-macos.dmg"
     ClientPlatform.IOS -> ""
 }
 
