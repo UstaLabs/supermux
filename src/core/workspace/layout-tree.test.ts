@@ -111,6 +111,14 @@ test("normalizeLayout repairs sizes after a child is dropped", () => {
   })
 })
 
+test("normalizeLayout keeps the sizes when no child was dropped", () => {
+  const l: LayoutNode = {
+    type: "split", direction: "row", sizes: [0.2, 0.8],
+    children: [group("g1", ["v1"]), group("g2", ["v2"])],
+  }
+  expect(normalizeLayout(l)).toEqual(l)
+})
+
 test("normalizeLayout repairs an activeViewId that left the group", () => {
   const l = { type: "group", id: "g1", viewIds: ["v1", "v2"], activeViewId: "v9" } as LayoutNode
   expect(normalizeLayout(l)).toEqual(group("g1", ["v1", "v2"], "v1"))
