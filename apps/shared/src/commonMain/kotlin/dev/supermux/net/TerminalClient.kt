@@ -21,13 +21,25 @@ enum class TerminalStatus { CONNECTING, CONNECTED, DISCONNECTED }
 
 /**
  * Build the /ws/term URL. Pure + testable. Mirrors the broker handler
- * (channels/web/index.ts): `kind=agent` forces the singular agent terminal and
- * ignores terminalId; scratch may name a terminal (broker defaults to "main").
+ * (channels/web/index.ts): either `?session=` (session-scoped, incl. kind=agent)
+ * or `?workspace=` (a plain shell in the workspace workdir). Exactly one.
+ * `kind=agent` forces the singular agent terminal and ignores terminalId; scratch
+ * may name a terminal (broker defaults to "main").
  */
-internal fun termWsUrl(baseUrl: String, sessionId: String, kind: String, terminalId: String?): String {
+internal fun termWsUrl(
+    baseUrl: String,
+    sessionId: String,
+    kind: String,
+    terminalId: String?,
+    workspaceId: String? = null,
+): String {
     // Darwin's (iOS) WebSocket requires a ws/wss scheme; the broker base may be an
     // http(s) pair URL. Normalize exactly like BrokerClient before opening the socket.
     val wsBase = wsBaseUrl(baseUrl)
+    if (workspaceId != null) {
+        val base = "$wsBase/ws/term?workspace=$workspaceId"
+        return if (terminalId != null) "$base&terminal=$terminalId" else base
+    }
     val base = "$wsBase/ws/term?session=$sessionId"
     return when {
         kind == "agent" -> "$base&kind=agent"
@@ -58,6 +70,8 @@ class TerminalClient(
     private val sessionId: String,
     private val kind: String = "scratch",      // "scratch" | "agent"
     private val terminalId: String? = null,    // scratch only; broker defaults to "main"
+    /** When set, opens /ws/term?workspace=… instead of ?session=… (spec §7.3). */
+    private val workspaceId: String? = null,
 ) {
     private val _output = MutableSharedFlow<ByteArray>(extraBufferCapacity = 512)
     val output: SharedFlow<ByteArray> = _output
@@ -84,7 +98,7 @@ class TerminalClient(
             try {
                 _status.value = TerminalStatus.CONNECTING
                 http.webSocket(
-                    urlString = termWsUrl(baseUrl, sessionId, kind, terminalId),
+                    urlString = termWsUrl(baseUrl, sessionId, kind, terminalId, workspaceId),
                     request = { header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0

@@ -880,6 +880,10 @@ class DesktopAppState(
     fun connectAgentTerminal(sessionId: String): TerminalClient =
         TerminalClient(baseUrl, token, http, sessionId, kind = "agent")
 
+    /** Factory for a workspace-scoped scratch terminal (`/ws/term?workspace=`). Spec §7.3. */
+    fun connectWorkspaceTerminal(workspaceId: String, terminalId: String): TerminalClient =
+        TerminalClient(baseUrl, token, http, sessionId = "", terminalId = terminalId, workspaceId = workspaceId)
+
     /** GET /api/term/list — the session's persisted scratch terminals (source of truth = tmux),
      *  used to rebuild the tab strip on open. Never throws (except real cancellation): any
      *  failure logs and yields []. */
@@ -891,6 +895,17 @@ class DesktopAppState(
      *  parity: the tmux session may already be gone). */
     fun closeTerminal(sessionId: String, terminalId: String) {
         stateScope.launch { runApi("closeTerminal") { api.closeTerminal(sessionId, terminalId) } }
+    }
+
+    /** GET /api/term/list?workspace= — workspace-scoped scratch terminals. */
+    suspend fun listWorkspaceTerminals(workspaceId: String): List<TerminalSummary> =
+        runApi("listWorkspaceTerminals") { api.listWorkspaceTerminals(workspaceId) } ?: emptyList()
+
+    /** POST /api/term/close for a workspace terminal. */
+    fun closeWorkspaceTerminal(workspaceId: String, terminalId: String) {
+        stateScope.launch {
+            runApi("closeWorkspaceTerminal") { api.closeWorkspaceTerminal(workspaceId, terminalId) }
+        }
     }
 
     // ── Displays (M5-2; mirrors AppViewModel.listDisplays/connectVnc/startDisplay/stopDisplay:
@@ -939,6 +954,40 @@ class DesktopAppState(
     /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure. */
     suspend fun fsList(session: SessionInfo, path: String): List<FsEntry> =
         runApi("fsList") { api.fsList(session.id, path) } ?: emptyList()
+
+    /** GET /workspaces/<id>/fs → directory listing (workspace workdir). Empty on any failure. */
+    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
+        runApi("workspaceFsList") { api.workspaceFsList(workspaceId, path) } ?: emptyList()
+
+    /**
+     * GET /workspaces/<id>/fs/read → file text. Same Result shape as [fsRead] (preserves
+     * FsException messages for the editor load-error UI).
+     */
+    suspend fun workspaceFsRead(workspaceId: String, path: String): Result<String> =
+        try {
+            Result.success(api.workspaceFsRead(workspaceId, path))
+        } catch (c: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            Result.failure(c)
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+    /** PUT /workspaces/<id>/fs/write → true on success. */
+    suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
+        runApi("workspaceFsWrite") { api.workspaceFsWrite(workspaceId, path, content) } ?: false
+
+    /** GET /workspaces/<id>/fs/search → filename matches. Empty on any failure. */
+    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
+        runApi("workspaceFsSearch") { api.workspaceFsSearch(workspaceId, q) } ?: emptyList()
+
+    /** GET /workspaces/<id>/fs/diff. Null on any failure. */
+    suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
+        runApi("workspaceFsDiff") { api.workspaceFsDiff(workspaceId, base) }
+
+    /** GET /workspaces/<id>/fs/refs. Null on any failure. */
+    suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult? =
+        runApi("workspaceFsRefs") { api.workspaceFsRefs(workspaceId) }
 
     /**
      * GET /sessions/<id>/fs/read → file text as a Result (mirrors AppViewModel.fsRead). Deliberately

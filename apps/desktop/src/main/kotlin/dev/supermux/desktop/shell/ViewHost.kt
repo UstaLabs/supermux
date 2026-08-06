@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -14,7 +15,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,11 +26,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.display.DisplayPanel
+import dev.supermux.desktop.editor.EditorPanel
+import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.PendingEditorOpen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
+import dev.supermux.net.TerminalClient
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
@@ -46,6 +52,10 @@ import dev.supermux.proto.stateString
  *
  * Adapters wrap the same call shapes SessionDetail uses today — see ChatPanel,
  * DesktopEditorPanel, DesktopTerminalPanel / TerminalTabs, DisplayPanel.
+ *
+ * [workspaceTerminalContent] is a test seam: SwingPanel/JediTerm cannot be hosted
+ * under runComposeUiTest, so UI tests inject a pure-Compose stand-in. Production
+ * always uses the default real [DesktopTerminalPanel].
  */
 @Composable
 fun ViewHost(
@@ -55,6 +65,13 @@ fun ViewHost(
     app: DesktopAppState,
     drafts: SnapshotStateMap<String, String>,
     modifier: Modifier = Modifier,
+    /**
+     * Workspace primary session — used only for LSP (still session-keyed in this phase).
+     * A workspace with no chat view passes null and the editor says so.
+     */
+    primarySessionId: String? = null,
+    workspaceTerminalContent: @Composable (connect: () -> TerminalClient, modifier: Modifier) -> Unit =
+        { connect, mod -> DesktopTerminalPanel(connect = connect, modifier = mod) },
 ) {
     when (view.kind) {
         "chat" -> {
@@ -65,22 +82,30 @@ fun ViewHost(
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
             val terminalId = view.stateString("terminalId") ?: "main"
-            // Phase 4 adds the workspace scope to the broker. Until it lands, a
-            // workspace-scoped terminal has nothing to attach to — draw the hint.
             if (scope == "session") {
                 val sessionId = view.stateString("sessionId")
                 if (sessionId == null) UnknownViewHint(view.kind, modifier)
                 else AgentTerminalForSession(app, sessionId, terminalId, modifier)
             } else {
-                WorkspaceTerminalPending(modifier) // replaced in Phase 4
+                WorkspaceTerminalPanel(
+                    app = app,
+                    workspaceId = workspaceId,
+                    terminalId = terminalId,
+                    content = workspaceTerminalContent,
+                    modifier = modifier.testTag("terminal-$workspaceId-$terminalId"),
+                )
             }
         }
         "editor" -> EditorPanelForWorkdir(
             app = app,
             workdir = workdir,
+            workspaceId = workspaceId,
             path = view.stateString("path"),
             mode = view.stateString("mode") ?: "tree",
-            modifier = modifier,
+            // LSP is still keyed by session (see the plan header). A workspace with
+            // no chat view gets no code intelligence — say so rather than looking broken.
+            lspSessionId = primarySessionId,
+            modifier = modifier.testTag("editor-$workdir"),
         )
         "display" -> {
             val displayId = view.stateString("displayId")
@@ -160,46 +185,115 @@ private fun AgentTerminalForSession(
 }
 
 /**
- * Editor adapter. Broker fs* APIs are still session-scoped, so we pick a live session
- * whose workdir (or repo root) matches the workspace workdir — the same binding
- * DesktopEditorPanel uses inside SessionDetail.
+ * Workspace-scoped terminal — a plain shell in the workspace work directory.
+ * Attaches with `?workspace=<id>` (spec §7.3). Same JediTerm rules as SessionDetail:
+ * only composed when the tab is active (LayoutHost guarantees that), input is
+ * marshaled off non-EDT threads by TerminalClient, and nothing Compose paints
+ * can appear above the heavyweight Swing child.
+ */
+@Composable
+private fun WorkspaceTerminalPanel(
+    app: DesktopAppState,
+    workspaceId: String,
+    terminalId: String,
+    content: @Composable (connect: () -> TerminalClient, modifier: Modifier) -> Unit,
+    modifier: Modifier,
+) {
+    key(workspaceId, terminalId) {
+        content(
+            { app.connectWorkspaceTerminal(workspaceId, terminalId) },
+            modifier.fillMaxSize(),
+        )
+    }
+}
+
+/**
+ * Editor adapter. Files read/write through `/workspaces/:id/fs*`. LSP stays
+ * session-keyed: when [lspSessionId] is set we drive LSP and editor_open through
+ * that session; when null the editor still works and shows a quiet one-line note.
  */
 @Composable
 private fun EditorPanelForWorkdir(
     app: DesktopAppState,
     workdir: String,
+    workspaceId: String,
     path: String?,
     mode: String,
+    lspSessionId: String?,
     modifier: Modifier,
 ) {
-    val sessions by app.sessions.collectAsState()
-    val session = sessions.firstOrNull { it.workdir == workdir }
-        ?: sessions.firstOrNull { it.repo_root == workdir }
-    if (session == null) {
-        Box(
-            modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                .testTag("view_editor_pending"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "Editor needs a session in $workdir",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-            )
-        }
-        return
-    }
-    // mode is reserved for tree/diff/file once the view state drives EditorPanel; path opens a tab.
     @Suppress("UNUSED_VARIABLE")
     val editorMode = mode
+    val sessions by app.sessions.collectAsState()
+    val lspSession = lspSessionId?.let { id -> sessions.firstOrNull { it.id == id } }
     val pending = path?.let { PendingEditorOpen(it, null, null) }
-    DesktopEditorPanel(
-        app = app,
-        session = session,
-        pendingOpen = pending,
-        onPendingOpenConsumed = {},
-        modifier = modifier.fillMaxSize().testTag("view_editor"),
-    )
+    val prefsStore = remember { EditorPrefsStore() }
+    var prefs by remember { mutableStateOf(prefsStore.load()) }
+    // Editor state is keyed on this id — use the workspace so a chatless workspace still
+    // has a stable identity without inventing a fake session.
+    val editorKey = lspSession?.id ?: "workspace:$workspaceId"
+
+    Column(modifier.fillMaxSize()) {
+        if (lspSession == null) {
+            Text(
+                "No agent in this workspace — code intelligence is off.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .padding(horizontal = Space.sm, vertical = Space.xs)
+                    .testTag("editor-no-lsp"),
+            )
+        }
+        EditorPanel(
+            sessionId = editorKey,
+            workdir = workdir,
+            fsList = { p -> app.workspaceFsList(workspaceId, p) },
+            fsRead = { p -> app.workspaceFsRead(workspaceId, p) },
+            fsWrite = { p, content -> app.workspaceFsWrite(workspaceId, p, content) },
+            fsSearch = { q -> app.workspaceFsSearch(workspaceId, q) },
+            fsDiff = { base -> app.workspaceFsDiff(workspaceId, base) },
+            fsRefs = { app.workspaceFsRefs(workspaceId) },
+            // Review stays session-keyed; only available when we have a primary chat.
+            onReviewAddComment = { body ->
+                if (lspSession != null) app.reviewAddComment(lspSession, body) else null
+            },
+            onReviewResolve = { commentId ->
+                if (lspSession != null) app.reviewResolve(lspSession, commentId) else false
+            },
+            onReviewSubmit = {
+                if (lspSession != null) app.reviewSubmit(lspSession) else null
+            },
+            fsChanges = app.fsChanges,
+            lspStatus = app.lspStatus,
+            lspRpc = app.lspRpc,
+            lspStatusQuery = { _, p ->
+                if (lspSession != null) app.lspStatusQuery(lspSession, p)
+            },
+            lspOpen = { _, serverId ->
+                if (lspSession != null) app.lspOpen(lspSession, serverId)
+            },
+            lspRpcOut = { _, serverId, message ->
+                if (lspSession != null) app.lspRpcOut(lspSession, serverId, message)
+            },
+            editorOpen = {
+                if (lspSession != null) app.editorOpen(lspSession)
+            },
+            editorClose = {
+                if (lspSession != null) app.editorClose(lspSession)
+            },
+            pendingOpen = pending,
+            onPendingOpenConsumed = {},
+            prefs = prefs,
+            onFontSize = { px ->
+                val next = prefs.copy(fontSize = px).clamped()
+                prefs = next
+                prefsStore.save(next)
+            },
+            modifier = Modifier.fillMaxSize().weight(1f),
+        )
+    }
 }
 
 /**
@@ -244,33 +338,6 @@ private fun DisplayPanelForStream(
     )
 }
 
-/**
- * Placeholder until Phase 4 wires workspace-scoped terminals to the broker
- * (`w:<workspaceId>` tmux scope). Do not invent a client-only attach path.
- */
-@Composable
-private fun WorkspaceTerminalPending(modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(cs.surfaceVariant.copy(alpha = 0.4f))
-            .testTag("view_terminal_workspace_pending"),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Workspace terminal", color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(Space.xs))
-            Text(
-                "arrives in Phase 4",
-                color = cs.onSurfaceVariant,
-                fontFamily = MonoFontFamily,
-                fontSize = 12.sp,
-            )
-        }
-    }
-}
-
 /** Unknown or incomplete view — never throw; a future kind must degrade gracefully. */
 @Composable
 fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
@@ -279,7 +346,7 @@ fun UnknownViewHint(kind: String, modifier: Modifier = Modifier) {
         modifier
             .fillMaxSize()
             .background(cs.surfaceVariant.copy(alpha = 0.4f))
-            .testTag("view_unknown"),
+            .testTag("view-unknown"),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

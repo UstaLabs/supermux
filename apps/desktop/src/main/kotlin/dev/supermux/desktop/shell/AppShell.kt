@@ -785,6 +785,7 @@ fun AppShell(
                                         workdir = current.workdir,
                                         app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
                                         drafts = drafts,
+                                        primarySessionId = current.primarySessionId,
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }

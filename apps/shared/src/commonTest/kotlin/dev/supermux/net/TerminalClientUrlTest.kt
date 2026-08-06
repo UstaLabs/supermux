@@ -46,6 +46,20 @@ class TerminalClientUrlTest {
         )
     }
 
+    @Test fun workspace_scope_uses_workspace_query() {
+        assertEquals(
+            "ws://h:1/ws/term?workspace=w1&terminal=main",
+            termWsUrl("ws://h:1", "", "scratch", "main", workspaceId = "w1"),
+        )
+    }
+
+    @Test fun workspace_scope_without_terminal_id() {
+        assertEquals(
+            "ws://h:1/ws/term?workspace=w1",
+            termWsUrl("ws://h:1", "", "scratch", null, workspaceId = "w1"),
+        )
+    }
+
     @Test fun terminal_focus_frame_carries_the_authoritative_grid_size() {
         assertEquals(
             "{\"type\":\"focus\",\"focused\":true,\"cols\":61,\"rows\":27}",
