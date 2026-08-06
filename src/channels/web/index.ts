@@ -214,7 +214,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
@@ -2360,6 +2360,9 @@ export class WebChannel implements Channel {
         const inheritFrom = typeof body.inheritFrom === "string" && body.inheritFrom.trim()
           ? body.inheritFrom.trim()
           : undefined
+        const workspaceId = typeof body.workspaceId === "string" && body.workspaceId.trim()
+          ? body.workspaceId.trim()
+          : undefined
         const result = await this.opts.spawnSession({
           name: body.name as string | undefined,
           workdir: normalizedWorkdir,
@@ -2369,6 +2372,7 @@ export class WebChannel implements Channel {
           worktree: body.worktree as boolean | undefined,
           baseBranch: body.baseBranch as string | undefined,
           inheritFrom,
+          workspaceId,
         })
         return this.json(result)
       } catch (err: any) {

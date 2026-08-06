@@ -10,6 +10,9 @@ import type { Channel, InboundMessage, OutboundAction } from "./channels/channel
 import { classifyInbound, transformOutbound } from "./core/routing"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
+import { WorkspaceService } from "./core/workspace/service"
+import { workspaceDto, viewDto } from "./core/workspace/dto"
+import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
 import { exposedLinksPublicUrl, hostRelayUrl } from "./core/relay/public-url"
@@ -259,6 +262,11 @@ try {
 }
 
 const registry = new Registry(db)
+// Repair any session that has no workspace before anything reads the tables.
+// A heal logs at warn — it means a crash between the session insert and the
+// workspace insert, not a normal path. Called once at startup, never from the
+// Registry constructor.
+registry.healWorkspaces()
 const reviewStore = new ReviewStore(db)
 const settings = new SettingsStore(db)
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
@@ -988,6 +996,33 @@ const displayManager = new DisplayManager({
   onAdded: (info) => webChannel?.broadcastToAll({ type: "display_added", display: info }),
   onRemoved: (id) => webChannel?.broadcastToAll({ type: "display_removed", id }),
 })
+// Workspace behaviour layer: close-a-view side effects and create-for-session.
+// archiveSession closes over killSession/unregisterSession/webChannel the same
+// way the killSession opt does; those are only invoked after startup wiring.
+const workspaceService = new WorkspaceService(
+  registry.workspaces,
+  {
+    archiveSession: async (id) => {
+      const s = registry.get(id)
+      if (!s) return
+      await killSession(s.id)
+      unregisterSession(s.id)
+      webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+    },
+    closeTerminal: async (scope, terminalId) => {
+      await terminalManager.close(scope, terminalId)
+    },
+    stopDisplay: async (id) => {
+      await displayManager.stop(id)
+    },
+  },
+  registry.db,
+)
+
+const wsDto = (id: string) => {
+  const w = registry.workspaces.getById(id)
+  return w ? workspaceDto(w, registry.workspaces.listViews(id)) : undefined
+}
 const fsWatcher = new FsWatcher()
 
 function spawnLoginProc(kind: string) {
@@ -1361,6 +1396,30 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         inheritFromSessionId: args.inheritFrom,
       })
       const entry = registry.get(r.session_id)
+      // Spec §9.1: a session without a workspaceId gets a fresh workspace.
+      // With one, it joins that workspace as a second chat.
+      // Broadcast workspace_added/changed before session_added (spec §9.1 step 6).
+      if (entry) {
+        if (args.workspaceId) {
+          workspaceService.addChatSession(args.workspaceId, entry.id)
+          const dto = wsDto(args.workspaceId)
+          if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+        } else {
+          const ws = workspaceService.createForSession({
+            sessionId: entry.id,
+            name: entry.name,
+            workdir: entry.workdir,
+            repo_root: entry.repo_root || undefined,
+            base_branch: entry.base_branch || undefined,
+            branch: entry.session_branch || undefined,
+            sort_order: entry.sort_order,
+          })
+          webChannel?.broadcastToAll({
+            type: "workspace_added",
+            workspace: workspaceDto(ws, registry.workspaces.listViews(ws.id)),
+          })
+        }
+      }
       await refreshTelegramMenu()
       // Codex/cursor register synchronously; Claude registers via onRegister.
       // onRegister's reconnect path does not broadcast, so always notify web
@@ -1570,6 +1629,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       registry.rename(s.id, newName)
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: newName })
+      // Spec §9.5: the workspace name follows its primary session. Both frames
+      // go out — an old client only knows the first one. propagateSessionRename
+      // returns undefined when the name did not change (loop guard).
+      const wsId = propagateSessionRename(registry.workspaces, s.id, newName)
+      if (wsId) {
+        const dto = wsDto(wsId)
+        if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+      }
     },
     reorderSessions: (orderedIds) => {
       registry.sessions.reorder(orderedIds)
@@ -1577,6 +1644,42 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // the drag origin already applied optimistically; peers need this frame.
       webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
     },
+    listWorkspaces: () =>
+      registry.workspaces.list().map((w) => workspaceDto(w, registry.workspaces.listViews(w.id))),
+    getWorkspace: (id) => wsDto(id),
+    createWorkspace: async (args) => {
+      const ws = registry.workspaces.create({ name: args.name ?? "Workspace", workdir: args.workdir })
+      return workspaceDto(ws, [])
+    },
+    patchWorkspace: (id, patch) => {
+      // byUser: true is deliberate — a rename on this HTTP route came from a
+      // human, and spec §9.5 rule 5 locks the name against agent propagation.
+      if (patch.name !== undefined) registry.workspaces.rename(id, patch.name, { byUser: true })
+      if (patch.layout !== undefined) registry.workspaces.setLayout(id, patch.layout as any)
+      if (patch.activeViewId !== undefined) registry.workspaces.setActiveView(id, patch.activeViewId)
+      const dto = wsDto(id)
+      if (!dto) throw new Error("workspace not found")
+      return dto
+    },
+    archiveWorkspace: async (id) => { await workspaceService.archiveWorkspace(id) },
+    reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
+    addWorkspaceView: (workspaceId, args) => {
+      const v = registry.workspaces.addView(workspaceId, {
+        kind: args.kind as any, state: args.state as any, title: args.title, groupId: args.groupId,
+      })
+      return viewDto(v)
+    },
+    patchWorkspaceView: (viewId, patch) => {
+      if (patch.title !== undefined) registry.workspaces.setViewTitle(viewId, patch.title)
+      if (patch.state !== undefined) registry.workspaces.setViewState(viewId, patch.state as any)
+      const v = registry.workspaces.getView(viewId)
+      if (!v) throw new Error("view not found")
+      return viewDto(v)
+    },
+    closeWorkspaceView: async (viewId) => { await workspaceService.closeView(viewId) },
+    moveWorkspaceView: (viewId, toWorkspaceId, toGroupId) =>
+      registry.workspaces.moveView(viewId, toWorkspaceId, toGroupId),
+    getWorkspaceWorkdir: (id) => registry.workspaces.getById(id)?.workdir,
     proxyBaseDomain: process.env.MUX_PROXY_BASE_DOMAIN,
     proxyMainHost: MUX_WEB_PUBLIC_URL ? new URL(MUX_WEB_PUBLIC_URL).host : undefined,
     proxyLookup: (domain: string) => {
