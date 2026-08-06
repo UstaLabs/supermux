@@ -21,6 +21,9 @@ firebaseBom = "33.7.0"
 googleServices = "4.4.2"
 media3 = "1.7.1"
 composeMultiplatform = "1.11.1"
+# Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
+# 1.11.1 / 2.3.21), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
+composeHotReload = "1.2.0"
 jediterm = "3.73"
 kcef = "2025.03.23"
 markdown = "0.7.6"
@@ -87,3 +90,4 @@ skie = { id = "co.touchlab.skie", version.ref = "skie" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+compose-hot-reload = { id = "org.jetbrains.compose.hot-reload", version.ref = "composeHotReload" }

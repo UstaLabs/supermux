@@ -1,10 +1,14 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.reload.gradle.ComposeHotRun
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.serialization)
+    // Dev-time only: adds :desktop:hotRun / :desktop:reload. See the ComposeHotRun block below for
+    // why this does NOT leak into the packaged app.
+    alias(libs.plugins.compose.hot.reload)
 }
 
 repositories {
@@ -41,6 +45,51 @@ dependencies {
 
 kotlin { jvmToolchain(17) }
 
+val macBuildHost = System.getProperty("os.name").orEmpty().lowercase()
+    .let { it.contains("mac") || it.contains("darwin") }
+
+// KCEF (JCEF) reflects into java.desktop AWT internals to embed the heavyweight Chromium child;
+// JDK-17 module encapsulation needs these opened or init throws InaccessibleObjectException.
+// Applies to every JVM that actually STARTS the app — the jpackage image, :desktop:run, AND
+// :desktop:hotRun — but NOT unit tests (which never start CEF). See KcefRuntime.
+//
+// macOS needs TWO more opens, and the failure mode is silent: JCEF's
+// CefBrowserWindowMac.getWindowHandle() reflects into `sun.lwawt.LWComponentPeer`
+// (getPlatformWindow) plus `sun.lwawt.macosx.CPlatformWindow` / `CFRetainedResource
+// $CFNativeAction` to obtain the NSWindow handle — a path a JetBrainsRuntime skips via
+// JdkEx.WindowHandleAccessor, but jpackage's runtime here is Corretto, so the reflection is live.
+// Without these it logs "failed to retrieve platform window handle" + IllegalAccessException, never
+// creates the native browser window, and the editor pane renders as a BLANK WHITE rectangle (CEF
+// itself initializes fine — nothing crashes). Host-conditional because the packages only exist in a
+// macOS java.desktop; adding them on Linux/Windows would just print a "package not in java.desktop"
+// warning at every start, and the mac app image can only be built on a mac anyway.
+val jcefAddOpens: List<String> = buildList {
+    addAll(listOf("--add-opens", "java.desktop/sun.awt=ALL-UNNAMED"))
+    addAll(listOf("--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED"))
+    if (macBuildHost) {
+        addAll(listOf("--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED"))
+        addAll(listOf("--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED"))
+    }
+}
+
+// Compose Hot Reload. `./gradlew :desktop:hotRun --auto` runs the app under a JetBrains Runtime and
+// re-applies @Composable edits on save without losing app state (broker WS session, open tabs).
+// Explicit mode (no --auto) reloads on `./gradlew :desktop:reload` instead.
+//
+// The plugin only touches these run tasks: it does NOT add anything to `runtimeClasspath`, so the
+// distributable built by packageDeb/Msi/Dmg is byte-for-byte what it was before — verified with
+// `:desktop:dependencies --configuration runtimeClasspath`.
+//
+// Two things do NOT hot-reload, both by construction: the editor pane (KCEF/JCEF — a heavyweight
+// native Chromium window behind SwingPanel) and the terminal panes (JediTerm, AWT). Their Kotlin
+// reloads fine, but the native widgets keep whatever state they had; changing their setup code
+// needs a real restart. Everything drawn by Compose — chat, settings, host wizard, usage, tabs —
+// reloads normally.
+tasks.withType<ComposeHotRun>().configureEach {
+    mainClass.set("dev.supermux.desktop.MainKt")
+    jvmArgs(jcefAddOpens)
+}
+
 // Never launch a real system browser from unit/UI tests (Agent OAuth, timeline links, etc.).
 // BrowserLauncher.openInBrowser checks this property and no-ops when set.
 tasks.withType<Test>().configureEach {
@@ -66,33 +115,9 @@ tasks.named<Copy>("processResources") {
 compose.desktop {
     application {
         mainClass = "dev.supermux.desktop.MainKt"
-        // KCEF (JCEF) reflects into java.desktop AWT internals to embed the heavyweight Chromium
-        // child; JDK-17 module encapsulation needs these opened or init throws
-        // InaccessibleObjectException. Applies to :desktop:run AND the jpackage image — NOT unit
-        // tests (which never start CEF). See KcefRuntime.
-        jvmArgs += listOf(
-            "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
-            "--add-opens", "java.desktop/java.awt.peer=ALL-UNNAMED",
-        )
-        // macOS needs TWO more opens, and the failure mode is silent: JCEF's
-        // CefBrowserWindowMac.getWindowHandle() reflects into `sun.lwawt.LWComponentPeer`
-        // (getPlatformWindow) plus `sun.lwawt.macosx.CPlatformWindow` / `CFRetainedResource
-        // $CFNativeAction` to obtain the NSWindow handle — a path a JetBrainsRuntime skips via
-        // JdkEx.WindowHandleAccessor, but jpackage's runtime here is Corretto, so the reflection is
-        // live. Without these it logs "failed to retrieve platform window handle" +
-        // IllegalAccessException, never creates the native browser window, and the editor pane
-        // renders as a BLANK WHITE rectangle (CEF itself initializes fine — nothing crashes).
-        // Host-conditional because the packages only exist in a macOS java.desktop; adding them on
-        // Linux/Windows would just print a "package not in java.desktop" warning at every start,
-        // and the mac app image can only be built on a mac anyway.
-        val macBuildHost = System.getProperty("os.name").orEmpty().lowercase()
-            .let { it.contains("mac") || it.contains("darwin") }
-        if (macBuildHost) {
-            jvmArgs += listOf(
-                "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
-                "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
-            )
-        }
+        // See jcefAddOpens above for why these are required and why the mac pair is host-gated.
+        // Shared with :desktop:hotRun so the two run paths can't drift.
+        jvmArgs += jcefAddOpens
         nativeDistributions {
             // Host-scoped: jpackage can only ever build the formats of the OS it runs on, AND on
             // macOS Compose eagerly creates a `notarize<Format>` task per declared format —
