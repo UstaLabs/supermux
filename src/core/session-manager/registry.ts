@@ -2,6 +2,8 @@ import type { Database } from "bun:sqlite"
 import { SessionStore } from "./session-store"
 import { ChatStore } from "./chat-store"
 import { ProxyStore, type StoredProxy } from "./proxy-store"
+import { WorkspaceStore } from "../workspace/store"
+import { healSessionsWithoutWorkspace } from "../workspace/self-heal"
 import type { Session, SessionRole, AgentKind } from "./types"
 import { canOrchestrate, isFallbackEligible } from "./policy"
 import { openDb, runMigrations } from "../storage/db"
@@ -36,17 +38,32 @@ const MAX_PROXIES_PER_SESSION = 5
 export class Registry {
   readonly sessions: SessionStore
   readonly chats: ChatStore
+  readonly workspaces: WorkspaceStore
+  /** Public so callers (self-heal, later routes) can run SQL against the same connection. */
+  readonly db: Database
   private reservations = new Set<string>()
   private proxies: ProxyStore
 
   constructor(db?: Database) {
     const resolvedDb = db ?? createTestDb()
+    this.db = resolvedDb
     this.sessions = new SessionStore(resolvedDb)
     this.chats = new ChatStore(resolvedDb)
+    this.workspaces = new WorkspaceStore(resolvedDb)
     this.proxies = new ProxyStore(resolvedDb)
     // Runs after SessionStore has loaded active+suspended sessions, so orphan
     // detection sees the real set. Prunes proxies whose session is gone.
     this.reloadProxies()
+  }
+
+  /**
+   * Repair any live session that has no workspace. Called once at broker
+   * startup (src/main.ts). Not called from the constructor: a test that builds
+   * a Registry and then registers sessions would otherwise heal nothing, and a
+   * heal writes rows, which a constructor should not do.
+   */
+  healWorkspaces(): string[] {
+    return healSessionsWithoutWorkspace(this.db, this.workspaces)
   }
 
   register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch">>): Session {
