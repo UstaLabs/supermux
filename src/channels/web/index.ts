@@ -32,6 +32,7 @@ import type { UpdateChecker } from "../../core/update/checker"
 import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
+import { workspaceScope, parseScope } from "../../core/workspace/scope"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -608,28 +609,45 @@ export class WebChannel implements Channel {
       return new Response("upgrade failed", { status: 500 })
     }
     if (url.pathname === "/ws/term") {
+      // Either ?session=<name> (a session-scoped terminal, incl. the agent pane)
+      // or ?workspace=<id> (a plain shell in the workspace work directory).
+      // Exactly one is accepted. Spec §7.3.
       const sessionName = url.searchParams.get("session") ?? ""
+      const workspaceId = url.searchParams.get("workspace") ?? ""
       const kind = url.searchParams.get("kind") === "agent" ? "agent" : "scratch"
-      // Per-terminal id (multiple scratch terminals per session). Agent terminals
-      // are singular → fixed id "agent". Sanitized: it becomes a tmux name.
       const terminalId = kind === "agent"
         ? "agent"
         : ((url.searchParams.get("terminal") ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64) || "main")
       const auth = this.authenticate(req)
       if (!auth.ok) return this.authFailureResponse(auth)
       const dev = auth.device
-      if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
-        return new Response("session not found", { status: 404 })
+
+      if (sessionName && workspaceId) {
+        return new Response("pass session or workspace, not both", { status: 400 })
       }
-      // Agent terminals are claude-only: getSessionTmuxTarget returns undefined
-      // for non-claude / unknown sessions (see main.ts).
+
+      // The scope key TerminalManager namespaces by, and the workdir it spawns in.
+      let scopeKey: string
+      if (workspaceId) {
+        // An agent pane belongs to an agent, never to a workspace.
+        if (kind === "agent") return new Response("agent terminal needs a session", { status: 400 })
+        const wd = this.opts.getWorkspaceWorkdir?.(workspaceId)
+        if (!wd) return new Response("workspace not found", { status: 404 })
+        scopeKey = workspaceScope(workspaceId)
+      } else {
+        if (!sessionName || !this.opts.getSessionWorkdir?.(sessionName)) {
+          return new Response("session not found", { status: 404 })
+        }
+        scopeKey = sessionName
+      }
+
       let agentTarget: string | undefined
       if (kind === "agent") {
         agentTarget = await this.opts.getSessionTmuxTarget?.(sessionName)
         if (!agentTarget) return new Response("agent terminal unsupported", { status: 404 })
       }
       const upgraded = server.upgrade(req, {
-        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: sessionName, terminalId, terminalAgentTarget: agentTarget } as WSData,
+        data: { deviceName: dev.name, openedAt: Date.now(), terminal: true, terminalKind: kind, terminalSession: scopeKey, terminalId, terminalAgentTarget: agentTarget } as WSData,
       })
       if (upgraded) return undefined
       return new Response("upgrade failed", { status: 500 })
@@ -701,7 +719,10 @@ export class WebChannel implements Channel {
     if (!tm) { ws.close(1011, "terminal not configured"); return }
     const sessionName = ws.data.terminalSession!
     const terminalId = ws.data.terminalId!
-    const workdir = this.opts.getSessionWorkdir?.(sessionName)
+    const scope = parseScope(sessionName)
+    const workdir = scope.kind === "workspace"
+      ? this.opts.getWorkspaceWorkdir?.(scope.id)
+      : this.opts.getSessionWorkdir?.(scope.id)
     if (!workdir) { ws.close(1011, "session not found"); return }
     try {
       ws.send(JSON.stringify({ type: "reset" }))
@@ -2835,17 +2856,29 @@ export class WebChannel implements Channel {
     // server) so the PWA can rebuild its tab strip across reloads.
     if (method === "GET" && path === "/api/term/list") {
       const session = url.searchParams.get("session") ?? ""
-      if (!session || !this.opts.getSessionWorkdir?.(session)) return this.json({ error: "session not found" }, 404)
-      const terminals = (await this.opts.terminalManager?.listForSession(session)) ?? []
+      const workspace = url.searchParams.get("workspace") ?? ""
+      if (session && workspace) return this.json({ error: "pass session or workspace, not both" }, 400)
+      let scopeKey: string
+      if (workspace) {
+        if (!this.opts.getWorkspaceWorkdir?.(workspace)) return this.json({ error: "workspace not found" }, 404)
+        scopeKey = workspaceScope(workspace)
+      } else {
+        if (!session || !this.opts.getSessionWorkdir?.(session)) return this.json({ error: "session not found" }, 404)
+        scopeKey = session
+      }
+      const terminals = (await this.opts.terminalManager?.listForSession(scopeKey)) ?? []
       return this.json({ terminals })
     }
     // Explicitly destroy one terminal (its tmux session + any viewers).
     if (method === "POST" && path === "/api/term/close") {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
       const session = typeof body.session === "string" ? body.session : ""
+      const workspace = typeof body.workspace === "string" ? body.workspace : ""
       const terminal = typeof body.terminal === "string" ? body.terminal : ""
-      if (!session || !terminal) return this.json({ error: "session and terminal required" }, 400)
-      await this.opts.terminalManager?.close(session, terminal)
+      if (!terminal) return this.json({ error: "terminal required" }, 400)
+      if (!session && !workspace) return this.json({ error: "session or workspace required" }, 400)
+      const scopeKey = workspace ? workspaceScope(workspace) : session
+      await this.opts.terminalManager?.close(scopeKey, terminal)
       return this.json({ ok: true })
     }
 
