@@ -56,7 +56,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.toDomainOrNull
+import dev.supermux.workspace.toDto
 import dev.supermux.desktop.host.AddHostScreen
 import dev.supermux.desktop.host.FleetState
 import dev.supermux.desktop.host.HostView
@@ -74,7 +77,10 @@ import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
+import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.UsageResponse
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.chatSessionId
 import dev.supermux.session.inferHomeDir
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -634,8 +640,15 @@ fun AppShell(
                 // ── Detail: launcher (detail-pane only), SessionDetail, or empty prompt ──
                 // New-session is a *side* panel — sidebar + resizer stay mounted. Other modals
                 // (archived / usage / settings) remain full-shell overlays below.
+                //
+                // SM_WORKSPACES=1 swaps the FIXED four-pane SessionDetail for LayoutHost
+                // driven by the workspace layout tree. Default OFF: same SessionDetail as
+                // today (sidebar + body both unchanged without the flag).
                 val id = ui.selectedId
                 val session = id?.let { sel -> sessions.firstOrNull { it.id == sel } }
+                // Close-view candidate (Task 7 wires the confirm dialog). Set by LayoutHost
+                // onCloseView; never ends work by itself.
+                var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
                 when {
                     ui.launcherOpen -> {
                         Box(
@@ -705,6 +718,80 @@ fun AppShell(
                                 createLocalRepo = { hostApp.createLocalRepo(it) },
                                 createForge = { cid, name -> hostApp.createForge(cid, name) },
                             )
+                        }
+                    }
+                    // Design-review path ONLY: workspace layout tree replaces the four-pane shell.
+                    // Selection is still a SESSION id (sidebar opens the workspace's first chat);
+                    // the workspace is derived from membership so reconcileSessions / viewing stay valid.
+                    workspaceSidebar -> {
+                        val current = workspaces.firstOrNull { w ->
+                            w.id == id || w.chatSessionIds().contains(id)
+                        }
+                        if (current == null) {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                    .testTag("workspace_welcome"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("select a workspace", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else {
+                            val serverTree = current.layout.toDomainOrNull()
+                                ?: LayoutNode.Group(id = "g", viewIds = emptyList())
+                            // Local tree for drag responsiveness; PATCH is debounced (below).
+                            var localLayout by remember(current.id) { mutableStateOf(serverTree) }
+                            var layoutDirty by remember(current.id) { mutableStateOf(false) }
+                            // Adopt broker updates when the user is not mid-drag.
+                            LaunchedEffect(current.layout) {
+                                if (!layoutDirty) {
+                                    localLayout = current.layout.toDomainOrNull()
+                                        ?: LayoutNode.Group(id = "g", viewIds = emptyList())
+                                }
+                            }
+                            // Debounce layout writes: a splitter drag fires on every pointer move.
+                            // One PATCH per move would flood the broker and every peer device.
+                            // Hold the tree in local state, render from local, PATCH at most every
+                            // ~300ms (trailing write also covers drag end).
+                            LaunchedEffect(localLayout, layoutDirty) {
+                                if (!layoutDirty) return@LaunchedEffect
+                                delay(300)
+                                runCatching {
+                                    app.api.patchWorkspace(
+                                        current.id,
+                                        PatchWorkspaceBody(layout = localLayout.toDto()),
+                                    )
+                                }
+                                layoutDirty = false
+                            }
+                            val viewsById = remember(current) { current.views.associateBy { it.id } }
+                            LayoutHost(
+                                layout = localLayout,
+                                titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
+                                onCloseView = { closeCandidate = viewsById[it] },
+                                onLayoutChange = { next ->
+                                    localLayout = next
+                                    layoutDirty = true
+                                },
+                                modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
+                            ) { viewId ->
+                                val v = viewsById[viewId]
+                                if (v != null) {
+                                    ViewHost(
+                                        view = v,
+                                        workspaceId = current.id,
+                                        workdir = current.workdir,
+                                        app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
+                                        drafts = drafts,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+                            }
+                            // closeCandidate is consumed by CloseViewDialog (Task 7). Until that
+                            // lands, a close only stages the view — no broker call yet.
+                            @Suppress("UNUSED_VARIABLE")
+                            val _closeCandidateHeld = closeCandidate
                         }
                     }
                     session == null -> {
