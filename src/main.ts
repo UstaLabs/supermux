@@ -2713,6 +2713,15 @@ const server = await startSocketServer({
             registry.markSelfRenamed(s.id)
             await refreshTelegramMenu()
             webChannel?.broadcastToAll({ type: "session_renamed", id: s.id, old: oldName, new: res.name })
+            // Spec §9.5: the workspace name follows its primary session, and an
+            // AGENT renaming itself through this tool is the main way that
+            // happens — the web renameSession opt above is the rarer path. Both
+            // frames go out; an old client only knows the first one.
+            const wsId = propagateSessionRename(registry.workspaces, s.id, res.name)
+            if (wsId) {
+              const dto = wsDto(wsId)
+              if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
+            }
           }
           return { ok: true, value: { name: res.name } }
         }
