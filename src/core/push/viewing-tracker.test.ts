@@ -56,12 +56,41 @@ test("chat_id not starting with web: always returns false", () => {
   expect(t.isViewing("", "ana")).toBe(false)
 })
 
-test("update replaces previous state for same device", () => {
+test("update ADDs a second concurrent session (multi-chat workspace)", () => {
+  // A clear-then-add rebuild is how desktop switches; pure true frames accumulate
+  // so two visible chats can both suppress. Classic single-session clients that
+  // only send Viewing(s2,true) without a clear will leave s1 — desktop diffs and
+  // always rebuilds from a clear, so it is unaffected.
   const t = new ViewingTracker()
   t.update("iphone", { session: "ana", visible: true })
   t.update("iphone", { session: "other", visible: true })
+  expect(t.isViewing("web:iphone", "ana")).toBe(true)
+  expect(t.isViewing("web:iphone", "other")).toBe(true)
+})
+
+test("clear then add rebuilds the set (classic switch)", () => {
+  const t = new ViewingTracker()
+  t.update("iphone", { session: "ana", visible: true })
+  t.update("iphone", { session: null, visible: false })
+  t.update("iphone", { session: "other", visible: true })
   expect(t.isViewing("web:iphone", "ana")).toBe(false)
   expect(t.isViewing("web:iphone", "other")).toBe(true)
+})
+
+test("setSessions installs a concurrent pair in one shot", () => {
+  const t = new ViewingTracker()
+  t.setSessions("iphone", ["s1", "s2"], true)
+  expect(t.isAnyExactViewing("s1")).toBe(true)
+  expect(t.isAnyExactViewing("s2")).toBe(true)
+  expect(t.isPresentFor("iphone", "s3")).toBe(false)
+})
+
+test("visible=false for one session removes only that session", () => {
+  const t = new ViewingTracker()
+  t.setSessions("iphone", ["s1", "s2"], true)
+  t.update("iphone", { session: "s2", visible: false })
+  expect(t.isAnyExactViewing("s1")).toBe(true)
+  expect(t.isAnyExactViewing("s2")).toBe(false)
 })
 
 test("isPresentFor: viewing the target session suppresses", () => {

@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
 import dev.supermux.desktop.host.AddHostScreen
@@ -478,18 +479,51 @@ fun AppShell(
         }
     }
 
+    // Live layout of the open workspace (tab switches update this before the broker PATCH lands)
+    // so Viewing frames track the active view of each group immediately. Only used when
+    // SM_WORKSPACES is on; null otherwise — classic path ignores it.
+    var workspaceViewingLayout by remember { mutableStateOf<LayoutNode?>(null) }
+    var workspaceViewingViews by remember { mutableStateOf<Map<String, ViewDto>>(emptyMap()) }
+
     // Re-assert viewing presence whenever the selection or window focus changes (broker per-device
-    // "viewing" tracker keys off (session id, visible)). ALSO clears this session's notification
-    // cooldown (M5-3) the moment it becomes actively viewed (selected AND focused), so the NEXT
-    // reply after the user looks away again notifies immediately rather than waiting out a stale
-    // dedup window from before they opened it.
-    LaunchedEffect(ui.selectedId, focused) {
+    // "viewing" tracker). ALSO clears this session's notification cooldown (M5-3) the moment it
+    // becomes actively viewed (selected AND focused), so the NEXT reply after the user looks away
+    // again notifies immediately rather than waiting out a stale dedup window.
+    //
+    // SM_WORKSPACES=1: one Viewing frame per visible chat view (active view of each group).
+    // SM_WORKSPACES unset: classic single selected session — behaviour EXACTLY as before.
+    LaunchedEffect(ui.selectedId, focused, workspaceSidebar, workspaceViewingLayout, workspaceViewingViews) {
         ui.selectedId?.let { sessionHost[it] }?.let { fleet?.setActiveHost(it) }
-        // Route viewing presence to the OWNING host (fleet) so only that broker treats the chat as
-        // foreground; single-host falls back to [app].
-        if (fleet != null) fleet.updateViewing(ui.selectedId, focused) else app.updateViewing(ui.selectedId, focused)
-        val sid = ui.selectedId
-        if (sid != null && focused) notify.onSessionFocused(sid)
+        if (workspaceSidebar) {
+            // Derive visible chat sessions from the open workspace's layout tree — never send a
+            // workspace id as a session. Phase 3 kept ui.selectedId as a SESSION id, so the
+            // classic path below was never broken; this multi path is for two chats on screen.
+            val visibleChatIds = if (focused) {
+                val tree = workspaceViewingLayout
+                if (tree != null) {
+                    collectActiveViewIds(tree).mapNotNull { vid ->
+                        workspaceViewingViews[vid]?.chatSessionId()
+                    }
+                } else {
+                    // Fallback: the selected session alone (sidebar still stores a session id).
+                    listOfNotNull(ui.selectedId)
+                }
+            } else {
+                emptyList()
+            }
+            if (fleet != null) {
+                // Fleet still has the classic single-session API; send the first visible (or null).
+                fleet.updateViewing(visibleChatIds.firstOrNull(), focused)
+            } else {
+                app.updateViewingSessions(visibleChatIds, focused)
+            }
+            for (sid in visibleChatIds) notify.onSessionFocused(sid)
+        } else {
+            // Classic path — unchanged when SM_WORKSPACES is unset.
+            if (fleet != null) fleet.updateViewing(ui.selectedId, focused) else app.updateViewing(ui.selectedId, focused)
+            val sid = ui.selectedId
+            if (sid != null && focused) notify.onSessionFocused(sid)
+        }
     }
 
     // M5-3: observe live agent replies and decide whether to raise a tray notification. Keyed on
@@ -728,6 +762,10 @@ fun AppShell(
                             w.id == id || w.chatSessionIds().contains(id)
                         }
                         if (current == null) {
+                            LaunchedEffect(Unit) {
+                                workspaceViewingLayout = null
+                                workspaceViewingViews = emptyMap()
+                            }
                             Box(
                                 Modifier
                                     .fillMaxSize()
@@ -767,6 +805,12 @@ fun AppShell(
                             }
                             val viewsById = remember(current) { current.views.associateBy { it.id } }
                             val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
+                            // Feed the viewing LaunchedEffect so a tab switch re-asserts
+                            // Viewing frames for only the active chat of each group.
+                            LaunchedEffect(localLayout, viewsById) {
+                                workspaceViewingLayout = localLayout
+                                workspaceViewingViews = viewsById
+                            }
                             LayoutHost(
                                 layout = localLayout,
                                 titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },

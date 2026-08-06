@@ -44,6 +44,15 @@ fun collectViewIds(node: LayoutNode): List<String> = when (node) {
 }
 
 /**
+ * The active view of every group, in document order. A chat sitting in a
+ * background tab is NOT active — only these ids are on screen (spec §11).
+ */
+fun collectActiveViewIds(node: LayoutNode): List<String> = when (node) {
+    is LayoutNode.Group -> listOfNotNull(node.activeViewId ?: node.viewIds.firstOrNull())
+    is LayoutNode.Split -> node.children.flatMap { collectActiveViewIds(it) }
+}
+
+/**
  * Null when the tree is valid, or a human-readable reason when it is not.
  *
  * The client calls this BEFORE a PATCH so a bad drag never reaches the broker.

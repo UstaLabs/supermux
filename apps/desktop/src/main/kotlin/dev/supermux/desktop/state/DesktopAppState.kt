@@ -99,6 +99,21 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 
 /**
+ * The Viewing frames to send for the currently visible chat views (spec §11).
+ *
+ * Before workspaces there was exactly one open chat, so one frame was enough.
+ * A workspace can show two chats at once, so the broker gets one frame per
+ * visible chat SESSION — never a workspace id, and never a chat that is sitting
+ * in an inactive tab.
+ *
+ * With nothing visible, send the single null-session frame the list view sends,
+ * so the broker clears this device's viewing state instead of keeping a stale one.
+ */
+fun viewingFramesFor(visibleChatSessionIds: List<String>): List<ClientFrame.Viewing> =
+    if (visibleChatSessionIds.isEmpty()) listOf(ClientFrame.Viewing(null, false))
+    else visibleChatSessionIds.map { ClientFrame.Viewing(it, true) }
+
+/**
  * @param connectOnInit when false (tests), the constructor does NOT collect frames, launch the
  *   WS client, or start the viewing heartbeat — so [reduce] and the send helpers can run without
  *   a network. Production uses the default `true`.
@@ -146,9 +161,12 @@ class DesktopAppState(
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
-    private var viewingSession: String? = null
+    /** Session ids of chats currently on screen (one per visible group), or empty. */
+    private var viewingSessionIds: List<String> = emptyList()
+    /** True when the window is foregrounded on the session list (no chat selected). */
+    private var viewingOnList: Boolean = false
     private var viewingVisible: Boolean = false
-    private var lastSentViewing: Pair<String?, Boolean>? = null
+    private var lastSentViewing: List<ClientFrame.Viewing>? = null
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
@@ -550,14 +568,34 @@ class DesktopAppState(
 
     // ── Viewing presence ───────────────────────────────────────────────────────────
 
-    /** Report the foreground chat (`null` = the session list) + whether the app is visible.
-     *  Deduped; (lazily) starts the keep-alive heartbeat. */
+    /**
+     * Report the foreground chat (`null` = the session list) + whether the app is visible.
+     * Classic single-chat path (SM_WORKSPACES unset). Deduped; starts the keep-alive heartbeat.
+     */
     fun updateViewing(session: String?, visible: Boolean) {
-        viewingSession = session
+        viewingSessionIds = if (visible && session != null) listOf(session) else emptyList()
+        viewingOnList = visible && session == null
         viewingVisible = visible
         // Optimistic clear (web useUnread.markRead / Android parity). Server confirms via
         // session_read after the viewing frame advances the read pointer.
         if (visible && session != null) markRead(session)
+        sendViewingIfChanged()
+        ensureViewingHeartbeat()
+    }
+
+    /**
+     * Report every chat session currently on screen (one per active group). Spec §11.
+     * Used when SM_WORKSPACES is on and a workspace can show two chats at once.
+     * Background tabs are not in [sessionIds]. Empty + [visible]=true means the list;
+     * empty + [visible]=false means the window is backgrounded.
+     */
+    fun updateViewingSessions(sessionIds: List<String>, visible: Boolean) {
+        viewingSessionIds = if (visible) sessionIds.distinct() else emptyList()
+        viewingOnList = visible && viewingSessionIds.isEmpty()
+        viewingVisible = visible
+        if (visible) {
+            for (id in viewingSessionIds) markRead(id)
+        }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
     }
@@ -571,12 +609,40 @@ class DesktopAppState(
         }
     }
 
+    private fun currentViewingFrames(): List<ClientFrame.Viewing> = when {
+        viewingOnList -> listOf(ClientFrame.Viewing(null, true))
+        !viewingVisible -> listOf(ClientFrame.Viewing(null, false))
+        else -> viewingFramesFor(viewingSessionIds)
+    }
+
     private fun sendViewingIfChanged() {
-        val next = viewingSession to viewingVisible
+        val next = currentViewingFrames()
         if (lastSentViewing == next) return
+        val prev = lastSentViewing
         lastSentViewing = next
         stateScope.launch {
-            runApi("viewing send") { sendFrame(ClientFrame.Viewing(viewingSession, viewingVisible)) }
+            // Diff against the last sent list. The broker's ViewingTracker ADDs on
+            // Viewing(s,true) and REMOVEs on Viewing(s,false), so a switch is a remove
+            // of the old id plus an add of the new one, and two concurrent chats are
+            // two adds. Spec §11.
+            val prevIds = prev?.mapNotNull { f -> f.session?.takeIf { f.visible } }?.toSet() ?: emptySet()
+            val nextIds = next.mapNotNull { f -> f.session?.takeIf { f.visible } }.toSet()
+            val nextOnList = next.any { it.session == null && it.visible }
+            val nextBackground = next.any { it.session == null && !it.visible }
+            for (id in prevIds - nextIds) {
+                runApi("viewing remove") { sendFrame(ClientFrame.Viewing(id, false)) }
+            }
+            when {
+                nextBackground ->
+                    runApi("viewing send") { sendFrame(ClientFrame.Viewing(null, false)) }
+                nextOnList ->
+                    runApi("viewing send") { sendFrame(ClientFrame.Viewing(null, true)) }
+                else -> {
+                    for (id in nextIds - prevIds) {
+                        runApi("viewing send") { sendFrame(ClientFrame.Viewing(id, true)) }
+                    }
+                }
+            }
         }
     }
 
@@ -588,7 +654,10 @@ class DesktopAppState(
             while (isActive) {
                 delay(60_000)
                 if (viewingVisible) {
-                    runApi("viewing heartbeat") { sendFrame(ClientFrame.Viewing(viewingSession, true)) }
+                    for (frame in currentViewingFrames()) {
+                        if (frame.session == null && !frame.visible) continue
+                        runApi("viewing heartbeat") { sendFrame(frame) }
+                    }
                 }
             }
         }
