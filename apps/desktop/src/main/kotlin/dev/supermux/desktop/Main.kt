@@ -43,6 +43,7 @@ import dev.supermux.desktop.chat.AssistantMessage
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.desktop.chat.loadMarkdownImageBitmap
 import dev.supermux.desktop.chat.prunePasteCache
+import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
 import dev.supermux.desktop.host.FleetState
@@ -61,6 +62,13 @@ import dev.supermux.desktop.workspace.WorkspaceRoot
 import dev.supermux.desktop.workspace.WorkspaceStateStore
 import dev.supermux.desktop.workspace.WorkspaceUiState
 import java.io.File
+
+/**
+ * Height reserved at the top of the macOS window for the traffic-light buttons, which float over
+ * our content once the title bar is made transparent + full-size (see the Window block). Matches
+ * the standard macOS title-bar height (28pt) so the buttons sit vertically centred in the strip.
+ */
+private val MAC_TITLE_BAR_INSET = 28.dp
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
@@ -280,9 +288,25 @@ fun main() {
                     exitApplication()
                 }
             },
-            title = "supermux",
+            // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
+            // title still paints centred over our own UI on runtimes that ignore
+            // `apple.awt.windowTitleVisible` (Corretto in the packaged app; the JBR used by
+            // :desktop:hotRun honours it). Other platforms keep the normal caption text.
+            title = if (isMacOs()) "" else "supermux",
             state = windowState,
         ) {
+            // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
+            // and only the traffic lights (close / minimize / zoom) float over it. These three
+            // root-pane client properties are AWT's route to NSWindow's FullSizeContentView +
+            // titlebarAppearsTransparent + hidden title; MAC_TITLE_BAR_INSET below keeps our own UI
+            // out from under the buttons. No-ops off macOS, but gated anyway to keep it obvious.
+            if (isMacOs()) {
+                LaunchedEffect(window) {
+                    window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
+                    window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
+                    window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
+                }
+            }
             // Paired flag + workspace UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
             // can reach the same WorkspaceLayout/selection the shortcuts drive.
@@ -374,6 +398,15 @@ fun main() {
             // Not persisted yet (M4 Settings/Appearance can own that later).
             var appearance by remember { mutableStateOf(AppearanceMode.DARK) }
             SupermuxTheme(appearance = appearance) {
+              // See the macOS chrome note on Window above: the app paints its own background all
+              // the way to the top edge, inset by the traffic-light height so nothing hides under
+              // the buttons. Zero inset (and a plain background fill) everywhere else.
+              Box(
+                  Modifier
+                      .fillMaxSize()
+                      .background(MaterialTheme.colorScheme.background)
+                      .padding(top = if (isMacOs()) MAC_TITLE_BAR_INSET else 0.dp),
+              ) {
                 if (!paired) {
                     val scope = rememberCoroutineScope()
                     // First-run choice (spec §6 / D6 choice A): on every native-host desktop platform
@@ -417,7 +450,7 @@ fun main() {
                     // The active host's app backs the single-host headless hooks below and is
                     // WorkspaceRoot's fallback; WorkspaceRoot itself routes through `fleet`. Non-null
                     // because `paired` ⟹ the store holds a host ⟹ FleetState opened its connection.
-                    val app = remember(fleet) { fleet.activeApp() } ?: return@SupermuxTheme
+                    val app = remember(fleet) { fleet.activeApp() } ?: return@Box
 
                     // Headless-verification hook (no input injection on CI boxes): SM_SMOKE_SEND=
                     // "<session-name>:<text>" resolves the named session after the first snapshot
@@ -1318,6 +1351,7 @@ fun main() {
                         )
                     }
                 }
+              }
             }
 
             // First-run intro cinematic ("mux boot": boot log → 2×2 agent-pane split → particle
