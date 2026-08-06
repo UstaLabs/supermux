@@ -219,6 +219,22 @@ export interface WebChannelOpts {
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
+  listWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  getWorkspace?: (id: string) => import("../../core/workspace/dto").WorkspaceDto | undefined
+  createWorkspace?: (args: { name?: string; workdir: string; worktree?: boolean; baseBranch?: string })
+    => Promise<import("../../core/workspace/dto").WorkspaceDto>
+  patchWorkspace?: (id: string, patch: { name?: string; layout?: unknown; activeViewId?: string })
+    => import("../../core/workspace/dto").WorkspaceDto
+  archiveWorkspace?: (id: string) => Promise<void>
+  reorderWorkspaces?: (orderedIds: string[]) => void
+  addWorkspaceView?: (workspaceId: string, args: { kind: string; state: unknown; title?: string; groupId?: string })
+    => import("../../core/workspace/dto").ViewDto
+  patchWorkspaceView?: (viewId: string, patch: { title?: string; state?: unknown })
+    => import("../../core/workspace/dto").ViewDto
+  closeWorkspaceView?: (viewId: string) => Promise<void>
+  moveWorkspaceView?: (viewId: string, toWorkspaceId: string, toGroupId?: string) => void
+  /** Workdir of a workspace, for the fs and terminal routes in Phase 4. */
+  getWorkspaceWorkdir?: (id: string) => string | undefined
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
   /**
    * Server-side TTS (codex). Returns either a soft platform error, or an async
@@ -906,10 +922,11 @@ export class WebChannel implements Channel {
       }
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
+      const workspaces = this.opts.listWorkspaces?.() ?? []
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
@@ -2380,6 +2397,144 @@ export class WebChannel implements Channel {
       if (!this.opts.reorderSessions) return this.json({ error: "not configured" }, 503)
       this.opts.reorderSessions(ids)
       return this.json({ ok: true })
+    }
+    // ── Workspaces ──────────────────────────────────────────────────────────
+    // Spec: docs/superpowers/specs/2026-08-06-workspaces-and-views-design.md §7
+    //
+    // Every mutation below broadcasts. A route that only writes SQLite leaves
+    // every other device stale until reconnect — that was the sessions_reordered
+    // defect, and it is the single easiest bug to reintroduce here.
+    if (method === "GET" && path === "/workspaces") {
+      return this.json({ workspaces: this.opts.listWorkspaces?.() ?? [] })
+    }
+    if (method === "POST" && path === "/workspaces") {
+      if (!this.opts.createWorkspace) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const workdir = body.workdir as string | undefined
+      if (!workdir) return this.json({ error: "workdir required" }, 400)
+      try {
+        const ws = await this.opts.createWorkspace({
+          name: body.name as string | undefined,
+          workdir,
+          worktree: body.worktree as boolean | undefined,
+          baseBranch: body.baseBranch as string | undefined,
+        })
+        this.broadcastToAll({ type: "workspace_added", workspace: ws })
+        return this.json(ws)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "PATCH" && path === "/workspaces/reorder") {
+      if (!this.opts.reorderWorkspaces) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
+      const ids = Array.isArray(body.orderedIds) ? body.orderedIds.filter((x): x is string => typeof x === "string") : []
+      this.opts.reorderWorkspaces(ids)
+      this.broadcastToAll({ type: "workspaces_reordered", orderedIds: ids })
+      return this.json({ ok: true })
+    }
+    if (method === "PATCH" && path.match(/^\/workspaces\/[^/]+$/)) {
+      if (!this.opts.patchWorkspace) return this.json({ error: "not configured" }, 503)
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      try {
+        const ws = this.opts.patchWorkspace(id, {
+          name: body.name as string | undefined,
+          layout: body.layout,
+          activeViewId: body.activeViewId as string | undefined,
+        })
+        this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        return this.json(ws)
+      } catch (err: any) {
+        // An invalid layout tree is the client's fault, not the server's.
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+$/)) {
+      if (!this.opts.archiveWorkspace) return this.json({ error: "not configured" }, 503)
+      const id = decodeURIComponent(path.split("/")[2]!)
+      try {
+        await this.opts.archiveWorkspace(id)
+        this.broadcastToAll({ type: "workspace_removed", id })
+        return new Response(null, { status: 204 })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/views$/)) {
+      if (!this.opts.addWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const workspaceId = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const kind = body.kind as string | undefined
+      if (!kind || !["chat", "terminal", "editor", "display"].includes(kind)) {
+        return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
+      }
+      if (body.state == null) return this.json({ error: "state required" }, 400)
+      try {
+        const view = this.opts.addWorkspaceView(workspaceId, {
+          kind, state: body.state,
+          title: body.title as string | undefined,
+          groupId: body.groupId as string | undefined,
+        })
+        this.broadcastToAll({ type: "view_added", workspaceId, view })
+        // The layout and the active view moved too, so the workspace frame follows.
+        const ws = this.opts.getWorkspace?.(workspaceId)
+        if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        return this.json(view)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "PATCH" && path.match(/^\/workspaces\/[^/]+\/views\/[^/]+$/)) {
+      if (!this.opts.patchWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const parts = path.split("/")
+      const workspaceId = decodeURIComponent(parts[2]!)
+      const viewId = decodeURIComponent(parts[4]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      try {
+        const view = this.opts.patchWorkspaceView(viewId, {
+          title: body.title as string | undefined,
+          state: body.state,
+        })
+        this.broadcastToAll({ type: "view_changed", workspaceId, view })
+        return this.json(view)
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+    }
+    if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+\/views\/[^/]+$/)) {
+      if (!this.opts.closeWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const parts = path.split("/")
+      const workspaceId = decodeURIComponent(parts[2]!)
+      const viewId = decodeURIComponent(parts[4]!)
+      try {
+        await this.opts.closeWorkspaceView(viewId)
+        this.broadcastToAll({ type: "view_removed", workspaceId, viewId })
+        const ws = this.opts.getWorkspace?.(workspaceId)
+        if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        return new Response(null, { status: 204 })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+    }
+    if (method === "POST" && path.match(/^\/views\/[^/]+\/move$/)) {
+      if (!this.opts.moveWorkspaceView) return this.json({ error: "not configured" }, 503)
+      const viewId = decodeURIComponent(path.split("/")[2]!)
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>
+      const to = body.toWorkspaceId as string | undefined
+      if (!to) return this.json({ error: "toWorkspaceId required" }, 400)
+      try {
+        const from = this.opts.listWorkspaces?.().find((w) => w.views.some((v) => v.id === viewId))?.id
+        this.opts.moveWorkspaceView(viewId, to, body.toGroupId as string | undefined)
+        this.broadcastToAll({ type: "view_moved", viewId, fromWorkspaceId: from ?? "", toWorkspaceId: to })
+        for (const id of [from, to]) {
+          const ws = id ? this.opts.getWorkspace?.(id) : undefined
+          if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
+        }
+        return this.json({ ok: true })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
     }
     if (method === "POST" && path.match(/^\/sessions\/[^/]+\/rename$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
