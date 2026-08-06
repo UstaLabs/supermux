@@ -274,7 +274,7 @@ CREATE TABLE views (
 );
 CREATE INDEX views_workspace ON views(workspace_id);
 
-ALTER TABLE sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+ALTER TABLE sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
 CREATE INDEX sessions_workspace ON sessions(workspace_id);
 ```
 

@@ -733,7 +733,12 @@ CREATE TABLE views (
 );
 CREATE INDEX views_workspace ON views(workspace_id);
 
-ALTER TABLE sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+-- ON DELETE SET NULL, not the default NO ACTION: a hard DELETE of a workspace row
+-- would otherwise be blocked by every session still pointing at it, and the views
+-- CASCADE above could never fire. An orphaned session is exactly what the startup
+-- self-heal repairs. Production never hard-deletes a workspace (the DELETE route
+-- archives), so this is defense, not a normal path.
+ALTER TABLE sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL;
 CREATE INDEX sessions_workspace ON sessions(workspace_id);
 
 -- Backfill step 1: one workspace per session.
