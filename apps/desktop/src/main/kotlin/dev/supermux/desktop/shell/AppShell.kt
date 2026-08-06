@@ -56,6 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.workspace.chatSessionIds
 import dev.supermux.desktop.host.AddHostScreen
 import dev.supermux.desktop.host.FleetState
 import dev.supermux.desktop.host.HostView
@@ -383,6 +384,11 @@ fun AppShell(
     // Prefer the merged fleet flows when multi-host; else the single [app]'s. `fleet` is stable
     // across recompositions (remembered in Main), so the `?:` picks the same flow each time.
     val sessions by (fleet?.sessions ?: app.sessions).collectAsState()
+    // Design-review flag: SM_WORKSPACES=1 swaps the session sidebar for the workspace one.
+    // Default OFF, so the shipping shell is unchanged until the row design is signed off.
+    // Read once — an env var cannot change under a hot reload anyway.
+    val workspaceSidebar = remember { System.getenv("SM_WORKSPACES")?.isNotBlank() == true }
+    val workspaces by app.workspaces.collectAsState()
     var archivedForList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
     LaunchedEffect(sessions, ui.selectedId) {
         // Refresh settled fold when the live list changes (settle/resume/snapshot).
@@ -561,6 +567,35 @@ fun AppShell(
                         onNewSession = onNewSession,
                         lastBySession = lastBySession,
                         lastRead = lastRead,
+                    )
+                } else if (workspaceSidebar) {
+                    // Design-review swap only: the sidebar lists workspaces, but selection
+                    // semantics are UNCHANGED — ui.selectedId is still a SESSION id, and the
+                    // detail pane below is untouched. Opening a workspace row selects that
+                    // workspace's first chat session, so everything downstream behaves exactly
+                    // as it does with the session list.
+                    //
+                    // The full swap (spec §13.6 + a workspace-scoped selection model) is Phase 3
+                    // Task 5 onward. This is the minimum needed to look at the rows in context.
+                    val wsOf = { wid: String -> workspaces.firstOrNull { it.id == wid } }
+                    WorkspaceListPanel(
+                        workspaces = workspaces,
+                        home = home,
+                        activeId = workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id,
+                        onOpen = { wid -> wsOf(wid)?.chatSessionIds()?.firstOrNull()?.let { ui.selectSession(it) } },
+                        agentState = agentState,
+                        sessionNames = remember(sessions) { sessions.associate { it.id to it.name } },
+                        sessionRoles = remember(sessions) { sessions.associate { it.id to it.role } },
+                        sessionGit = remember(sessions) { sessions.associate { it.id to it.git } },
+                        onOpenSession = { _, sid -> ui.selectSession(sid) },
+                        onRename = { wid, name -> wsOf(wid)?.primarySessionId?.let { appFor(it).rename(it, name) } },
+                        onArchive = { wid ->
+                            wsOf(wid)?.chatSessionIds()?.forEach { sid ->
+                                appFor(sid).kill(sid) { if (ui.selectedId == sid) ui.selectedId = null }
+                            }
+                        },
+                        onNewWorkspace = onNewSession,
+                        modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                     )
                 } else {
                     SessionListPanel(
