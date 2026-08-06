@@ -766,6 +766,7 @@ fun AppShell(
                                 layoutDirty = false
                             }
                             val viewsById = remember(current) { current.views.associateBy { it.id } }
+                            val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
                             LayoutHost(
                                 layout = localLayout,
                                 titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
@@ -788,10 +789,28 @@ fun AppShell(
                                     )
                                 }
                             }
-                            // closeCandidate is consumed by CloseViewDialog (Task 7). Until that
-                            // lands, a close only stages the view — no broker call yet.
-                            @Suppress("UNUSED_VARIABLE")
-                            val _closeCandidateHeld = closeCandidate
+                            // Spec §9.3: a close that ends work asks first. Editor skips the dialog.
+                            // NOT the Finish flow — one question, two buttons (Close / Cancel).
+                            closeCandidate?.let { v ->
+                                if (!v.closeNeedsConfirmation()) {
+                                    LaunchedEffect(v.id) {
+                                        runCatching { app.api.closeView(v.workspaceId, v.id) }
+                                        closeCandidate = null
+                                    }
+                                } else {
+                                    CloseViewDialog(
+                                        view = v,
+                                        sessionNames = sessionNames,
+                                        onDismiss = { closeCandidate = null },
+                                        onConfirm = {
+                                            overlayScope.launch {
+                                                runCatching { app.api.closeView(v.workspaceId, v.id) }
+                                                closeCandidate = null
+                                            }
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                     session == null -> {
