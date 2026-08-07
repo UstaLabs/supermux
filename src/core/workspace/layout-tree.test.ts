@@ -7,6 +7,8 @@ import {
   singleViewLayout,
   addViewToGroup,
   removeViewFromLayout,
+  reorderWithinGroup,
+  moveViewToGroup,
 } from "./layout-tree"
 
 const group = (id: string, viewIds: string[], activeViewId?: string): LayoutNode =>
@@ -149,4 +151,72 @@ test("removeViewFromLayout returns null when the last view goes", () => {
 test("removeViewFromLayout picks a new active view when the active one goes", () => {
   const l = group("g1", ["v1", "v2"], "v1")
   expect(removeViewFromLayout(l, "v1")).toEqual(group("g1", ["v2"], "v2"))
+})
+
+// --- Phase 5: reorder within a group, move between groups ---
+
+test("reorderWithinGroup_movesAViewToANewIndex", () => {
+  const l = group("g1", ["a", "b", "c"], "a")
+  expect(reorderWithinGroup(l, "g1", "a", 1)).toEqual(group("g1", ["b", "a", "c"], "a"))
+})
+
+test("reorderWithinGroup_clampsAnOutOfRangeIndex", () => {
+  const l = group("g1", ["a", "b"], "a")
+  expect(reorderWithinGroup(l, "g1", "a", 99)).toEqual(group("g1", ["b", "a"], "a"))
+})
+
+test("reorderWithinGroup_keepsTheActiveViewActive", () => {
+  const l = group("g1", ["a", "b", "c"], "c")
+  expect((reorderWithinGroup(l, "g1", "a", 2) as Extract<LayoutNode, { type: "group" }>).activeViewId).toBe("c")
+})
+
+test("reorderWithinGroup_isANoOpForAnUnknownGroup", () => {
+  const l = group("g1", ["a", "b"], "a")
+  expect(reorderWithinGroup(l, "nope", "a", 1)).toEqual(l)
+})
+
+test("moveViewToGroup_movesAcrossAndActivatesItThere", () => {
+  const l: LayoutNode = {
+    type: "split", direction: "row", sizes: [0.5, 0.5],
+    children: [group("g1", ["a", "b"], "a"), group("g2", ["c"], "c")],
+  }
+  const out = moveViewToGroup(l, "a", "g2", 0)!
+  expect(out).toEqual({
+    type: "split", direction: "row", sizes: [0.5, 0.5],
+    children: [group("g1", ["b"], "b"), group("g2", ["a", "c"], "a")],
+  })
+})
+
+test("moveViewToGroup_collapsesTheSplitWhenTheSourceGroupEmpties", () => {
+  // Last view leaves g1 → g1 disappears → the split has one child → it collapses.
+  const l: LayoutNode = {
+    type: "split", direction: "row", sizes: [0.5, 0.5],
+    children: [group("g1", ["a"], "a"), group("g2", ["c"], "c")],
+  }
+  expect(moveViewToGroup(l, "a", "g2", 0)).toEqual(group("g2", ["a", "c"], "a"))
+})
+
+test("moveViewToGroup_isANoOpWhenTheTargetGroupIsUnknown", () => {
+  const l = group("g1", ["a", "b"], "a")
+  expect(moveViewToGroup(l, "a", "nope", 0)).toEqual(l)
+})
+
+test("moveViewToGroup_movingWithinTheSameGroupJustReorders", () => {
+  const l = group("g1", ["a", "b", "c"], "a")
+  expect(moveViewToGroup(l, "a", "g1", 1)).toEqual(group("g1", ["b", "a", "c"], "a"))
+})
+
+test("everyPhase5OperationLeavesAValidTree", () => {
+  const l: LayoutNode = {
+    type: "split", direction: "row", sizes: [0.5, 0.5],
+    children: [group("g1", ["a", "b"], "a"), group("g2", ["c"], "c")],
+  }
+  expect(validateLayout(reorderWithinGroup(l, "g1", "a", 1))).toBeNull()
+  expect(validateLayout(moveViewToGroup(l, "a", "g2", 0)!)).toBeNull()
+  // splitGroup is Kotlin-only (broker never splits); validateLayout on a hand-built split is enough for TS parity of the other ops.
+  const handSplit: LayoutNode = {
+    type: "split", direction: "column", sizes: [0.5, 0.5],
+    children: [group("g1", ["a"], "a"), group("gNew", ["b"], "b")],
+  }
+  expect(validateLayout(handSplit)).toBeNull()
 })

@@ -207,3 +207,67 @@ fun splitGroup(
     }
     return walk(node)
 }
+
+/**
+ * Move [viewId] to [index] within its own group. Out-of-range indices clamp.
+ * The active view is unchanged — reordering tabs must not switch which one you
+ * are looking at.
+ */
+fun reorderWithinGroup(node: LayoutNode, groupId: String, viewId: String, index: Int): LayoutNode = when (node) {
+    is LayoutNode.Group -> {
+        if (node.id != groupId || viewId !in node.viewIds) node
+        else {
+            val rest = node.viewIds.filter { it != viewId }
+            val at = index.coerceIn(0, rest.size)
+            node.copy(viewIds = rest.subList(0, at) + viewId + rest.subList(at, rest.size))
+        }
+    }
+    is LayoutNode.Split -> node.copy(children = node.children.map { reorderWithinGroup(it, groupId, viewId, index) })
+}
+
+/**
+ * Move [viewId] out of wherever it is and into [toGroupId] at [index], and make
+ * it active there — you dragged it, you want to see it.
+ *
+ * Emptying the source group collapses it, and a split left with one child
+ * collapses too; that is [normalizeLayout]'s job and it runs here. Returns null
+ * only if the whole tree emptied, which cannot happen while the moved view still
+ * exists — but the signature stays nullable to match [removeViewFromLayout].
+ */
+fun moveViewToGroup(node: LayoutNode, viewId: String, toGroupId: String, index: Int): LayoutNode? {
+    // Same-group move is a reorder; going through remove+add would briefly empty
+    // a one-view group and collapse the split out from under the user.
+    val owner = groupIdOf(node, viewId)
+    if (owner == toGroupId) return reorderWithinGroup(node, toGroupId, viewId, index)
+    if (!hasGroup(node, toGroupId)) return node
+
+    val without = removeViewFromLayout(node, viewId) ?: return node
+    if (!hasGroup(without, toGroupId)) return node
+    return normalizeLayout(insertIntoGroup(without, toGroupId, viewId, index))
+}
+
+/** The id of the group holding [viewId], or null. */
+fun groupIdOf(node: LayoutNode, viewId: String): String? = when (node) {
+    is LayoutNode.Group -> node.id.takeIf { viewId in node.viewIds }
+    is LayoutNode.Split -> node.children.firstNotNullOfOrNull { groupIdOf(it, viewId) }
+}
+
+private fun hasGroup(node: LayoutNode, groupId: String): Boolean = when (node) {
+    is LayoutNode.Group -> node.id == groupId
+    is LayoutNode.Split -> node.children.any { hasGroup(it, groupId) }
+}
+
+private fun insertIntoGroup(node: LayoutNode, groupId: String, viewId: String, index: Int): LayoutNode = when (node) {
+    is LayoutNode.Group -> {
+        if (node.id != groupId) node
+        else {
+            val at = index.coerceIn(0, node.viewIds.size)
+            LayoutNode.Group(
+                id = node.id,
+                viewIds = node.viewIds.subList(0, at) + viewId + node.viewIds.subList(at, node.viewIds.size),
+                activeViewId = viewId,
+            )
+        }
+    }
+    is LayoutNode.Split -> node.copy(children = node.children.map { insertIntoGroup(it, groupId, viewId, index) })
+}

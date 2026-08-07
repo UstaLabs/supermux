@@ -184,4 +184,84 @@ class LayoutTreeTest {
         val l = group("g1", listOf("v1", "v2"), "v1")
         assertEquals(l, splitGroup(l, "nope", "v2", "row", "g2"))
     }
+
+    // --- Phase 5: reorder within a group, move between groups ---
+
+    @Test
+    fun reorderWithinGroup_movesAViewToANewIndex() {
+        val l = group("g1", listOf("a", "b", "c"), "a")
+        assertEquals(
+            LayoutNode.Group("g1", listOf("b", "a", "c"), "a"),
+            reorderWithinGroup(l, "g1", "a", 1),
+        )
+    }
+
+    @Test
+    fun reorderWithinGroup_clampsAnOutOfRangeIndex() {
+        val l = group("g1", listOf("a", "b"), "a")
+        assertEquals(LayoutNode.Group("g1", listOf("b", "a"), "a"), reorderWithinGroup(l, "g1", "a", 99))
+    }
+
+    @Test
+    fun reorderWithinGroup_keepsTheActiveViewActive() {
+        val l = group("g1", listOf("a", "b", "c"), "c")
+        assertEquals("c", (reorderWithinGroup(l, "g1", "a", 2) as LayoutNode.Group).activeViewId)
+    }
+
+    @Test
+    fun reorderWithinGroup_isANoOpForAnUnknownGroup() {
+        val l = group("g1", listOf("a", "b"), "a")
+        assertEquals(l, reorderWithinGroup(l, "nope", "a", 1))
+    }
+
+    @Test
+    fun moveViewToGroup_movesAcrossAndActivatesItThere() {
+        val l = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+            group("g1", listOf("a", "b"), "a"),
+            group("g2", listOf("c"), "c"),
+        ))
+        val out = moveViewToGroup(l, "a", "g2", index = 0)!!
+        val split = out as LayoutNode.Split
+        assertEquals(LayoutNode.Group("g1", listOf("b"), "b"), split.children[0])
+        assertEquals(LayoutNode.Group("g2", listOf("a", "c"), "a"), split.children[1])
+    }
+
+    @Test
+    fun moveViewToGroup_collapsesTheSplitWhenTheSourceGroupEmpties() {
+        // Last view leaves g1 → g1 disappears → the split has one child → it collapses.
+        val l = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+            group("g1", listOf("a"), "a"),
+            group("g2", listOf("c"), "c"),
+        ))
+        assertEquals(
+            LayoutNode.Group("g2", listOf("a", "c"), "a"),
+            moveViewToGroup(l, "a", "g2", index = 0),
+        )
+    }
+
+    @Test
+    fun moveViewToGroup_isANoOpWhenTheTargetGroupIsUnknown() {
+        val l = group("g1", listOf("a", "b"), "a")
+        assertEquals(l, moveViewToGroup(l, "a", "nope", 0))
+    }
+
+    @Test
+    fun moveViewToGroup_movingWithinTheSameGroupJustReorders() {
+        val l = group("g1", listOf("a", "b", "c"), "a")
+        assertEquals(
+            LayoutNode.Group("g1", listOf("b", "a", "c"), "a"),
+            moveViewToGroup(l, "a", "g1", index = 1),
+        )
+    }
+
+    @Test
+    fun everyPhase5OperationLeavesAValidTree() {
+        val l = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+            group("g1", listOf("a", "b"), "a"),
+            group("g2", listOf("c"), "c"),
+        ))
+        assertNull(validateLayout(reorderWithinGroup(l, "g1", "a", 1)))
+        assertNull(validateLayout(moveViewToGroup(l, "a", "g2", 0)!!))
+        assertNull(validateLayout(splitGroup(group("g1", listOf("a", "b"), "a"), "g1", "b", "column", "gNew")))
+    }
 }

@@ -141,3 +141,95 @@ export function removeViewFromLayout(node: LayoutNode, viewId: string): LayoutNo
   }
   return normalizeLayout(strip(node))
 }
+
+/**
+ * Move [viewId] to [index] within its own group. Out-of-range indices clamp.
+ * The active view is unchanged — reordering tabs must not switch which one you
+ * are looking at.
+ */
+export function reorderWithinGroup(
+  node: LayoutNode,
+  groupId: string,
+  viewId: string,
+  index: number,
+): LayoutNode {
+  if (node.type === "group") {
+    if (node.id !== groupId || !node.viewIds.includes(viewId)) return node
+    const rest = node.viewIds.filter((v) => v !== viewId)
+    const at = Math.max(0, Math.min(index, rest.length))
+    return {
+      ...node,
+      viewIds: [...rest.slice(0, at), viewId, ...rest.slice(at)],
+    }
+  }
+  return {
+    ...node,
+    children: node.children.map((c) => reorderWithinGroup(c, groupId, viewId, index)),
+  }
+}
+
+/**
+ * Move [viewId] out of wherever it is and into [toGroupId] at [index], and make
+ * it active there — you dragged it, you want to see it.
+ *
+ * Emptying the source group collapses it, and a split left with one child
+ * collapses too; that is normalizeLayout's job and it runs here. Returns null
+ * only if the whole tree emptied, which cannot happen while the moved view still
+ * exists — but the signature stays nullable to match removeViewFromLayout.
+ */
+export function moveViewToGroup(
+  node: LayoutNode,
+  viewId: string,
+  toGroupId: string,
+  index: number,
+): LayoutNode | null {
+  // Same-group move is a reorder; going through remove+add would briefly empty
+  // a one-view group and collapse the split out from under the user.
+  const owner = groupIdOf(node, viewId)
+  if (owner === toGroupId) return reorderWithinGroup(node, toGroupId, viewId, index)
+  if (!hasGroup(node, toGroupId)) return node
+
+  const without = removeViewFromLayout(node, viewId)
+  if (without === null) return node
+  if (!hasGroup(without, toGroupId)) return node
+  return normalizeLayout(insertIntoGroup(without, toGroupId, viewId, index))
+}
+
+/** The id of the group holding [viewId], or null. */
+export function groupIdOf(node: LayoutNode, viewId: string): string | null {
+  if (node.type === "group") {
+    return node.viewIds.includes(viewId) ? node.id : null
+  }
+  for (const c of node.children) {
+    const id = groupIdOf(c, viewId)
+    if (id !== null) return id
+  }
+  return null
+}
+
+function hasGroup(node: LayoutNode, groupId: string): boolean {
+  if (node.type === "group") return node.id === groupId
+  return node.children.some((c) => hasGroup(c, groupId))
+}
+
+function insertIntoGroup(
+  node: LayoutNode,
+  groupId: string,
+  viewId: string,
+  index: number,
+): LayoutNode {
+  if (node.type === "group") {
+    if (node.id !== groupId) return node
+    const at = Math.max(0, Math.min(index, node.viewIds.length))
+    return {
+      type: "group",
+      id: node.id,
+      viewIds: [...node.viewIds.slice(0, at), viewId, ...node.viewIds.slice(at)],
+      activeViewId: viewId,
+    }
+  }
+  return {
+    ...node,
+    children: node.children.map((c) => insertIntoGroup(c, groupId, viewId, index)),
+  }
+}
