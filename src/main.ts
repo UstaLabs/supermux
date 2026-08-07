@@ -92,7 +92,7 @@ import {
 import { validateWebEnv } from "./shared/web-env"
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
-import { execSync as _execSync, spawn as nodeSpawn, execFileSync } from "child_process"
+import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary } from "./shared/preflight"
@@ -132,7 +132,6 @@ import { LinuxXvfbProvider } from "./core/display/providers/linux-xvfb"
 import { MacosScreenProvider } from "./core/display/providers/macos-screen"
 import { listDevices } from "./core/display/scrcpy/adb"
 import { FsWatcher } from "./core/editor/fs-watcher"
-import { scanRepos } from "./core/editor/repo-scanner"
 import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
@@ -2474,19 +2473,16 @@ const server = await startSocketServer({
       const workdir = msg.workdir as string
       const agentSessionId = msg.agent_session_id as string | undefined
 
-      // Reconnect path: look up by UUID first
+      // Attach path: the spawn path created the row before claude started, so
+      // every legitimate register frame finds it here (first connect and
+      // reconnect look identical).
       const existing = registry.get(sessionUuid)
       if (existing) {
-        log.info("shim_reconnect", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid })
+        log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid })
         if (agentSessionId) {
           registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
         }
-        const pendingWindow = pendingRuntimeTargetId.get(sessionUuid)
-        if (pendingWindow) {
-          registry.sessions.setTmuxWindowId(sessionUuid, pendingWindow)
-          pendingRuntimeTargetId.delete(sessionUuid)
-        }
-        // Rebuild adapter if missing (after broker restart)
+        // Rebuild adapter if missing (first connect, or after broker restart)
         if (!adapters.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
           const adapter = new ClaudeCodeAdapter({
             sessionName: existing.name,
@@ -2514,91 +2510,12 @@ const server = await startSocketServer({
         return { name: existing.name, session_id: sessionUuid }
       }
 
-      // spawnSession (or the supervisor) reserved this name and bound the
-      // socket before claude started, so we register the real name as-is.
-      // If for some reason no reservation exists (manual /claude in a tmux
-      // window?), fall back to deriving+uniquifying here.
-      let finalName: string
-      if (requested && registry.takenNames().has(requested) && !registry.resolveName(requested)) {
-        // Reserved by our spawn path — claim it.
-        finalName = requested
-      } else {
-        const { deriveName, ensureUnique } = await import("./core/session-manager/naming")
-        const base = requested ?? deriveName(workdir)
-        finalName = ensureUnique(base, registry.takenNames())
-      }
-
-      // Preserve the stored role/is_default so a backfilled PA (role='personal_assistant')
-      // re-registers as PA → can_orchestrate stays true via policy. Brand-new sessions
-      // default to worker/false.
-      const prior = registry.get(sessionUuid)
-      const wasInternal = pendingInternal.delete(sessionUuid)
-      const session = registry.register({
-        id: sessionUuid,  // Use the UUID from the socket
-        name: finalName,
-        workdir,
-        tmux_target: `${TMUX_SESSION}:${finalName}`,
-        pid: msg.pid,
-        agent_session_id: agentSessionId,
-        role: prior?.role ?? "worker",
-        is_default: prior?.is_default ?? false,
-        internal: wasInternal,
-        base_commits: (() => {
-          const out: Record<string, string> = {}
-          for (const repo of scanRepos(workdir)) {
-            try { out[repo.relPath] = _execSync("git rev-parse HEAD", { cwd: repo.absPath, encoding: "utf-8", timeout: 5000 }).trim() } catch {}
-          }
-          return out
-        })(),
-      })
-
-      if (!wasInternal) webChannel?.broadcastToAll({
-        type: "session_added",
-        session: { id: session.id, name: finalName, workdir, mute: false, connected: true, agent: session.agent, user_status: session.user_status, sort_order: session.sort_order, draft_payload: session.draft_payload },
-      })
-
-      if (!adapters.has(sessionUuid)) {
-        const adapter = new ClaudeCodeAdapter({
-          sessionName: finalName,
-          workdir,
-          sendInboundSocket: (payload) => server.sendInbound(sessionUuid, payload),
-          interruptSocket: () => interruptClaudePane(sessionUuid),
-        })
-        registerClaudeRuntime(sessionUuid, adapter)
-        wireClaudeStateEvents(adapter, {
-          onState: (event, tool) => agentStateStore.applyEvent(sessionUuid, event, tool),
-          onError: (errorType, message) => {
-            const s = registry.get(sessionUuid)
-            void notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
-          },
-        })
-      }
-      // If this registration matches a pending /spawn, flip the chat's active.
-      const pendingChat = pendingSpawnActive.get(finalName)
-      if (pendingChat) {
-        registry.setActive(pendingChat, session.id)
-        pendingSpawnActive.delete(finalName)
-      }
-      // Apply deferred Claude session ID (supervisor/spawn fire before onRegister)
-      const pendingClaude = pendingClaudeSessionId.get(sessionUuid) ?? pendingClaudeSessionId.get(finalName)
-      if (pendingClaude) {
-        registry.sessions.setAgentSessionId(sessionUuid, pendingClaude)
-        pendingClaudeSessionId.delete(sessionUuid)
-        pendingClaudeSessionId.delete(finalName)
-      }
-      const pendingWindow = pendingRuntimeTargetId.get(sessionUuid)
-      if (pendingWindow) {
-        registry.sessions.setTmuxWindowId(sessionUuid, pendingWindow)
-        pendingRuntimeTargetId.delete(sessionUuid)
-      }
-      // Start transcript tailer for Claude sessions
-      ensureClaudeTailer(sessionUuid, finalName, workdir)
-      await refreshTelegramMenu()
-      void commandRegistry.refresh(finalName)
-      if (session.role === "personal_assistant" && session.is_default) {
-        setTimeout(() => { void maybeAutoSendSoulSetup(session.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
-      }
-      return { name: finalName, session_id: sessionUuid }
+      // No row → nothing to attach to. The spawn path creates every legitimate
+      // row before claude starts, and the shim can only reach a socket the
+      // broker bound for a spawn. An unknown id means the session was killed
+      // in the ~1s startup gap. Refuse; never create rows here.
+      log.warn("register_unknown_session", { session_id: sessionUuid, requested, workdir })
+      throw new Error(`unknown session: ${sessionUuid} — the broker did not spawn this session`)
     },
     onOutbound: async (msg) => {
       const fromSession = msg.session_id
