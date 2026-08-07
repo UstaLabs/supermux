@@ -18,21 +18,18 @@ afterEach(() => { try { db.close() } catch {}; rmSync(tmpDir, { recursive: true,
 
 test("createSupervisor exposes ensurePersonalAssistants", () => {
   const registry = new Registry(db)
-  const sup = createSupervisor({ registry, bindSocket: async () => {}, spawnTmux: async () => {} })
+  const sup = createSupervisor({ registry, bindSocket: async () => {} })
   expect(typeof sup.ensurePersonalAssistants).toBe("function")
 })
 
 test("ensurePersonalAssistants keeps a fresh install at zero PAs", async () => {
   const registry = new Registry(db)
-  const spawns: any[] = []
   const sup = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async (o) => { spawns.push(o) },
     paWorkdir: "/tmp/amux-test-pa",
   })
   await sup.ensurePersonalAssistants()
-  expect(spawns.length).toBe(0)
   expect(registry.listPAs().length).toBe(0)
 })
 
@@ -41,7 +38,6 @@ test("bootstrapPA supports codex agent and stores it in registry", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
     codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
     codexSpawnAppServer: () => ({
       pid: 123,
@@ -106,7 +102,6 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
     codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
     codexSpawnAppServer: () => ({
       pid: 123,
@@ -167,7 +162,6 @@ test("bootstrapPA creates Claude through the session backend", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => { throw new Error("must not spawn via tmux") },
     sessionBackend,
   })
 
@@ -185,7 +179,6 @@ test("reconcile invokes the internal-worker reaper each tick", async () => {
   const sup = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => {},
     reapInternalWorkers: async () => { reapCalls++ },
   })
   await sup.reconcile()
@@ -209,7 +202,6 @@ test("reconcile never suspends a draft (pid 0 reads as dead but the guard skips 
   const sup = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => {},
   })
   try {
     await sup.reconcile()

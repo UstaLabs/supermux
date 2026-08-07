@@ -43,9 +43,6 @@ export type SupervisorOpts = {
   // Bind the unix socket for a session BEFORE claude spawns; otherwise the
   // shim hits ENOENT on connect and the session dies on arrival.
   bindSocket: (session_id: string) => Promise<void>
-  // Store the Claude Code session ID so resumed sessions can pass --resume.
-  // Override for tests; defaults to the real tmux helper.
-  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
   sessionBackend?: SessionBackend
   // PA workdir, resolved from the config store by the caller. When omitted
   // (e.g. tests), falls back to the historical default.
@@ -56,20 +53,11 @@ export type SupervisorOpts = {
    *  no longer silently drop adapters because a bag member was not passed
    *  (the old half-filled-bag bug). Explicit seams below still win (tests). */
   sessionManager?: SessionManagerLike
-  // Non-Claude PA spawn dependencies (injected by main.ts; optional for tests).
-  onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
-  onCursorSessionId?: (name: string, sessionId: string) => void
-  onOpenCodeSessionId?: (name: string, sessionId: string) => void
+  // Test seams for non-Claude PA spawns (production derives from sessionManager).
   registerAdapter?: Parameters<typeof spawnPA>[0]["registerAdapter"]
   codexResolveAuth?: Parameters<typeof spawnPA>[0]["codexResolveAuth"]
   codexSpawnAppServer?: Parameters<typeof spawnPA>[0]["codexSpawnAppServer"]
   codexAdapterFactory?: Parameters<typeof spawnPA>[0]["codexAdapterFactory"]
-  cursorResolveAuth?: Parameters<typeof spawnPA>[0]["cursorResolveAuth"]
-  cursorSmokeAgent?: Parameters<typeof spawnPA>[0]["cursorSmokeAgent"]
-  cursorRunnerFactory?: Parameters<typeof spawnPA>[0]["cursorRunnerFactory"]
-  cursorAdapterFactory?: Parameters<typeof spawnPA>[0]["cursorAdapterFactory"]
-  opencodeSpawnServer?: Parameters<typeof spawnPA>[0]["opencodeSpawnServer"]
-  opencodeAdapterFactory?: Parameters<typeof spawnPA>[0]["opencodeAdapterFactory"]
   reapInternalWorkers?: () => Promise<void>
 }
 
@@ -82,7 +70,6 @@ export type SessionManagerLike = {
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
-  const spawnTmux = opts.spawnTmux
   const sessionBackend = opts.sessionBackend ?? getSessionBackend()
   // Derived non-claude PA spawn wiring: explicit test seams win; otherwise the
   // session component provides the real behavior. Without either, spawnPA
@@ -94,9 +81,9 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   const persistAgentSessionId = (brokerSessionId: string, sid: string) => {
     if (opts.registry.get(brokerSessionId)) opts.registry.sessions.setAgentSessionId(brokerSessionId, sid)
   }
-  const onCodexSessionId = opts.onCodexSessionId ?? (opts.sessionManager ? persistAgentSessionId : undefined)
-  const onCursorSessionId = opts.onCursorSessionId ?? (opts.sessionManager ? persistAgentSessionId : undefined)
-  const onOpenCodeSessionId = opts.onOpenCodeSessionId ?? (opts.sessionManager ? persistAgentSessionId : undefined)
+  const onCodexSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onCursorSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onOpenCodeSessionId = opts.sessionManager ? persistAgentSessionId : undefined
   // Prefer caller-supplied values (from config store); fall back to the built-in
   // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via
   // SettingsStore.getAppConfig) and forwarded as opts.paWorkdir.
@@ -151,7 +138,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: pa.model,
         reasoningLevel: pa.reasoningLevel,
         bind: opts.bindSocket,
-        spawnTmux,
         sessionBackend,
         tmuxSession: TMUX_SESSION,
         id: pa.id,
@@ -163,12 +149,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         codexResolveAuth: opts.codexResolveAuth,
         codexSpawnAppServer: opts.codexSpawnAppServer,
         codexAdapterFactory: opts.codexAdapterFactory,
-        cursorResolveAuth: opts.cursorResolveAuth,
-        cursorSmokeAgent: opts.cursorSmokeAgent,
-        cursorRunnerFactory: opts.cursorRunnerFactory,
-        cursorAdapterFactory: opts.cursorAdapterFactory,
-        opencodeSpawnServer: opts.opencodeSpawnServer,
-        opencodeAdapterFactory: opts.opencodeAdapterFactory,
       })
     }
   }
@@ -197,7 +177,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: bootstrapOpts?.model,
         reasoningLevel: bootstrapOpts?.reasoningLevel,
         bind: opts.bindSocket,
-        spawnTmux,
         sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: opts.resolveEffort,
@@ -208,12 +187,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         codexResolveAuth: opts.codexResolveAuth,
         codexSpawnAppServer: opts.codexSpawnAppServer,
         codexAdapterFactory: opts.codexAdapterFactory,
-        cursorResolveAuth: opts.cursorResolveAuth,
-        cursorSmokeAgent: opts.cursorSmokeAgent,
-        cursorRunnerFactory: opts.cursorRunnerFactory,
-        cursorAdapterFactory: opts.cursorAdapterFactory,
-        opencodeSpawnServer: opts.opencodeSpawnServer,
-        opencodeAdapterFactory: opts.opencodeAdapterFactory,
       })
     } catch (err) {
       opts.registry.unregister(id)

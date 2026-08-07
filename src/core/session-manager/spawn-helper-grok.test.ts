@@ -42,7 +42,6 @@ describe("Grok spawn", () => {
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      spawnTmux: async () => { throw new Error("grok must not spawn tmux") },
       grokRunnerFactory: () => fakeRunner(),
       onGrokSessionId: (_name, sid) => persisted.push(sid),
     }, {
@@ -69,7 +68,6 @@ describe("Grok spawn", () => {
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      spawnTmux: async () => { throw new Error("grok must not spawn tmux") },
       grokRunnerFactory: () => (opts: any) => { runnerEnv = opts.env; return fakeRunner((p) => { newParams = p })(opts) },
     }, {
       workdir,

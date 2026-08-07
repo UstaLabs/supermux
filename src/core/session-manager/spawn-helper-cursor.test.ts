@@ -18,9 +18,6 @@ describe("Cursor spawn", () => {
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      spawnTmux: async () => {
-        throw new Error("cursor must not spawn tmux")
-      },
       cursorResolveAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
       cursorSmokeAgent: async () => {},
       cursorRunnerFactory: () => async (_args, _onLine, onExit) => {

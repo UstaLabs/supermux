@@ -63,7 +63,6 @@ function deps(registry: any) {
   return {
     registry,
     bind: async (id: string) => { boundIds.push(id) },
-    spawnTmux: async () => {},
     tmuxSession: "mux",
     registerAdapter: () => {},
     onOpenCodeSessionId: () => {},

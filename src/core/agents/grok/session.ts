@@ -44,7 +44,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
   await deps.bind(id)
 
-  const adapter = (deps.grokAdapterFactory ?? ((o) => new GrokAdapter(o)))({
+  const adapter = new GrokAdapter({
     sessionName: name,
     workdir: args.workdir,
     runner: (deps.grokRunnerFactory ?? (() => realGrokRunner))(),
@@ -87,7 +87,6 @@ export async function resumeGrokSession(
   deps: {
     resolveAttachment?: (file_id: string) => Promise<string>
     onGrokSessionId?: (name: string, sid: string) => void
-    grokRunnerFactory?: () => GrokRunner
   },
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: GrokAdapter }> {
@@ -105,7 +104,7 @@ export async function resumeGrokSession(
   const adapter = new GrokAdapter({
     sessionName: session.name,
     workdir: session.workdir,
-    runner: (deps.grokRunnerFactory ?? (() => realGrokRunner))(),
+    runner: realGrokRunner,
     persistSessionId: async (sid) => { deps.onGrokSessionId?.(session.name, sid) },
     initialSessionId: session.agent_session_id || undefined,
     model: session.model,

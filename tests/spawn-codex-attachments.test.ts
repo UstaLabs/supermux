@@ -23,7 +23,6 @@ function makeDeps(registry: Registry, extra?: Partial<SpawnDeps>): SpawnDeps {
   return {
     registry,
     bind: async () => {},
-    spawnTmux: async () => {},
     tmuxSession: "mux",
     codexResolveAuth: async () => ({ mode: "oauth_copy", env: {} }),
     codexPrepareSessionHome: async () => {},

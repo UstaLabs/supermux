@@ -53,7 +53,6 @@ test("Claude spawn sends structured argv and env to the session backend", async 
   const result = await spawnSession({
     registry,
     bind: async () => {},
-    spawnTmux: async () => { throw new Error("Claude must not use the POSIX spawn adapter") },
     sessionBackend,
     tmuxSession: "mux",
   }, {

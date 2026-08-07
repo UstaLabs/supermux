@@ -66,7 +66,6 @@ type GrokSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 export type SpawnDeps = {
   registry: Registry
   bind: (session_id: string) => Promise<void>
-  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
   sessionBackend?: SessionBackend
   tmuxSession: string
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -81,7 +80,6 @@ export type SpawnDeps = {
   cursorRunnerFactory?: (opts: { home: string; authEnv: Record<string, string> }) => CursorRunner
   cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
   grokRunnerFactory?: () => GrokRunner
-  grokAdapterFactory?: (opts: ConstructorParameters<typeof GrokAdapter>[0]) => GrokAdapter
   registerAdapter?: (
     name: string,
     adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
@@ -137,7 +135,6 @@ export async function spawnPA(opts: {
   model?: string
   reasoningLevel?: string
   bind: (session_id: string) => Promise<void>
-  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
   sessionBackend?: SessionBackend
   tmuxSession: string
   onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
@@ -161,8 +158,6 @@ export async function spawnPA(opts: {
   cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
   opencodeSpawnServer?: typeof spawnOpenCodeServer
   opencodeAdapterFactory?: (opts: ConstructorParameters<typeof OpenCodeAdapter>[0]) => OpenCodeAdapter
-  grokRunnerFactory?: () => GrokRunner
-  grokAdapterFactory?: (opts: ConstructorParameters<typeof GrokAdapter>[0]) => GrokAdapter
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -396,10 +391,10 @@ export async function spawnPA(opts: {
     })
     writeGrokPreamble({ workdir, sessionName: name })
 
-    const adapter = (opts.grokAdapterFactory ?? ((o) => new GrokAdapter(o)))({
+    const adapter = new GrokAdapter({
       sessionName: name,
       workdir,
-      runner: (opts.grokRunnerFactory ?? (() => realGrokRunner))(),
+      runner: realGrokRunner,
       persistSessionId: async (sid) => { opts.onGrokSessionId?.(name, sid) },
       initialSessionId: undefined,
       model,

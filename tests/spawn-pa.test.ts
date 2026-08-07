@@ -87,7 +87,6 @@ test("spawns a Codex PA and registers it as personal_assistant", async () => {
     agent: "codex" as const,
     workdir: join(tmpDir, "codex-pa"),
     bind: async () => {},
-    spawnTmux: async () => ({}),
     tmuxSession: "mux",
     codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
     codexSpawnAppServer: () => ({
@@ -131,7 +130,6 @@ test("spawns a Cursor PA and registers it as personal_assistant", async () => {
     agent: "cursor" as const,
     workdir: join(tmpDir, "cursor-pa"),
     bind: async () => {},
-    spawnTmux: async () => ({}),
     tmuxSession: "mux",
     cursorResolveAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
     cursorSmokeAgent: async () => {},
@@ -168,7 +166,6 @@ test("spawns an OpenCode PA and registers it as personal_assistant", async () =>
     agent: "opencode" as const,
     workdir: join(tmpDir, "opencode-pa"),
     bind: async () => {},
-    spawnTmux: async () => ({}),
     tmuxSession: "mux",
     opencodeSpawnServer: async () => ({
       pid: 123,
