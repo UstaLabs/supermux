@@ -1,16 +1,70 @@
 import { describe, expect, test } from "bun:test"
 import { join } from "path"
-import { openDb, runMigrations } from "../storage/db"
+import { openDb, runMigrations, type Db } from "../storage/db"
 import { Registry } from "./registry"
-import { SessionManager } from "./manager"
+import { SessionManager, type SessionManagerPorts } from "./manager"
 import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { ClaudeCodeAdapter } from "../agents/claude"
+import type { FileStore } from "../files/store"
+
+/** Minimal inert ports: the runtime-store tests never cross into a port. */
+function fakePorts(db: Db): SessionManagerPorts {
+  return {
+    getWebChannel: () => undefined,
+    getAgentRpc: () => ({ settle: () => {}, fail: () => {} }),
+    socket: { sendInbound: async () => {} },
+    backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
+    cleanup: {
+      terminals: { killAllForSession: async () => {} },
+      fsWatcher: { killSession: () => {} },
+      stopClaudeTailer: () => {},
+      releaseDraftAttachments: () => {},
+      recentInbound: { clear: () => {} },
+      pendingReapply: { clear: () => {} },
+      syncGitStatus: () => {},
+    },
+    displays: {
+      killAllForSession: async () => {},
+      start: async () => { throw new Error("unused in tests") },
+      get: () => undefined,
+      stop: async () => {},
+    },
+    agentState: { applyEvent: () => {}, clear: () => {} },
+    bgTasks: { clear: () => {} },
+    commands: { remove: () => {}, refresh: async () => {} },
+    register: {
+      interruptClaudePane: async () => {},
+      notifyAgentError: async () => {},
+      ensureClaudeTailer: () => {},
+      maybeAutoSendSoulSetup: async () => {},
+    },
+    outbound: {
+      onAssistantMessage: async () => {},
+      getChannel: () => undefined,
+      telegramApi: undefined,
+    },
+    orchestration: {
+      spawnSession: async () => { throw new Error("unused in tests") },
+      refreshTelegramMenu: async () => {},
+      wsDto: () => undefined,
+      exposedProxyLinksBaseUrl: () => undefined,
+      proxyWsPayload: () => ({}),
+      proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
+    },
+    stores: {
+      fileStore: {} as unknown as FileStore,
+      messageLog: { get: () => [], update: () => false, addReaction: () => false },
+      searchStore: { searchKnowledge: () => [], searchSessions: () => [] },
+      db,
+    },
+  }
+}
 
 function manager(): SessionManager {
   const db = openDb(":memory:")
   runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
-  return new SessionManager(new Registry(db))
+  return new SessionManager(new Registry(db), fakePorts(db))
 }
 
 describe("SessionManager runtime store", () => {
