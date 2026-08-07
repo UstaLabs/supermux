@@ -10,11 +10,9 @@ import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { GrokAdapter } from "../agents/grok/adapter"
 import { resolveCodexAuth } from "../agents/codex/auth"
 import { writeCodexPreamble } from "../agents/codex/preamble-writer"
-import { resolveCursorAuth } from "../agents/cursor/auth"
-import { makeRealCursorRunner } from "../agents/cursor/runner"
-import { writeCursorPreamble } from "../agents/cursor/preamble-writer"
-import { codexPrepareSessionHome, codexSpawnArgs, cursorSpawnArgs } from "../plugins"
+import { codexPrepareSessionHome, codexSpawnArgs } from "../plugins"
 import { resumeOpenCodeSession } from "./spawn-helper"
+import * as cursorSession from "../agents/cursor/session"
 import * as grokSession from "../agents/grok/session"
 import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { buildClaudeSpawnSpec } from "./spawn-command"
@@ -720,28 +718,8 @@ export class SessionManager {
     return handle
   }
 
-  private async resumeCursorArm(
-    session: { id: string; workdir: string; agent_home: string; agent_session_id?: string },
-    name: string,
-  ): Promise<void> {
-    const auth = await resolveCursorAuth({
-      apiKey: process.env.CURSOR_API_KEY,
-      userCursorDir: join(home(), ".cursor"),
-      sessionHome: session.agent_home,
-    })
-    writeCursorPreamble({ workdir: session.workdir, sessionName: name })
-    const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
-    const adapter = new CursorAdapter({
-      sessionName: name,
-      workdir: session.workdir,
-      runner,
-      persistSessionId: async (id) => {
-        this.registry.sessions.setAgentSessionId(session.id, id)
-      },
-      initialSessionId: session.agent_session_id,
-      pluginArgs: cursorSpawnArgs({ sessionName: name }).args,
-      resolveAttachment: this.ports.resume.resolveAttachment,
-    })
+  private async resumeCursorArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await cursorSession.resume(this.resumeCtx(session.id), session, name)
     this.registerCursorRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }

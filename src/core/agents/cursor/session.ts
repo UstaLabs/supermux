@@ -2,6 +2,7 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME, smokeCursorAgent } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
+import type { ResumeCtx, ResumeRow } from "../session-types"
 import { resolveCursorAuth } from "./auth"
 import type { CursorAuthResult } from "./auth"
 import { writeCursorMcpConfig } from "./mcp-writer"
@@ -14,6 +15,7 @@ import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import { home } from "../../../shared/home"
 
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
@@ -75,4 +77,32 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   } catch (err) {
     throw err
   }
+}
+
+/** Dialect half of resume; the SessionManager registers + wires the result.
+ * Cursor sessions are per-turn — no persistent process to respawn. The adapter
+ * just needs agent_home (config + auth dir); the preamble is self-healed on
+ * every resume. agent_session_id may be absent if the session never received a
+ * first message yet; that's OK — initialSessionId=undefined means the first
+ * turn starts fresh. */
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CursorAdapter }> {
+  const auth = await resolveCursorAuth({
+    apiKey: process.env.CURSOR_API_KEY,
+    userCursorDir: join(home(), ".cursor"),
+    sessionHome: session.agent_home,
+  })
+  writeCursorPreamble({ workdir: session.workdir, sessionName: name })
+  const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
+  const adapter = new CursorAdapter({
+    sessionName: name,
+    workdir: session.workdir,
+    runner,
+    persistSessionId: async (id) => {
+      ctx.persistAgentSessionId(id)
+    },
+    initialSessionId: session.agent_session_id,
+    pluginArgs: cursorSpawnArgs({ sessionName: name }).args,
+    resolveAttachment: ctx.resolveAttachment,
+  })
+  return { adapter }
 }
