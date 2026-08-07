@@ -89,7 +89,7 @@ import {
   MUX_HOME, STATE_DIR, PID_FILE, SOCKETS_DIR, ENV_FILE, INBOX_DIR, DEVICES_FILE, HOST_KEY_FILE,
 } from "./shared/paths"
 import { validateWebEnv } from "./shared/web-env"
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, watch as fsWatch } from "fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chmodSync, unlinkSync, watch as fsWatch } from "fs"
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
@@ -348,7 +348,6 @@ if (existsSync(REGISTRY_FILE)) {
         }
       }
     }
-    const { unlinkSync } = await import("fs")
     unlinkSync(REGISTRY_FILE)
     log.info("registry_json_imported_and_deleted")
   } catch (err: any) {

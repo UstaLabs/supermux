@@ -50,7 +50,7 @@ export type SupervisorOpts = {
   /** The session component. When present, adapter registration and session-id
    *  persistence for non-claude PA spawns DERIVE from it — the supervisor can
    *  no longer silently drop adapters because a bag member was not passed
-   *  (the old half-filled-bag bug). Explicit seams below still win (tests). */
+   *  (the old half-filled-bag bug). */
   sessionManager?: SessionManagerLike
   reapInternalWorkers?: () => Promise<void>
 }

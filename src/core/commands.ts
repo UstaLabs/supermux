@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto"
 import { Registry } from "./session-manager/registry"
 import type { MessageStore } from "./session-manager/messages"
 import { fetchAllUsage } from "./usage/index"
@@ -410,7 +411,6 @@ async function cmdProxy(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   if (!port || port < 1 || port > 65535) return { text: "port must be 1-65535" }
   let finalDomain = domain
   if (!finalDomain) {
-    const { randomBytes } = await import("crypto")
     finalDomain = "px-" + randomBytes(4).toString("hex")
   }
   try {

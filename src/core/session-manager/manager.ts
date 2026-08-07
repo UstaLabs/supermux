@@ -13,7 +13,8 @@ import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
-import { ensureUnique } from "./naming"
+import { ensureUnique, resolveSelfRename } from "./naming"
+import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
@@ -487,7 +488,6 @@ export class SessionManager {
         // so no `old` is needed and any session — including can_orchestrate=false
         // workers — can name itself.
         if (!s) return { ok: false, error: "unknown session" }
-        const { resolveSelfRename } = await import("./naming")
         const res = resolveSelfRename(stringArg(op.args, "name"), s.name, this.registry.list().map((x) => x.name), !!s.self_renamed)
         if (!res.ok) return { ok: false, error: res.error }
         const oldName = s.name
@@ -555,7 +555,6 @@ export class SessionManager {
         if (!port || port < 1 || port > 65535) return { ok: false, error: "port must be 1-65535" }
         let domain = optionalStringArg(op.args, "domain")
         if (!domain) {
-          const { randomBytes } = await import("crypto")
           domain = "px-" + randomBytes(4).toString("hex")
         }
         try {
