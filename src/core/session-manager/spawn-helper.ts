@@ -26,6 +26,10 @@ import { writeGrokConfig } from "../agents/grok/config-writer"
 import { resolveGrokAuth } from "../agents/grok/auth"
 import { realGrokRunner, type GrokRunner } from "../agents/grok/runner"
 import { GrokAdapter } from "../agents/grok/adapter"
+// Dispatcher-only import: the per-agent session modules import types/helpers
+// back from this file, which is a benign cycle as long as neither side
+// dereferences the other at module-init time (functions + types only).
+import { spawn as spawnGrokSession } from "../agents/grok/session"
 import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries } from "../plugins"
 import { join } from "path"
 import { shimSpawnSpec } from "./shim-spawn"
@@ -38,7 +42,7 @@ import { STATE_DIR, SOCKETS_DIR } from "../../shared/paths"
 import { AgentKind } from "../../shared/agents"
 import type { Session } from "./types"
 
-function captureBaseCommits(workdir: string): Record<string, string> {
+export function captureBaseCommits(workdir: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const repo of scanRepos(workdir)) {
     try {
@@ -52,7 +56,7 @@ function captureBaseCommits(workdir: string): Record<string, string> {
   return out
 }
 
-const HOME = home()
+export const HOME = home()
 
 type CursorSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 /** grok has no separate spawn handle (the adapter owns its stdio child); this
@@ -784,69 +788,6 @@ export async function resumeOpenCodeSession(
   if (session.agent_session_id) await adapter.resume()
   else await adapter.start()
   return { adapter, handle }
-}
-
-/** grok's worker is an in-process adapter driving a `grok agent stdio` child over
- * ACP. Unlike cursor (per-turn CLI) the child is persistent; unlike codex/opencode
- * it's owned by the adapter, so there's no separate handle and no pid to track —
- * the row is registered with pid 0 and adapter.stop() is the kill.
- *
- * MCP + preamble are NOT files grok reads from a private home: the mux-shim server
- * is handed to grok inline via ACP `session/new`, and the identity preamble goes to
- * AGENTS.md in the workdir (git-excluded, override-safe). sessionHome exists only to
- * give the row an agent_home for resume. */
-export async function spawnGrokSession(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
-  const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
-  const id = randomUUID()
-  deps.registry.reserveName(name)
-
-  const sessionHome = join(STATE_DIR, "agents", "grok", name)
-  mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
-
-  const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
-  writeGrokConfig({
-    sessionHome,
-    ...shimSpawnSpec(),
-    sessionName: name,
-    sessionId: id,
-    socketsDir: SOCKETS_DIR,
-  })
-  writeGrokPreamble({ workdir: args.workdir, sessionName: name })
-
-  await deps.bind(id)
-
-  const adapter = (deps.grokAdapterFactory ?? ((o) => new GrokAdapter(o)))({
-    sessionName: name,
-    workdir: args.workdir,
-    runner: (deps.grokRunnerFactory ?? (() => realGrokRunner))(),
-    persistSessionId: async (sid) => { deps.onGrokSessionId?.(name, sid) },
-    initialSessionId: undefined,
-    model: args.model,
-    effort: args.effort,
-    env: auth.env,
-    resolveAttachment: deps.resolveAttachment,
-  })
-
-  // Register BEFORE adapter.start(): start() completes the ACP handshake, which
-  // fires persistSessionId — that callback resolves the row by name, so the row
-  // must already exist or the grok session id is lost (breaking resume).
-  deps.registry.register({
-    id,
-    name,
-    workdir: args.workdir,
-    pid: 0,
-    agent: AgentKind.Grok,
-    agent_home: sessionHome,
-    base_commits: captureBaseCommits(args.workdir),
-    internal: args.internal,
-  } as any)
-
-  await adapter.start()
-
-  deps.registerAdapter?.(name, adapter, { onExit: () => {} })
-
-  return { name, session_id: id, model: args.model }
 }
 
 /** Rebuild a grok session's adapter + stdio child after a broker restart. The child
