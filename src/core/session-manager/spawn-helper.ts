@@ -472,14 +472,29 @@ async function spawnClaudeSession(deps: SpawnDeps, args: SpawnArgs): Promise<Spa
       cols: 80,
       rows: 24,
     })
-    deps.onRuntimeTargetId?.(id, target.id)
+    // The row is born HERE, synchronously — not in onRegister. The shim's
+    // register frame later ATTACHES to this row (main.ts onRegister).
+    // connected:false — the socket layer flips it when the shim joins.
+    deps.registry.register({
+      id,
+      name,
+      agent: AgentKind.Claude,
+      workdir: args.workdir,
+      tmux_target: `${deps.tmuxSession}:${name}`,
+      tmux_window_id: target.id,
+      pid: target.pid ?? process.pid,
+      agent_session_id: claudeSessionId,
+      internal: args.internal,
+      connected: false,
+      base_commits: captureBaseCommits(args.workdir),
+    })
     await (deps.postSpawnReady ?? ((targetId) => sendChannelConsentEnter(targetId, { backend })))(target.id)
   } catch (err) {
-    // Free the reserved name so a retry can reclaim it (see the function doc).
+    // Free the reserved name AND any row so a retry can reclaim the name.
     deps.registry.releaseName(name)
+    if (deps.registry.get(id)) deps.registry.sessions.deleteById(id)
     throw err
   }
-  deps.onClaudeSessionId?.(name, claudeSessionId)
   return { name, session_id: id, model: args.model }
 }
 
