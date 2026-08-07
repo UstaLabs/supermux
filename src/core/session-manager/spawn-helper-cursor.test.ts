@@ -1,9 +1,38 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, mock, test } from "bun:test"
 import { join } from "path"
 import { AgentKind } from "../../shared/agents"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
+
+// The cursor collaborators are swapped via bun module mocks (the spawn path
+// has no injection seams). mock.module is process-global: capture the real
+// export VALUES first (a spread snapshot — the namespace's live bindings get
+// patched by the mock) and restore them in afterAll.
+const realCursorAuth = { ...(await import("../agents/cursor/auth")) }
+const realCursorSmoke = { ...(await import("../agents/cursor/smoke")) }
+const realCursorRunner = { ...(await import("../agents/cursor/runner")) }
+
+mock.module("../agents/cursor/auth", () => ({
+  ...realCursorAuth,
+  resolveCursorAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
+}))
+mock.module("../agents/cursor/smoke", () => ({
+  ...realCursorSmoke,
+  smokeCursorAgent: async () => {},
+}))
+mock.module("../agents/cursor/runner", () => ({
+  ...realCursorRunner,
+  makeRealCursorRunner: () => async (_args: unknown, _onLine: unknown, onExit: (code: number) => void) => {
+    onExit(0)
+  },
+}))
+
+afterAll(() => {
+  mock.module("../agents/cursor/auth", () => realCursorAuth)
+  mock.module("../agents/cursor/smoke", () => realCursorSmoke)
+  mock.module("../agents/cursor/runner", () => realCursorRunner)
+})
 
 function registry(): Registry {
   const db = openDb(":memory:")
@@ -18,11 +47,6 @@ describe("Cursor spawn", () => {
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      cursorResolveAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
-      cursorSmokeAgent: async () => {},
-      cursorRunnerFactory: () => async (_args, _onLine, onExit) => {
-        onExit(0)
-      },
     }, {
       workdir: process.cwd(),
       requestedName: "cursor-no-tmux",

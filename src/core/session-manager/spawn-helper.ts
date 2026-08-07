@@ -10,11 +10,11 @@ import { writeCodexPreamble } from "../agents/codex/preamble-writer"
 import { spawnCodexAppServer, type CodexSpawnHandle } from "../agents/codex/spawn"
 import { CodexAdapter } from "../agents/codex/adapter"
 import { resolveCursorAuth } from "../agents/cursor/auth"
-import type { CursorAuthResult } from "../agents/cursor/auth"
 import { writeCursorMcpConfig } from "../agents/cursor/mcp-writer"
 import { writeCursorPreamble } from "../agents/cursor/preamble-writer"
 import { makeRealCursorRunner } from "../agents/cursor/runner"
-import { CursorAdapter, type CursorRunner } from "../agents/cursor/adapter"
+import { smokeCursorAgent } from "../agents/cursor/smoke"
+import { CursorAdapter } from "../agents/cursor/adapter"
 import { resolveOpenCodeAuth } from "../agents/opencode/auth"
 import { writeOpenCodeConfig } from "../agents/opencode/config-writer"
 import { writeOpenCodePreamble } from "../agents/opencode/preamble-writer"
@@ -67,10 +67,6 @@ export type SpawnDeps = {
   bind: (session_id: string) => Promise<void>
   tmuxSession: string
   resolveAttachment?: (file_id: string) => Promise<string>
-  cursorResolveAuth?: typeof resolveCursorAuth
-  cursorSmokeAgent?: typeof smokeCursorAgent
-  cursorRunnerFactory?: (opts: { home: string; authEnv: Record<string, string> }) => CursorRunner
-  cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
   grokRunnerFactory?: () => GrokRunner
   registerAdapter?: (
     name: string,
@@ -138,10 +134,6 @@ export async function spawnPA(opts: {
     adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
-  cursorResolveAuth?: typeof resolveCursorAuth
-  cursorSmokeAgent?: typeof smokeCursorAgent
-  cursorRunnerFactory?: (opts: { home: string; authEnv: Record<string, string> }) => CursorRunner
-  cursorAdapterFactory?: (opts: ConstructorParameters<typeof CursorAdapter>[0]) => CursorAdapter
   opencodeSpawnServer?: typeof spawnOpenCodeServer
   opencodeAdapterFactory?: (opts: ConstructorParameters<typeof OpenCodeAdapter>[0]) => OpenCodeAdapter
   resolveAttachment?: (file_id: string) => Promise<string>
@@ -258,7 +250,7 @@ export async function spawnPA(opts: {
     const sessionHome = join(STATE_DIR, "agents", "cursor", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
-    const auth: CursorAuthResult = await (opts.cursorResolveAuth ?? resolveCursorAuth)({
+    const auth = await resolveCursorAuth({
       apiKey: process.env.CURSOR_API_KEY,
       userCursorDir: join(HOME, ".cursor"),
       sessionHome,
@@ -273,10 +265,10 @@ export async function spawnPA(opts: {
     })
     writeCursorPreamble({ workdir, sessionName: name })
 
-    await (opts.cursorSmokeAgent ?? smokeCursorAgent)({ home: sessionHome, authEnv: auth.env })
+    await smokeCursorAgent({ home: sessionHome, authEnv: auth.env })
 
-    const runner = (opts.cursorRunnerFactory ?? makeRealCursorRunner)({ home: sessionHome, authEnv: auth.env })
-    const adapter = (opts.cursorAdapterFactory ?? ((opts) => new CursorAdapter(opts)))({
+    const runner = makeRealCursorRunner({ home: sessionHome, authEnv: auth.env })
+    const adapter = new CursorAdapter({
       sessionName: name,
       workdir,
       runner,
@@ -415,28 +407,3 @@ export async function spawnPA(opts: {
   return { name, id }
 }
 
-// Quick "does cursor-agent run at all" check. Cursor is per-turn so we
-// don't pre-launch a real agent; this just confirms the binary is on PATH
-// and the env-isolated HOME is readable. Anything else (auth failures, model
-// access) will surface on the first user message — which is the right time.
-export async function smokeCursorAgent(opts: { home: string; authEnv: Record<string, string> }): Promise<void> {
-  const { resolveCommand, spawnCommand } = await import("../process/launcher")
-  await new Promise<void>((resolve, reject) => {
-    const env: Record<string, string> = {
-      ...(process.env as Record<string, string>),
-      ...opts.authEnv,
-      HOME: opts.home,
-      ...(process.platform === "win32" ? { USERPROFILE: opts.home } : {}),
-    }
-    const command = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"
-    const child = spawnCommand(command, ["--version"], { env, stdio: ["ignore", "pipe", "pipe"] })
-    let out = ""
-    child.stdout!.on("data", (c: Buffer) => { out += c.toString("utf8") })
-    child.stderr!.on("data", () => {})  // drain
-    child.on("exit", (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`cursor-agent --version exit ${code}; output: ${out.slice(0, 200)}`))
-    })
-    child.on("error", (err) => reject(new Error(`cursor-agent not runnable: ${err.message}`)))
-  })
-}

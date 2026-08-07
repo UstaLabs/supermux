@@ -14,6 +14,10 @@ import type { SessionBackend } from "../src/core/runtime/session-backend"
 const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
 const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
 const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
+const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
+const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
+const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter")) }
 
 mock.module("../src/core/agents/codex/auth", () => ({
   ...realCodexAuth,
@@ -36,11 +40,34 @@ mock.module("../src/core/agents/codex/adapter", () => ({
     async start() { await this.opts.persistThreadId("codex-thread-id") }
   },
 }))
+mock.module("../src/core/agents/cursor/auth", () => ({
+  ...realCursorAuth,
+  resolveCursorAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
+}))
+mock.module("../src/core/agents/cursor/smoke", () => ({
+  ...realCursorSmoke,
+  smokeCursorAgent: async () => {},
+}))
+mock.module("../src/core/agents/cursor/runner", () => ({
+  ...realCursorRunner,
+  makeRealCursorRunner: () => async () => {},
+}))
+mock.module("../src/core/agents/cursor/adapter", () => ({
+  ...realCursorAdapter,
+  CursorAdapter: class {
+    constructor(private opts: any) {}
+    async start() { await this.opts.persistSessionId("cursor-session-id") }
+  },
+}))
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
   mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
   mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/agents/cursor/auth", () => realCursorAuth)
+  mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
+  mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)
+  mock.module("../src/core/agents/cursor/adapter", () => realCursorAdapter)
 })
 
 let tmpDir: string
@@ -157,14 +184,6 @@ test("spawns a Cursor PA and registers it as personal_assistant", async () => {
     workdir: join(tmpDir, "cursor-pa"),
     bind: async () => {},
     tmuxSession: "mux",
-    cursorResolveAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
-    cursorSmokeAgent: async () => {},
-    cursorRunnerFactory: () => async () => {},
-    cursorAdapterFactory: (opts) => ({
-      start: async () => {
-        await opts.persistSessionId("cursor-session-id")
-      },
-    } as any),
     registerAdapter: () => {},
     onCursorSessionId: (name, sessionId) => {
       expect(name).toBe("cursor-pa")

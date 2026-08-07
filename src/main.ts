@@ -109,9 +109,7 @@ import type { AgentAdapter } from "./core/agents/types"
 import { resolveCodexAuth } from "./core/agents/codex/auth"
 import { spawnCodexAppServer, type CodexSpawnHandle } from "./core/agents/codex/spawn"
 import { CodexAdapter } from "./core/agents/codex/adapter"
-import { resolveCursorAuth } from "./core/agents/cursor/auth"
-import { makeRealCursorRunner } from "./core/agents/cursor/runner"
-import { CursorAdapter } from "./core/agents/cursor/adapter"
+import type { CursorAdapter } from "./core/agents/cursor/adapter"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
@@ -1558,9 +1556,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           const session = registry.resolveName(name)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
-        cursorResolveAuth: resolveCursorAuth,
-        cursorRunnerFactory: makeRealCursorRunner,
-        cursorAdapterFactory: (opts) => new CursorAdapter(opts),
         resolveAttachment: resolveAttachmentPath,
       })
       const entry = registry.get(r.id)
@@ -2589,9 +2584,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
             const session = registry.resolveName(name)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
-          cursorResolveAuth: resolveCursorAuth,
-          cursorRunnerFactory: makeRealCursorRunner,
-          cursorAdapterFactory: (opts) => new CursorAdapter(opts),
         })
         const entry = registry.get(r.id)
         await refreshTelegramMenu()
