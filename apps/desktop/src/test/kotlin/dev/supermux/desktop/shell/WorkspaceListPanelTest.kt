@@ -1,14 +1,19 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.host.HostView
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.LayoutNodeDto
+import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -289,5 +294,124 @@ class WorkspaceListPanelTest {
             )
         }
         onNodeWithTag("host_filter_chips").assertDoesNotExist()
+    }
+
+    // ── Visual regressions the first 16 chrome tests missed ───────────────────
+
+    /**
+     * SessionListPanel group mode draws one settled fold per live project group and
+     * hides settled-only projects. The workspace panel must not invent extra folds
+     * (orphan path + per-group) that stack three "Show N settled" buttons.
+     */
+    @Test
+    fun settledFold_exactlyOne_forLiveGroupWithSettledOnlyElsewhere() = runComposeUiTest {
+        setContent {
+            WorkspaceListPanel(
+                workspaces = listOf(ws("w1", "live", "/home/u/projects/app")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                archived = listOf(
+                    ArchivedDto(id = "a1", name = "old-a", workdir = "/home/u/projects/app"),
+                    ArchivedDto(id = "a2", name = "old-b", workdir = "/home/u/projects/app"),
+                    // Settled-only project — SessionListPanel hides this; must not add a fold.
+                    ArchivedDto(id = "o1", name = "orphan-settled", workdir = "/home/u/projects/other"),
+                    ArchivedDto(id = "o2", name = "orphan-settled-2", workdir = "/home/u/projects/other"),
+                    ArchivedDto(id = "o3", name = "orphan-settled-3", workdir = "/home/u/projects/third"),
+                ),
+            )
+        }
+        // Exactly one fold in the tree (assert the count, not mere presence).
+        onAllNodesWithTag("settled_fold").assertCountEquals(1)
+        onNodeWithText("Show 2 settled").assertIsDisplayed()
+        // Must not stack settled-only / orphan chrome.
+        onNodeWithText("Show 3 settled").assertDoesNotExist()
+        onNodeWithText("Show 5 settled").assertDoesNotExist()
+        onNodeWithText("Show 1 settled").assertDoesNotExist()
+    }
+
+    @Test
+    fun row_rendersMessagePreviewFromPrimarySession() = runComposeUiTest {
+        val previewText = "Merged into `dev` (fast-forward). — Commit: cd…"
+        setContent {
+            WorkspaceListPanel(
+                workspaces = listOf(
+                    ws(
+                        "w1", "feature", "/home/u/projects/app",
+                        branch = "mux/feature",
+                        views = listOf(chatView("v1", "s1", "w1")),
+                    ).copy(primarySessionId = "s1"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                sessions = listOf(
+                    SessionInfo(id = "s1", name = "feature", workdir = "/home/u/projects/app", agent = "claude"),
+                ),
+                lastBySession = mapOf(
+                    "s1" to LogEntry(
+                        id = "log1",
+                        ts = "2026-08-07T12:00:00Z",
+                        direction = "out",
+                        text = previewText,
+                    ),
+                ),
+            )
+        }
+        // Preview is how the user scans the list — must be present alongside the branch.
+        onNodeWithText(previewText).assertIsDisplayed()
+        onNodeWithText("mux/feature").assertIsDisplayed()
+    }
+
+    @Test
+    fun row_rendersSuspendedBadgeWhenPrimarySessionIsSuspended() = runComposeUiTest {
+        setContent {
+            WorkspaceListPanel(
+                workspaces = listOf(
+                    ws(
+                        "w1", "paused", "/home/u/projects/app",
+                        views = listOf(chatView("v1", "s1", "w1")),
+                    ).copy(primarySessionId = "s1"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                sessions = listOf(
+                    SessionInfo(
+                        id = "s1",
+                        name = "paused",
+                        workdir = "/home/u/projects/app",
+                        agent = "claude",
+                        status = "suspended",
+                    ),
+                ),
+            )
+        }
+        onNodeWithText("suspended").assertIsDisplayed()
+    }
+
+    /**
+     * Prove there is no take(n)/cap on workspace rows inside a project group.
+     * Scroll every row into the LazyColumn viewport and assert it exists — if the
+     * list were capped at 7, rows 8–19 would not be scrollable/found.
+     */
+    @Test
+    fun groupOfNineteenWorkspaces_rendersAllNineteenRows() = runComposeUiTest {
+        val list = (1..19).map { i ->
+            ws("w$i", "ws-$i", "/home/u/projects/supermux")
+        }
+        setContent {
+            WorkspaceListPanel(
+                workspaces = list,
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+            )
+        }
+        for (i in 1..19) {
+            onNodeWithTag("workspaces_list")
+                .performScrollToNode(hasTestTag("workspace_row_w$i"))
+            onNodeWithTag("workspace_row_w$i").assertExists()
+        }
     }
 }

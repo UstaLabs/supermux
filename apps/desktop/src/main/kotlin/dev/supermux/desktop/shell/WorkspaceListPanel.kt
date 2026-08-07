@@ -5,7 +5,10 @@
 // Design rules (non-negotiable, from the reverted session-list redesign):
 //  - No large per-row avatars — SessionStatusRail is the leading visual.
 //  - Keep branch and git status on the row.
-//  - Rows stay lean — no heavier than today's session row (name + branch; path is on the group header).
+//  - Rows: name + message preview + branch (path is on the group header — do not bring it back).
+//  - Suspended/lifecycle badge from the primary session, SessionRow styling.
+//  - Settled fold: SessionListPanel group mode only — one fold per live project group;
+//    no orphan/settled-only stack under the list.
 //  - No animation on this surface (100+/day).
 //  - Geist for language, Geist Mono for machine content (paths, branches).
 //  - One teal accent, used for state and agency only.
@@ -93,6 +96,7 @@ import dev.supermux.desktop.session.SessionRow
 import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.session.relTime
 import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
@@ -225,10 +229,16 @@ fun WorkspaceListPanel(
         buildTaskSections(combinedTaskSessions(visibleSessions, archived), lastTs)
     }
     // Settled sessions keyed by project path for the fold under each workspace group.
+    // Recency order matches buildTaskSections (SessionListPanel parity).
     val settledByPath = remember(visibleSessions, archived, lastBySession) {
         val combined = combinedTaskSessions(visibleSessions, archived)
         val settled = combined.filter { it.sectionKey() == SectionKey.SETTLED }
-        settled.groupBy { it.repo_root ?: it.workdir }
+        settled.groupBy { it.repo_root ?: it.workdir }.mapValues { (_, list) ->
+            buildTaskSections(list, lastTs)
+                .firstOrNull { it.key == SectionKey.SETTLED }
+                ?.sessions
+                .orEmpty()
+        }
     }
     // Draft sessions still live on the session model (workspaces don't draft yet).
     val draftSessions = remember(visibleSessions) {
@@ -440,14 +450,11 @@ fun WorkspaceListPanel(
                 val settledSection = flatSections.firstOrNull { it.key == SectionKey.SETTLED }
                 if (settledSection != null && settledSection.sessions.isNotEmpty()) {
                     item(key = "flat:settled") {
-                        TextButton(onClick = { flatSettledExpanded = !flatSettledExpanded }) {
-                            Text(
-                                if (flatSettledExpanded) "Hide ${settledSection.sessions.size} settled"
-                                else "Show ${settledSection.sessions.size} settled",
-                                fontSize = 12.sp,
-                                color = cs.onSurfaceVariant,
-                            )
-                        }
+                        SettledFoldButton(
+                            count = settledSection.sessions.size,
+                            expanded = flatSettledExpanded,
+                            onClick = { flatSettledExpanded = !flatSettledExpanded },
+                        )
                     }
                     if (flatSettledExpanded) {
                         items(settledSection.sessions, key = { "f:s:${it.id}" }) { s ->
@@ -463,6 +470,11 @@ fun WorkspaceListPanel(
                     }
                 }
             } else {
+                // Group-by-project: match SessionListPanel exactly.
+                // - Settled fold only under each live project group that has settled rows.
+                // - Settled-only paths are HIDDEN (groupSessions drops hasActive=false groups).
+                // - No "orphan" fold stacked under the list — that invented extra "Show N settled"
+                //   chrome SessionListPanel never draws.
                 groups.forEach { g ->
                     item(key = "h:${g.key}") { PathGroupHeader(g.label, g.workspaces.size) }
                     val ordered = groupOrder(g.workspaces)
@@ -498,22 +510,20 @@ fun WorkspaceListPanel(
                             } else null,
                         )
                     }
-                    // Settled fold under this project (session archived rows — same chrome as SessionListPanel).
+                    // Settled fold under this project (SessionListPanel: g.sections SETTLED).
                     val pathKey = g.key
                     val settled = if (pathKey == PA_GROUP_KEY) emptyList()
                     else settledByPath[pathKey].orEmpty()
                     if (settled.isNotEmpty()) {
                         item(key = "settled:${g.key}") {
                             val open = settledExpanded.contains(g.key)
-                            TextButton(onClick = {
-                                settledExpanded = if (open) settledExpanded - g.key else settledExpanded + g.key
-                            }) {
-                                Text(
-                                    if (open) "Hide ${settled.size} settled" else "Show ${settled.size} settled",
-                                    fontSize = 12.sp,
-                                    color = cs.onSurfaceVariant,
-                                )
-                            }
+                            SettledFoldButton(
+                                count = settled.size,
+                                expanded = open,
+                                onClick = {
+                                    settledExpanded = if (open) settledExpanded - g.key else settledExpanded + g.key
+                                },
+                            )
                         }
                         if (settledExpanded.contains(g.key)) {
                             items(settled, key = { "s:${it.id}" }) { s ->
@@ -528,34 +538,28 @@ fun WorkspaceListPanel(
                         }
                     }
                 }
-                // Settled-only paths (no live workspace group for that workdir) still need a fold.
-                // When the whole list is empty of live workspaces, this is the sole Settled chrome.
-                val coveredPaths = groups.map { it.key }.toHashSet()
-                val orphanSettled = settledByPath
-                    .filterKeys { it !in coveredPaths }
-                    .values
-                    .flatten()
-                if (orphanSettled.isNotEmpty()) {
-                    item(key = "settled:orphan") {
-                        val open = settledExpanded.contains("__orphan__")
-                        TextButton(onClick = {
-                            settledExpanded = if (open) settledExpanded - "__orphan__" else settledExpanded + "__orphan__"
-                        }) {
-                            Text(
-                                if (open) "Hide ${orphanSettled.size} settled" else "Show ${orphanSettled.size} settled",
-                                fontSize = 12.sp,
-                                color = cs.onSurfaceVariant,
+                // Empty live list but archived data: one global fold (empty-workspace chrome).
+                // SessionListPanel group mode would show nothing here; we keep a single fold so
+                // archived remains reachable when there are zero workspaces.
+                if (groups.isEmpty()) {
+                    val settledSection = flatSections.firstOrNull { it.key == SectionKey.SETTLED }
+                    if (settledSection != null && settledSection.sessions.isNotEmpty()) {
+                        item(key = "settled:all") {
+                            SettledFoldButton(
+                                count = settledSection.sessions.size,
+                                expanded = flatSettledExpanded,
+                                onClick = { flatSettledExpanded = !flatSettledExpanded },
                             )
                         }
-                    }
-                    if (settledExpanded.contains("__orphan__")) {
-                        items(orphanSettled, key = { "s:o:${it.id}" }) { s ->
-                            SessionRow(
-                                s, active = false, preview = lastBySession[s.id],
-                                lastReadAt = lastRead[s.id],
-                                onClick = { onResume(s.id) },
-                                onResume = { onResume(s.id) },
-                            )
+                        if (flatSettledExpanded) {
+                            items(settledSection.sessions, key = { "s:all:${it.id}" }) { s ->
+                                SessionRow(
+                                    s, active = false, preview = lastBySession[s.id],
+                                    lastReadAt = lastRead[s.id],
+                                    onClick = { onResume(s.id) },
+                                    onResume = { onResume(s.id) },
+                                )
+                            }
                         }
                     }
                 }
@@ -646,6 +650,26 @@ fun WorkspaceListPanel(
     }
 }
 
+/** "Show N settled" / "Hide N settled" — shared by flat + per-group folds. */
+@Composable
+private fun SettledFoldButton(
+    count: Int,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.testTag("settled_fold"),
+    ) {
+        Text(
+            if (expanded) "Hide $count settled" else "Show $count settled",
+            fontSize = 12.sp,
+            color = cs.onSurfaceVariant,
+        )
+    }
+}
+
 /**
  * Workspace row + optional multi-agent children. Keeps list item keys stable.
  */
@@ -684,6 +708,7 @@ private fun WorkspaceListEntry(
             git = git,
             preview = preview,
             lastReadAt = lastReadAt,
+            sessionStatus = primary?.status,
             mute = primary?.mute == true,
             host = host,
             projectTag = projectTag,
@@ -734,8 +759,9 @@ fun workspaceRowContextLabels(
 }
 
 /**
- * One workspace row: status rail, name, multi-agent mark, branch —
+ * One workspace row: status rail, name, multi-agent mark, message preview, branch —
  * lean by design (SessionRow parity). No per-row avatar. Path is omitted (group header owns it).
+ * Preview + lifecycle badge come from the primary session (SessionRow plumbing).
  * Hover reveals a lightweight "+" to add a view/tab ([onAddView]).
  */
 @Composable
@@ -746,6 +772,8 @@ fun WorkspaceRow(
     git: dev.supermux.proto.GitLiteStatusDto? = null,
     preview: LogEntry? = null,
     lastReadAt: String? = null,
+    /** Lifecycle status of the primary session (`suspended`, …) — SessionRow badge. */
+    sessionStatus: String? = null,
     mute: Boolean = false,
     host: HostView? = null,
     projectTag: String? = null,
@@ -758,6 +786,7 @@ fun WorkspaceRow(
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
 ) {
+    val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val working = activity == WorkspaceActivity.WORKING
     val hasUnread = dev.supermux.session.sessionListShowsUnread(
@@ -897,8 +926,36 @@ fun WorkspaceRow(
                     HostBadge(host)
                 }
 
+                // Status badge — SessionRow parity: non-null and not "active".
+                val status = sessionStatus
+                if (status != null && status != "active") {
+                    val badgeColor = if (status == "suspended") Color(c.warning)
+                    else cs.onSurfaceVariant.copy(alpha = 0.6f)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        status,
+                        color = badgeColor,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 10.sp,
+                    )
+                } else {
+                    Spacer(Modifier.height(Space.xs))
+                }
+
+                // Preview: last message from primary session — SessionRow truncation + styling.
+                // No workdir fallback: group header owns the path (do not bring path back).
+                val previewText = preview?.text?.replace("\n", " ")?.take(80)
+                if (previewText != null) {
+                    Text(
+                        previewText,
+                        color = cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
                 // Branch — machine content, mono. Hard requirement from design rules.
-                // Path is intentionally omitted (duplicates the group header).
                 val branch = w.branch
                 if (!branch.isNullOrBlank()) {
                     Spacer(Modifier.height(2.dp))
@@ -910,8 +967,6 @@ fun WorkspaceRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                } else {
-                    Spacer(Modifier.height(Space.xs))
                 }
             }
         }
