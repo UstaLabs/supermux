@@ -516,7 +516,7 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   soulSetupQueued.add(session.id)
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
     const current = registry.get(id)
-    const adapter = current ? adapters.get(current.id) : undefined
+    const adapter = current ? runtimes.get(current.id)?.adapter : undefined
     if (adapter) {
       await adapter.send(text, meta)
     } else {
@@ -594,20 +594,18 @@ const channels: Record<string, Channel> = {
   ...(whatsapp ? { whatsapp } : {}),
 }
 
-// adapters keyed by session UUID (not session name)
-const adapters = new Map<string, AgentAdapter>()
+// ONE runtime store, keyed by session UUID (not session name). The adapter
+// lives inside the SessionRuntime — never in a second map.
 const runtimes = new RuntimeRegistry()
 const soulSetupQueued = new Set<string>()
 const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 
 function registerRuntime(sessionId: string, runtime: SessionRuntime): void {
   runtimes.set(sessionId, runtime)
-  adapters.set(sessionId, runtime.adapter)
 }
 
 function deleteRuntime(sessionId: string): void {
   runtimes.delete(sessionId)
-  adapters.delete(sessionId)
 }
 
 function registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter): void {
@@ -663,7 +661,7 @@ const commandRegistry = new CommandRegistry({
       : kind === "cursor" ? cursorSpawnArgs({ sessionName: s.name }).args
       : kind === "opencode" ? []
       : claudeSpawnArgs({ sessionName: s.name }).args
-    const adapter = adapters.get(s.id) as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient } | undefined
+    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient } | undefined
     return {
       name: s.name,
       kind,
@@ -689,7 +687,7 @@ const commandRegistry = new CommandRegistry({
 function findCodexClient(): import("./core/slash-commands/types").CodexRpc | undefined {
   for (const s of registry.list()) {
     if (s.agent !== "codex") continue
-    const adapter = adapters.get(s.id) as { rpc?: import("./core/slash-commands/types").CodexRpc } | undefined
+    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc } | undefined
     if (adapter?.rpc) return adapter.rpc
   }
   return undefined
@@ -857,7 +855,7 @@ async function interruptClaudePane(sessionId: string): Promise<void> {
 // status itself — idle is reflected from the session: Claude's interrupt marker
 // in the transcript, or codex/cursor turn-complete.
 async function interruptSessionById(sessionId: string): Promise<{ ok: boolean; reason?: string }> {
-  return runInterrupt({ adapter: adapters.get(sessionId) })
+  return runInterrupt({ adapter: runtimes.get(sessionId)?.adapter })
 }
 
 type FinishRequest = { action: FinishAction; skipVerify?: boolean; commitFirst?: boolean; commitMessage?: string; draft?: boolean; prRequiresGreen?: boolean; prTitle?: string; prBody?: string }
@@ -1324,7 +1322,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       if (typeof claudeSid !== "string") return
       const s = registry.list().find((x) => x.agent_session_id === claudeSid)
       if (!s) return
-      const adapter = adapters.get(s.id)
+      const adapter = runtimes.get(s.id)?.adapter
       if (!(adapter instanceof ClaudeCodeAdapter)) return
       if (event === "StopFailure") {
         // Field shape isn't firmly documented — accept flat (error_type/error_message),
@@ -2469,7 +2467,7 @@ const server = await startSocketServer({
           registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
         }
         // Rebuild adapter if missing (first connect, or after broker restart)
-        if (!adapters.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
+        if (!runtimes.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
           const adapter = new ClaudeCodeAdapter({
             sessionName: existing.name,
             workdir: existing.workdir,
@@ -2516,7 +2514,7 @@ const server = await startSocketServer({
       try {
         const op = msg.op
         if (op.name === "reply") {
-          const adapter = adapters.get(fromSession)
+          const adapter = runtimes.get(fromSession)?.adapter
           const files = optionalStringArrayArg(op.args, "files")
           const hasFiles = !!files?.length
           // Claude uses reply for all user-facing output. Codex/cursor normally
@@ -2823,7 +2821,7 @@ const recentInboundIds = new RecentInboundIds()
 const pendingReapply = new PendingReapply()
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return deliverInboundCore({
-    getAdapter: (id) => adapters.get(id),
+    getAdapter: (id) => runtimes.get(id)?.adapter,
     isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
@@ -3184,7 +3182,7 @@ async function switchSessionModel(sessionId: string, newModel: string, opts?: { 
   // each session/prompt), so a model switch is a live in-process field update —
   // no process/serve restart, no config reapply.
   if (session.agent === "cursor" || session.agent === "opencode" || session.agent === AgentKind.Grok) {
-    const adapter = adapters.get(session.id) as any
+    const adapter = runtimes.get(session.id)?.adapter as any
     if (adapter && "model" in adapter) {
       adapter.model = newModel
     }
