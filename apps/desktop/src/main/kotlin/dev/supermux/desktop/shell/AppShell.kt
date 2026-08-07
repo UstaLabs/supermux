@@ -620,18 +620,58 @@ fun AppShell(
                             home = home,
                             activeId = workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id,
                             onOpen = { wid -> wsOf(wid)?.chatSessionIds()?.firstOrNull()?.let { ui.selectSession(it) } },
+                            sessions = sessions,
+                            lastBySession = lastBySession,
+                            lastRead = lastRead,
                             agentState = agentState,
                             sessionNames = remember(sessions) { sessions.associate { it.id to it.name } },
                             sessionRoles = remember(sessions) { sessions.associate { it.id to it.role } },
-                            sessionGit = remember(sessions) { sessions.associate { it.id to it.git } },
                             onOpenSession = { _, sid -> ui.selectSession(sid) },
-                            onRename = { wid, name -> wsOf(wid)?.primarySessionId?.let { appFor(it).rename(it, name) } },
-                            onArchive = { wid ->
+                            // Workspace-scoped ops resolve the primary/chat sessions, then route
+                            // to the OWNING host (multi-host); single-host → [app]. Same targets as
+                            // the SessionListPanel branch below.
+                            onRename = { wid, name ->
+                                val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
+                                if (sid != null) appFor(sid).rename(sid, name)
+                            },
+                            onKill = { wid ->
                                 wsOf(wid)?.chatSessionIds()?.forEach { sid ->
                                     appFor(sid).kill(sid) { if (ui.selectedId == sid) ui.selectedId = null }
                                 }
                             },
-                            onNewWorkspace = onNewSession,
+                            onMute = { wid, muted ->
+                                val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
+                                if (sid != null) appFor(sid).setMute(sid, muted)
+                            },
+                            onNewSession = onNewSession,
+                            archived = archivedForList,
+                            onResume = { id ->
+                                overlayScope.launch {
+                                    appFor(id).resume(id)
+                                    archivedForList = runCatching { app.archived() }.getOrDefault(emptyList())
+                                }
+                            },
+                            onOpenDraft = { id -> ui.openLauncher(draftId = id) },
+                            onReorder = { ids ->
+                                // Workspace reorder: map to primary session ids when the broker
+                                // only knows session order (Phase 3 may grow a workspace reorder API).
+                                val sessionIds = ids.mapNotNull { wid ->
+                                    wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
+                                }
+                                if (sessionIds.isNotEmpty()) app.reorderSessions(sessionIds)
+                            },
+                            hosts = hostViews,
+                            sessionHost = sessionHost,
+                            hostFilter = hostFilter,
+                            onSelectHostFilter = { hostFilter = it },
+                            onAddHost = { addHostOpen = true },
+                            onUsage = { ui.openUsage() },
+                            onSettings = { ui.openSettings() },
+                            onDevices = { ui.openSettings(SettingsSection.Devices) },
+                            appearance = appearance,
+                            onToggleTheme = onToggleTheme,
+                            // No dedicated add-view flow yet — open the launcher (same as new session).
+                            onAddView = { onNewSession() },
                             modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                         )
                     } else {

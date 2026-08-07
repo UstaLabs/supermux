@@ -13,7 +13,6 @@ import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.proto.AgentStatus
-import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -62,7 +61,6 @@ fun main() = application {
                     agentState = fixtures.agentState,
                     sessionNames = fixtures.sessionNames,
                     sessionRoles = fixtures.sessionRoles,
-                    sessionGit = fixtures.sessionGit,
                     onOpenSession = { _, _ -> },
                     modifier = Modifier.width(340.dp).fillMaxSize(),
                 )
@@ -76,7 +74,6 @@ private data class PreviewFixtures(
     val agentState: Map<String, AgentStatus>,
     val sessionNames: Map<String, String>,
     val sessionRoles: Map<String, String?>,
-    val sessionGit: Map<String, GitLiteStatusDto?>,
 )
 
 private fun chat(id: String, sessionId: String, wid: String) = ViewDto(
@@ -204,20 +201,10 @@ private fun previewFixtures(): PreviewFixtures {
         "s-long" to "long name agent",
     )
 
-    val sessionGit = mapOf(
-        "s-solo" to GitLiteStatusDto(mode = "base", ahead = 2, behind = 0, dirty = 1, touched = true),
-        "s-m1" to GitLiteStatusDto(mode = "base", ahead = 0, behind = 0, dirty = 0, touched = false),
-        "s-m2" to GitLiteStatusDto(mode = "base", ahead = 0, behind = 0, dirty = 0, touched = false),
-        "s-mixed" to GitLiteStatusDto(mode = "base", ahead = 1, behind = 0, dirty = 0, touched = true),
-        "s-work" to GitLiteStatusDto(mode = "base", ahead = 3, behind = 1, dirty = 2, touched = true),
-        "s-long" to GitLiteStatusDto(mode = "base", ahead = 0, behind = 0, dirty = 0, touched = false),
-    )
-
     return PreviewFixtures(
         workspaces = listOf(solo, multi, mixed, working, longName),
         agentState = agentState,
         sessionNames = sessionNames,
         sessionRoles = emptyMap(), // no PAs in the fixture
-        sessionGit = sessionGit,
     )
 }
