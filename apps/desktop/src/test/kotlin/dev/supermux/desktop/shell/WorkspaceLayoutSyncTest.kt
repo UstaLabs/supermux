@@ -81,7 +81,7 @@ class WorkspaceLayoutSyncTest {
                 },
             )
             tree = sync.tree
-            LayoutHost(layout = sync.tree, onLayoutChange = { sync.edit(it) }) { Text("body-$it") }
+            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 
@@ -119,7 +119,7 @@ class WorkspaceLayoutSyncTest {
                 },
             )
             tree = sync.tree
-            LayoutHost(layout = sync.tree, onLayoutChange = { sync.edit(it) }) { Text("body-$it") }
+            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 
@@ -153,7 +153,7 @@ class WorkspaceLayoutSyncTest {
                 push = { next -> withContext(NonCancellable) { server = next.toDto() } },
             )
             tree = sync.tree
-            LayoutHost(layout = sync.tree, onLayoutChange = { sync.edit(it) }) { Text("body-$it") }
+            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 

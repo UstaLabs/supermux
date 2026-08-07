@@ -873,7 +873,9 @@ fun AppShell(
                                     layout = localLayout,
                                     titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
                                     onCloseView = { closeCandidate = viewsById[it] },
-                                    onLayoutChange = { next -> layoutSync.edit(next) },
+                                    // The EDIT, not the resulting tree: only a function can be
+                                    // replayed over a workspace_changed frame that lands mid-edit.
+                                    onEdit = { edit -> layoutSync.edit(edit) },
                                     // "+" on the tab strip → pick a kind → it opens as a new tab in
                                     // THAT group. A chat needs an agent, so it goes through the
                                     // launcher (spec §9.2); the other kinds are pure views and are
@@ -895,12 +897,10 @@ fun AppShell(
                                                 // validateLayout. Add-then-split keeps every
                                                 // intermediate tree valid using tested primitives.
                                                 val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
-                                                layoutSync.edit(
-                                                    splitGroup(
-                                                        layoutSync.tree, groupId, newViewId, dir,
-                                                        newGroupId = java.util.UUID.randomUUID().toString(),
-                                                    ),
-                                                )
+                                                val newGroupId = java.util.UUID.randomUUID().toString()
+                                                layoutSync.edit {
+                                                    splitGroup(it, groupId, newViewId, dir, newGroupId)
+                                                }
                                             }
                                         }
                                     },

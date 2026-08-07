@@ -158,6 +158,51 @@ fun addViewToGroup(node: LayoutNode, groupId: String, viewId: String): LayoutNod
     is LayoutNode.Split -> node.copy(children = node.children.map { addViewToGroup(it, groupId, viewId) })
 }
 
+/**
+ * Make [viewId] the active tab of [groupId]. An unknown group, or a view that
+ * does not live in that group, changes nothing.
+ *
+ * Unlike [addViewToGroup] this never inserts. It exists so the tab strip can say
+ * WHICH group to change by id instead of handing back a rebuilt parent node: a
+ * Compose callback can outlive the composition that created it, and a rebuilt
+ * parent carries a stale copy of every sibling with it. Naming the group means a
+ * stale callback misses and does nothing, instead of reverting the tree.
+ *
+ * No TypeScript counterpart — like [splitGroup], the broker only stores what the
+ * client computes.
+ */
+fun setActiveViewInGroup(node: LayoutNode, groupId: String, viewId: String): LayoutNode = when (node) {
+    is LayoutNode.Group ->
+        if (node.id != groupId || viewId !in node.viewIds) node else node.copy(activeViewId = viewId)
+    is LayoutNode.Split -> node.copy(children = node.children.map { setActiveViewInGroup(it, groupId, viewId) })
+}
+
+/**
+ * Replace the sizes of the split at [path] — the child indices to walk from the
+ * root, so `[]` is the root itself and `[0, 1]` is the second child of the first.
+ *
+ * Splits are addressed by path because [LayoutNode.Split] has no id; only
+ * [LayoutNode.Group] does. A path that runs off the tree, or that lands on a
+ * group, or a [sizes] list of the wrong length changes nothing — which is the
+ * point. A splitter drag handler holds its path from when Compose last built it,
+ * and the tree may have changed underneath; missing is correct, and far better
+ * than writing back the children that split had at capture time.
+ *
+ * No TypeScript counterpart — the broker only stores what the client computes.
+ */
+fun setSplitSizes(node: LayoutNode, path: List<Int>, sizes: List<Double>): LayoutNode {
+    if (path.isEmpty()) {
+        return if (node !is LayoutNode.Split || sizes.size != node.children.size) node
+               else node.copy(sizes = sizes)
+    }
+    if (node !is LayoutNode.Split) return node
+    val i = path.first()
+    if (i !in node.children.indices) return node
+    val child = setSplitSizes(node.children[i], path.drop(1), sizes)
+    if (child === node.children[i]) return node
+    return node.copy(children = node.children.toMutableList().also { it[i] = child })
+}
+
 /** Remove a view wherever it is, then normalize. Null when the tree empties. */
 fun removeViewFromLayout(node: LayoutNode, viewId: String): LayoutNode? {
     fun strip(n: LayoutNode): LayoutNode = when (n) {

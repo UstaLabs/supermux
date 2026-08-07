@@ -65,6 +65,8 @@ import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.moveViewToGroup
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.reorderWithinGroup
+import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.setSplitSizes
 import dev.supermux.workspace.splitGroup
 import java.util.UUID
 
@@ -94,7 +96,21 @@ import java.util.UUID
 @Composable
 fun LayoutHost(
     layout: LayoutNode,
-    onLayoutChange: (LayoutNode) -> Unit,
+    /**
+     * The resulting tree, for callers that just hold a tree (tests, previews).
+     * Ignored when [onEdit] is set — prefer [onEdit] anywhere the tree is synced
+     * with the broker, because only a transform can be replayed onto a frame
+     * that lands mid-edit.
+     */
+    onLayoutChange: (LayoutNode) -> Unit = {},
+    /**
+     * The edit itself, as a function of the tree. This is what WorkspaceLayoutState
+     * keeps as its pending edit and replays over incoming `workspace_changed`
+     * frames, so the broker's membership and the user's arrangement can both
+     * survive. A tree cannot be replayed — it would carry every view it happened
+     * to hold at the time back with it.
+     */
+    onEdit: (((LayoutNode) -> LayoutNode) -> Unit)? = null,
     modifier: Modifier = Modifier,
     titleFor: (String) -> String = { it },
     onCloseView: (String) -> Unit = {},
@@ -120,7 +136,34 @@ fun LayoutHost(
     val drag = dragState ?: ownedDrag
     val layoutState = rememberUpdatedState(layout)
     val onLayoutChangeState = rememberUpdatedState(onLayoutChange)
+    val onEditState = rememberUpdatedState(onEdit)
     val onMoveToWorkspaceState = rememberUpdatedState(onMoveToWorkspace)
+
+    // EVERY edit goes through here, and every edit is a function of the CURRENT
+    // tree — never of a node captured when this composition ran.
+    //
+    // Compose callbacks routinely outlive the composition that built them: a
+    // `pointerInput` block is only rebuilt when its keys change, a popover's
+    // onClick is built when the menu opens, a coroutine resumes whenever it
+    // resumes. The tree used to travel back UP through these, each parent
+    // rebuilding itself from the child it was handed, so any stale callback
+    // wrote back a whole stale subtree. That is not a partial mismatch, it is a
+    // full rollback: a view closed since capture came back (as a tab titled
+    // "view", because it no longer has a record to take a name from), and a view
+    // created since capture disappeared. Resizing a splitter did both, since
+    // `pointerInput` keys on nothing that a tab change touches.
+    //
+    // A transform cannot do that. It names what to change — a group id, a split
+    // path — and reads the tree at invocation time, so a stale caller misses and
+    // no-ops instead of resurrecting anything.
+    fun applyEdit(edit: (LayoutNode) -> LayoutNode) {
+        // Hand the FUNCTION up when the caller can take one; it is the only form
+        // that survives a `workspace_changed` frame landing mid-edit.
+        onEditState.value?.let { it(edit); return }
+        val tree = layoutState.value
+        val next = normalizeLayout(edit(tree)) ?: return
+        if (next != tree) onLayoutChangeState.value(next)
+    }
 
     fun applyDrop(target: TabDropTarget) {
         when (target) {
@@ -130,41 +173,45 @@ fun LayoutHost(
             }
             else -> Unit
         }
-        val tree = layoutState.value
-        val next: LayoutNode? = when (target) {
-            is TabDropTarget.Reorder ->
-                reorderWithinGroup(tree, target.groupId, target.viewId, target.index)
-            is TabDropTarget.MoveToGroup ->
-                moveViewToGroup(tree, target.viewId, target.toGroupId, target.index)
-            is TabDropTarget.Split -> {
-                // splitGroup only acts when the view already lives in the target
-                // group and the group has ≥2 views. Cross-group edge drops first
-                // move the view into the target, then split — but only if the
-                // target already has another view to stay put; a single-view
-                // group cannot be split by its only (incoming) tab.
-                val owner = groupIdOf(tree, target.viewId)
-                val withView = if (owner == target.groupId) {
-                    tree
-                } else {
-                    moveViewToGroup(tree, target.viewId, target.groupId, Int.MAX_VALUE) ?: tree
+        // Minted once, outside the transform: a replay must land on the same group
+        // id, not invent a new one each time the edit is rebased onto a frame.
+        val newGroupId = UUID.randomUUID().toString()
+        applyEdit { tree ->
+            when (target) {
+                is TabDropTarget.Reorder ->
+                    reorderWithinGroup(tree, target.groupId, target.viewId, target.index)
+                is TabDropTarget.MoveToGroup ->
+                    moveViewToGroup(tree, target.viewId, target.toGroupId, target.index) ?: tree
+                is TabDropTarget.Split -> {
+                    // splitGroup only acts when the view already lives in the target
+                    // group and the group has ≥2 views. Cross-group edge drops first
+                    // move the view into the target, then split — but only if the
+                    // target already has another view to stay put; a single-view
+                    // group cannot be split by its only (incoming) tab.
+                    val owner = groupIdOf(tree, target.viewId)
+                    val withView = if (owner == target.groupId) {
+                        tree
+                    } else {
+                        moveViewToGroup(tree, target.viewId, target.groupId, Int.MAX_VALUE) ?: tree
+                    }
+                    val split = splitGroup(
+                        withView,
+                        target.groupId,
+                        target.viewId,
+                        target.direction,
+                        newGroupId = newGroupId,
+                    )
+                    if (target.newFirst) reverseNewSplit(split, target.groupId) else split
                 }
-                val split = splitGroup(
-                    withView,
-                    target.groupId,
-                    target.viewId,
-                    target.direction,
-                    newGroupId = UUID.randomUUID().toString(),
-                )
-                if (target.newFirst) reverseNewSplit(split, target.groupId) else split
+                is TabDropTarget.MoveToWorkspace -> tree // handled above
             }
-            is TabDropTarget.MoveToWorkspace -> null // handled above
         }
-        if (next != null && next != tree) onLayoutChangeState.value(next)
     }
 
     LayoutHostNode(
         layout = layout,
-        onLayoutChange = onLayoutChange,
+        path = emptyList(),
+        applyEdit = { applyEdit(it) },
         dragState = drag,
         onDrop = { applyDrop(it) },
         modifier = modifier,
@@ -200,10 +247,17 @@ private fun reverseNewSplit(node: LayoutNode, originalGroupId: String): LayoutNo
     }
 }
 
+/**
+ * [path] is this node's address: the child indices to walk from the root. Only
+ * splits need it (a group is named by its id), and it is what [setSplitSizes]
+ * takes. It is derived purely from the tree's shape, so a handler may hold one
+ * indefinitely — the worst a stale path does is miss.
+ */
 @Composable
 private fun LayoutHostNode(
     layout: LayoutNode,
-    onLayoutChange: (LayoutNode) -> Unit,
+    path: List<Int>,
+    applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
     dragState: TabDragState,
     onDrop: (TabDropTarget) -> Unit,
     modifier: Modifier,
@@ -214,10 +268,10 @@ private fun LayoutHostNode(
 ) {
     when (layout) {
         is LayoutNode.Group -> GroupHost(
-            layout, onLayoutChange, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, content,
+            layout, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, content,
         )
         is LayoutNode.Split -> SplitHost(
-            layout, onLayoutChange, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, content,
+            layout, path, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, content,
         )
     }
 }
@@ -225,7 +279,7 @@ private fun LayoutHostNode(
 @Composable
 private fun GroupHost(
     group: LayoutNode.Group,
-    onLayoutChange: (LayoutNode) -> Unit,
+    applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
     dragState: TabDragState,
     onDrop: (TabDropTarget) -> Unit,
     modifier: Modifier,
@@ -249,7 +303,9 @@ private fun GroupHost(
             viewIds = group.viewIds,
             activeViewId = active,
             titleFor = titleFor,
-            onSelect = { onLayoutChange(group.copy(activeViewId = it)) },
+            // Name the group; do NOT hand back a rebuilt `group`. This lambda is
+            // captured by the tab's pointer handler and can outlive this composition.
+            onSelect = { viewId -> applyEdit { setActiveViewInGroup(it, group.id, viewId) } },
             onClose = onCloseView,
             dragState = dragState,
             onDrop = onDrop,
@@ -291,7 +347,8 @@ private fun GroupHost(
 @Composable
 private fun SplitHost(
     split: LayoutNode.Split,
-    onLayoutChange: (LayoutNode) -> Unit,
+    path: List<Int>,
+    applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
     dragState: TabDragState,
     onDrop: (TabDropTarget) -> Unit,
     modifier: Modifier,
@@ -306,16 +363,19 @@ private fun SplitHost(
     ResizableSplitN(
         direction = split.direction,
         sizes = split.sizes,
-        onSizesChange = { next -> onLayoutChange(split.copy(sizes = next)) },
+        // Address this split by path and let the root apply it. Writing back
+        // `split.copy(sizes = ...)` was the bug Ahmet hit: ResizableSplitN keys
+        // its drag handler on `pointerInput(totalPx, index)`, so the handler kept
+        // whichever `split` was current when it was last built, and every resize
+        // restored that node's children — reviving a closed view or dropping a
+        // new one.
+        onSizesChange = { next -> applyEdit { setSplitSizes(it, path, next) } },
         modifier = modifier,
     ) { index ->
         LayoutHostNode(
             layout = split.children[index],
-            onLayoutChange = { child ->
-                val next = split.copy(children = split.children.toMutableList().also { it[index] = child })
-                // normalize keeps the tree valid if a child collapsed to nothing.
-                onLayoutChange(normalizeLayout(next) ?: child)
-            },
+            path = path + index,
+            applyEdit = applyEdit,
             dragState = dragState,
             onDrop = onDrop,
             titleFor = titleFor,
@@ -648,6 +708,12 @@ fun ResizableSplitN(
     val horizontal = direction == "row"
     var totalPx by remember { mutableStateOf(0) }
     val currentSizes by rememberUpdatedState(sizes)
+    // The drag handler below lives in `pointerInput(totalPx, index)`, so it is
+    // rebuilt only when the pane count or geometry changes — never when the tree
+    // does. Anything it captures directly goes stale. `sizes` was already guarded
+    // this way; the callback needs the same guard, or a caller that closes over
+    // tree state sends yesterday's tree.
+    val currentOnSizesChange by rememberUpdatedState(onSizesChange)
     val handle = 24.dp
 
     @Composable
@@ -681,7 +747,7 @@ fun ResizableSplitN(
                         val minFrac = 0.05
                         val nextA = (a + delta).coerceIn(minFrac * pair, (1.0 - minFrac) * pair)
                         val nextB = pair - nextA
-                        onSizesChange(
+                        currentOnSizesChange(
                             cur.toMutableList().also {
                                 it[index] = nextA
                                 it[index + 1] = nextB
