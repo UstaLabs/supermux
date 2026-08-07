@@ -33,6 +33,8 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jediterm.terminal.ui.JediTermWidget
+import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
@@ -187,10 +189,19 @@ fun DesktopTerminalPanel(
         }
         // No auto-focus on composition: SwingPanel does not request focus for its child; the
         // JediTerm panel takes focus on click (Swing default), matching the Android rule.
-        SwingPanel(
-            factory = { widget },
-            modifier = Modifier.fillMaxSize(),
-        )
+        //
+        // …and step aside while anything modal is open. Per the note above, Compose
+        // cannot paint over this widget, so a dialog or a menu opened anywhere in
+        // the app would simply be invisible on top of a terminal. KeepAlivePanel
+        // hides it by LAYOUT (0×0 + clip), the only kind a heavyweight AWT child
+        // respects: the widget stays in the same composition slot, the client keeps
+        // its websocket, and the grid and scrollback come back untouched.
+        HeavyweightModalShield {
+            SwingPanel(
+                factory = { widget },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

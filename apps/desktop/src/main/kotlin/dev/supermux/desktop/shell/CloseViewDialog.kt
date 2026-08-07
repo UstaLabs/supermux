@@ -1,6 +1,6 @@
 package dev.supermux.desktop.shell
 
-import androidx.compose.material3.AlertDialog
+import dev.supermux.desktop.ui.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable

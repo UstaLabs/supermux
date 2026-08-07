@@ -26,7 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.DropdownMenu
+import dev.supermux.desktop.ui.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -142,20 +142,18 @@ fun LayoutHost(
     // EVERY edit goes through here, and every edit is a function of the CURRENT
     // tree — never of a node captured when this composition ran.
     //
-    // Compose callbacks routinely outlive the composition that built them: a
-    // `pointerInput` block is only rebuilt when its keys change, a popover's
-    // onClick is built when the menu opens, a coroutine resumes whenever it
-    // resumes. The tree used to travel back UP through these, each parent
-    // rebuilding itself from the child it was handed, so any stale callback
-    // wrote back a whole stale subtree. That is not a partial mismatch, it is a
-    // full rollback: a view closed since capture came back (as a tab titled
-    // "view", because it no longer has a record to take a name from), and a view
-    // created since capture disappeared. Resizing a splitter did both, since
-    // `pointerInput` keys on nothing that a tab change touches.
+    // The tree used to travel back UP through these callbacks, each parent
+    // rebuilding itself from the child it was handed. A transform carries only
+    // an address — a group id, a split path — so it can be REPLAYED onto the
+    // broker's tree when a workspace_changed frame lands mid-edit, which is what
+    // WorkspaceLayoutState does with it and why the shape matters. Handing back a
+    // rebuilt node cannot be replayed: it drags along every sibling it happened
+    // to hold at the time, so a frame that deleted a view would be undone by it.
     //
-    // A transform cannot do that. It names what to change — a group id, a split
-    // path — and reads the tree at invocation time, so a stale caller misses and
-    // no-ops instead of resurrecting anything.
+    // (An earlier version of this comment blamed stale `pointerInput` captures.
+    // That was wrong — a probe showed the handler does receive the fresh callback
+    // — and the real cause was the sync layer dropping frames. Addressing edits
+    // is still right, for the replay reason above.)
     fun applyEdit(edit: (LayoutNode) -> LayoutNode) {
         // Hand the FUNCTION up when the caller can take one; it is the only form
         // that survives a `workspace_changed` frame landing mid-edit.

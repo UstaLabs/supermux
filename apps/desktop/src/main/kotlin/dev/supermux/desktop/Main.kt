@@ -9,11 +9,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.AlertDialog
+import dev.supermux.desktop.ui.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +59,8 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.desktop.ui.LocalModalPresence
+import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
@@ -397,6 +400,12 @@ fun main() {
             // Appearance lives here so the sidebar theme toggle and SupermuxTheme share one source.
             // Not persisted yet (M4 Settings/Appearance can own that later).
             var appearance by remember { mutableStateOf(AppearanceMode.DARK) }
+            // One presence for the whole window: a dialog opened anywhere must hide
+            // EVERY heavyweight AWT child (JediTerm, KCEF), not just the one in the
+            // pane that owns it — Compose cannot paint over any of them, and a split
+            // can show a terminal next to the pane the dialog came from.
+            val modalPresence = remember { ModalPresence() }
+            CompositionLocalProvider(LocalModalPresence provides modalPresence) {
             SupermuxTheme(appearance = appearance) {
               // See the macOS chrome note on Window above: the app paints its own background all
               // the way to the top edge, inset by the traffic-light height so nothing hides under
@@ -1381,6 +1390,7 @@ fun main() {
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
             }
+        }
         }
     }
 }

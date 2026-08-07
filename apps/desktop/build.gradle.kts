@@ -206,3 +206,12 @@ compose.desktop {
         }
     }
 }
+
+// Throwaway probe for SwingPanel z-order (test-source main — never ships).
+tasks.register<JavaExec>("probeInteropZOrder") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.InteropZOrderProbeKt")
+    jvmArgs(jcefAddOpens)
+}
