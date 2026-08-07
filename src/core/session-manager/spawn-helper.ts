@@ -84,12 +84,9 @@ export type SpawnDeps = {
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   onThreadId?: (name: string, threadId: string) => void
-  onCodexSessionId?: (name: string, sessionId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
-  onClaudeSessionId?: (name: string, claudeSessionId: string) => void
-  onRuntimeTargetId?: (brokerSessionId: string, targetId: string) => void
 }
 
 export type SpawnArgs = {
@@ -150,7 +147,6 @@ export async function spawnPA(opts: {
   spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
   sessionBackend?: SessionBackend
   tmuxSession: string
-  onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
   onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
@@ -223,7 +219,9 @@ export async function spawnPA(opts: {
     registry.sessions.setTmuxWindowId(id, target.id)
     finalPid = target.pid ?? process.pid
     void sendChannelConsentEnter(target.id, { backend: opts.sessionBackend })
-    opts.onClaudeSessionId?.(id, claudeSessionId)
+    // The row exists either way (registerPA above, or skipRegister with a live
+    // row) — write the fresh claude session id directly.
+    registry.sessions.setAgentSessionId(id, claudeSessionId)
   } else if (agent === AgentKind.Codex) {
     const sessionHome = join(STATE_DIR, "agents", "codex", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })

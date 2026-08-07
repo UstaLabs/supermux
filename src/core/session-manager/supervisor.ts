@@ -44,7 +44,6 @@ export type SupervisorOpts = {
   // shim hits ENOENT on connect and the session dies on arrival.
   bindSocket: (session_id: string) => Promise<void>
   // Store the Claude Code session ID so resumed sessions can pass --resume.
-  onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
   // Override for tests; defaults to the real tmux helper.
   spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
   sessionBackend?: SessionBackend
@@ -116,7 +115,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       })
       const target = await sessionBackend.create({ group: TMUX_SESSION, name: tmuxWindowName, cwd: pa.workdir, ...spec, cols: 80, rows: 24 })
       opts.registry.sessions.setTmuxWindowId(pa.id, target.id)
-      if (!pa.agent_session_id) opts.onClaudeSessionId?.(pa.id, claudeSessionId)
+      if (!pa.agent_session_id) opts.registry.sessions.setAgentSessionId(pa.id, claudeSessionId)
       opts.registry.sessions.activate(pa.id, target.pid ?? process.pid)
       void sendChannelConsentEnter(target.id, { backend: sessionBackend })
     } else {
@@ -132,7 +131,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         sessionBackend,
         tmuxSession: TMUX_SESSION,
         id: pa.id,
-        onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
         onCodexSessionId: opts.onCodexSessionId,
         onCursorSessionId: opts.onCursorSessionId,
@@ -178,7 +176,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         spawnTmux,
         sessionBackend,
         tmuxSession: TMUX_SESSION,
-        onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
         onCodexSessionId: opts.onCodexSessionId,
         onCursorSessionId: opts.onCursorSessionId,

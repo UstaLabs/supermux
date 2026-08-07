@@ -570,14 +570,6 @@ const runtimeTargetIdOf = (s: { id: string; name: string; tmux_window_id?: strin
     persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid),
   })
 const replyOwner = new Map<string, string>()              // key: `${chat_id}:${message_id}`
-const pendingSpawnActive = new Map<string, string>()      // expectedName → channelChatId
-const pendingClaudeSessionId = new Map<string, string>()  // brokerSessionId → claudeSessionId
-const pendingRuntimeTargetId = new Map<string, string>()      // brokerSessionId → opaque runtime target ID
-// Claude sessions register asynchronously via the shim's onRegister (not in the
-// spawn helper), so a worker that must be marked broker-internal records the
-// intent here keyed by broker session id; onRegister consumes it. Same deferred
-// pattern as pendingRuntimeTargetId/pendingClaudeSessionId above.
-const pendingInternal = new Set<string>()                  // brokerSessionId (internal=true)
 // agent-rpc registry. Assigned once below, after spawnSession/killSession/
 // deliverInbound (its deps) are all defined; declared here so it's in scope for
 // the orchestration dispatch (rpc_resolve / rpc_reject) further up.
@@ -1548,11 +1540,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             registerGrokRuntime(sid, adapter)
           }
           wireAdapterEvents(adapter, sid)
-        },
-        onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
-          const session = registry.get(brokerSessionId)
-          if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
-          else pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
         },
         onCodexSessionId: (brokerSessionId, sessionId) => {
           const session = registry.get(brokerSessionId)
@@ -2983,16 +2970,6 @@ async function spawnSession(args: {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
-      onClaudeSessionId: (name: string, claudeSessionId: string) => {
-        const session = registry.resolveName(name)
-        if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
-        else pendingClaudeSessionId.set(name, claudeSessionId)
-      },
-      onRuntimeTargetId: (brokerSessionId: string, targetId: string) => {
-        const session = registry.get(brokerSessionId)
-        if (session) registry.sessions.setTmuxWindowId(brokerSessionId, targetId)
-        else pendingRuntimeTargetId.set(brokerSessionId, targetId)
-      },
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
@@ -3280,10 +3257,9 @@ ch.on("inbound", async (msg: InboundMessage) => {
       fromSession: undefined,
       spawnSession: async (workdir: string, name?: string, agent?: AgentKind, model?: string, reasoningLevel?: string) => {
         const r = await spawnSession({ workdir, requestedName: name, agent, model, reasoningLevel })
-        // Record pending intent BEFORE the shim's eventual onRegister so it
-        // sees the chat to flip active onto. spawnSession resolved the final
-        // name already, so the key is stable.
-        pendingSpawnActive.set(r.name, msg.chat_id)
+        // The row exists when spawnSession resolves (all agents) — flip the
+        // chat's active session directly.
+        registry.setActive(msg.chat_id, r.session_id)
         return r
       },
       killSession,
@@ -3329,11 +3305,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
               registerGrokRuntime(sid, adapter)
             }
             wireAdapterEvents(adapter, sid)
-          },
-          onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
-            const session = registry.get(brokerSessionId)
-            if (session) registry.sessions.setAgentSessionId(session.id, claudeSessionId)
-            else pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
           },
           onCodexSessionId: (brokerSessionId, sessionId) => {
             const session = registry.get(brokerSessionId)
@@ -3672,9 +3643,6 @@ const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
   sessionBackend,
-  onClaudeSessionId: (brokerSessionId, claudeSessionId) => {
-    pendingClaudeSessionId.set(brokerSessionId, claudeSessionId)
-  },
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
   reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
