@@ -236,3 +236,27 @@ tasks.register<JavaExec>("probeKcefBlending") {
     mainClass.set("dev.supermux.desktop.shell.KcefBlendingProbeKt")
     jvmArgs(jcefAddOpens)
 }
+
+// Probe 4: blending fixes COMPOSITING — does the modal painted over the interop
+// child also RECEIVE INPUT? Test-source main — never ships.
+tasks.register<JavaExec>("probeInteropInput") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.InteropInputProbeKt")
+    jvmArgs(jcefAddOpens)
+}
+
+// Writes the test runtime classpath so a probe can be launched with a bare `java`
+// from a real GUI terminal — a Gradle daemon started over SSH has no window
+// server connection and its forked children inherit that. Test-only helper.
+tasks.register("dumpTestClasspath") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    val cp = sourceSets["test"].runtimeClasspath
+    val out = File(System.getProperty("java.io.tmpdir"), "sm-test-classpath.txt")
+    doLast {
+        out.writeText(cp.joinToString(File.pathSeparator))
+        println("dumpTestClasspath -> $out")
+    }
+}

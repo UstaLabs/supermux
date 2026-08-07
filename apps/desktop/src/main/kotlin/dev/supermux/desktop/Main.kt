@@ -202,17 +202,26 @@ fun main() {
     // Must be set before the first Compose window: the flag is read through a
     // memoizing `lazy`, so setting it later is silently ignored.
     //
-    // Compose 1.11.1 gates this on the render API — Direct3D and Metal only, never
-    // OpenGL — so it is a no-op on Linux by construction, not a misconfiguration.
-    // Verified on the Mac with `renderApi=METAL` read off the live SkiaLayer: a
-    // dialog and a dropdown paint correctly over a LIVE terminal, which no longer
-    // has to hide at all. It does NOT rescue KCEF (a native NSView, sheared off at
-    // the page's top edge), so the editor keeps its shield — see
-    // ui/ModalPresence.kt.
+    // ⚠ This is NOT currently sufficient to stop the terminal hiding behind a
+    // modal, and the reason is worth keeping: blending composites, it does not
+    // re-route INPUT. On Metal a dialog does paint correctly over a live
+    // terminal — verified with `renderApi=METAL` read off the live SkiaLayer —
+    // but the AWT child remains topmost for hit-testing, so every click still
+    // lands on JediTerm and the dialog's buttons are dead. Ahmet: "it renders
+    // correctly on top of the terminal. But if I try to click on any button, it
+    // doesn't work." So HeavyweightModalShield still hides the terminal, and
+    // this flag is currently inert for modals.
     //
-    // Still marked experimental by JetBrains; if it ever regresses, deleting this
-    // line restores the previous behaviour (terminal hides while a modal is open)
-    // rather than bringing the invisible-dialog bug back.
+    // It stays because it is the half of the problem that IS solved, at no cost
+    // measured on Metal, and because the remaining half is about input routing
+    // rather than painting. The moment input is sorted, the terminal can stop
+    // hiding by flipping one argument in DesktopTerminalPanel — read the note
+    // there first.
+    //
+    // Compose 1.11.1 gates blending on the render API — Direct3D and Metal only,
+    // never OpenGL — so it is a no-op on Linux by construction. It also does not
+    // rescue KCEF at all (a native NSView: the dialog comes out sheared off at
+    // the page's top edge). Still marked experimental by JetBrains.
     System.setProperty("compose.interop.blending", "true")
 
     val store = DesktopTokenStore()

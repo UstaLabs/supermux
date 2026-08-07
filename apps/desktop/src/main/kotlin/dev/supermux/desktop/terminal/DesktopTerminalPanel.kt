@@ -196,11 +196,21 @@ fun DesktopTerminalPanel(
         // hides it by LAYOUT (0×0 + clip), the only kind a heavyweight AWT child
         // respects: the widget stays in the same composition slot, the client keeps
         // its websocket, and the grid and scrollback come back untouched.
-        // JediTerm is a SWING child, so interop blending lets Compose paint straight
-        // over it: on Metal/D3D the terminal stays live and visible under a dialog
-        // instead of blanking. Only where blending cannot apply (Linux/OpenGL) does
-        // it still have to step aside.
-        HeavyweightModalShield(evenWithBlending = false) {
+        // Hides on EVERY platform, blending or not.
+        //
+        // Interop blending does make Compose PAINT over this widget on Metal, and
+        // for a moment that looked like the fix. It is not: blending composites,
+        // it does not re-route input. The AWT child stays topmost for hit-testing,
+        // so a dialog painted over the terminal swallowed every click —
+        //
+        //   Ahmet: "it renders correctly on top of the terminal. But if I try to
+        //   click on any button, it doesn't work."
+        //
+        // A modal you can see but cannot press is worse than one that blanks the
+        // pane behind it, so this steps aside until input routing is solved too.
+        // Do not set evenWithBlending = false here again without proving that a
+        // CLICK lands, not just that the pixels look right.
+        HeavyweightModalShield(evenWithBlending = true) {
             SwingPanel(
                 factory = { widget },
                 modifier = Modifier.fillMaxSize(),
