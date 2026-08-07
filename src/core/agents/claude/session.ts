@@ -9,7 +9,7 @@ import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
 
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
-  const backend = deps.sessionBackend ?? getSessionBackend()
+  const backend = getSessionBackend()
   const base = args.requestedName ?? deriveName(args.workdir)
   // Resolve a window name unique against BOTH taken display names AND existing
   // tmux window names. Worker windows are named after the repo base (e.g.
@@ -53,7 +53,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       connected: false,
       base_commits: captureBaseCommits(args.workdir),
     })
-    await (deps.postSpawnReady ?? ((targetId) => sendChannelConsentEnter(targetId, { backend })))(target.id)
+    await sendChannelConsentEnter(target.id, { backend })
   } catch (err) {
     // Free the reserved name AND any row so a retry can reclaim the name.
     deps.registry.releaseName(name)

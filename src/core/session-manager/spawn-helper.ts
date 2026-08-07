@@ -4,7 +4,6 @@ import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
 import { getSessionBackend } from "../runtime"
-import type { SessionBackend } from "../runtime/session-backend"
 import { resolveCodexAuth } from "../agents/codex/auth"
 import { writeCodexConfig } from "../agents/codex/config-writer"
 import { writeCodexPreamble } from "../agents/codex/preamble-writer"
@@ -66,10 +65,8 @@ type GrokSpawnHandle = { onExit: (cb: (code: number | null) => void) => void }
 export type SpawnDeps = {
   registry: Registry
   bind: (session_id: string) => Promise<void>
-  sessionBackend?: SessionBackend
   tmuxSession: string
   resolveAttachment?: (file_id: string) => Promise<string>
-  postSpawnReady?: (target: string) => Promise<void>
   codexResolveAuth?: typeof resolveCodexAuth
   codexPrepareSessionHome?: typeof codexPrepareSessionHome
   codexSpawnArgs?: typeof codexSpawnArgs
@@ -135,7 +132,6 @@ export async function spawnPA(opts: {
   model?: string
   reasoningLevel?: string
   bind: (session_id: string) => Promise<void>
-  sessionBackend?: SessionBackend
   tmuxSession: string
   onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
@@ -196,7 +192,7 @@ export async function spawnPA(opts: {
       effort: opts.resolveEffort?.({ agent, model, reasoningLevel }),
       workdir,
     })
-    const target = await (opts.sessionBackend ?? getSessionBackend()).create({
+    const target = await getSessionBackend().create({
       group: opts.tmuxSession,
       name,
       cwd: workdir,
@@ -206,7 +202,7 @@ export async function spawnPA(opts: {
     })
     registry.sessions.setTmuxWindowId(id, target.id)
     finalPid = target.pid ?? process.pid
-    void sendChannelConsentEnter(target.id, { backend: opts.sessionBackend })
+    void sendChannelConsentEnter(target.id)
     // The row exists either way (registerPA above, or skipRegister with a live
     // row) — write the fresh claude session id directly.
     registry.sessions.setAgentSessionId(id, claudeSessionId)

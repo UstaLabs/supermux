@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, describe, expect, test } from "bun:test"
 import { join } from "path"
 import { rmSync } from "fs"
 import { AgentKind } from "../../shared/agents"
@@ -6,6 +6,7 @@ import { STATE_DIR } from "../../shared/paths"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
+import { setSessionBackendForTests } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
 
 // Move 1 of the session-consolidation spec: the claude session row is born in
@@ -30,17 +31,21 @@ function fakeBackend(overrides?: Partial<SessionBackend>): SessionBackend {
   return {
     list: async () => [],
     create: async () => ({ id: "@42", name: "w", pid: 4242, alive: true }),
+    // Short-circuits the post-spawn consent poll (sendChannelConsentEnter).
+    capture: async () => "Listening for channel messages",
     ...overrides,
   } as unknown as SessionBackend
 }
 
+// The session backend is injected through the runtime override, not a bag seam.
+afterEach(() => setSessionBackendForTests())
+
 function deps(reg: Registry, backend?: SessionBackend) {
+  setSessionBackendForTests(backend ?? fakeBackend())
   return {
     registry: reg,
     bind: async () => {},
     tmuxSession: "mux",
-    sessionBackend: backend ?? fakeBackend(),
-    postSpawnReady: async () => {},
   }
 }
 

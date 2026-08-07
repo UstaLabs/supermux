@@ -6,6 +6,7 @@ import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { createSupervisor } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
+import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
 
 let tmpDir: string, db: ReturnType<typeof openDb>
@@ -14,7 +15,11 @@ beforeEach(() => {
   db = openDb(join(tmpDir, "t.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
 })
-afterEach(() => { try { db.close() } catch {}; rmSync(tmpDir, { recursive: true, force: true }) })
+afterEach(() => {
+  setSessionBackendForTests()
+  try { db.close() } catch {}
+  rmSync(tmpDir, { recursive: true, force: true })
+})
 
 test("createSupervisor exposes ensurePersonalAssistants", () => {
   const registry = new Registry(db)
@@ -123,13 +128,13 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
 
 test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
   const registry = new Registry(db)
+  setSessionBackendForTests({
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id: "w1", name: opts.name, pid: 123, alive: true }),
+    capture: async () => "Listening for channel messages",
+  } as unknown as SessionBackend)
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    sessionBackend: {
-      create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id: "w1", name: opts.name, pid: 123, alive: true }),
-      capture: async () => "Listening for channel messages",
-    } as unknown as SessionBackend,
   })
 
   let captured: any
@@ -152,17 +157,16 @@ test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
 test("bootstrapPA creates Claude through the session backend", async () => {
   const registry = new Registry(db)
   let createOpts: Parameters<SessionBackend["create"]>[0] | undefined
-  const sessionBackend = {
+  setSessionBackendForTests({
     create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
       createOpts = opts
       return { id: "opaque-target", name: opts.name, pid: 31337, alive: true }
     },
     capture: async () => "Listening for channel messages",
-  } as unknown as SessionBackend
+  } as unknown as SessionBackend)
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    sessionBackend,
   })
 
   await supervisor.bootstrapPA("native-pa", { agent: AgentKind.Claude })

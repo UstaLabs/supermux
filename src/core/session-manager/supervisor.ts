@@ -43,7 +43,6 @@ export type SupervisorOpts = {
   // Bind the unix socket for a session BEFORE claude spawns; otherwise the
   // shim hits ENOENT on connect and the session dies on arrival.
   bindSocket: (session_id: string) => Promise<void>
-  sessionBackend?: SessionBackend
   // PA workdir, resolved from the config store by the caller. When omitted
   // (e.g. tests), falls back to the historical default.
   paWorkdir?: string
@@ -70,7 +69,7 @@ export type SessionManagerLike = {
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
-  const sessionBackend = opts.sessionBackend ?? getSessionBackend()
+  const sessionBackend = getSessionBackend()
   // Derived non-claude PA spawn wiring: explicit test seams win; otherwise the
   // session component provides the real behavior. Without either, spawnPA
   // builds adapters and drops them (the pre-component bug this fixes).
@@ -138,7 +137,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: pa.model,
         reasoningLevel: pa.reasoningLevel,
         bind: opts.bindSocket,
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
         id: pa.id,
         resolveEffort: opts.resolveEffort,
@@ -177,7 +175,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: bootstrapOpts?.model,
         reasoningLevel: bootstrapOpts?.reasoningLevel,
         bind: opts.bindSocket,
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: opts.resolveEffort,
         onCodexSessionId,

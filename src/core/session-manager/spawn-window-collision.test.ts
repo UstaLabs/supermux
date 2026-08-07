@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, describe, expect, test } from "bun:test"
 import { join } from "path"
 import { rmSync } from "fs"
 import { AgentKind } from "../../shared/agents"
@@ -6,6 +6,7 @@ import { STATE_DIR } from "../../shared/paths"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
+import { setSessionBackendForTests } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
 
 // Regression test for the "new session kills the prior same-repo session" bug.
@@ -34,6 +35,9 @@ afterAll(() => {
   }
 })
 
+// The fake backend is injected via the runtime override (never the real tmux).
+afterEach(() => setSessionBackendForTests())
+
 describe("Claude spawn — tmux window-name collision", () => {
   test("a new session whose name matches an existing window gets a unique window name (does NOT reuse/kill it)", async () => {
     const reg = registry()
@@ -41,16 +45,16 @@ describe("Claude spawn — tmux window-name collision", () => {
     const existingWindows = [occupied] // a live session already owns this window name
     const spawnedWindows: string[] = []
 
+    setSessionBackendForTests({
+      list: async () => existingWindows.map((name, i) => ({ id: `target-${i}`, name, pid: i + 1, alive: true })),
+      create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
+      capture: async () => "Listening for channel messages",
+    } as unknown as SessionBackend)
+
     const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      // Injected so the test never touches the real tmux server.
-      sessionBackend: {
-        list: async () => existingWindows.map((name, i) => ({ id: `target-${i}`, name, pid: i + 1, alive: true })),
-        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
-      } as unknown as SessionBackend,
-      postSpawnReady: async () => {},
     }, {
       workdir: process.cwd(),
       requestedName: occupied,
@@ -66,15 +70,16 @@ describe("Claude spawn — tmux window-name collision", () => {
     const reg = registry()
     const spawnedWindows: string[] = []
 
+    setSessionBackendForTests({
+      list: async () => [],
+      create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
+      capture: async () => "Listening for channel messages",
+    } as unknown as SessionBackend)
+
     const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      sessionBackend: {
-        list: async () => [],
-        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
-      } as unknown as SessionBackend,
-      postSpawnReady: async () => {},
     }, {
       workdir: process.cwd(),
       requestedName: "ztest-spawn-unique",

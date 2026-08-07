@@ -1539,7 +1539,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         model: args.model,
         reasoningLevel: args.reasoningLevel,
         bind: (sid: string) => server.bind(sid),
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: (s) => sessionEffort(s),
         registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
@@ -2233,7 +2232,6 @@ async function spawnSession(args: {
     {
       registry,
       bind: (sid: string) => server.bind(sid),
-      sessionBackend,
       tmuxSession: TMUX_SESSION,
       resolveAttachment: resolveAttachmentPath,
       registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
@@ -2575,7 +2573,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
           workdir,
           model: args.model,
           bind: (sid: string) => server.bind(sid),
-          sessionBackend,
           tmuxSession: TMUX_SESSION,
           resolveEffort: (s) => sessionEffort(s),
           registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
@@ -2915,7 +2912,6 @@ agentRpc = createAgentRpc({
 const supervisor = createSupervisor({
   registry,
   bindSocket: (sid) => server.bind(sid),
-  sessionBackend,
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
   // Adapter registration + session-id persistence for supervisor-spawned
