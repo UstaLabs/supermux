@@ -38,7 +38,7 @@ import { acquirePidFile, releasePidFile } from "./core/session-manager/pid-file"
 import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA, resumeOpenCodeSession, resumeGrokSession } from "./core/session-manager/spawn-helper"
-import { RuntimeRegistry, type SessionRuntime } from "./core/session-manager/runtime"
+import { SessionManager } from "./core/session-manager/manager"
 import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
@@ -594,49 +594,20 @@ const channels: Record<string, Channel> = {
   ...(whatsapp ? { whatsapp } : {}),
 }
 
-// ONE runtime store, keyed by session UUID (not session name). The adapter
-// lives inside the SessionRuntime — never in a second map.
-const runtimes = new RuntimeRegistry()
+// The SessionManager component owns per-session runtime state (Move 2). The
+// thin aliases below keep existing call sites unchanged while the handlers
+// migrate into the component stage by stage.
+const sessionManager = new SessionManager(registry)
+const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()
 const SOUL_SETUP_AUTO_SEND_DELAY_MS = 3_000
 
-function registerRuntime(sessionId: string, runtime: SessionRuntime): void {
-  runtimes.set(sessionId, runtime)
-}
-
-function deleteRuntime(sessionId: string): void {
-  runtimes.delete(sessionId)
-}
-
-function registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter): void {
-  registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
-}
-
-function registerCodexRuntime(sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle): void {
-  registerRuntime(sessionId, { kind: AgentKind.Codex, adapter, handle })
-  handle.onExit?.((code: number | null) => {
-    log.info("codex_app_server_exited", { name, code })
-    deleteRuntime(sessionId)
-  })
-}
-
-function registerCursorRuntime(sessionId: string, adapter: CursorAdapter): void {
-  registerRuntime(sessionId, { kind: AgentKind.Cursor, adapter })
-}
-
-// grok's stdio child is owned by the adapter (no separate handle), so unlike
-// opencode there's no handle.onExit to unregister on — adapter.stop() is the kill.
-function registerGrokRuntime(sessionId: string, adapter: GrokAdapter): void {
-  registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
-}
-
-function registerOpenCodeRuntime(sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle): void {
-  registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter, handle })
-  handle.onExit?.((code: number | null) => {
-    log.info("opencode_serve_exited", { name, code })
-    deleteRuntime(sessionId)
-  })
-}
+const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessionId)
+const registerClaudeRuntime = (sessionId: string, adapter: ClaudeCodeAdapter) => sessionManager.registerClaudeRuntime(sessionId, adapter)
+const registerCodexRuntime = (sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle) => sessionManager.registerCodexRuntime(sessionId, name, adapter, handle)
+const registerCursorRuntime = (sessionId: string, adapter: CursorAdapter) => sessionManager.registerCursorRuntime(sessionId, adapter)
+const registerGrokRuntime = (sessionId: string, adapter: GrokAdapter) => sessionManager.registerGrokRuntime(sessionId, adapter)
+const registerOpenCodeRuntime = (sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle) => sessionManager.registerOpenCodeRuntime(sessionId, name, adapter, handle)
 
 // Slash-command discovery: per-session command list (control + agent commands
 // tapped from each CLI's native protocol). Broadcast to web on change.
