@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, mock, test } from "bun:test"
 import { join } from "path"
 import { mkdtempSync, existsSync, readFileSync } from "fs"
 import { tmpdir } from "os"
@@ -7,6 +7,20 @@ import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
 import type { AcpClient } from "../agents/grok/acp-client"
+import type { GrokRunner } from "../agents/grok/runner"
+
+// The grok stdio runner is swapped via a bun module mock (the spawn path has
+// no injection seams); each test points `currentRunner` at its own fake.
+// Snapshot-capture the real exports and restore in afterAll.
+const realGrokRunnerModule = { ...(await import("../agents/grok/runner")) }
+let currentRunner: GrokRunner
+mock.module("../agents/grok/runner", () => ({
+  ...realGrokRunnerModule,
+  realGrokRunner: ((opts) => currentRunner(opts)) as GrokRunner,
+}))
+afterAll(() => {
+  mock.module("../agents/grok/runner", () => realGrokRunnerModule)
+})
 
 function registry(): Registry {
   const db = openDb(":memory:")
@@ -38,11 +52,11 @@ describe("Grok spawn", () => {
     const workdir = mkdtempSync(join(tmpdir(), "mux-grok-"))
     const persisted: string[] = []
 
+    currentRunner = fakeRunner() as unknown as GrokRunner
     const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      grokRunnerFactory: () => fakeRunner(),
       onGrokSessionId: (_name, sid) => persisted.push(sid),
     }, {
       workdir,
@@ -64,11 +78,11 @@ describe("Grok spawn", () => {
     let newParams: any
     let runnerEnv: any
 
+    currentRunner = ((opts: any) => { runnerEnv = opts.env; return fakeRunner((p) => { newParams = p })(opts) }) as unknown as GrokRunner
     const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
-      grokRunnerFactory: () => (opts: any) => { runnerEnv = opts.env; return fakeRunner((p) => { newParams = p })(opts) },
     }, {
       workdir,
       requestedName: "grok-shim",

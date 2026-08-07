@@ -101,15 +101,11 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
  *
  * Mirrors spawn but skips name reservation + registry.register
  * (the row already exists). Self-heals the on-disk config/preamble (idempotent),
- * the opencode analogue of codex's codexPrepareSessionHome-on-resume.
- *
- * `opts.spawnServer` is an injection seam for tests. */
+ * the opencode analogue of codex's codexPrepareSessionHome-on-resume. */
 export async function resumeOpenCodeSession(
   deps: { resolveAttachment?: (file_id: string) => Promise<string>; onOpenCodeSessionId?: (name: string, sid: string) => void },
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
-  opts: { spawnServer?: typeof spawnOpenCodeServer } = {},
 ): Promise<{ adapter: OpenCodeAdapter; handle: OpenCodeSpawnHandle }> {
-  const spawnServer = opts.spawnServer ?? spawnOpenCodeServer
   const sessionHome = session.agent_home
   const configHome = join(sessionHome, "config")
 
@@ -127,7 +123,7 @@ export async function resumeOpenCodeSession(
   })
 
   const auth = resolveOpenCodeAuth({ home: HOME })
-  const handle = await spawnServer({ workdir: session.workdir, configHome, authEnv: auth.env })
+  const handle = await spawnOpenCodeServer({ workdir: session.workdir, configHome, authEnv: auth.env })
 
   const adapter = new OpenCodeAdapter({
     sessionName: session.name,

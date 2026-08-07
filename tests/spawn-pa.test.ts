@@ -18,6 +18,8 @@ const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
 const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
 const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
 const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter")) }
+const realOpenCodeSpawn = { ...(await import("../src/core/agents/opencode/spawn")) }
+const realOpenCodeAdapter = { ...(await import("../src/core/agents/opencode/adapter")) }
 
 mock.module("../src/core/agents/codex/auth", () => ({
   ...realCodexAuth,
@@ -59,6 +61,24 @@ mock.module("../src/core/agents/cursor/adapter", () => ({
     async start() { await this.opts.persistSessionId("cursor-session-id") }
   },
 }))
+mock.module("../src/core/agents/opencode/spawn", () => ({
+  ...realOpenCodeSpawn,
+  spawnOpenCodeServer: async () => ({
+    pid: 123,
+    baseUrl: "http://localhost:1234",
+    client: {} as any,
+    child: null as any,
+    kill: () => {},
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/opencode/adapter", () => ({
+  ...realOpenCodeAdapter,
+  OpenCodeAdapter: class {
+    constructor(private opts: any) {}
+    async start() { await this.opts.persistSessionId("opencode-sid") }
+  },
+}))
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
@@ -68,6 +88,8 @@ afterAll(() => {
   mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
   mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)
   mock.module("../src/core/agents/cursor/adapter", () => realCursorAdapter)
+  mock.module("../src/core/agents/opencode/spawn", () => realOpenCodeSpawn)
+  mock.module("../src/core/agents/opencode/adapter", () => realOpenCodeAdapter)
 })
 
 let tmpDir: string
@@ -212,27 +234,6 @@ test("spawns an OpenCode PA and registers it as personal_assistant", async () =>
     workdir: join(tmpDir, "opencode-pa"),
     bind: async () => {},
     tmuxSession: "mux",
-    opencodeSpawnServer: async () => ({
-      pid: 123,
-      baseUrl: "http://localhost:1234",
-      client: {
-        session: {
-          create: async () => ({ data: { id: "opencode-sid" } }),
-        },
-        event: {
-          subscribe: async () => ({ stream: [] as any }),
-        },
-        listCommands: async () => [],
-      } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    opencodeAdapterFactory: (opts) => ({
-      start: async () => {
-        await opts.persistSessionId("opencode-sid")
-      },
-    } as any),
     registerAdapter: () => {},
     onOpenCodeSessionId: (name, sessionId) => {
       expect(name).toBe("opencode-pa")

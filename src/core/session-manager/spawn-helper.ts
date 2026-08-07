@@ -23,7 +23,7 @@ import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import { writeGrokPreamble } from "../agents/grok/preamble-writer"
 import { writeGrokConfig } from "../agents/grok/config-writer"
 import { resolveGrokAuth } from "../agents/grok/auth"
-import { realGrokRunner, type GrokRunner } from "../agents/grok/runner"
+import { realGrokRunner } from "../agents/grok/runner"
 import { GrokAdapter } from "../agents/grok/adapter"
 // Dispatcher-only import: the per-agent session modules import types/helpers
 // back from this file, which is a benign cycle as long as neither side
@@ -67,7 +67,6 @@ export type SpawnDeps = {
   bind: (session_id: string) => Promise<void>
   tmuxSession: string
   resolveAttachment?: (file_id: string) => Promise<string>
-  grokRunnerFactory?: () => GrokRunner
   registerAdapter?: (
     name: string,
     adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
@@ -134,8 +133,6 @@ export async function spawnPA(opts: {
     adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
-  opencodeSpawnServer?: typeof spawnOpenCodeServer
-  opencodeAdapterFactory?: (opts: ConstructorParameters<typeof OpenCodeAdapter>[0]) => OpenCodeAdapter
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -318,7 +315,7 @@ export async function spawnPA(opts: {
       skillsPaths,
     })
 
-    const handle = await (opts.opencodeSpawnServer ?? spawnOpenCodeServer)({
+    const handle = await spawnOpenCodeServer({
       workdir,
       configHome,
       authEnv: auth.env,
@@ -340,7 +337,7 @@ export async function spawnPA(opts: {
     }
     finalPid = handle.pid
 
-    const adapter = (opts.opencodeAdapterFactory ?? ((opts) => new OpenCodeAdapter(opts)))({
+    const adapter = new OpenCodeAdapter({
       sessionName: name,
       workdir,
       client: handle.client,

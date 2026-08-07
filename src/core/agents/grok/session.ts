@@ -6,7 +6,7 @@ import type { ResumeCtx, ResumeRow } from "../session-types"
 import { writeGrokPreamble } from "./preamble-writer"
 import { writeGrokConfig } from "./config-writer"
 import { resolveGrokAuth } from "./auth"
-import { realGrokRunner, type GrokRunner } from "./runner"
+import { realGrokRunner } from "./runner"
 import { GrokAdapter } from "./adapter"
 import { join } from "path"
 import { mkdirSync } from "fs"
@@ -47,7 +47,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   const adapter = new GrokAdapter({
     sessionName: name,
     workdir: args.workdir,
-    runner: (deps.grokRunnerFactory ?? (() => realGrokRunner))(),
+    runner: realGrokRunner,
     persistSessionId: async (sid) => { deps.onGrokSessionId?.(name, sid) },
     initialSessionId: undefined,
     model: args.model,

@@ -1,9 +1,24 @@
-import { test, expect } from "bun:test"
+import { test, expect, mock, afterAll } from "bun:test"
 import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { resumeOpenCodeSession } from "../agents/opencode/session"
 import type { OpenCodeClientLike } from "../agents/opencode/adapter"
+import type { spawnOpenCodeServer } from "../agents/opencode/spawn"
+
+// resumeOpenCodeSession spawns `opencode serve` through the real module — swap
+// it per test with mock.module (snapshot-capture the real exports; restore in
+// afterAll so later files see the real module).
+const realOpenCodeSpawn = { ...(await import("../agents/opencode/spawn")) }
+let currentSpawnServer: typeof spawnOpenCodeServer
+mock.module("../agents/opencode/spawn", () => ({
+  ...realOpenCodeSpawn,
+  spawnOpenCodeServer: (opts: Parameters<typeof spawnOpenCodeServer>[0]) => currentSpawnServer(opts),
+}))
+afterAll(() => {
+  mock.module("../agents/opencode/spawn", () => realOpenCodeSpawn)
+})
+
+const { resumeOpenCodeSession } = await import("../agents/opencode/session")
 
 // A fake `opencode serve` handle: records prompt/create/abort calls so the test
 // can assert resume() (no create) vs start() (create) without a real server.
@@ -31,11 +46,11 @@ function session(over: Partial<{ agent_session_id: string }> = {}) {
 
 test("resume without a persisted id starts a FRESH opencode session (calls create)", async () => {
   const fk = fakeServer()
+  currentSpawnServer = fk.spawnServer
   let persisted: { name: string; sid: string } | undefined
   const { adapter, handle } = await resumeOpenCodeSession(
     { onOpenCodeSessionId: (name, sid) => { persisted = { name, sid } } },
     session(),
-    { spawnServer: fk.spawnServer },
   )
   expect(handle.pid).toBe(4242)
   expect(fk.createCalls).toEqual(["create"]) // start() path
@@ -47,10 +62,10 @@ test("resume without a persisted id starts a FRESH opencode session (calls creat
 
 test("resume WITH a persisted id reuses it WITHOUT creating a new session", async () => {
   const fk = fakeServer()
+  currentSpawnServer = fk.spawnServer
   const { adapter } = await resumeOpenCodeSession(
     {},
     session({ agent_session_id: "ses_prior" }),
-    { spawnServer: fk.spawnServer },
   )
   expect(fk.createCalls).toEqual([]) // resume() path — no create
   await adapter.send("hi")
