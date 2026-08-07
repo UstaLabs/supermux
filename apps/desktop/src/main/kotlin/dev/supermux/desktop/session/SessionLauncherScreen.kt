@@ -280,6 +280,13 @@ fun SessionLauncherScreen(
         text: String,
         replaceDraftId: String?,
     ) -> String? = { _, _, _, _, _, _ -> null },
+    /**
+     * Start the project picker on this directory instead of the most-recent
+     * default. Set when the composer runs inside a workspace tab so a new chat
+     * lands in that workspace's work tree. A DEFAULT, not a lock — the follow
+     * effect below stops as soon as it is set, so the user can still pick freely.
+     */
+    initialWorkdir: String? = null,
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
@@ -512,6 +519,11 @@ fun SessionLauncherScreen(
     // Follow the most-recently-used project as session/message data hydrates, but freeze once
     // the user engages (picked a path or started composing) — web chooseDefaultProject parity.
     val composing = message.text.isNotBlank() || staged.isNotEmpty()
+    // A workspace-seeded workdir wins over the most-recent-project default: the
+    // whole point is that a chat opened in a workspace starts in ITS directory.
+    LaunchedEffect(initialWorkdir) {
+        if (!initialWorkdir.isNullOrBlank()) { workdir = initialWorkdir; workdirTouched = true }
+    }
     LaunchedEffect(recentProjectPaths, workdirTouched, composing, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         workdir = chooseDefaultProject(

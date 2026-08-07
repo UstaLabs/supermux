@@ -1748,6 +1748,8 @@ class DesktopAppState(
         worktree: Boolean,
         baseBranch: String?,
         replaceDraftId: String? = null,
+        /** Join this workspace rather than creating a new one (spec decision 5). */
+        workspaceId: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
@@ -1767,6 +1769,7 @@ class DesktopAppState(
                 worktree = if (worktree) true else null,
                 baseBranch = baseBranch?.ifBlank { null },
                 reasoningLevel = reasoningLevel?.ifBlank { null },
+                workspaceId = workspaceId,
             ),
         )
         val sessionId = resolveSpawnId(resp, _sessions.value)

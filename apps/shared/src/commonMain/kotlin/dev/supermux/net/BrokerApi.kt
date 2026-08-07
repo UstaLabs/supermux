@@ -171,6 +171,15 @@ data class SpawnRequest(
     val reasoningLevel: String? = null,
     /** draft | in_progress — draft creates without spawning an agent process. */
     val userStatus: String? = null,
+    /**
+     * Join an existing workspace instead of getting a fresh one.
+     *
+     * Absent, the broker calls createForSession and the session lands in a NEW
+     * workspace. Present, it calls addChatSession and the session joins this one,
+     * sharing its work tree — spec decision 5. The broker has accepted this since
+     * Phase 1b; the client simply had no field to send it in.
+     */
+    val workspaceId: String? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
     /**

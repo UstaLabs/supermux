@@ -728,8 +728,17 @@ fun AppShell(
     //
     // [onCreated] receives the new session id; the caller decides what that means
     // (select it, or bind the pending view to it).
-    val launcherPane: @Composable (onBack: () -> Unit, onCreated: (String) -> Unit) -> Unit =
-        { onBack, onCreated ->
+    // [joinWorkspaceId] / [seedWorkdir] are set when the composer runs INSIDE a
+    // workspace tab: the new session joins that workspace (so it shares the work
+    // tree) and the project picker starts on that workspace's directory. Both are
+    // defaults, not limits — the user can still pick any project (spec decision 5).
+    val launcherPane: @Composable (
+        onBack: () -> Unit,
+        onCreated: (String) -> Unit,
+        joinWorkspaceId: String?,
+        seedWorkdir: String?,
+    ) -> Unit =
+        { onBack, onCreated, joinWorkspaceId, seedWorkdir ->
                     SessionLauncherScreen(
                         sessions = activeHostSessions,
                         home = home,
@@ -772,7 +781,8 @@ fun AppShell(
                                 replaceDraftId = replaceDraftId,
                             )
                         },
-                        initialDraftId = ui.launcherDraftId,
+                        initialWorkdir = seedWorkdir,
+            initialDraftId = ui.launcherDraftId,
                         initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
                         hosts = hostViews,
                         selectedHost = activeHostId,
@@ -803,6 +813,8 @@ fun AppShell(
                                 launcherPane(
                                     { ui.launcherOpen = false; ui.launcherDraftId = null },
                                     { newId -> ui.selectedId = newId; ui.launcherOpen = false; ui.launcherDraftId = null },
+                                    null,
+                                    null,
                                 )
                             }
                         }
@@ -909,6 +921,8 @@ fun AppShell(
                                                 app.bindChatView(current.id, v.id, newId)
                                                 ui.selectedId = newId
                                             },
+                                            current.id,
+                                            current.workdir,
                                         )
                                     } else if (v != null) {
                                         ViewHost(
