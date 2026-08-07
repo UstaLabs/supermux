@@ -63,7 +63,6 @@ import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
-import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDto
 import dev.supermux.workspace.chatSessionIds
@@ -848,33 +847,16 @@ fun AppShell(
                                     Text("select a workspace", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             } else {
-                                val serverTree = current.layout.toDomainOrNull()
-                                    ?: LayoutNode.Group(id = "g", viewIds = emptyList())
-                                // Local tree for drag responsiveness; PATCH is debounced (below).
-                                var localLayout by remember(current.id) { mutableStateOf(serverTree) }
-                                var layoutDirty by remember(current.id) { mutableStateOf(false) }
-                                // Adopt broker updates when the user is not mid-drag.
-                                LaunchedEffect(current.layout) {
-                                    if (!layoutDirty) {
-                                        localLayout = current.layout.toDomainOrNull()
-                                            ?: LayoutNode.Group(id = "g", viewIds = emptyList())
-                                    }
+                                // Local tree for drag responsiveness; the debounced PATCH and the
+                                // workspace_changed adoption both live in rememberWorkspaceLayout,
+                                // where the round trip can be tested on its own.
+                                val layoutSync = rememberWorkspaceLayout(
+                                    workspaceId = current.id,
+                                    serverLayout = current.layout,
+                                ) { tree ->
+                                    app.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
                                 }
-                                // Debounce layout writes: a splitter drag fires on every pointer move.
-                                // One PATCH per move would flood the broker and every peer device.
-                                // Hold the tree in local state, render from local, PATCH at most every
-                                // ~300ms (trailing write also covers drag end).
-                                LaunchedEffect(localLayout, layoutDirty) {
-                                    if (!layoutDirty) return@LaunchedEffect
-                                    delay(300)
-                                    runCatching {
-                                        app.api.patchWorkspace(
-                                            current.id,
-                                            PatchWorkspaceBody(layout = localLayout.toDto()),
-                                        )
-                                    }
-                                    layoutDirty = false
-                                }
+                                val localLayout = layoutSync.tree
                                 val viewsById = remember(current) { current.views.associateBy { it.id } }
                                 val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
                                 // Feed the viewing LaunchedEffect so a tab switch re-asserts
@@ -891,10 +873,7 @@ fun AppShell(
                                     layout = localLayout,
                                     titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
                                     onCloseView = { closeCandidate = viewsById[it] },
-                                    onLayoutChange = { next ->
-                                        localLayout = next
-                                        layoutDirty = true
-                                    },
+                                    onLayoutChange = { next -> layoutSync.edit(next) },
                                     // "+" on the tab strip → pick a kind → it opens as a new tab in
                                     // THAT group. A chat needs an agent, so it goes through the
                                     // launcher (spec §9.2); the other kinds are pure views and are
@@ -916,11 +895,12 @@ fun AppShell(
                                                 // validateLayout. Add-then-split keeps every
                                                 // intermediate tree valid using tested primitives.
                                                 val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
-                                                localLayout = splitGroup(
-                                                    localLayout, groupId, newViewId, dir,
-                                                    newGroupId = java.util.UUID.randomUUID().toString(),
+                                                layoutSync.edit(
+                                                    splitGroup(
+                                                        layoutSync.tree, groupId, newViewId, dir,
+                                                        newGroupId = java.util.UUID.randomUUID().toString(),
+                                                    ),
                                                 )
-                                                layoutDirty = true
                                             }
                                         }
                                     },
