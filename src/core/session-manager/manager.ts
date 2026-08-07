@@ -8,10 +8,7 @@ import { CursorAdapter } from "../agents/cursor/adapter"
 import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { GrokAdapter } from "../agents/grok/adapter"
-import * as codexSession from "../agents/codex/session"
-import * as cursorSession from "../agents/cursor/session"
-import * as grokSession from "../agents/grok/session"
-import * as opencodeSession from "../agents/opencode/session"
+import { agents } from "../agents/registry"
 import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
@@ -681,20 +678,20 @@ export class SessionManager {
   }
 
   private async resumeCodexArm(session: ResumeRow, name: string): Promise<CodexSpawnHandle> {
-    const { adapter, handle } = await codexSession.resume(this.resumeCtx(session.id), session, name)
+    const { adapter, handle } = await agents.codex.resume(this.resumeCtx(session.id), session, name)
     this.registerCodexRuntime(session.id, name, adapter, handle)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
     return handle
   }
 
   private async resumeCursorArm(session: ResumeRow, name: string): Promise<void> {
-    const { adapter } = await cursorSession.resume(this.resumeCtx(session.id), session, name)
+    const { adapter } = await agents.cursor.resume(this.resumeCtx(session.id), session, name)
     this.registerCursorRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
   private async resumeOpenCodeArm(session: ResumeRow, name: string): Promise<OpenCodeSpawnHandle> {
-    const { adapter, handle } = await opencodeSession.resume(this.resumeCtx(session.id), session, name)
+    const { adapter, handle } = await agents.opencode.resume(this.resumeCtx(session.id), session, name)
     this.registerOpenCodeRuntime(session.id, name, adapter, handle)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
     return handle
@@ -713,7 +710,7 @@ export class SessionManager {
   }
 
   private async resumeGrokArm(session: ResumeRow, name: string): Promise<void> {
-    const { adapter } = await grokSession.resume(this.resumeCtx(session.id), session, name)
+    const { adapter } = await agents.grok.resume(this.resumeCtx(session.id), session, name)
     this.registerGrokRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }

@@ -29,11 +29,7 @@ import { GrokAdapter } from "../agents/grok/adapter"
 // Dispatcher-only import: the per-agent session modules import types/helpers
 // back from this file, which is a benign cycle as long as neither side
 // dereferences the other at module-init time (functions + types only).
-import { spawn as spawnGrokSession } from "../agents/grok/session"
-import { spawn as spawnCursorSession } from "../agents/cursor/session"
-import { spawn as spawnOpenCodeSession } from "../agents/opencode/session"
-import { spawn as spawnCodexSession } from "../agents/codex/session"
-import { spawn as spawnClaudeSession } from "../agents/claude/session"
+import { agents } from "../agents/registry"
 import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries } from "../plugins"
 import { join } from "path"
 import { shimSpawnSpec } from "./shim-spawn"
@@ -130,18 +126,7 @@ export type SpawnResult = {
 // If the tmux spawn fails the reservation is released so the name is freed.
 export async function spawnSession(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const agent = args.agent ?? AgentKind.Claude
-  switch (agent) {
-    case AgentKind.Claude:
-      return spawnClaudeSession(deps, args)
-    case AgentKind.Codex:
-      return spawnCodexSession(deps, args)
-    case AgentKind.Cursor:
-      return spawnCursorSession(deps, args)
-    case AgentKind.OpenCode:
-      return spawnOpenCodeSession(deps, args)
-    case AgentKind.Grok:
-      return spawnGrokSession(deps, args)
-  }
+  return agents[agent].spawn(deps, args)
 }
 
 export async function spawnPA(opts: {
