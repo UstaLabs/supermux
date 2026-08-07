@@ -1019,6 +1019,31 @@ const workspaceService = new WorkspaceService(
   registry.db,
 )
 
+/**
+ * Archive a workspace once nothing live remains in it.
+ *
+ * "Live" means a chat view whose session is still active/suspended, or any
+ * non-chat view (terminal / editor / display). Spec §9.3 is explicit that
+ * closing the last CHAT does not close the workspace — a workspace holding a
+ * terminal is still a workspace. This only retires the empty shells that a
+ * session archive would otherwise strand in the sidebar.
+ */
+function archiveWorkspaceIfEmpty(workspaceId: string): void {
+  const ws = registry.workspaces.getById(workspaceId)
+  if (!ws || ws.status !== "active") return
+  const views = registry.workspaces.listViews(workspaceId)
+  if (views.some((v) => v.kind !== "chat")) return
+  const liveChat = registry.workspaces.chatSessionIds(workspaceId).some((sid) => {
+    const row = registry.db
+      .query("SELECT status FROM sessions WHERE id = ?")
+      .get(sid) as { status?: string } | null
+    return row?.status === "active" || row?.status === "suspended"
+  })
+  if (liveChat) return
+  registry.workspaces.archive(workspaceId)
+  webChannel?.broadcastToAll({ type: "workspace_removed", id: workspaceId })
+}
+
 const wsDto = (id: string) => {
   const w = registry.workspaces.getById(id)
   return w ? workspaceDto(w, registry.workspaces.listViews(id)) : undefined
@@ -1617,10 +1642,23 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     killSession: async (id) => {
       const s = registry.get(id)
       if (!s) throw new Error("session not found")
+      // SessionRecord carries no workspace_id (the column exists, the type does
+      // not) — read it straight from the row before the session goes.
+      const workspaceId = (registry.db
+        .query("SELECT workspace_id FROM sessions WHERE id = ?")
+        .get(s.id) as { workspace_id?: string } | null)?.workspace_id
       await killSession(s.id)
       unregisterSession(s.id)
       await refreshTelegramMenu()
       webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
+      // Archiving a session used to leave its workspace behind forever: the row
+      // stayed in the sidebar with a dead chat, and "archive" did nothing because
+      // there was no live session left to kill. Retire the workspace once nothing
+      // live remains in it.
+      //
+      // A workspace with non-chat views (terminal / editor / display) SURVIVES —
+      // spec §9.3: closing the last chat does not close the workspace.
+      if (workspaceId) archiveWorkspaceIfEmpty(workspaceId)
     },
     renameSession: async (id, newName) => {
       const s = registry.get(id)
@@ -1644,8 +1682,20 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // the drag origin already applied optimistically; peers need this frame.
       webChannel?.broadcastToAll({ type: "sessions_reordered", orderedIds })
     },
-    listWorkspaces: () =>
-      registry.workspaces.list().map((w) => workspaceDto(w, registry.workspaces.listViews(w.id))),
+    listWorkspaces: () => {
+      // Hide workspaces owned by an INTERNAL session, exactly as the session list
+      // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
+      // the rpc-worker sessions — invisible in the session sidebar since forever —
+      // reappear as workspace rows, which is what the user hit.
+      const internal = new Set(
+        (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
+          .map((r) => r.id),
+      )
+      return registry.workspaces
+        .list()
+        .filter((w) => !w.primary_session_id || !internal.has(w.primary_session_id))
+        .map((w) => workspaceDto(w, registry.workspaces.listViews(w.id)))
+    },
     getWorkspace: (id) => wsDto(id),
     createWorkspace: async (args) => {
       const ws = registry.workspaces.create({ name: args.name ?? "Workspace", workdir: args.workdir })

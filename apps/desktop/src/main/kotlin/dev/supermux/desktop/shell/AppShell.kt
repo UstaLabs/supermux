@@ -635,9 +635,13 @@ fun AppShell(
                                 if (sid != null) appFor(sid).rename(sid, name)
                             },
                             onKill = { wid ->
-                                wsOf(wid)?.chatSessionIds()?.forEach { sid ->
-                                    appFor(sid).kill(sid) { if (ui.selectedId == sid) ui.selectedId = null }
-                                }
+                                // Archive the WORKSPACE, not each chat session. The broker archives
+                                // the sessions and the workspace row together and broadcasts
+                                // workspace_removed. Killing sessions one by one leaves the row
+                                // behind whenever they are already archived — which is exactly what
+                                // made an rpc-worker workspace look impossible to archive.
+                                if (wsOf(wid)?.chatSessionIds()?.contains(ui.selectedId) == true) ui.selectedId = null
+                                app.archiveWorkspace(wid)
                             },
                             onMute = { wid, muted ->
                                 val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()

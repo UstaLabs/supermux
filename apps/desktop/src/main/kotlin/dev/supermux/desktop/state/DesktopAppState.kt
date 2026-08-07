@@ -1165,6 +1165,24 @@ class DesktopAppState(
         }
     }
 
+    /**
+     * Archive a whole workspace: the broker archives its chat sessions AND the
+     * workspace row, then broadcasts workspace_removed.
+     *
+     * Killing the chat sessions one by one is NOT equivalent and was the bug the
+     * user hit: a workspace whose sessions were already archived had nothing left
+     * to kill, so the row never left the sidebar and looked un-archivable.
+     */
+    fun archiveWorkspace(workspaceId: String) {
+        // Optimistic removal so the row leaves immediately; the workspace_removed
+        // frame is authoritative and peers get it too.
+        _workspaces.update { cur -> cur.filter { it.id != workspaceId } }
+        stateScope.launch {
+            runCatching { api.archiveWorkspace(workspaceId) }
+                .onFailure { println("[DesktopAppState] archiveWorkspace failed: $it") }
+        }
+    }
+
     suspend fun createDraftSession(
         workdir: String,
         agent: String,

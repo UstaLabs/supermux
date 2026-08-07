@@ -161,3 +161,31 @@ test("findByPrimarySession finds the workspace a session names", () => {
   expect(ws.findByPrimarySession("s1")?.id).toBe(w.id)
   expect(ws.findByPrimarySession("nope")).toBeUndefined()
 })
+
+// ── Regression: the rpc-worker workspace the user could not archive ──────────
+// Two separate bugs produced one symptom. A workspace whose session was archived
+// stayed "active" forever, and the sidebar's archive action killed chat sessions
+// rather than archiving the workspace — so with the sessions already dead there
+// was nothing to kill and the row never left.
+
+test("archive retires a workspace whose session is already gone", () => {
+  const { ws } = store()
+  const w = ws.create({ name: "rpc-voice", workdir: "/home/u/.mux/state/rpc-workers" })
+  ws.addView(w.id, { kind: "chat", state: { sessionId: "dead-session" } })
+
+  ws.archive(w.id)
+
+  expect(ws.list().map((x) => x.id)).not.toContain(w.id)
+  expect(ws.getById(w.id)!.status).toBe("archived")
+})
+
+test("a workspace keeping a terminal view is not an empty shell", () => {
+  // Spec 9.3: closing the last chat does NOT close the workspace — a workspace
+  // holding a terminal is still a workspace.
+  const { ws } = store()
+  const w = ws.create({ name: "keeps a terminal", workdir: "/w" })
+  ws.addView(w.id, { kind: "terminal", state: { scope: "workspace", terminalId: "main" } })
+
+  expect(ws.listViews(w.id).some((v) => v.kind !== "chat")).toBe(true)
+  expect(ws.getById(w.id)!.status).toBe("active")
+})
