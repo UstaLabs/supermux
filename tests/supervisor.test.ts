@@ -90,7 +90,7 @@ test("a sessionManager-equipped supervisor registers the adapter of a spawned no
   supervisor.stop()
 
   expect(registered.length).toBe(1)
-  expect(registered[0].name).toBe("coder-reg")
+  expect(registered[0]?.name).toBe("coder-reg")
 })
 
 test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
