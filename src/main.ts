@@ -1558,9 +1558,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           const session = registry.resolveName(name)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
         },
-        codexResolveAuth: resolveCodexAuth,
-        codexSpawnAppServer: spawnCodexAppServer,
-        codexAdapterFactory: (opts) => new CodexAdapter(opts),
         cursorResolveAuth: resolveCursorAuth,
         cursorRunnerFactory: makeRealCursorRunner,
         cursorAdapterFactory: (opts) => new CursorAdapter(opts),
@@ -2592,9 +2589,6 @@ ch.on("inbound", async (msg: InboundMessage) => {
             const session = registry.resolveName(name)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
           },
-          codexResolveAuth: resolveCodexAuth,
-          codexSpawnAppServer: spawnCodexAppServer,
-          codexAdapterFactory: (opts) => new CodexAdapter(opts),
           cursorResolveAuth: resolveCursorAuth,
           cursorRunnerFactory: makeRealCursorRunner,
           cursorAdapterFactory: (opts) => new CursorAdapter(opts),

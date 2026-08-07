@@ -67,11 +67,6 @@ export type SpawnDeps = {
   bind: (session_id: string) => Promise<void>
   tmuxSession: string
   resolveAttachment?: (file_id: string) => Promise<string>
-  codexResolveAuth?: typeof resolveCodexAuth
-  codexPrepareSessionHome?: typeof codexPrepareSessionHome
-  codexSpawnArgs?: typeof codexSpawnArgs
-  codexSpawnAppServer?: typeof spawnCodexAppServer
-  codexAdapterFactory?: (opts: ConstructorParameters<typeof CodexAdapter>[0]) => CodexAdapter
   cursorResolveAuth?: typeof resolveCursorAuth
   cursorSmokeAgent?: typeof smokeCursorAgent
   cursorRunnerFactory?: (opts: { home: string; authEnv: Record<string, string> }) => CursorRunner
@@ -143,11 +138,6 @@ export async function spawnPA(opts: {
     adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
-  codexResolveAuth?: typeof resolveCodexAuth
-  codexPrepareSessionHome?: typeof codexPrepareSessionHome
-  codexSpawnArgs?: typeof codexSpawnArgs
-  codexSpawnAppServer?: typeof spawnCodexAppServer
-  codexAdapterFactory?: (opts: ConstructorParameters<typeof CodexAdapter>[0]) => CodexAdapter
   cursorResolveAuth?: typeof resolveCursorAuth
   cursorSmokeAgent?: typeof smokeCursorAgent
   cursorRunnerFactory?: (opts: { home: string; authEnv: Record<string, string> }) => CursorRunner
@@ -210,7 +200,7 @@ export async function spawnPA(opts: {
     const sessionHome = join(STATE_DIR, "agents", "codex", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
-    const auth = await (opts.codexResolveAuth ?? resolveCodexAuth)({
+    const auth = await resolveCodexAuth({
       apiKey: process.env.OPENAI_API_KEY,
       userCodexHome: join(HOME, ".codex"),
       sessionCodexHome: sessionHome,
@@ -225,14 +215,14 @@ export async function spawnPA(opts: {
     })
     writeCodexPreamble({ codexHome: sessionHome, sessionName: name, workdir })
 
-    await (opts.codexPrepareSessionHome ?? codexPrepareSessionHome)(sessionHome)
-    const handle = (opts.codexSpawnAppServer ?? spawnCodexAppServer)({
+    await codexPrepareSessionHome(sessionHome)
+    const handle = spawnCodexAppServer({
       codexHome: sessionHome,
       workdir,
       authEnv: auth.env,
       model,
       reasoningLevel: opts.resolveEffort?.({ agent, model, reasoningLevel }),
-      pluginConfigArgs: (opts.codexSpawnArgs ?? codexSpawnArgs)({ sessionName: name }).args,
+      pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
     })
 
     if (!skipRegister) {
@@ -251,7 +241,7 @@ export async function spawnPA(opts: {
     }
     finalPid = handle.pid
 
-    const adapter = (opts.codexAdapterFactory ?? ((opts) => new CodexAdapter(opts)))({
+    const adapter = new CodexAdapter({
       sessionName: name,
       workdir,
       client: handle.client,

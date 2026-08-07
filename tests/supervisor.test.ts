@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test"
+import { test, expect, describe, afterAll, beforeEach, afterEach, mock } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -8,6 +8,41 @@ import { createSupervisor } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+
+// Codex PA spawns go through the real spawnPA path; its collaborators are
+// swapped via bun module mocks (there are no injection seams). mock.module is
+// process-global: capture the real modules and restore them in afterAll.
+const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
+const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
+const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+
+mock.module("../src/core/agents/codex/auth", () => ({
+  ...realCodexAuth,
+  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
+}))
+mock.module("../src/core/agents/codex/spawn", () => ({
+  ...realCodexSpawn,
+  spawnCodexAppServer: () => ({
+    pid: 123,
+    client: { request: async () => ({}) } as any,
+    child: null as any,
+    kill: () => {},
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/codex/adapter", () => ({
+  ...realCodexAdapter,
+  CodexAdapter: class {
+    constructor(_opts: any) {}
+    async start() {}
+  },
+}))
+
+afterAll(() => {
+  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
+  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
+  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+})
 
 let tmpDir: string, db: ReturnType<typeof openDb>
 beforeEach(() => {
@@ -43,18 +78,7 @@ test("bootstrapPA supports codex agent and stores it in registry", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: () => ({
-      start: async () => {},
-    } as any),
-    registerAdapter: () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
   })
 
   await supervisor.bootstrapPA("coder", { agent: AgentKind.Codex })
@@ -70,21 +94,10 @@ test("a sessionManager-equipped supervisor registers the adapter of a spawned no
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    // No explicit registerAdapter seam: it must DERIVE from sessionManager.
+    // Adapter registration must DERIVE from sessionManager.
     sessionManager: {
       registerSpawnedAdapter: (name: string) => { registered.push({ name }) },
     },
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: () => ({
-      start: async () => {},
-    } as any),
   })
 
   await supervisor.bootstrapPA("coder-reg", { agent: AgentKind.Codex })
@@ -107,18 +120,7 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: () => ({
-      start: async () => {},
-    } as any),
-    registerAdapter: () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
   })
   await expect(supervisor.ensurePersonalAssistants()).resolves.toBeUndefined()
   const pa = registry.get(paId)

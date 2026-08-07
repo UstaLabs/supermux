@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach } from "bun:test"
+import { test, expect, afterAll, beforeEach, afterEach, mock } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -7,6 +7,41 @@ import { Registry } from "../src/core/session-manager/registry"
 import { spawnPA } from "../src/core/session-manager/spawn-helper"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+
+// Non-claude collaborators are swapped via bun module mocks (spawnPA has no
+// injection seams). mock.module is process-global: capture the real modules
+// first, restore them in afterAll so later test files see the real thing.
+const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
+const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
+const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+
+mock.module("../src/core/agents/codex/auth", () => ({
+  ...realCodexAuth,
+  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
+}))
+mock.module("../src/core/agents/codex/spawn", () => ({
+  ...realCodexSpawn,
+  spawnCodexAppServer: () => ({
+    pid: 123,
+    client: { request: async () => ({}) } as any,
+    child: null as any,
+    kill: () => {},
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/codex/adapter", () => ({
+  ...realCodexAdapter,
+  CodexAdapter: class {
+    constructor(private opts: any) {}
+    async start() { await this.opts.persistThreadId("codex-thread-id") }
+  },
+}))
+
+afterAll(() => {
+  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
+  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
+  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+})
 
 let tmpDir: string
 
@@ -92,19 +127,6 @@ test("spawns a Codex PA and registers it as personal_assistant", async () => {
     workdir: join(tmpDir, "codex-pa"),
     bind: async () => {},
     tmuxSession: "mux",
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: (opts) => ({
-      start: async () => {
-        await opts.persistThreadId("codex-thread-id")
-      },
-    } as any),
     registerAdapter: () => {},
     onCodexSessionId: (brokerSessionId, sessionId) => {
       receivedBrokerId = brokerSessionId

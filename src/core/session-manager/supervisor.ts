@@ -52,11 +52,6 @@ export type SupervisorOpts = {
    *  no longer silently drop adapters because a bag member was not passed
    *  (the old half-filled-bag bug). Explicit seams below still win (tests). */
   sessionManager?: SessionManagerLike
-  // Test seams for non-Claude PA spawns (production derives from sessionManager).
-  registerAdapter?: Parameters<typeof spawnPA>[0]["registerAdapter"]
-  codexResolveAuth?: Parameters<typeof spawnPA>[0]["codexResolveAuth"]
-  codexSpawnAppServer?: Parameters<typeof spawnPA>[0]["codexSpawnAppServer"]
-  codexAdapterFactory?: Parameters<typeof spawnPA>[0]["codexAdapterFactory"]
   reapInternalWorkers?: () => Promise<void>
 }
 
@@ -70,13 +65,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
   const sessionBackend = getSessionBackend()
-  // Derived non-claude PA spawn wiring: explicit test seams win; otherwise the
-  // session component provides the real behavior. Without either, spawnPA
-  // builds adapters and drops them (the pre-component bug this fixes).
-  const registerAdapter = opts.registerAdapter
-    ?? (opts.sessionManager
-      ? ((name: string, adapter: unknown, handle?: unknown) => opts.sessionManager!.registerSpawnedAdapter(name, adapter, handle)) as NonNullable<Parameters<typeof spawnPA>[0]["registerAdapter"]>
-      : undefined)
+  // Derived non-claude PA spawn wiring: the session component provides the
+  // real behavior. Without it, spawnPA builds adapters and drops them (the
+  // pre-component bug this fixes).
+  const registerAdapter = opts.sessionManager
+    ? ((name: string, adapter: unknown, handle?: unknown) => opts.sessionManager!.registerSpawnedAdapter(name, adapter, handle)) as NonNullable<Parameters<typeof spawnPA>[0]["registerAdapter"]>
+    : undefined
   const persistAgentSessionId = (brokerSessionId: string, sid: string) => {
     if (opts.registry.get(brokerSessionId)) opts.registry.sessions.setAgentSessionId(brokerSessionId, sid)
   }
@@ -144,9 +138,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         onCursorSessionId,
         onOpenCodeSessionId,
         registerAdapter,
-        codexResolveAuth: opts.codexResolveAuth,
-        codexSpawnAppServer: opts.codexSpawnAppServer,
-        codexAdapterFactory: opts.codexAdapterFactory,
       })
     }
   }
@@ -181,9 +172,6 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         onCursorSessionId,
         onOpenCodeSessionId,
         registerAdapter,
-        codexResolveAuth: opts.codexResolveAuth,
-        codexSpawnAppServer: opts.codexSpawnAppServer,
-        codexAdapterFactory: opts.codexAdapterFactory,
       })
     } catch (err) {
       opts.registry.unregister(id)

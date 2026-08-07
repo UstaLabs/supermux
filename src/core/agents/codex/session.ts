@@ -25,7 +25,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     const sessionHome = join(STATE_DIR, "agents", "codex", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
-    const auth = await (deps.codexResolveAuth ?? resolveCodexAuth)({
+    const auth = await resolveCodexAuth({
       apiKey: process.env.OPENAI_API_KEY,
       userCodexHome: join(HOME, ".codex"),
       sessionCodexHome: sessionHome,
@@ -44,14 +44,14 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     // Install enabled plugins into this session's CODEX_HOME so skills/list +
     // native invocation see them (the `-c enabled` flag needs them installed).
-    await (deps.codexPrepareSessionHome ?? codexPrepareSessionHome)(sessionHome)
-    const handle = (deps.codexSpawnAppServer ?? spawnCodexAppServer)({
+    await codexPrepareSessionHome(sessionHome)
+    const handle = spawnCodexAppServer({
       codexHome: sessionHome,
       workdir: args.workdir,
       authEnv: auth.env,
       model: args.model,
       reasoningLevel: args.effort,
-      pluginConfigArgs: (deps.codexSpawnArgs ?? codexSpawnArgs)({ sessionName: name }).args,
+      pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
     })
 
     // Register BEFORE adapter.start() so the persistThreadId callback
@@ -69,7 +69,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       internal: args.internal,
     } as any)
 
-    const adapter = (deps.codexAdapterFactory ?? ((opts) => new CodexAdapter(opts)))({
+    const adapter = new CodexAdapter({
       sessionName: name,
       workdir: args.workdir,
       client: handle.client,
