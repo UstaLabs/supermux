@@ -1179,7 +1179,13 @@ class DesktopAppState(
      * path goes through the launcher (spec §9.2). The broker answers with
      * view_added + workspace_changed, which is what actually draws the tab.
      */
-    fun addWorkspaceView(workspaceId: String, kind: dev.supermux.desktop.shell.NewViewKind, groupId: String) {
+    fun addWorkspaceView(
+        workspaceId: String,
+        kind: dev.supermux.desktop.shell.NewViewKind,
+        groupId: String,
+        /** Called with the new view id once the broker has created it. */
+        onCreated: (String) -> Unit = {},
+    ) {
         val state: JsonObject = when (kind) {
             dev.supermux.desktop.shell.NewViewKind.TERMINAL -> buildJsonObject {
                 put("scope", JsonPrimitive("workspace"))
@@ -1194,6 +1200,7 @@ class DesktopAppState(
         }
         stateScope.launch {
             runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
+                .onSuccess { onCreated(it.id) }
                 .onFailure { println("[DesktopAppState] addWorkspaceView failed: $it") }
         }
     }

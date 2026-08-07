@@ -35,6 +35,12 @@ import androidx.compose.ui.unit.sp
 fun DropZoneSurface(
     activeZone: DropZone?,
     modifier: Modifier = Modifier,
+    /**
+     * False for a pane holding a single view: it cannot be split (splitGroup would
+     * leave an empty group), so the edge targets are not drawn at all. Showing a
+     * target that silently swallows the drop is worse than showing none.
+     */
+    edgesEnabled: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val idle = cs.primary.copy(alpha = 0.08f)
@@ -47,24 +53,24 @@ fun DropZoneSurface(
             Modifier
                 .fillMaxWidth()
                 .weight(0.25f)
-                .background(if (activeZone == DropZone.Top) hot else idle)
-                .then(if (activeZone == DropZone.Top) Modifier.border(2.dp, border) else Modifier)
+                .background(if (!edgesEnabled) Color.Transparent else if (activeZone == DropZone.Top) hot else idle)
+                .then(if (edgesEnabled && activeZone == DropZone.Top) Modifier.border(2.dp, border) else Modifier)
                 .testTag("drop-zone-top"),
             contentAlignment = Alignment.Center,
         ) {
-            if (activeZone == DropZone.Top) ZoneLabel("Split above")
+            if (edgesEnabled && activeZone == DropZone.Top) ZoneLabel("Split above")
         }
         Row(Modifier.fillMaxWidth().weight(0.5f)) {
             Box(
                 Modifier
                     .fillMaxHeight()
                     .weight(0.25f)
-                    .background(if (activeZone == DropZone.Left) hot else idle)
-                    .then(if (activeZone == DropZone.Left) Modifier.border(2.dp, border) else Modifier)
+                    .background(if (!edgesEnabled) Color.Transparent else if (activeZone == DropZone.Left) hot else idle)
+                    .then(if (edgesEnabled && activeZone == DropZone.Left) Modifier.border(2.dp, border) else Modifier)
                     .testTag("drop-zone-left"),
                 contentAlignment = Alignment.Center,
             ) {
-                if (activeZone == DropZone.Left) ZoneLabel("Split left")
+                if (edgesEnabled && activeZone == DropZone.Left) ZoneLabel("Split left")
             }
             Box(
                 Modifier
@@ -82,24 +88,24 @@ fun DropZoneSurface(
                 Modifier
                     .fillMaxHeight()
                     .weight(0.25f)
-                    .background(if (activeZone == DropZone.Right) hot else idle)
-                    .then(if (activeZone == DropZone.Right) Modifier.border(2.dp, border) else Modifier)
+                    .background(if (!edgesEnabled) Color.Transparent else if (activeZone == DropZone.Right) hot else idle)
+                    .then(if (edgesEnabled && activeZone == DropZone.Right) Modifier.border(2.dp, border) else Modifier)
                     .testTag("drop-zone-right"),
                 contentAlignment = Alignment.Center,
             ) {
-                if (activeZone == DropZone.Right) ZoneLabel("Split right")
+                if (edgesEnabled && activeZone == DropZone.Right) ZoneLabel("Split right")
             }
         }
         Box(
             Modifier
                 .fillMaxWidth()
                 .weight(0.25f)
-                .background(if (activeZone == DropZone.Bottom) hot else idle)
-                .then(if (activeZone == DropZone.Bottom) Modifier.border(2.dp, border) else Modifier)
+                .background(if (!edgesEnabled) Color.Transparent else if (activeZone == DropZone.Bottom) hot else idle)
+                .then(if (edgesEnabled && activeZone == DropZone.Bottom) Modifier.border(2.dp, border) else Modifier)
                 .testTag("drop-zone-bottom"),
             contentAlignment = Alignment.Center,
         ) {
-            if (activeZone == DropZone.Bottom) ZoneLabel("Split below")
+            if (edgesEnabled && activeZone == DropZone.Bottom) ZoneLabel("Split below")
         }
     }
 }

@@ -102,7 +102,7 @@ fun LayoutHost(
      * new view lands as a tab in that group rather than somewhere arbitrary.
      * Null hides the button.
      */
-    onAddView: ((groupId: String, kind: NewViewKind) -> Unit)? = null,
+    onAddView: ((groupId: String, kind: NewViewKind, placement: NewViewPlacement) -> Unit)? = null,
     /**
      * Shared drag state so the sidebar can register workspace-row drop targets.
      * When null, [LayoutHost] owns a private instance (standalone / tests).
@@ -208,7 +208,7 @@ private fun LayoutHostNode(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
-    onAddView: ((String, NewViewKind) -> Unit)?,
+    onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
     content: @Composable (String) -> Unit,
 ) {
     when (layout) {
@@ -230,7 +230,7 @@ private fun GroupHost(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
-    onAddView: ((String, NewViewKind) -> Unit)?,
+    onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
     content: @Composable (String) -> Unit,
 ) {
     if (group.viewIds.isEmpty()) {
@@ -252,7 +252,7 @@ private fun GroupHost(
             onClose = onCloseView,
             dragState = dragState,
             onDrop = onDrop,
-            onAddView = onAddView?.let { add -> { kind -> add(group.id, kind) } },
+            onAddView = onAddView?.let { add -> { kind, place -> add(group.id, kind, place) } },
         )
         // While a drag is active, SWAP the heavyweight body for a Compose
         // drop-zone surface. Overlaying zones above SwingPanel is invisible.
@@ -265,7 +265,14 @@ private fun GroupHost(
                 },
         ) {
             if (dragState.isDragging) {
-                DropZoneSurface(activeZone = dragState.zoneOver(group.id))
+                // A pane holding ONE view cannot be split — splitGroup would leave an
+                // empty group — so it shows no edge zones at all. Offering a target
+                // that silently does nothing is the worst possible feedback; use
+                // "+ > Split right/down" to get a second pane from a single view.
+                DropZoneSurface(
+                    activeZone = dragState.zoneOver(group.id),
+                    edgesEnabled = group.viewIds.size >= 2,
+                )
             } else {
                 content(active)
             }
@@ -282,7 +289,7 @@ private fun SplitHost(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
-    onAddView: ((String, NewViewKind) -> Unit)?,
+    onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
     content: @Composable (String) -> Unit,
 ) {
     // Reuse the existing ResizableSplit drag chrome rather than writing new
@@ -340,6 +347,44 @@ enum class NewViewKind(val wire: String, val label: String) {
     DISPLAY("display", "Display"),
 }
 
+/**
+ * Where a new view lands relative to the pane its "+" was clicked in.
+ *
+ * [HERE] is a tab in the same pane. The two split placements exist because
+ * drag-to-split can only ever DIVIDE existing tabs — a pane holding one view has
+ * nothing to divide, so with a single chat there was no way to get a second pane
+ * at all. This is that way.
+ */
+enum class NewViewPlacement(val label: String) {
+    HERE("In this pane"),
+    SPLIT_RIGHT("Split right"),
+    SPLIT_DOWN("Split down"),
+}
+
+/** First step of the "+" popover: which kind of view. */
+@Composable
+private fun KindMenuItems(onPick: (NewViewKind) -> Unit) {
+    for (k in NewViewKind.entries) {
+        DropdownMenuItem(
+            text = { Text(k.label, fontSize = 12.sp) },
+            onClick = { onPick(k) },
+            modifier = Modifier.testTag("tab-add-view-${k.wire}"),
+        )
+    }
+}
+
+/** Second step: in this pane, or in a new pane beside it. */
+@Composable
+private fun PlacementMenuItems(onPick: (NewViewPlacement) -> Unit) {
+    for (p in NewViewPlacement.entries) {
+        DropdownMenuItem(
+            text = { Text(p.label, fontSize = 12.sp) },
+            onClick = { onPick(p) },
+            modifier = Modifier.testTag("tab-add-place-${p.name.lowercase()}"),
+        )
+    }
+}
+
 @Composable
 fun ViewTabStrip(
     viewIds: List<String>,
@@ -353,7 +398,7 @@ fun ViewTabStrip(
      * adds it to THIS group as a new tab. Null hides the button entirely (tests
      * and any caller that cannot create views).
      */
-    onAddView: ((NewViewKind) -> Unit)? = null,
+    onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
     // Back-compat for call sites that do not participate in drag (previews, older tests).
     ViewTabStrip(
@@ -381,7 +426,7 @@ internal fun ViewTabStrip(
     dragState: TabDragState?,
     onDrop: (TabDropTarget) -> Unit,
     modifier: Modifier = Modifier,
-    onAddView: ((NewViewKind) -> Unit)? = null,
+    onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
@@ -465,6 +510,7 @@ internal fun ViewTabStrip(
         // affordance belongs where the tabs are.
         if (onAddView != null) {
             var pickerOpen by remember { mutableStateOf(false) }
+            var pickedKind by remember { mutableStateOf<NewViewKind?>(null) }
             Box {
                 Box(
                     Modifier
@@ -483,15 +529,21 @@ internal fun ViewTabStrip(
                 }
                 DropdownMenu(
                     expanded = pickerOpen,
-                    onDismissRequest = { pickerOpen = false },
+                    onDismissRequest = { pickerOpen = false; pickedKind = null },
                     modifier = Modifier.testTag("tab-add-view-menu"),
                 ) {
-                    for (kind in NewViewKind.entries) {
-                        DropdownMenuItem(
-                            text = { Text(kind.label, fontSize = 12.sp) },
-                            onClick = { pickerOpen = false; onAddView(kind) },
-                            modifier = Modifier.testTag("tab-add-view-${kind.wire}"),
-                        )
+                    val kind = pickedKind
+                    if (kind == null) {
+                        KindMenuItems(onPick = { pickedKind = it })
+                    } else {
+                        // Second step: where it goes. Splitting is offered even for a
+                        // one-view pane — that is the whole point, since a drag cannot
+                        // split a pane that has nothing to divide.
+                        PlacementMenuItems(onPick = { place ->
+                            pickerOpen = false
+                            pickedKind = null
+                            onAddView(kind, place)
+                        })
                     }
                 }
             }
