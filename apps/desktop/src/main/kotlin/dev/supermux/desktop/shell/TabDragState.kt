@@ -95,11 +95,15 @@ class TabDragState {
         val p = pointerRoot
 
         // Prefer strip hits: reorder within a strip or move onto another strip.
-        // Origin-strip reorder also matches when the pointer is only slightly
-        // off the strip (SessionDragReorder-style vertical tolerance).
+        // A small vertical slop keeps a slightly-low release on the strip; deeper
+        // into the pane must fall through to edge zones (bottom-edge split).
+        val stripSlop = 24f
         stripBounds.entries
-            .firstOrNull { (groupId, r) ->
-                r.contains(p) || (groupId == origin && p.x >= r.left && p.x <= r.right)
+            .firstOrNull { (_, r) ->
+                r.contains(p) || (
+                    p.x >= r.left && p.x <= r.right &&
+                        p.y >= r.top - stripSlop && p.y <= r.bottom + stripSlop
+                    )
             }
             ?.let { (groupId, _) ->
                 return if (groupId == origin) {
@@ -110,18 +114,25 @@ class TabDragState {
             }
 
         // Pane edge / centre drop zones (only meaningful while the pane is swapped).
-        paneBounds.entries
+        // Pointer past a pane's outer edge still counts as that edge — test coords
+        // and real drags often leave the window before release.
+        val paneHit = paneBounds.entries
             .firstOrNull { (_, r) -> r.contains(p) }
-            ?.let { (groupId, pane) ->
-                val zone = zoneFor(pane, p)
-                return when (zone) {
-                    DropZone.Centre -> TabDropTarget.MoveToGroup(viewId, groupId, index = Int.MAX_VALUE)
-                    DropZone.Left -> TabDropTarget.Split(groupId, viewId, direction = "row", newFirst = true)
-                    DropZone.Right -> TabDropTarget.Split(groupId, viewId, direction = "row", newFirst = false)
-                    DropZone.Top -> TabDropTarget.Split(groupId, viewId, direction = "column", newFirst = true)
-                    DropZone.Bottom -> TabDropTarget.Split(groupId, viewId, direction = "column", newFirst = false)
-                }
+            ?: paneBounds.entries
+                .filter { (id, _) -> id == origin || paneBounds.size == 1 }
+                .minByOrNull { (_, r) -> distanceOutside(r, p) }
+                ?.takeIf { (_, r) -> distanceOutside(r, p) < Float.POSITIVE_INFINITY }
+        if (paneHit != null) {
+            val (groupId, pane) = paneHit
+            val zone = zoneFor(pane, p)
+            return when (zone) {
+                DropZone.Centre -> TabDropTarget.MoveToGroup(viewId, groupId, index = Int.MAX_VALUE)
+                DropZone.Left -> TabDropTarget.Split(groupId, viewId, direction = "row", newFirst = true)
+                DropZone.Right -> TabDropTarget.Split(groupId, viewId, direction = "row", newFirst = false)
+                DropZone.Top -> TabDropTarget.Split(groupId, viewId, direction = "column", newFirst = true)
+                DropZone.Bottom -> TabDropTarget.Split(groupId, viewId, direction = "column", newFirst = false)
             }
+        }
 
         // Fall back: same-strip offset reorder.
         return TabDropTarget.Reorder(origin, viewId, reorderIndexByOffset(origin, viewId, p.x))
@@ -185,6 +196,20 @@ class TabDragState {
     }
 
     private fun zoneFor(pane: Rect, p: Offset): DropZone {
+        // Outside the pane: the side we exited is the drop edge.
+        if (!pane.contains(p)) {
+            val dxLeft = pane.left - p.x
+            val dxRight = p.x - pane.right
+            val dyTop = pane.top - p.y
+            val dyBottom = p.y - pane.bottom
+            val maxOut = maxOf(dxLeft, dxRight, dyTop, dyBottom)
+            return when (maxOut) {
+                dxLeft -> DropZone.Left
+                dxRight -> DropZone.Right
+                dyTop -> DropZone.Top
+                else -> DropZone.Bottom
+            }
+        }
         val x = (p.x - pane.left) / pane.width.coerceAtLeast(1f)
         val y = (p.y - pane.top) / pane.height.coerceAtLeast(1f)
         val edge = 0.25f
@@ -201,6 +226,21 @@ class TabDragState {
             min == distTop -> DropZone.Top
             else -> DropZone.Bottom
         }
+    }
+
+    private fun distanceOutside(pane: Rect, p: Offset): Float {
+        if (pane.contains(p)) return 0f
+        val dx = when {
+            p.x < pane.left -> pane.left - p.x
+            p.x > pane.right -> p.x - pane.right
+            else -> 0f
+        }
+        val dy = when {
+            p.y < pane.top -> pane.top - p.y
+            p.y > pane.bottom -> p.y - pane.bottom
+            else -> 0f
+        }
+        return dx + dy
     }
 
     private fun tabKey(groupId: String, viewId: String) = "$groupId\u0000$viewId"
