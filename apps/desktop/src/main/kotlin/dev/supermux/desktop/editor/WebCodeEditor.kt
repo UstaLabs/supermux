@@ -283,6 +283,10 @@ private fun EditorSwingHost(engine: DesktopEditorEngine, modifier: Modifier = Mo
     val holder = remember { JPanel(BorderLayout()).apply { background = java.awt.Color(0x28, 0x2C, 0x34) } }
     // Step aside while anything modal is open — Compose cannot paint over this
     // heavyweight child, so a dialog or menu over the editor would be invisible.
+    // Unlike the terminal this cannot be rescued by interop blending: KCEF is a
+    // NATIVE window, not Swing content, and a dialog over it comes out sheared off
+    // at the page's top edge (measured on Metal). So this one hides on every
+    // platform — hence no `evenWithBlending = false` here.
     // Hiding is by LAYOUT (0×0 + clip), which is what an AWT child
     // respects, and the browser is not recreated. Note this only ever HIDES an
     // already-realized browser; the factory above still runs at full size, so the

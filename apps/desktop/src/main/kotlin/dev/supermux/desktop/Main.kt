@@ -198,6 +198,23 @@ private val MAC_TITLE_BAR_INSET = 28.dp
 //                                  2×2 PNG fixture. Overlay only; no broker traffic. Off by default.
 //                                  [main]
 fun main() {
+    // Let Compose paint over the Swing interop children (the JediTerm terminals).
+    // Must be set before the first Compose window: the flag is read through a
+    // memoizing `lazy`, so setting it later is silently ignored.
+    //
+    // Compose 1.11.1 gates this on the render API — Direct3D and Metal only, never
+    // OpenGL — so it is a no-op on Linux by construction, not a misconfiguration.
+    // Verified on the Mac with `renderApi=METAL` read off the live SkiaLayer: a
+    // dialog and a dropdown paint correctly over a LIVE terminal, which no longer
+    // has to hide at all. It does NOT rescue KCEF (a native NSView, sheared off at
+    // the page's top edge), so the editor keeps its shield — see
+    // ui/ModalPresence.kt.
+    //
+    // Still marked experimental by JetBrains; if it ever regresses, deleting this
+    // line restores the previous behaviour (terminal hides while a modal is open)
+    // rather than bringing the invisible-dialog bug back.
+    System.setProperty("compose.interop.blending", "true")
+
     val store = DesktopTokenStore()
     // Reclaim aged clipboard-paste PNGs under <config>/paste-cache/ (app-owned; never /tmp).
     // Individual files are never deleted by path during composer lifecycle — only this age prune.

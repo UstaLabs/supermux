@@ -215,3 +215,24 @@ tasks.register<JavaExec>("probeInteropZOrder") {
     mainClass.set("dev.supermux.desktop.shell.InteropZOrderProbeKt")
     jvmArgs(jcefAddOpens)
 }
+
+// Probe 2: interop blending on a GPU backend that can actually support it
+// (Metal/D3D only — see BlendingProbe.kt). Test-source main — never ships.
+tasks.register<JavaExec>("probeBlending") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.BlendingProbeKt")
+    jvmArgs(jcefAddOpens)
+}
+
+// Probe 3: the SAME question for the KCEF editor, which blending does NOT rescue
+// (native NSView, not Swing content). Keeps the evidence for that split
+// reproducible. Test-source main — never ships.
+tasks.register<JavaExec>("probeKcefBlending") {
+    group = "application"
+    dependsOn("compileTestKotlin")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.supermux.desktop.shell.KcefBlendingProbeKt")
+    jvmArgs(jcefAddOpens)
+}

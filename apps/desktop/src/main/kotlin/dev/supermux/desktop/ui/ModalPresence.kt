@@ -105,12 +105,45 @@ fun ModalOpen() {
 @Composable
 fun HeavyweightModalShield(
     modifier: Modifier = Modifier,
+    /**
+     * False for a child that interop blending can rescue — a SWING child, which
+     * Compose can then paint straight over, so it never has to hide at all. True
+     * for one blending cannot rescue: a native window (KCEF's NSView), which
+     * still has to step aside on every platform.
+     *
+     * See [interopBlendingSupported] for why this is not simply always true.
+     */
+    evenWithBlending: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    val hidden = LocalModalPresence.current.anyOpen
+    val modalOpen = LocalModalPresence.current.anyOpen
+    val hidden = modalOpen && (evenWithBlending || !interopBlendingSupported)
     Box(modifier.fillMaxSize()) {
         Box(if (hidden) Modifier.size(0.dp).clipToBounds() else Modifier.fillMaxSize()) {
             content()
         }
     }
+}
+
+/**
+ * Whether `compose.interop.blending` can actually do anything here.
+ *
+ * Compose 1.11.1 gates blending on the render API, and the gate is a
+ * `tableswitch` over exactly **DIRECT3D and METAL** — OpenGL is not in the set.
+ * So on Linux this is not "needs a better GPU", it can never work, and the
+ * fallback is not optional there.
+ *
+ * Measured on Ahmet's Mac with the real GPU (`renderApi=METAL`,
+ * `useInteropBlending=true` read off the live SkiaLayer, not assumed):
+ *
+ *   Compose over JediTerm, a SWING child ........ paints correctly, terminal stays live
+ *   Compose over KCEF, a native Chromium NSView . sheared off at the page's top edge
+ *
+ * That is the whole reason [HeavyweightModalShield] still exists: "Compose cannot
+ * paint over a heavyweight AWT child" is really two different problems, and
+ * blending solves only the Swing one.
+ */
+internal val interopBlendingSupported: Boolean by lazy {
+    val os = System.getProperty("os.name").orEmpty().lowercase()
+    os.contains("mac") || os.contains("win")
 }

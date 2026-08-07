@@ -196,7 +196,11 @@ fun DesktopTerminalPanel(
         // hides it by LAYOUT (0×0 + clip), the only kind a heavyweight AWT child
         // respects: the widget stays in the same composition slot, the client keeps
         // its websocket, and the grid and scrollback come back untouched.
-        HeavyweightModalShield {
+        // JediTerm is a SWING child, so interop blending lets Compose paint straight
+        // over it: on Metal/D3D the terminal stays live and visible under a dialog
+        // instead of blanking. Only where blending cannot apply (Linux/OpenGL) does
+        // it still have to step aside.
+        HeavyweightModalShield(evenWithBlending = false) {
             SwingPanel(
                 factory = { widget },
                 modifier = Modifier.fillMaxSize(),
