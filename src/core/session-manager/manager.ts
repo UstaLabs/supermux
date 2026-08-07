@@ -1,13 +1,28 @@
 import { RuntimeRegistry, type SessionRuntime } from "./runtime"
-import type { Registry, ProxyEntry } from "./registry"
+import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
 import { ClaudeCodeAdapter } from "../agents/claude"
-import type { CodexAdapter } from "../agents/codex/adapter"
-import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { CursorAdapter } from "../agents/cursor/adapter"
+import { CodexAdapter } from "../agents/codex/adapter"
+import { spawnCodexAppServer, type CodexSpawnHandle } from "../agents/codex/spawn"
+import { CursorAdapter } from "../agents/cursor/adapter"
 import type { OpenCodeAdapter } from "../agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import type { GrokAdapter } from "../agents/grok/adapter"
+import { resolveCodexAuth } from "../agents/codex/auth"
+import { writeCodexPreamble } from "../agents/codex/preamble-writer"
+import { resolveCursorAuth } from "../agents/cursor/auth"
+import { makeRealCursorRunner } from "../agents/cursor/runner"
+import { writeCursorPreamble } from "../agents/cursor/preamble-writer"
+import { codexPrepareSessionHome, codexSpawnArgs, cursorSpawnArgs } from "../plugins"
+import { resumeOpenCodeSession, resumeGrokSession } from "./spawn-helper"
+import { buildClaudeSpawnSpec } from "./spawn-command"
+import { preAcceptTrust } from "./trust"
+import { sendChannelConsentEnter } from "./post-spawn-keys"
+import { ensureUnique } from "./naming"
+import { resumedSessionPid } from "./resume-pid"
+import type { SessionBackend } from "../runtime/session-backend"
+import { home } from "../../shared/home"
+import { join } from "path"
 import { AgentKind, isAgentKind } from "../../shared/agents"
 import { wireClaudeStateEvents } from "../agents/claude/state-projection"
 import { claudeTranscriptPath } from "../agents/claude/transcript-path"
@@ -113,6 +128,20 @@ export type SessionManagerPorts = {
     messageLog: Pick<MessageStore, "get" | "update" | "addReaction">
     searchStore: Pick<SearchStore, "searchKnowledge" | "searchSessions">
     db: Db
+  }
+  /** Resume-flow collaborators that stay in main.ts (the rest are module imports). */
+  resume: {
+    /** Socket bind — the server is constructed after the component (late-bound). */
+    bind(sessionId: string): Promise<void>
+    /** Recreate a merged-away worktree at the SAME path before any respawn. */
+    ensureSessionWorktree(session: { id: string; name: string; workdir: string; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<void>
+    /** Resolved CLI effort for a session (model cache lives in main.ts). */
+    sessionEffort(s: { agent?: string; model?: string; reasoningLevel?: string }): string | undefined
+    resolveAttachment(file_id: string): Promise<string>
+    /** Adapter event fan-out (activity/state/commands sinks live in main.ts). */
+    wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void
+    sessionBackend: SessionBackend
+    tmuxSession: string
   }
 }
 
@@ -615,6 +644,315 @@ export class SessionManager {
     return { ok: false, error: "unknown orchestration op" }
     } catch (err) {
       return { ok: false, error: String(err instanceof Error ? err.message : err) }
+    }
+  }
+
+  // ── Resume: one flow, three sources, five kinds (Move 3) ──────────────────
+  //
+  // The per-kind ARMS are shared by every source. The per-source FRAMES keep
+  // their behavior (logging, activate-vs-resume, broadcast) from the three old
+  // main.ts ladders. Fixed here by structure: preambles are rewritten on EVERY
+  // resume; opencode/grok have suspended arms; the cursor arm passes pluginArgs
+  // from every source (boot silently dropped them before).
+
+  private async waitForConnected(sessionId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (this.registry.get(sessionId)?.connected) return true
+      await new Promise<void>(r => setTimeout(r, 100))
+    }
+    log.warn("wait_session_connected_timeout", { sessionId, timeoutMs })
+    return false
+  }
+
+  private async resumeCodexArm(
+    session: { id: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; agent?: string; reasoningLevel?: string },
+    name: string,
+  ): Promise<CodexSpawnHandle> {
+    const auth = await resolveCodexAuth({
+      apiKey: process.env.OPENAI_API_KEY,
+      userCodexHome: join(home(), ".codex"),
+      sessionCodexHome: session.agent_home,
+    })
+    await codexPrepareSessionHome(session.agent_home)
+    writeCodexPreamble({ codexHome: session.agent_home, sessionName: name, workdir: session.workdir })
+    const effort = this.ports.resume.sessionEffort(session)
+    const handle = spawnCodexAppServer({
+      codexHome: session.agent_home,
+      workdir: session.workdir,
+      authEnv: auth.env,
+      model: session.model,
+      reasoningLevel: effort,
+      pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
+    })
+    const adapter = new CodexAdapter({
+      sessionName: name,
+      workdir: session.workdir,
+      client: handle.client,
+      persistThreadId: async () => {},
+      initialThreadId: session.agent_session_id,
+      resolveAttachment: this.ports.resume.resolveAttachment,
+    })
+    await adapter.resume()
+    this.registerCodexRuntime(session.id, name, adapter, handle)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+    return handle
+  }
+
+  private async resumeCursorArm(
+    session: { id: string; workdir: string; agent_home: string; agent_session_id?: string },
+    name: string,
+  ): Promise<void> {
+    const auth = await resolveCursorAuth({
+      apiKey: process.env.CURSOR_API_KEY,
+      userCursorDir: join(home(), ".cursor"),
+      sessionHome: session.agent_home,
+    })
+    writeCursorPreamble({ workdir: session.workdir, sessionName: name })
+    const runner = makeRealCursorRunner({ home: session.agent_home, authEnv: auth.env })
+    const adapter = new CursorAdapter({
+      sessionName: name,
+      workdir: session.workdir,
+      runner,
+      persistSessionId: async (id) => {
+        this.registry.sessions.setAgentSessionId(session.id, id)
+      },
+      initialSessionId: session.agent_session_id,
+      pluginArgs: cursorSpawnArgs({ sessionName: name }).args,
+      resolveAttachment: this.ports.resume.resolveAttachment,
+    })
+    this.registerCursorRuntime(session.id, adapter)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+  }
+
+  private async resumeOpenCodeArm(
+    session: { id: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
+    name: string,
+  ): Promise<OpenCodeSpawnHandle> {
+    const { adapter, handle } = await resumeOpenCodeSession(
+      {
+        resolveAttachment: this.ports.resume.resolveAttachment,
+        onOpenCodeSessionId: (_name, sid) => { this.registry.sessions.setAgentSessionId(session.id, sid) },
+      },
+      { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
+    )
+    this.registerOpenCodeRuntime(session.id, name, adapter, handle)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+    return handle
+  }
+
+  private async resumeGrokArm(
+    session: { id: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; agent?: string; reasoningLevel?: string },
+    name: string,
+  ): Promise<void> {
+    const { adapter } = await resumeGrokSession(
+      {
+        resolveAttachment: this.ports.resume.resolveAttachment,
+        onGrokSessionId: (_name, sid) => { this.registry.sessions.setAgentSessionId(session.id, sid) },
+      },
+      { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: this.ports.resume.sessionEffort(session), agent_session_id: session.agent_session_id },
+    )
+    this.registerGrokRuntime(session.id, adapter)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+  }
+
+  /** Suspended → live (lazy, triggered by the next inbound message). */
+  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
+    const { sessionBackend, tmuxSession } = this.ports.resume
+    let resumedRuntimePid: number | null = null
+    try {
+      log.info("resume_suspended_begin", {
+        name: session.name,
+        id: session.id,
+        agent: session.agent,
+        status: this.registry.get(session.id)?.status,
+        has_agent_session_id: !!session.agent_session_id,
+      })
+      await this.ports.resume.ensureSessionWorktree(session)
+      if (session.agent === "claude") {
+        await this.ports.resume.bind(session.id)
+        preAcceptTrust(session.workdir)
+        // Clear ONLY our own prior window, by id — never kill by name (a name
+        // can be shared with a sibling's live window).
+        if (session.tmux_window_id) await sessionBackend.kill(session.tmux_window_id).catch(() => {})
+        const windowName = ensureUnique(session.name, new Set((await sessionBackend.list(tmuxSession)).map(target => target.name)))
+        log.info("resume_suspended_claude", { name: session.name, window: windowName })
+        const effort = this.ports.resume.sessionEffort(session)
+        const spec = buildClaudeSpawnSpec({
+          name: session.name, model: session.model, effort, sessionId: session.id,
+          claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
+          workdir: session.workdir,
+        })
+        const target = await sessionBackend.create({ group: tmuxSession, name: windowName, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
+        this.registry.sessions.setTmuxWindowId(session.id, target.id)
+        resumedRuntimePid = target.pid
+        await sendChannelConsentEnter(target.id, { backend: sessionBackend })
+        await this.waitForConnected(session.id, 25_000)
+      } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
+        await this.ports.resume.bind(session.id)
+        await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, session.name)
+      } else if (session.agent === "cursor" && session.agent_home) {
+        await this.resumeCursorArm({ ...session, agent_home: session.agent_home }, session.name)
+      } else if (session.agent === "opencode" && session.agent_home) {
+        await this.ports.resume.bind(session.id)
+        await this.resumeOpenCodeArm({ ...session, agent_home: session.agent_home }, session.name)
+      } else if (session.agent === AgentKind.Grok && session.agent_home) {
+        await this.ports.resume.bind(session.id)
+        await this.resumeGrokArm({ ...session, agent_home: session.agent_home }, session.name)
+      } else {
+        log.warn("resume_suspended_no_path", { name: session.name, agent: session.agent })
+        return false
+      }
+      this.registry.sessions.activate(session.id, resumedSessionPid(resumedRuntimePid, session.pid))
+      return true
+    } catch (err: any) {
+      log.error("resume_suspended_failed", { name: session.name, err: String(err) })
+      return false
+    }
+  }
+
+  /** Archived → live. */
+  async resumeFromArchive(sessionId: string): Promise<{ ok: boolean; name?: string; error?: string }> {
+    const { sessionBackend, tmuxSession } = this.ports.resume
+    const session = this.registry.sessions.getById(sessionId) // bypasses archived filter in registry.get()
+    if (!session || session.status !== "archived") {
+      return { ok: false, error: "Session not found or not archived" }
+    }
+
+    let name = session.name
+    const takenRuntimeNames = session.agent === AgentKind.Claude
+      ? new Set((await sessionBackend.list(tmuxSession)).map(target => target.name))
+      : new Set<string>()
+    const takenNames = new Set([...this.registry.takenNames(), ...takenRuntimeNames])
+    if (takenNames.has(name)) {
+      name = ensureUnique(name, takenNames)
+    }
+
+    let resumedRuntimeTargetId: string | undefined
+    let resumedRuntimePid: number | null = null
+    try {
+      await this.ports.resume.ensureSessionWorktree(session)
+      if (session.agent === "claude") {
+        await this.ports.resume.bind(sessionId)
+        const effort = this.ports.resume.sessionEffort(session)
+        const spec = buildClaudeSpawnSpec({
+          name, model: session.model, effort, sessionId,
+          claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
+          workdir: session.workdir,
+        })
+        const target = await sessionBackend.create({ group: tmuxSession, name, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
+        resumedRuntimeTargetId = target.id
+        resumedRuntimePid = target.pid
+        void sendChannelConsentEnter(target.id, { backend: sessionBackend })
+      } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
+        await this.ports.resume.bind(sessionId)
+        await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, name)
+      } else if (session.agent === "cursor" && session.agent_home) {
+        await this.resumeCursorArm({ ...session, agent_home: session.agent_home }, name)
+      } else if (session.agent === "opencode" && session.agent_home) {
+        await this.ports.resume.bind(sessionId)
+        await this.resumeOpenCodeArm({ ...session, agent_home: session.agent_home }, name)
+      } else if (session.agent === AgentKind.Grok && session.agent_home) {
+        await this.ports.resume.bind(sessionId)
+        await this.resumeGrokArm({ ...session, agent_home: session.agent_home }, name)
+      } else {
+        return { ok: false, error: `Cannot resume agent type: ${session.agent}` }
+      }
+
+      const resumed = this.registry.sessions.resume(sessionId, name, resumedRuntimePid ?? process.pid)
+      if (resumedRuntimeTargetId) this.registry.sessions.setTmuxWindowId(sessionId, resumedRuntimeTargetId)
+
+      // Use the post-resume row (in_progress + top sort_order), not the stale archived snapshot.
+      const live = resumed ?? this.registry.sessions.getById(sessionId) ?? session
+      this.ports.getWebChannel()?.broadcastToAll({
+        type: "session_added",
+        session: {
+          id: sessionId,
+          name: live.name,
+          workdir: live.workdir,
+          agent: live.agent,
+          status: "active",
+          repo_root: live.repo_root || undefined,
+          session_branch: live.session_branch || undefined,
+          finish_job: live.finish_job,
+          user_status: live.user_status,
+          sort_order: live.sort_order,
+          draft_payload: live.draft_payload,
+        },
+      })
+
+      await this.ports.orchestration.refreshTelegramMenu()
+      return { ok: true, name }
+    } catch (err: any) {
+      log.error("resume_from_archive_failed", { name: session.name, err: String(err) })
+      return { ok: false, error: String(err?.message ?? err) }
+    }
+  }
+
+  /** Broker boot: rebuild the in-process adapters for non-claude sessions.
+   *  (Claude sessions are reconciled by the supervisor: surviving panes
+   *  reattach via the shim; dead ones suspend.) Failures log and continue. */
+  async resumeAtBoot(): Promise<void> {
+    for (const s of this.registry.list()) {
+      if (s.agent === "codex") {
+        if (!s.agent_session_id || !s.agent_home) {
+          log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
+          continue
+        }
+        try {
+          const handle = await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, handle.pid ?? process.pid)
+          log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
+        } catch (err: any) {
+          log.warn("codex_resume_failed", { name: s.name, err: String(err) })
+        }
+      } else if (s.agent === "cursor") {
+        // Cursor sessions are per-turn — no persistent process. The adapter
+        // just needs agent_home (config + auth dir). agent_session_id may be
+        // absent if the session never received a first message yet; that's OK —
+        // initialSessionId=undefined means the first turn starts fresh.
+        if (!s.agent_home) {
+          log.warn("cursor_resume_skip", { name: s.name, reason: "missing agent_home" })
+          continue
+        }
+        try {
+          await this.resumeCursorArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+          log.info("cursor_resume_ready", { name: s.name, session_id: s.agent_session_id ?? "(first turn pending)" })
+        } catch (err: any) {
+          log.warn("cursor_resume_failed", { name: s.name, err: String(err) })
+        }
+      } else if (s.agent === "opencode") {
+        // opencode's worker (in-process adapter + broker-child `opencode serve`)
+        // dies with the broker; without this respawn the row survives but the
+        // runtime is empty → inbound hits adapter_not_ready and never replies.
+        if (!s.agent_home) {
+          log.warn("opencode_resume_skip", { name: s.name, reason: "missing agent_home" })
+          continue
+        }
+        try {
+          const handle = await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, handle.pid ?? process.pid)
+          log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+        } catch (err: any) {
+          log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
+        }
+      } else if (s.agent === AgentKind.Grok) {
+        // grok's worker (in-process adapter + `grok agent stdio` child) dies with
+        // the broker; same rationale as opencode. agent_home holds the private
+        // ~/.grok (config + credential path) the child needs.
+        if (!s.agent_home) {
+          log.warn("grok_resume_skip", { name: s.name, reason: "missing agent_home" })
+          continue
+        }
+        try {
+          await this.resumeGrokArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
+          log.info("grok_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+        } catch (err: any) {
+          log.warn("grok_resume_failed", { name: s.name, err: String(err) })
+        }
+      }
     }
   }
 }

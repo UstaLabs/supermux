@@ -58,6 +58,18 @@ function fakePorts(db: Db): SessionManagerPorts {
       searchStore: { searchKnowledge: () => [], searchSessions: () => [] },
       db,
     },
+    resume: {
+      bind: async () => {},
+      ensureSessionWorktree: async () => {},
+      sessionEffort: () => undefined,
+      resolveAttachment: async () => { throw new Error("unused in tests") },
+      wireAdapterEvents: () => {},
+      sessionBackend: {
+        list: async () => [],
+        create: async () => { throw new Error("unused in tests") },
+      } as unknown as import("../runtime/session-backend").SessionBackend,
+      tmuxSession: "mux-test",
+    },
   }
 }
 
@@ -66,6 +78,27 @@ function manager(): SessionManager {
   runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
   return new SessionManager(new Registry(db), fakePorts(db))
 }
+
+describe("SessionManager resume frames", () => {
+  test("suspended resume of an unknown agent kind returns false", async () => {
+    const m = manager()
+    const ok = await m.resumeSuspended({ id: "x", name: "n", agent: "not-a-kind", workdir: "/tmp" })
+    expect(ok).toBe(false)
+  })
+
+  test("suspended resume of opencode WITHOUT agent_home returns false (arm exists, home missing)", async () => {
+    const m = manager()
+    const ok = await m.resumeSuspended({ id: "x", name: "n", agent: "opencode", workdir: "/tmp" })
+    expect(ok).toBe(false)
+  })
+
+  test("archive resume of a non-archived id reports the guard error", async () => {
+    const m = manager()
+    const r = await m.resumeFromArchive("nope")
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain("not archived")
+  })
+})
 
 describe("SessionManager runtime store", () => {
   test("registerClaudeRuntime stores the runtime; adapterFor returns its adapter", () => {
