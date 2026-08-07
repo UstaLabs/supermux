@@ -20,11 +20,16 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -206,8 +211,13 @@ fun SettingsHub(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.md),
         ) {
-            TextButton(onClick = { tryClose() }, modifier = Modifier.testTag("settings_hub_back")) {
-                Text("Back")
+            IconButton(onClick = { tryClose() }, modifier = Modifier.testTag("settings_hub_back")) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = cs.onSurface,
+                    modifier = Modifier.size(18.dp),
+                )
             }
             Text(
                 "Settings",
@@ -276,12 +286,14 @@ fun SettingsHub(
                     SettingsSection.Assistant -> AssistantSettingsScreen(
                         assistantLoad = assistantLoad,
                         assistantSave = assistantSave,
+                        onDirtyChange = { identityDirty = it },
+                    )
+                    SettingsSection.Curator -> CuratorSettingsScreen(
                         curatorLoad = curatorLoad,
                         curatorSave = curatorSave,
                         curatorRunNow = curatorRunNow,
                         loadModels = curatorLoadModels,
                         loadReasoning = curatorLoadReasoning,
-                        onDirtyChange = { identityDirty = it },
                     )
                     SettingsSection.Voice -> VoiceSettingsScreen(
                         loadConfig = voiceLoadConfig,

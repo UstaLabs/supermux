@@ -1,4 +1,4 @@
-// Root of the paired app shell. M1 Task 9 (this) is the shell chrome: a collapsible,
+// Root of the paired app shell. M1 Task 9 (this) is the workspace chrome: a collapsible,
 // drag-resizable sidebar, the multi-pane SessionDetail with pane toggles, keyboard shortcuts, and
 // UI-state persistence (ShellStateStore → ui-state.json).
 //
@@ -26,12 +26,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -56,11 +58,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import dev.supermux.workspace.LayoutNode
-import dev.supermux.workspace.chatSessionIds
+import dev.supermux.net.PatchWorkspaceBody
+import dev.supermux.proto.chatSessionId
+import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.collectActiveViewIds
+import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
+import dev.supermux.workspace.chatSessionIds
 import dev.supermux.desktop.host.AddHostScreen
 import dev.supermux.desktop.host.FleetState
 import dev.supermux.desktop.host.HostView
@@ -78,17 +83,14 @@ import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
-import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.UsageResponse
-import dev.supermux.proto.ViewDto
-import dev.supermux.proto.chatSessionId
 import dev.supermux.session.inferHomeDir
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
- * Sections of the Settings hub (left rail), in rail order: Agents (Task 1), Devices (Task 2),
- * System (Task 3), Git hosting (Task 4), Proxies / Identity / Voice (Task 5). Editor/LSP and
- * Personal Assistants are the pre-existing screens folded into the hub.
+ * Sections of the Settings hub (left rail), in rail order.
  */
 enum class SettingsSection(val label: String) {
     Agents("Agents"),
@@ -96,15 +98,17 @@ enum class SettingsSection(val label: String) {
     System("System"),
     GitHosting("Git hosting"),
     Proxies("Proxies"),
-    /** Identity (PA name + soul.md + curator) — distinct from [PersonalAssistants] fleet. */
+    /** PA name + soul.md — distinct from [PersonalAssistants] fleet and [Curator]. */
     Assistant("Identity"),
+    /** Nightly ~/.mux curator schedule + run-now. */
+    Curator("Curator"),
     Voice("Voice"),
     EditorLsp("Editor / LSP"),
     PersonalAssistants("Personal assistants"),
 }
 
 /**
- * Holder for the shell UI state that both [AppShell] and the window MenuBar (Main.kt) act
+ * Holder for the workspace UI state that both [AppShell] and the window MenuBar (Main.kt) act
  * on: the shared [ShellLayout] and the selected session id. Created once in Main (so the menu
  * can reach it), hydrated from [ShellStateStore] at startup.
  */
@@ -115,146 +119,95 @@ class ShellUiState {
 
     /**
      * Whether the New-Session launcher is showing in the **detail pane** (sidebar stays mounted).
-     * Flipped on by onNewSession's entry points (Ctrl+N, File ▸ New Session, rail/list `+`);
-     * flipped off by back/escape or a successful submit. Lives here (not local to AppShell)
-     * so Main's MenuBar can open it too, the same reason [selectedId] lives here.
+     * Not a [DesktopRoute]: it is a side panel inside [DesktopRoute.Home], not a full-pane push.
      */
     var launcherOpen by mutableStateOf(false)
     /** When set, the launcher reopens this draft session (web /new?draft=). */
     var launcherDraftId by mutableStateOf<String?>(null)
 
     /**
-     * Whether the Archived-sessions overlay (M4e Task 2) is showing. Flipped on by the File ▸
-     * "Archived…" menu item in Main.kt (which reaches this shared state the same way New-Session
-     * does); flipped off by the screen's back/escape or a Resume. Lives here (not local to
-     * [AppShell]) for the SAME reason as [launcherOpen] — Main's MenuBar renders outside
-     * AppShell's composition but must open it.
+     * Nav3 back stack — sole source of truth for full-pane destinations.
+     * Always starts with [DesktopRoute.Home]; overlays are pushed with [navigate].
      */
-    var archivedOpen by mutableStateOf(false)
+    val backStack: SnapshotStateList<DesktopRoute> = mutableStateListOf(DesktopRoute.Home)
+
+    /** Top of [backStack] (never null — Home is always present). */
+    val currentRoute: DesktopRoute get() = backStack.lastOrNull() ?: DesktopRoute.Home
+
+    /** True when launcher is open or any route is above Home (gates workspace shortcuts). */
+    val overlayOpen: Boolean get() = launcherOpen || backStack.size > 1
+
+    // Read-only views of the stack (for load effects / assertions). Open via [navigate] / open*.
+    val archivedOpen: Boolean get() = currentRoute is DesktopRoute.Archived
+    val usageOpen: Boolean get() = currentRoute is DesktopRoute.Usage
+    val settingsOpen: Boolean get() = currentRoute is DesktopRoute.Settings
+    val appUpdateOpen: Boolean get() = currentRoute is DesktopRoute.AppUpdate
+    val lspSettingsOpen: Boolean
+        get() = (currentRoute as? DesktopRoute.Settings)?.section == SettingsSection.EditorLsp
+    val personalAssistantsOpen: Boolean
+        get() = (currentRoute as? DesktopRoute.Settings)?.section == SettingsSection.PersonalAssistants
 
     /**
-     * Whether the Usage overlay (M4f Task 2) is showing. Flipped on by the File ▸ "Usage…" menu
-     * item in Main.kt and the SessionDetail overflow ⋮ "Usage" row (both reach this shared state
-     * the same way New-Session/Archived do); flipped off by the screen's back/escape. Lives here
-     * (not local to [AppShell]) for the SAME reason as [launcherOpen]/[archivedOpen] — Main's
-     * MenuBar renders outside AppShell's composition but must open it.
+     * Settings rail section. When Settings is on the stack, reads/writes that route's [DesktopRoute.Settings.section];
+     * when closed, remembers the last section for the next open (and for tests).
      */
-    var usageOpen by mutableStateOf(false)
-
-    /**
-     * Whether the LSP settings overlay (M4g-4) is showing. Flipped on by the File ▸
-     * "Editor / LSP…" menu item in Main.kt and the SessionDetail overflow ⋮ row (both reach this
-     * shared state the same way New-Session/Archived/Usage do); flipped off by the screen's own
-     * back button or Escape. Lives here (not local to [AppShell]) for the SAME reason as
-     * [launcherOpen]/[archivedOpen]/[usageOpen] — Main's MenuBar renders outside AppShell's
-     * composition but must open it.
-     */
-    /**
-     * Whether the Settings hub overlay is showing (Agents / Editor·LSP / Personal Assistants).
-     * Flipped on by File ▸ "Settings…", File ▸ "Editor / LSP…", File ▸ "Personal Assistants…",
-     * and the SessionDetail overflow ⋮ row; flipped off by the hub's back/escape.
-     */
-    var settingsOpen by mutableStateOf(false)
-
-    /** Which section the Settings hub detail pane shows. */
-    var settingsSection by mutableStateOf(SettingsSection.Agents)
-
-    var appUpdateOpen by mutableStateOf(false)
-
-    /**
-     * Compatibility views over [settingsOpen]/[settingsSection] so existing tests that set
-     * `lspSettingsOpen = true` / assert `personalAssistantsOpen` keep working while the hub is
-     * the single overlay.
-     */
-    var lspSettingsOpen: Boolean
-        get() = settingsOpen && settingsSection == SettingsSection.EditorLsp
+    var settingsSection: SettingsSection
+        get() = (currentRoute as? DesktopRoute.Settings)?.section ?: lastSettingsSection
         set(value) {
-            if (value) openLspSettings() else if (lspSettingsOpen) settingsOpen = false
+            lastSettingsSection = value
+            val i = backStack.indexOfLast { it is DesktopRoute.Settings }
+            if (i >= 0) backStack[i] = DesktopRoute.Settings(value)
         }
-
-    var personalAssistantsOpen: Boolean
-        get() = settingsOpen && settingsSection == SettingsSection.PersonalAssistants
-        set(value) {
-            if (value) openPersonalAssistants() else if (personalAssistantsOpen) settingsOpen = false
-        }
+    private var lastSettingsSection by mutableStateOf(SettingsSection.Agents)
 
     /**
-     * Any modal UI that should mute shell pane shortcuts: the detail-pane launcher
-     * ([launcherOpen]) or a full-shell overlay ([archivedOpen], [usageOpen], [settingsOpen],
-     * [appUpdateOpen]). Ctrl+B/L/E/T/D are gated OFF while this is true so a chord left unhandled
-     * by the modal can't bubble to [shellShortcuts] and mutate the layout behind it.
+     * Push [route]. [DesktopRoute.Home] clears overlays; other routes replace any open overlay
+     * (`[Home, route]`) and close the detail-pane launcher.
      */
-    val overlayOpen: Boolean get() = launcherOpen || archivedOpen || usageOpen || settingsOpen || appUpdateOpen
+    fun navigate(route: DesktopRoute) {
+        when (route) {
+            is DesktopRoute.Home -> popToHome()
+            else -> {
+                launcherOpen = false
+                popToHome()
+                if (route is DesktopRoute.Settings) lastSettingsSection = route.section
+                backStack.add(route)
+            }
+        }
+    }
 
-    /**
-     * Open the New-Session launcher in the detail pane; closes other full-shell overlays so
-     * they never stack. ALL launcher open sites route through here (Ctrl+N / File ▸ New Session /
-     * the rail/list `+`).
-     */
+    /** Pop one entry; false if already at Home. NavDisplay onBack. */
+    fun goBack(): Boolean {
+        if (backStack.size <= 1) return false
+        backStack.removeAt(backStack.lastIndex)
+        return true
+    }
+
+    private fun popToHome() {
+        while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
+    }
+
+    /** Detail-pane new-session UI; also clears full-pane routes. */
     fun openLauncher(draftId: String? = null) {
         launcherDraftId = draftId
         launcherOpen = true
-        archivedOpen = false
-        usageOpen = false
-        settingsOpen = false
-        appUpdateOpen = false
+        navigate(DesktopRoute.Home)
     }
 
-    /**
-     * Select a live session in the sidebar/rail. Closes the detail-pane launcher so the
-     * session's chat opens instead of staying stuck on "New session".
-     */
     fun selectSession(id: String) {
         selectedId = id
         launcherOpen = false
         launcherDraftId = null
     }
 
-    /** Open the Archived-sessions overlay; the "at most one overlay" mirror of [openLauncher]. */
-    fun openArchived() {
-        archivedOpen = true
-        launcherOpen = false
-        usageOpen = false
-        settingsOpen = false
-        appUpdateOpen = false
-    }
-
-    /** Open the Usage overlay; the "at most one overlay" mirror of [openLauncher]/[openArchived]. */
-    fun openUsage() {
-        usageOpen = true
-        launcherOpen = false
-        archivedOpen = false
-        settingsOpen = false
-        appUpdateOpen = false
-    }
-
-    /**
-     * Open the Settings hub on [section], enforcing the "at most one overlay" invariant.
-     * File ▸ "Settings…" uses [SettingsSection.Agents]; the existing Editor/LSP and Personal
-     * Assistants menu items keep working by routing here with their section selected.
-     */
-    fun openSettings(section: SettingsSection = SettingsSection.Agents) {
-        settingsSection = section
-        settingsOpen = true
-        launcherOpen = false
-        archivedOpen = false
-        usageOpen = false
-        appUpdateOpen = false
-    }
-
-    /** Open Settings hub focused on Editor / LSP (File ▸ "Editor / LSP…" + overflow menu). */
+    // Menu / chrome conveniences → navigate
+    fun openArchived() = navigate(DesktopRoute.Archived)
+    fun openUsage() = navigate(DesktopRoute.Usage)
+    fun openSettings(section: SettingsSection = SettingsSection.Agents) =
+        navigate(DesktopRoute.Settings(section))
     fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
-
-    /** Open Settings hub focused on Personal Assistants. */
     fun openPersonalAssistants() = openSettings(SettingsSection.PersonalAssistants)
-
-    fun openAppUpdate() {
-        launcherOpen = false
-        archivedOpen = false
-        usageOpen = false
-        settingsOpen = false
-        appUpdateOpen = true
-    }
+    fun openAppUpdate() = navigate(DesktopRoute.AppUpdate)
 
     /**
      * One-shot external "open this file" request (sessionId → ref), consumed by [SessionDetail] and
@@ -339,10 +292,8 @@ class ShellUiState {
      * id, not a live one), consumed by [dev.supermux.desktop.session.ArchivedScreen] — it seeds the
      * internal list⇄chat nav (`openedId`) so the matching row's read-only `ArchivedChatView` renders
      * without a click, the same way [forceFinishDialogFor] seeds the Finish dialog. Set by the
-     * off-by-default `SM_ARCHIVED_OPEN` headless hook in Main.kt (which also flips [archivedOpen] via
-     * [openArchived] so the overlay is showing); null in normal operation. Cleared once
-     * [dev.supermux.desktop.session.ArchivedScreen] consumes it (mirrors [forceLinksMenuFor]'s
-     * consumed-callback pattern — see [AppShell]'s wiring).
+     * off-by-default `SM_ARCHIVED_OPEN` headless hook in Main.kt (which also [openArchived]s);
+     * null in normal operation. Cleared once ArchivedScreen consumes it.
      */
     var forceArchivedOpenFor by mutableStateOf<String?>(null)
 
@@ -375,13 +326,13 @@ fun AppShell(
     // developer's real ~/.config/supermux-desktop/launcher-state.json.
     launcherStore: LauncherStore,
     // M5-3: injectable so production (Main.kt) passes the real Tray-backed controller while the
-    // existing AppShellTest suite (and any other caller that doesn't care about
+    // existing WorkspaceRootTest suite (and any other caller that doesn't care about
     // notifications) keeps compiling unmodified with the null-object default.
     notify: NotificationController = NotificationController(NoopNotificationManager),
     // Multi-host fleet (spec §5): when present, the merged session list + per-row host badges + the
     // `All · <host…> · +` chip row + add-host + per-session/active-host routing come from here.
     // Default null = single-host: EVERY flow/op falls back to `app`, so the existing behavior and
-    // the whole AppShellTest suite are unchanged.
+    // the whole WorkspaceRootTest suite are unchanged.
     fleet: FleetState? = null,
     /** Appearance mode shown in the sidebar theme toggle; toggled via [onToggleTheme]. */
     appearance: AppearanceMode = AppearanceMode.DARK,
@@ -448,7 +399,7 @@ fun AppShell(
     val drafts = remember { mutableStateMapOf<String, String>() }
 
     // Headless-verification hook (no input injection on CI boxes); harmless in production (off by
-    // default). With SM_AUTOSELECT=1 we auto-select a session so the shell renders under Xvfb
+    // default). With SM_AUTOSELECT=1 we auto-select a session so the workspace renders under Xvfb
     // without a pointer: the SM_SMOKE_SEND target if one is set, otherwise the most-recently-active
     // session. Skips if a (valid) persisted selection already exists.
     if (System.getenv("SM_AUTOSELECT") == "1") {
@@ -479,6 +430,11 @@ fun AppShell(
         }
     }
 
+    // Re-assert viewing presence whenever the selection or window focus changes (broker per-device
+    // "viewing" tracker keys off (session id, visible)). ALSO clears this session's notification
+    // cooldown (M5-3) the moment it becomes actively viewed (selected AND focused), so the NEXT
+    // reply after the user looks away again notifies immediately rather than waiting out a stale
+    // dedup window from before they opened it.
     // Live layout of the open workspace (tab switches update this before the broker PATCH lands)
     // so Viewing frames track the active view of each group immediately. Only used when
     // SM_WORKSPACES is on; null otherwise — classic path ignores it.
@@ -571,7 +527,7 @@ fun AppShell(
         inferHomeDir(sessions.firstOrNull()?.workdir) ?: System.getProperty("user.home").orEmpty()
     }
 
-    // Root focus so the shell shortcuts (Ctrl/Cmd B/N/L/E/T/D) resolve even before the user
+    // Root focus so the workspace shortcuts (Ctrl/Cmd B/N/L/E/T/D) resolve even before the user
     // clicks into a pane; once the composer/terminal is focused, key events still bubble up here.
     val rootFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
@@ -593,341 +549,11 @@ fun AppShell(
             Column(Modifier.fillMaxSize()) {
             AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
             Box(Modifier.weight(1f).fillMaxWidth()) {
-            // Row holds only panes — the resize/collapse control is an overlay so it never
-            // steals horizontal space and so the chip paints above both sides of the seam.
-            Row(Modifier.fillMaxSize()) {
-                // ── Sidebar: collapsed rail, or the full list ──
-                if (layout.sidebarCollapsed) {
-                    SessionsRail(
-                        sessions = sessions,
-                        selectedId = ui.selectedId,
-                        agentState = agentState,
-                        onSelect = { ui.selectSession(it) },
-                        onExpand = { layout.sidebarCollapsed = false },
-                        onNewSession = onNewSession,
-                        lastBySession = lastBySession,
-                        lastRead = lastRead,
-                    )
-                } else if (workspaceSidebar) {
-                    // Design-review swap only: the sidebar lists workspaces, but selection
-                    // semantics are UNCHANGED — ui.selectedId is still a SESSION id, and the
-                    // detail pane below is untouched. Opening a workspace row selects that
-                    // workspace's first chat session, so everything downstream behaves exactly
-                    // as it does with the session list.
-                    //
-                    // The full swap (spec §13.6 + a workspace-scoped selection model) is Phase 3
-                    // Task 5 onward. This is the minimum needed to look at the rows in context.
-                    val wsOf = { wid: String -> workspaces.firstOrNull { it.id == wid } }
-                    WorkspaceListPanel(
-                        workspaces = workspaces,
-                        home = home,
-                        activeId = workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id,
-                        onOpen = { wid -> wsOf(wid)?.chatSessionIds()?.firstOrNull()?.let { ui.selectSession(it) } },
-                        agentState = agentState,
-                        sessionNames = remember(sessions) { sessions.associate { it.id to it.name } },
-                        sessionRoles = remember(sessions) { sessions.associate { it.id to it.role } },
-                        sessionGit = remember(sessions) { sessions.associate { it.id to it.git } },
-                        onOpenSession = { _, sid -> ui.selectSession(sid) },
-                        onRename = { wid, name -> wsOf(wid)?.primarySessionId?.let { appFor(it).rename(it, name) } },
-                        onArchive = { wid ->
-                            wsOf(wid)?.chatSessionIds()?.forEach { sid ->
-                                appFor(sid).kill(sid) { if (ui.selectedId == sid) ui.selectedId = null }
-                            }
-                        },
-                        onNewWorkspace = onNewSession,
-                        modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
-                    )
-                } else {
-                    SessionListPanel(
-                        sessions = sessions,
-                        home = home,
-                        activeId = ui.selectedId,
-                        onOpen = { ui.selectSession(it) },
-                        lastBySession = lastBySession,
-                        lastRead = lastRead,
-                        agentState = agentState,
-                        // Per-session ops route to the OWNING host (multi-host); single-host → [app].
-                        onRename = { id, name -> appFor(id).rename(id, name) },
-                        onKill = { id -> appFor(id).kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
-                        onMute = { id, muted -> appFor(id).setMute(id, muted) },
-                        onNewSession = onNewSession,
-                        archived = archivedForList,
-                        onResume = { id -> overlayScope.launch { appFor(id).resume(id); archivedForList = runCatching { app.archived() }.getOrDefault(emptyList()) } },
-                        onOpenDraft = { id -> ui.openLauncher(draftId = id) },
-                        onReorder = { ids -> app.reorderSessions(ids) },
-                        // Fleet badges/chips (multi-host only; empty in single-host mode).
-                        hosts = hostViews,
-                        sessionHost = sessionHost,
-                        hostFilter = hostFilter,
-                        onSelectHostFilter = { hostFilter = it },
-                        onAddHost = { addHostOpen = true },
-                        // Footer: usage/devices/settings match File menu; theme toggles [appearance].
-                        onUsage = { ui.openUsage() },
-                        onSettings = { ui.openSettings() },
-                        onDevices = { ui.openSettings(SettingsSection.Devices) },
-                        appearance = appearance,
-                        onToggleTheme = onToggleTheme,
-                        modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
-                    )
-                }
-
-                // ── Detail: launcher (detail-pane only), SessionDetail, or empty prompt ──
-                // New-session is a *side* panel — sidebar + resizer stay mounted. Other modals
-                // (archived / usage / settings) remain full-shell overlays below.
-                //
-                // SM_WORKSPACES=1 swaps the FIXED four-pane SessionDetail for LayoutHost
-                // driven by the workspace layout tree. Default OFF: same SessionDetail as
-                // today (sidebar + body both unchanged without the flag).
-                val id = ui.selectedId
-                val session = id?.let { sel -> sessions.firstOrNull { it.id == sel } }
-                // Close-view candidate (Task 7 wires the confirm dialog). Set by LayoutHost
-                // onCloseView; never ends work by itself.
-                var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
-                when {
-                    ui.launcherOpen -> {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .testTag("launcher_overlay")
-                                .onPreviewKeyEvent { e ->
-                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                        ui.launcherOpen = false; ui.launcherDraftId = null
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                },
-                        ) {
-                            SessionLauncherScreen(
-                                sessions = activeHostSessions,
-                                home = home,
-                                onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
-                                lastBySession = lastBySession,
-                                // Host-global lookups + spawn target the ACTIVE host (`hostApp`);
-                                // the host picker below switches it. Single-host → [app].
-                                loadProjects = { hostApp.listProjects() },
-                                validatePath = { hostApp.validatePath(it) },
-                                loadModels = { hostApp.launcherModels(it) },
-                                loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
-                                loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
-                                transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
-                                loadPrefs = { launcherStore.loadPrefs() },
-                                onPrefsChange = { launcherStore.savePrefs(it) },
-                                loadDraft = { launcherStore.loadDraft() },
-                                onDraftChange = { launcherStore.saveDraft(it) },
-                                onClearDraft = { launcherStore.clearDraft() },
-                                // Spawn → select + send the first message → close. A null id is
-                                // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
-                                // turns any thrown message into the inline launcher_error text.
-                                onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
-                                    val newId = hostApp.createSessionWithFirstMessage(
-                                        workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-                                        replaceDraftId = replaceDraftId,
-                                    )
-                                    if (newId == null) {
-                                        throw IllegalStateException(
-                                            "Couldn't create the session — check the working directory and try again.",
-                                        )
-                                    }
-                                    ui.selectedId = newId
-                                    hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
-                                    ui.launcherOpen = false; ui.launcherDraftId = null
-                                },
-                                onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
-                                    hostApp.createDraftSession(
-                                        workdir, agent, model, text,
-                                        reasoningLevel = reasoningLevel,
-                                        replaceDraftId = replaceDraftId,
-                                    )
-                                },
-                                initialDraftId = ui.launcherDraftId,
-                                initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
-                                hosts = hostViews,
-                                selectedHost = activeHostId,
-                                onSelectHost = { fleet?.setActiveHost(it) },
-                                loadAgents = { hostApp.launcherAgents() },
-                                loadForges = { hostApp.listForges() },
-                                searchForge = { hostApp.searchForge(it) },
-                                cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
-                                createLocalRepo = { hostApp.createLocalRepo(it) },
-                                createForge = { cid, name -> hostApp.createForge(cid, name) },
-                            )
-                        }
-                    }
-                    // Design-review path ONLY: workspace layout tree replaces the four-pane shell.
-                    // Selection is still a SESSION id (sidebar opens the workspace's first chat);
-                    // the workspace is derived from membership so reconcileSessions / viewing stay valid.
-                    workspaceSidebar -> {
-                        val current = workspaces.firstOrNull { w ->
-                            w.id == id || w.chatSessionIds().contains(id)
-                        }
-                        if (current == null) {
-                            LaunchedEffect(Unit) {
-                                workspaceViewingLayout = null
-                                workspaceViewingViews = emptyMap()
-                            }
-                            Box(
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                                    .testTag("workspace_welcome"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("select a workspace", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        } else {
-                            val serverTree = current.layout.toDomainOrNull()
-                                ?: LayoutNode.Group(id = "g", viewIds = emptyList())
-                            // Local tree for drag responsiveness; PATCH is debounced (below).
-                            var localLayout by remember(current.id) { mutableStateOf(serverTree) }
-                            var layoutDirty by remember(current.id) { mutableStateOf(false) }
-                            // Adopt broker updates when the user is not mid-drag.
-                            LaunchedEffect(current.layout) {
-                                if (!layoutDirty) {
-                                    localLayout = current.layout.toDomainOrNull()
-                                        ?: LayoutNode.Group(id = "g", viewIds = emptyList())
-                                }
-                            }
-                            // Debounce layout writes: a splitter drag fires on every pointer move.
-                            // One PATCH per move would flood the broker and every peer device.
-                            // Hold the tree in local state, render from local, PATCH at most every
-                            // ~300ms (trailing write also covers drag end).
-                            LaunchedEffect(localLayout, layoutDirty) {
-                                if (!layoutDirty) return@LaunchedEffect
-                                delay(300)
-                                runCatching {
-                                    app.api.patchWorkspace(
-                                        current.id,
-                                        PatchWorkspaceBody(layout = localLayout.toDto()),
-                                    )
-                                }
-                                layoutDirty = false
-                            }
-                            val viewsById = remember(current) { current.views.associateBy { it.id } }
-                            val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
-                            // Feed the viewing LaunchedEffect so a tab switch re-asserts
-                            // Viewing frames for only the active chat of each group.
-                            LaunchedEffect(localLayout, viewsById) {
-                                workspaceViewingLayout = localLayout
-                                workspaceViewingViews = viewsById
-                            }
-                            LayoutHost(
-                                layout = localLayout,
-                                titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
-                                onCloseView = { closeCandidate = viewsById[it] },
-                                onLayoutChange = { next ->
-                                    localLayout = next
-                                    layoutDirty = true
-                                },
-                                modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
-                            ) { viewId ->
-                                val v = viewsById[viewId]
-                                if (v != null) {
-                                    ViewHost(
-                                        view = v,
-                                        workspaceId = current.id,
-                                        workdir = current.workdir,
-                                        app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
-                                        drafts = drafts,
-                                        primarySessionId = current.primarySessionId,
-                                        modifier = Modifier.fillMaxSize(),
-                                    )
-                                }
-                            }
-                            // Spec §9.3: a close that ends work asks first. Editor skips the dialog.
-                            // NOT the Finish flow — one question, two buttons (Close / Cancel).
-                            closeCandidate?.let { v ->
-                                if (!v.closeNeedsConfirmation()) {
-                                    LaunchedEffect(v.id) {
-                                        runCatching { app.api.closeView(v.workspaceId, v.id) }
-                                        closeCandidate = null
-                                    }
-                                } else {
-                                    CloseViewDialog(
-                                        view = v,
-                                        sessionNames = sessionNames,
-                                        onDismiss = { closeCandidate = null },
-                                        onConfirm = {
-                                            overlayScope.launch {
-                                                runCatching { app.api.closeView(v.workspaceId, v.id) }
-                                                closeCandidate = null
-                                            }
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    session == null -> {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                    else -> {
-                        SessionDetail(
-                            // Route the detail to the session's OWNING host in multi-host mode.
-                            app = appFor(session.id),
-                            session = session,
-                            agent = agentState[session.id],
-                            layout = layout,
-                            draft = drafts[session.id] ?: "",
-                            onDraftChange = { drafts[session.id] = it },
-                            externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
-                            onExternalOpenConsumed = { ui.externalOpen = null },
-                            forceFinishDialog = ui.forceFinishDialogFor == session.id,
-                            onForceFinishConsumed = { ui.forceFinishDialogFor = null },
-                            forceGitMenu = ui.forceGitMenuFor?.takeIf { it.first == session.id }?.second,
-                            onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
-                            forceLinksMenu = ui.forceLinksMenuFor == session.id,
-                            onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
-                            forceOverflowMenu = ui.forceOverflowFor == session.id,
-                            onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
-                            externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
-                            onExternalAttachConsumed = { ui.externalAttach = null },
-                            externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
-                            onExternalDictateConsumed = { ui.externalDictate = null },
-                            pasteImageRequestNonce = ui.pasteImageRequestNonce,
-                            onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                            onUsage = { ui.openUsage() },
-                            onLspSettings = { ui.openLspSettings() },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                }
-            }
-
-            // Resize + collapse OVERLAY on the sidebar seam (not a Row child — zero layout width,
-            // paints above both panes so the chip stays visible). Sits next to the detail-pane
-            // launcher, not over a full-shell modal.
-            if (!layout.sidebarCollapsed) {
-                SidebarDivider(
-                    onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
-                    onCollapse = { layout.sidebarCollapsed = true },
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .offset(x = layout.sidebarWidth - SidebarDividerCenterOffset)
-                        .zIndex(20f),
-                )
-            }
-
-            // ── Archived-sessions: a FULL-PANE overlay above the shell (M4e Task 2) ──
-            // Full-shell overlay (unlike the detail-pane launcher). The list is loaded from
-            // `app.archived()` each time the overlay opens
-            // (not kept live — an archived list is a point-in-time snapshot); reset to empty on
-            // close so a re-open always re-fetches. `archivedLoading` distinguishes "still fetching"
-            // (spinner) from "resolved empty" (empty text), so a slow fetch never flashes the empty
-            // state. Escape / back / Resume close it via onBack; Resume additionally kicks the
-            // un-archive (the resumed session returns live via a WS frame — no snackbar, the
-            // M4-polish gap).
+            // Re-fetch when the matching route is on top of the Nav3 stack.
             var archivedList by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
             var archivedLoading by remember { mutableStateOf(false) }
-            LaunchedEffect(ui.archivedOpen, activeHostId) {
-                if (ui.archivedOpen) {
+            LaunchedEffect(ui.currentRoute, activeHostId) {
+                if (ui.currentRoute is DesktopRoute.Archived) {
                     archivedLoading = true
                     archivedList = hostApp.archived()
                     archivedLoading = false
@@ -936,38 +562,10 @@ fun AppShell(
                     archivedLoading = false
                 }
             }
-            if (ui.archivedOpen) {
-                Column(Modifier.fillMaxSize().testTag("archived_overlay")) {
-                    HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
-                    Box(Modifier.weight(1f)) {
-                        ArchivedScreen(
-                            archived = archivedList,
-                            loading = archivedLoading,
-                            home = home,
-                            onBack = { ui.archivedOpen = false },
-                            onResume = { id ->
-                                overlayScope.launch { hostApp.resume(id) }
-                                ui.archivedOpen = false
-                            },
-                            loadLogs = { hostApp.archivedLogs(it) },
-                            forceOpenId = ui.forceArchivedOpenFor,
-                            onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
-                        )
-                    }
-                }
-            }
-
-            // ── Usage: a FULL-PANE overlay above the shell (M4f Task 2) ──
-            // Same shape as the launcher/archived overlays. `app.usage()` is loaded fresh each time
-            // the overlay opens (a point-in-time snapshot, not kept live) and reset to null on
-            // close so a re-open always re-fetches; `usageLoading` distinguishes "still fetching"
-            // from "resolved null" the same way `archivedLoading` does. A successful redeem
-            // (`code == "reset"`) swaps the codex slice in place so the card's numbers move without
-            // a full re-fetch; any other code just surfaces CodexUsageCard's own inline note.
             var usageData by remember { mutableStateOf<UsageResponse?>(null) }
             var usageLoading by remember { mutableStateOf(false) }
-            LaunchedEffect(ui.usageOpen, activeHostId) {
-                if (ui.usageOpen) {
+            LaunchedEffect(ui.currentRoute, activeHostId) {
+                if (ui.currentRoute is DesktopRoute.Usage) {
                     usageLoading = true
                     usageData = hostApp.usage()
                     usageLoading = false
@@ -976,195 +574,542 @@ fun AppShell(
                     usageLoading = false
                 }
             }
-            if (ui.usageOpen) {
-                // Self-focusing (unlike the launcher/archived overlay Boxes, which rely on an inner
-                // field grabbing focus): UsageScreen has no text field a user would naturally focus
-                // first, and Compose's onPreviewKeyEvent only fires along the path to whatever node
-                // currently holds focus. Claiming focus on THIS Box on open makes it that path's
-                // leaf, so Escape works the instant the overlay opens — not just after some other
-                // interaction happens to move focus into it.
-                val usageFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { runCatching { usageFocus.requestFocus() } }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .testTag("usage_overlay")
-                        .focusRequester(usageFocus)
-                        .focusable()
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.usageOpen = false
-                                true
-                            } else {
-                                false
+
+            // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honor it.
+            var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
+            val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<DesktopRoute>() }
+
+            NavDisplay(
+                backStack = ui.backStack,
+                modifier = Modifier.fillMaxSize(),
+                onBack = {
+                    when (ui.currentRoute) {
+                        is DesktopRoute.Settings -> settingsTryClose?.invoke() ?: run { ui.goBack() }
+                        else -> ui.goBack()
+                    }
+                },
+                sceneStrategies = listOf(fullPaneOverlay),
+                entryProvider = entryProvider {
+                    entry<DesktopRoute.Home> {
+                Box(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxSize()) {
+                    // ── Sidebar: collapsed rail, or the full list ──
+                    if (layout.sidebarCollapsed) {
+                        SessionsRail(
+                            sessions = sessions,
+                            selectedId = ui.selectedId,
+                            agentState = agentState,
+                            onSelect = { ui.selectSession(it) },
+                            onExpand = { layout.sidebarCollapsed = false },
+                            onNewSession = onNewSession,
+                            lastBySession = lastBySession,
+                            lastRead = lastRead,
+                        )
+                    } else if (workspaceSidebar) {
+                        // Design-review swap only: the sidebar lists workspaces, but selection
+                        // semantics are UNCHANGED — ui.selectedId is still a SESSION id, and the
+                        // detail pane below is untouched. Opening a workspace row selects that
+                        // workspace's first chat session, so everything downstream behaves exactly
+                        // as it does with the session list.
+                        //
+                        // The full swap (spec §13.6 + a workspace-scoped selection model) is Phase 3
+                        // Task 5 onward. This is the minimum needed to look at the rows in context.
+                        val wsOf = { wid: String -> workspaces.firstOrNull { it.id == wid } }
+                        WorkspaceListPanel(
+                            workspaces = workspaces,
+                            home = home,
+                            activeId = workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id,
+                            onOpen = { wid -> wsOf(wid)?.chatSessionIds()?.firstOrNull()?.let { ui.selectSession(it) } },
+                            agentState = agentState,
+                            sessionNames = remember(sessions) { sessions.associate { it.id to it.name } },
+                            sessionRoles = remember(sessions) { sessions.associate { it.id to it.role } },
+                            sessionGit = remember(sessions) { sessions.associate { it.id to it.git } },
+                            onOpenSession = { _, sid -> ui.selectSession(sid) },
+                            onRename = { wid, name -> wsOf(wid)?.primarySessionId?.let { appFor(it).rename(it, name) } },
+                            onArchive = { wid ->
+                                wsOf(wid)?.chatSessionIds()?.forEach { sid ->
+                                    appFor(sid).kill(sid) { if (ui.selectedId == sid) ui.selectedId = null }
+                                }
+                            },
+                            onNewWorkspace = onNewSession,
+                            modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
+                        )
+                    } else {
+                        SessionListPanel(
+                            sessions = sessions,
+                            home = home,
+                            activeId = ui.selectedId,
+                            onOpen = { ui.selectSession(it) },
+                            lastBySession = lastBySession,
+                            lastRead = lastRead,
+                            agentState = agentState,
+                            // Per-session ops route to the OWNING host (multi-host); single-host → [app].
+                            onRename = { id, name -> appFor(id).rename(id, name) },
+                            onKill = { id -> appFor(id).kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
+                            onMute = { id, muted -> appFor(id).setMute(id, muted) },
+                            onNewSession = onNewSession,
+                            archived = archivedForList,
+                            onResume = { id -> overlayScope.launch { appFor(id).resume(id); archivedForList = runCatching { app.archived() }.getOrDefault(emptyList()) } },
+                            onOpenDraft = { id -> ui.openLauncher(draftId = id) },
+                            onReorder = { ids -> app.reorderSessions(ids) },
+                            // Fleet badges/chips (multi-host only; empty in single-host mode).
+                            hosts = hostViews,
+                            sessionHost = sessionHost,
+                            hostFilter = hostFilter,
+                            onSelectHostFilter = { hostFilter = it },
+                            onAddHost = { addHostOpen = true },
+                            // Footer: usage/devices/settings match File menu; theme toggles [appearance].
+                            onUsage = { ui.openUsage() },
+                            onSettings = { ui.openSettings() },
+                            onDevices = { ui.openSettings(SettingsSection.Devices) },
+                            appearance = appearance,
+                            onToggleTheme = onToggleTheme,
+                            modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
+                        )
+                    }
+
+                    // ── Detail: launcher (detail-pane only), SessionDetail, or empty prompt ──
+                    // New-session is a *side* panel — sidebar + resizer stay mounted. Other modals
+                    // (archived / usage / settings) remain full-workspace overlays below.
+                    val id = ui.selectedId
+                    val session = id?.let { sel -> sessions.firstOrNull { it.id == sel } }
+                        // Close-view candidate (Task 7 wires the confirm dialog). Set by
+                        // LayoutHost onCloseView; never ends work by itself.
+                        var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+                    when {
+                        ui.launcherOpen -> {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .testTag("launcher_overlay")
+                                    .onPreviewKeyEvent { e ->
+                                        if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                            ui.launcherOpen = false; ui.launcherDraftId = null
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    },
+                            ) {
+                                SessionLauncherScreen(
+                                    sessions = activeHostSessions,
+                                    home = home,
+                                    onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
+                                    lastBySession = lastBySession,
+                                    // Host-global lookups + spawn target the ACTIVE host (`hostApp`);
+                                    // the host picker below switches it. Single-host → [app].
+                                    loadProjects = { hostApp.listProjects() },
+                                    validatePath = { hostApp.validatePath(it) },
+                                    loadModels = { hostApp.launcherModels(it) },
+                                    loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
+                                    loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
+                                    transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
+                                    loadPrefs = { launcherStore.loadPrefs() },
+                                    onPrefsChange = { launcherStore.savePrefs(it) },
+                                    loadDraft = { launcherStore.loadDraft() },
+                                    onDraftChange = { launcherStore.saveDraft(it) },
+                                    onClearDraft = { launcherStore.clearDraft() },
+                                    // Spawn → select + send the first message → close. A null id is
+                                    // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
+                                    // turns any thrown message into the inline launcher_error text.
+                                    onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
+                                        val newId = hostApp.createSessionWithFirstMessage(
+                                            workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+                                            replaceDraftId = replaceDraftId,
+                                        )
+                                        if (newId == null) {
+                                            throw IllegalStateException(
+                                                "Couldn't create the session — check the working directory and try again.",
+                                            )
+                                        }
+                                        ui.selectedId = newId
+                                        hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
+                                        ui.launcherOpen = false; ui.launcherDraftId = null
+                                    },
+                                    onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
+                                        hostApp.createDraftSession(
+                                            workdir, agent, model, text,
+                                            reasoningLevel = reasoningLevel,
+                                            replaceDraftId = replaceDraftId,
+                                        )
+                                    },
+                                    initialDraftId = ui.launcherDraftId,
+                                    initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
+                                    hosts = hostViews,
+                                    selectedHost = activeHostId,
+                                    onSelectHost = { fleet?.setActiveHost(it) },
+                                    loadAgents = { hostApp.launcherAgents() },
+                                    loadForges = { hostApp.listForges() },
+                                    searchForge = { hostApp.searchForge(it) },
+                                    cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
+                                    createLocalRepo = { hostApp.createLocalRepo(it) },
+                                    createForge = { cid, name -> hostApp.createForge(cid, name) },
+                                )
                             }
-                        },
-                ) {
-                    Column(Modifier.fillMaxSize()) {
-                        HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
-                        Box(Modifier.weight(1f)) {
-                            UsageScreen(
-                                usage = usageData,
-                                loading = usageLoading,
-                                onBack = { ui.usageOpen = false },
-                                onRedeem = {
-                                    val r = hostApp.redeemCodexReset()
-                                    if (r?.code == "reset" && r.codex != null) {
-                                        usageData = usageData?.copy(codex = r.codex)
+                        }
+                        session == null -> {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        workspaceSidebar -> {
+                            val current = workspaces.firstOrNull { w ->
+                                w.id == id || w.chatSessionIds().contains(id)
+                            }
+                            if (current == null) {
+                                LaunchedEffect(Unit) {
+                                    workspaceViewingLayout = null
+                                    workspaceViewingViews = emptyMap()
+                                }
+                                Box(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                        .testTag("workspace_welcome"),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text("select a workspace", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            } else {
+                                val serverTree = current.layout.toDomainOrNull()
+                                    ?: LayoutNode.Group(id = "g", viewIds = emptyList())
+                                // Local tree for drag responsiveness; PATCH is debounced (below).
+                                var localLayout by remember(current.id) { mutableStateOf(serverTree) }
+                                var layoutDirty by remember(current.id) { mutableStateOf(false) }
+                                // Adopt broker updates when the user is not mid-drag.
+                                LaunchedEffect(current.layout) {
+                                    if (!layoutDirty) {
+                                        localLayout = current.layout.toDomainOrNull()
+                                            ?: LayoutNode.Group(id = "g", viewIds = emptyList())
                                     }
-                                    r
-                                },
+                                }
+                                // Debounce layout writes: a splitter drag fires on every pointer move.
+                                // One PATCH per move would flood the broker and every peer device.
+                                // Hold the tree in local state, render from local, PATCH at most every
+                                // ~300ms (trailing write also covers drag end).
+                                LaunchedEffect(localLayout, layoutDirty) {
+                                    if (!layoutDirty) return@LaunchedEffect
+                                    delay(300)
+                                    runCatching {
+                                        app.api.patchWorkspace(
+                                            current.id,
+                                            PatchWorkspaceBody(layout = localLayout.toDto()),
+                                        )
+                                    }
+                                    layoutDirty = false
+                                }
+                                val viewsById = remember(current) { current.views.associateBy { it.id } }
+                                val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
+                                // Feed the viewing LaunchedEffect so a tab switch re-asserts
+                                // Viewing frames for only the active chat of each group.
+                                LaunchedEffect(localLayout, viewsById) {
+                                    workspaceViewingLayout = localLayout
+                                    workspaceViewingViews = viewsById
+                                }
+                                LayoutHost(
+                                    layout = localLayout,
+                                    titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
+                                    onCloseView = { closeCandidate = viewsById[it] },
+                                    onLayoutChange = { next ->
+                                        localLayout = next
+                                        layoutDirty = true
+                                    },
+                                    modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
+                                ) { viewId ->
+                                    val v = viewsById[viewId]
+                                    if (v != null) {
+                                        ViewHost(
+                                            view = v,
+                                            workspaceId = current.id,
+                                            workdir = current.workdir,
+                                            app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
+                                            drafts = drafts,
+                                            primarySessionId = current.primarySessionId,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
+                                }
+                                // Spec §9.3: a close that ends work asks first. Editor skips the dialog.
+                                // NOT the Finish flow — one question, two buttons (Close / Cancel).
+                                closeCandidate?.let { v ->
+                                    if (!v.closeNeedsConfirmation()) {
+                                        LaunchedEffect(v.id) {
+                                            runCatching { app.api.closeView(v.workspaceId, v.id) }
+                                            closeCandidate = null
+                                        }
+                                    } else {
+                                        CloseViewDialog(
+                                            view = v,
+                                            sessionNames = sessionNames,
+                                            onDismiss = { closeCandidate = null },
+                                            onConfirm = {
+                                                overlayScope.launch {
+                                                    runCatching { app.api.closeView(v.workspaceId, v.id) }
+                                                    closeCandidate = null
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        session == null -> {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        else -> {
+                            SessionDetail(
+                                // Route the detail to the session's OWNING host in multi-host mode.
+                                app = appFor(session.id),
+                                session = session,
+                                agent = agentState[session.id],
+                                layout = layout,
+                                draft = drafts[session.id] ?: "",
+                                onDraftChange = { drafts[session.id] = it },
+                                externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
+                                onExternalOpenConsumed = { ui.externalOpen = null },
+                                forceFinishDialog = ui.forceFinishDialogFor == session.id,
+                                onForceFinishConsumed = { ui.forceFinishDialogFor = null },
+                                forceGitMenu = ui.forceGitMenuFor?.takeIf { it.first == session.id }?.second,
+                                onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
+                                forceLinksMenu = ui.forceLinksMenuFor == session.id,
+                                onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
+                                forceOverflowMenu = ui.forceOverflowFor == session.id,
+                                onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
+                                externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
+                                onExternalAttachConsumed = { ui.externalAttach = null },
+                                externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
+                                onExternalDictateConsumed = { ui.externalDictate = null },
+                                pasteImageRequestNonce = ui.pasteImageRequestNonce,
+                                onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
+                                onUsage = { ui.openUsage() },
+                                onLspSettings = { ui.openLspSettings() },
+                                modifier = Modifier.fillMaxSize(),
                             )
                         }
                     }
                 }
-            }
 
-            // ── Settings hub: FULL-PANE overlay (desktop-parity Task 1) ──
-            // Single entry point for Agents + folded Editor/LSP + Personal Assistants.
-            // openLspSettings()/openPersonalAssistants() still work — they open this hub with
-            // the matching section selected. Host-scoped: key(activeHostId) + hostApp.* so a
-            // fleet switch reloads the active broker's agent/LSP/PA state.
-            if (ui.settingsOpen) {
-                val settingsFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { runCatching { settingsFocus.requestFocus() } }
-                // One overlay tag: settings_overlay for Agents (and as a general alias via
-                // settings_hub); legacy tags when the hub is focused on folded sections so
-                // EditorLspScreenTest / PA tests keep resolving.
-                val overlayTag = when (ui.settingsSection) {
-                    SettingsSection.EditorLsp -> "lsp_settings_overlay"
-                    SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
-                    SettingsSection.Agents, SettingsSection.Devices -> "settings_overlay"
-                    SettingsSection.Agents, SettingsSection.GitHosting -> "settings_overlay"
-                    SettingsSection.Agents, SettingsSection.Devices, SettingsSection.System -> "settings_overlay"
-                    SettingsSection.Agents,
-                    SettingsSection.Devices,
-                    SettingsSection.Proxies,
-                    SettingsSection.Assistant,
-                    SettingsSection.Voice,
-                    -> "settings_overlay"
+                // Resize + collapse OVERLAY on the sidebar seam (not a Row child — zero layout width,
+                // paints above both panes so the chip stays visible). Sits next to the detail-pane
+                // launcher, not over a full-workspace modal.
+                if (!layout.sidebarCollapsed) {
+                    SidebarDivider(
+                        onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
+                        onCollapse = { layout.sidebarCollapsed = true },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset(x = layout.sidebarWidth - SidebarDividerCenterOffset)
+                            .zIndex(20f),
+                    )
                 }
-                // Escape is handled inside SettingsHub (dirty-soul discard confirm). The outer
-                // box only owns focus so keys reach the hub; it does not close unconditionally.
-                var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .testTag(overlayTag)
-                        .focusRequester(settingsFocus)
-                        .focusable()
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                settingsTryClose?.invoke() ?: run { ui.settingsOpen = false }
-                                true
-                            } else {
-                                false
+
+
+                }
+                    }
+
+                    entry<DesktopRoute.Settings>(
+                        metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                    ) { route ->
+                        val settingsFocus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { settingsFocus.requestFocus() } }
+                        val overlayTag = when (route.section) {
+                            SettingsSection.EditorLsp -> "lsp_settings_overlay"
+                            SettingsSection.PersonalAssistants -> "personal_assistants_overlay"
+                            else -> "settings_overlay"
+                        }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .testTag(overlayTag)
+                                .focusRequester(settingsFocus)
+                                .focusable()
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                        settingsTryClose?.invoke() ?: run { ui.goBack() }
+                                        true
+                                    } else false
+                                },
+                        ) {
+                            Column(Modifier.fillMaxSize()) {
+                                HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                                Box(Modifier.weight(1f)) {
+                                    androidx.compose.runtime.key(activeHostId, route.section) {
+                                        SettingsHub(
+                                            section = route.section,
+                                            onSectionChange = { ui.settingsSection = it },
+                                            onBack = { ui.goBack() },
+                                            onRegisterCloseHandler = { settingsTryClose = it },
+                                            agentStatuses = { hostApp.agentStatuses() },
+                                            agentStartLogin = { hostApp.startAgentLogin(it) },
+                                            agentPollLogin = { hostApp.agentLoginState(it) },
+                                            agentSendCode = { kind, code -> hostApp.sendAgentLoginCode(kind, code) },
+                                            agentCancelLogin = { hostApp.cancelAgentLogin(it) },
+                                            agentSaveSecret = { kind, value -> hostApp.saveAgentSecret(kind, value) },
+                                            agentStartInstall = { hostApp.startAgentInstall(it) },
+                                            agentPollInstall = { hostApp.agentInstallState(it) },
+                                            openCodeProviders = { hostApp.openCodeProviders() },
+                                            openCodeSetKey = { id, k -> hostApp.setOpenCodeKey(id, k) },
+                                            openCodeStartOAuth = { id, method -> hostApp.startOpenCodeOAuth(id, method) },
+                                            openCodeFinishOAuth = { id, method, code -> hostApp.finishOpenCodeOAuth(id, method, code) },
+                                            devicesLoad = { hostApp.devices() },
+                                            deviceAdd = { name -> hostApp.addDevice(name) },
+                                            deviceRevoke = { name -> hostApp.revokeDevice(name) },
+                                            updateStatus = { hostApp.updateStatus() },
+                                            checkUpdate = { hostApp.checkUpdate() },
+                                            runUpdate = { hostApp.runUpdate() },
+                                            restartBroker = { hostApp.restartBroker() },
+                                            proxiesLoad = { hostApp.proxiesForSettings() },
+                                            proxySessionNames = { hostApp.sessions.value.map { it.name } },
+                                            proxyCreate = { session, port, domain ->
+                                                hostApp.createProxy(session, port, domain)
+                                            },
+                                            proxySetPublic = { domain, isPublic ->
+                                                hostApp.setProxyPublic(domain, isPublic)
+                                            },
+                                            proxyRemove = { domain -> hostApp.removeProxy(domain) },
+                                            assistantLoad = { hostApp.assistantLoad() },
+                                            assistantSave = { paName, soul -> hostApp.assistantSave(paName, soul) },
+                                            curatorLoad = { hostApp.curatorSettings() },
+                                            curatorSave = { enabled, hour, minute, agent, model, reasoning ->
+                                                hostApp.saveCurator(enabled, hour, minute, agent, model, reasoning)
+                                            },
+                                            curatorRunNow = { hostApp.runCuratorNow() },
+                                            curatorLoadModels = { agent -> hostApp.launcherModels(agent) },
+                                            curatorLoadReasoning = { agent, model ->
+                                                hostApp.launcherReasoning(agent, model)
+                                            },
+                                            voiceLoadConfig = { hostApp.appConfig() },
+                                            voiceLoadModels = { family -> hostApp.launcherModels(family) },
+                                            voiceSaveStt = { engine -> hostApp.saveVoiceStt(engine) },
+                                            voiceSaveTts = { engine -> hostApp.saveVoiceTts(engine) },
+                                            voiceSaveCleanup = { engine, model ->
+                                                hostApp.saveVoiceCleanup(engine, model)
+                                            },
+                                            glossaryLoad = { hostApp.fetchGlossary() },
+                                            glossarySave = { terms -> hostApp.updateGlossary(terms) },
+                                            lspLoad = { hostApp.lspLoad() },
+                                            lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
+                                            lspInstall = { id -> hostApp.lspInstall(id) },
+                                            lspInstallLog = hostApp.lspInstallLog,
+                                            lspInstallDone = hostApp.lspInstallDone,
+                                            lspAddCustom = { args ->
+                                                hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
+                                            },
+                                            lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
+                                            paLoad = { hostApp.personalAssistants() },
+                                            paCreate = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
+                                            paKill = { hostApp.killPersonalAssistant(it) },
+                                            forgesLoad = { hostApp.forgesLoad() },
+                                            forgeAdd = { kind, token, host, transport ->
+                                                hostApp.forgeAdd(kind, token, host, transport)
+                                            },
+                                            forgeImport = { kind, transport -> hostApp.forgeImport(kind, transport) },
+                                            forgeRemove = { id -> hostApp.forgeRemove(id) },
+                                        )
+                                    }
+                                }
                             }
-                        },
-                ) {
-                    Column(Modifier.fillMaxSize()) {
-                        HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
-                        Box(Modifier.weight(1f)) {
-                            androidx.compose.runtime.key(activeHostId) {
-                                SettingsHub(
-                                    section = ui.settingsSection,
-                                    onSectionChange = { ui.settingsSection = it },
-                                    onBack = { ui.settingsOpen = false },
-                                    onRegisterCloseHandler = { settingsTryClose = it },
-                                    agentStatuses = { hostApp.agentStatuses() },
-                                    agentStartLogin = { hostApp.startAgentLogin(it) },
-                                    agentPollLogin = { hostApp.agentLoginState(it) },
-                                    agentSendCode = { kind, code -> hostApp.sendAgentLoginCode(kind, code) },
-                                    agentCancelLogin = { hostApp.cancelAgentLogin(it) },
-                                    agentSaveSecret = { kind, value -> hostApp.saveAgentSecret(kind, value) },
-                                    agentStartInstall = { hostApp.startAgentInstall(it) },
-                                    agentPollInstall = { hostApp.agentInstallState(it) },
-                                    openCodeProviders = { hostApp.openCodeProviders() },
-                                    openCodeSetKey = { id, key -> hostApp.setOpenCodeKey(id, key) },
-                                    openCodeStartOAuth = { id, method -> hostApp.startOpenCodeOAuth(id, method) },
-                                    openCodeFinishOAuth = { id, method, code -> hostApp.finishOpenCodeOAuth(id, method, code) },
-                                    devicesLoad = { hostApp.devices() },
-                                    deviceAdd = { name -> hostApp.addDevice(name) },
-                                    deviceRevoke = { name -> hostApp.revokeDevice(name) },
-                                    updateStatus = { hostApp.updateStatus() },
-                                    checkUpdate = { hostApp.checkUpdate() },
-                                    runUpdate = { hostApp.runUpdate() },
-                                    restartBroker = { hostApp.restartBroker() }, // suspend→Boolean
-                                    proxiesLoad = { hostApp.proxiesForSettings() },
-                                    proxySessionNames = { hostApp.sessions.value.map { it.name } },
-                                    proxyCreate = { session, port, domain ->
-                                        hostApp.createProxy(session, port, domain)
+                        }
+                    }
+
+                    entry<DesktopRoute.Archived>(
+                        metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                    ) {
+                        Column(Modifier.fillMaxSize().testTag("archived_overlay")) {
+                            HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                            Box(Modifier.weight(1f)) {
+                                ArchivedScreen(
+                                    archived = archivedList,
+                                    loading = archivedLoading,
+                                    home = home,
+                                    onBack = { ui.goBack() },
+                                    onResume = { id ->
+                                        overlayScope.launch { hostApp.resume(id) }
+                                        ui.goBack()
                                     },
-                                    proxySetPublic = { domain, isPublic ->
-                                        hostApp.setProxyPublic(domain, isPublic)
-                                    },
-                                    proxyRemove = { domain -> hostApp.removeProxy(domain) },
-                                    assistantLoad = { hostApp.assistantLoad() },
-                                    assistantSave = { paName, soul -> hostApp.assistantSave(paName, soul) },
-                                    curatorLoad = { hostApp.curatorSettings() },
-                                    curatorSave = { enabled, hour, minute, agent, model, reasoning ->
-                                        hostApp.saveCurator(enabled, hour, minute, agent, model, reasoning)
-                                    },
-                                    curatorRunNow = { hostApp.runCuratorNow() },
-                                    curatorLoadModels = { agent -> hostApp.launcherModels(agent) },
-                                    curatorLoadReasoning = { agent, model ->
-                                        hostApp.launcherReasoning(agent, model)
-                                    },
-                                    voiceLoadConfig = { hostApp.appConfig() },
-                                    voiceLoadModels = { family -> hostApp.launcherModels(family) },
-                                    voiceSaveStt = { engine -> hostApp.saveVoiceStt(engine) },
-                                    voiceSaveTts = { engine -> hostApp.saveVoiceTts(engine) },
-                                    voiceSaveCleanup = { engine, model ->
-                                        hostApp.saveVoiceCleanup(engine, model)
-                                    },
-                                    glossaryLoad = { hostApp.fetchGlossary() },
-                                    glossarySave = { terms -> hostApp.updateGlossary(terms) },
-                                    lspLoad = { hostApp.lspLoad() },
-                                    lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
-                                    lspInstall = { id -> hostApp.lspInstall(id) },
-                                    lspInstallLog = hostApp.lspInstallLog,
-                                    lspInstallDone = hostApp.lspInstallDone,
-                                    lspAddCustom = { args ->
-                                        hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
-                                    },
-                                    lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
-                                    paLoad = { hostApp.personalAssistants() },
-                                    paCreate = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
-                                    paKill = { hostApp.killPersonalAssistant(it) },
-                                    forgesLoad = { hostApp.forgesLoad() },
-                                    forgeAdd = { kind, token, host, transport ->
-                                        hostApp.forgeAdd(kind, token, host, transport)
-                                    },
-                                    forgeImport = { kind, transport -> hostApp.forgeImport(kind, transport) },
-                                    forgeRemove = { id -> hostApp.forgeRemove(id) },
+                                    loadLogs = { hostApp.archivedLogs(it) },
+                                    forceOpenId = ui.forceArchivedOpenFor,
+                                    onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
                                 )
                             }
                         }
                     }
-                }
-            }
 
-            if (ui.appUpdateOpen) {
-                val updFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { runCatching { updFocus.requestFocus() } }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .testTag("app_update_overlay")
-                        .focusRequester(updFocus)
-                        .focusable()
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.appUpdateOpen = false
-                                true
-                            } else false
-                        },
-                ) {
-                    AppUpdateScreen(onBack = { ui.appUpdateOpen = false })
-                }
-            }
+                    entry<DesktopRoute.Usage>(
+                        metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                    ) {
+                        val usageFocus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { usageFocus.requestFocus() } }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .testTag("usage_overlay")
+                                .focusRequester(usageFocus)
+                                .focusable()
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                        ui.goBack()
+                                        true
+                                    } else false
+                                },
+                        ) {
+                            Column(Modifier.fillMaxSize()) {
+                                HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                                Box(Modifier.weight(1f)) {
+                                    UsageScreen(
+                                        usage = usageData,
+                                        loading = usageLoading,
+                                        onBack = { ui.goBack() },
+                                        onRedeem = {
+                                            val r = hostApp.redeemCodexReset()
+                                            if (r?.code == "reset" && r.codex != null) {
+                                                usageData = usageData?.copy(codex = r.codex)
+                                            }
+                                            r
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
 
-            // ── Add host: a FULL-PANE overlay above the shell (multi-host, spec §3.4/§5) ──
+                    entry<DesktopRoute.AppUpdate>(
+                        metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                    ) {
+                        val updFocus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { updFocus.requestFocus() } }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .testTag("app_update_overlay")
+                                .focusRequester(updFocus)
+                                .focusable()
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                        ui.goBack()
+                                        true
+                                    } else false
+                                },
+                        ) {
+                            AppUpdateScreen(onBack = { ui.goBack() })
+                        }
+                    }
+                },
+            )
+
+            // ── Add host: a FULL-PANE overlay above the workspace (multi-host, spec §3.4/§5) ──
             // Opened by the fleet chip row's `+`. Wired to the fleet's claim seams; a successful
             // add closes the overlay and jumps the filter to the new host so its (soon-arriving)
             // sessions are front-and-center. Only reachable when `fleet != null`.

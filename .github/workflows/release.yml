@@ -521,6 +521,140 @@ jobs:
         if: always() && steps.signing.outputs.have == '1'
         run: security delete-keychain "$MACOS_RELEASE_KEYCHAIN" || true
 
+  build-compose-desktop-macos:
+    # Compose Multiplatform macOS client (apps/desktop / jpackage DMG). Distinct from
+    # build-desktop-macos above, which ships the native SwiftUI Supermux.app as
+    # supermux-macos.dmg. This lane produces supermux-desktop-macos.dmg ("Supermux
+    # Desktop.app", bundle id dev.supermux.desktop) so both can install side-by-side
+    # on a case-insensitive volume. Same Developer ID + notary secrets as the native
+    # lane; dry runs without secrets upload an explicitly unsigned DMG.
+    runs-on: macos-26
+    env:
+      DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
+      MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+      APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: oven-sh/setup-bun@v2
+      - name: Resolve version
+        id: ver
+        working-directory: .
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build portable tmux
+        working-directory: .
+        run: scripts/build-portable-tmux.sh "$RUNNER_TEMP/tmux"
+      - name: Stage host helper binaries
+        working-directory: .
+        env:
+          SUPERMUX_TMUX: ${{ runner.temp }}/tmux
+        run: scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
+      - name: Check release credentials
+        id: signing
+        working-directory: .
+        run: |
+          have=1
+          [ -n "$MACOS_DEVELOPER_ID_P12_BASE64" ] || have=0
+          [ -n "$MACOS_DEVELOPER_ID_P12_PASSWORD" ] || have=0
+          [ -n "$APPLE_NOTARY_KEY_P8_BASE64" ] || have=0
+          [ -n "$APPLE_NOTARY_KEY_ID" ] || have=0
+          [ -n "$APPLE_NOTARY_ISSUER_ID" ] || have=0
+          if [ "$have" = 0 ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "::error::macOS signing/notarization secrets are required for tag releases (compose desktop)"
+            exit 1
+          fi
+          if [ "$have" = 0 ]; then
+            echo "::warning::macOS release secrets are absent; uploading an unsigned compose-desktop dry-run DMG"
+          fi
+          echo "have=$have" >> "$GITHUB_OUTPUT"
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.have == '1'
+        working-directory: .
+        env:
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/supermux-compose-release.keychain-db"
+          CERTIFICATE="$RUNNER_TEMP/developer-id-compose.p12"
+          printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 --decode > "$CERTIFICATE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Compose's signing preflight resolves the identity by common name (label),
+          # not SHA-1 — opposite of raw codesign against a non-default keychain.
+          security list-keychains -d user -s "$KEYCHAIN"
+          echo "MACOS_COMPOSE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Build signed Compose DMG
+        if: steps.signing.outputs.have == '1'
+        run: >
+          ./gradlew :desktop:packageDmg --console=plain --no-daemon
+          -PsmMacSignIdentity="${{ env.DEVELOPER_ID_APPLICATION }}"
+          -PsmMacSignKeychain="${{ env.MACOS_COMPOSE_KEYCHAIN }}"
+      - name: Build unsigned Compose DMG
+        if: steps.signing.outputs.have != '1'
+        run: ./gradlew :desktop:packageDmg --console=plain --no-daemon
+      - name: Stage DMG
+        working-directory: .
+        run: |
+          mkdir -p dist
+          SRC="$(find apps/desktop/build/compose/binaries/main/dmg -name '*.dmg' -type f | head -1)"
+          test -n "$SRC" && test -f "$SRC"
+          if [ "${{ steps.signing.outputs.have }}" = "1" ]; then
+            DMG="dist/supermux-desktop-macos.dmg"
+          else
+            DMG="dist/supermux-desktop-macos-unsigned.dmg"
+          fi
+          cp "$SRC" "$DMG"
+          echo "COMPOSE_MACOS_DMG=$DMG" >> "$GITHUB_ENV"
+          echo "Staged $SRC -> $DMG ($(wc -c < "$DMG") bytes)"
+      - name: Sign, notarize, and staple DMG
+        if: steps.signing.outputs.have == '1'
+        working-directory: .
+        run: |
+          # Compose signs the .app image when smMacSignIdentity is set, but not the
+          # outer DMG — Gatekeeper needs a signature on the disk image itself.
+          codesign --force --timestamp \
+            --keychain "$MACOS_COMPOSE_KEYCHAIN" \
+            --sign "$DEVELOPER_ID_APPLICATION" \
+            "$COMPOSE_MACOS_DMG"
+          NOTARY_KEY="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY"
+          xcrun notarytool submit "$COMPOSE_MACOS_DMG" \
+            --key "$NOTARY_KEY" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$COMPOSE_MACOS_DMG"
+          xcrun stapler validate "$COMPOSE_MACOS_DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$COMPOSE_MACOS_DMG"
+      - name: Checksum
+        working-directory: .
+        run: |
+          cd dist
+          shasum -a 256 "$(basename "$COMPOSE_MACOS_DMG")" > "$(basename "$COMPOSE_MACOS_DMG").sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: supermux-compose-desktop-macos
+          path: dist/*
+          if-no-files-found: error
+      - name: Remove temporary keychain
+        if: always() && steps.signing.outputs.have == '1'
+        working-directory: .
+        run: security delete-keychain "$MACOS_COMPOSE_KEYCHAIN" || true
+
   build-ios-testflight:
     # Signed iOS app (with the embedded watch app + both notification extensions)
     # archived, exported as an App Store .ipa, and uploaded to TestFlight. Unlike the
@@ -714,7 +848,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-desktop-macos]
+    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-desktop-macos, build-compose-desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -744,6 +878,8 @@ jobs:
             dist/supermux-windows.msi.sha256
             dist/supermux-macos.dmg
             dist/supermux-macos.dmg.sha256
+            dist/supermux-desktop-macos.dmg
+            dist/supermux-desktop-macos.dmg.sha256
           )
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" --clobber "${assets[@]}"
@@ -783,7 +919,10 @@ jobs:
           SHA_ANDROID=$(cut -d' ' -f1 dist/supermux-android.apk.sha256)
           SHA_DESKTOP_LINUX=$(cut -d' ' -f1 dist/supermux-linux.deb.sha256 2>/dev/null || true)
           SHA_DESKTOP_WINDOWS=$(cut -d' ' -f1 dist/supermux-windows.msi.sha256 2>/dev/null || true)
+          # desktop-macos = native SwiftUI Supermux.app DMG (historical key; AppUpdateView).
           SHA_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-macos.dmg.sha256 2>/dev/null || true)
+          # compose-desktop-macos = Compose Multiplatform "Supermux Desktop" DMG.
+          SHA_COMPOSE_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-desktop-macos.dmg.sha256 2>/dev/null || true)
           # Android: prefer the version CI baked into the APK (android-client.env from
           # build-android). Fall back to gradle defaults only if the env file is missing.
           if [ -f dist/android-client.env ]; then
@@ -802,7 +941,8 @@ jobs:
           echo "clients.android version=${CLIENT_ANDROID_VERSION} versionCode=${CLIENT_ANDROID_CODE}"
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
           bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
-            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" "$SHA_DESKTOP_MACOS" > site/versions.json
+            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" "$SHA_DESKTOP_MACOS" \
+            "$SHA_COMPOSE_DESKTOP_MACOS" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
           git config user.name "supermux-release"

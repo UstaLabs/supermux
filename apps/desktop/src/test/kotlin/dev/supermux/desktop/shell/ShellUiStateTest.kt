@@ -13,7 +13,7 @@ import kotlin.test.assertTrue
  * to ui-state.json permanently). An empty live set must be treated as "not loaded yet", not
  * "everything died".
  */
-class ShellUiStateTest {
+class WorkspaceUiStateTest {
     private fun hydrated(): ShellUiState = ShellUiState().apply {
         selectedId = "s1"
         layout.toggleEditor("s1")
@@ -50,7 +50,7 @@ class ShellUiStateTest {
     // stale one surfacing when the other closes. openLauncher()/openArchived() enforce exclusivity.
 
     @Test fun openLauncherClosesTheArchivedOverlay() {
-        val ui = ShellUiState().apply { archivedOpen = true }
+        val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
@@ -75,14 +75,14 @@ class ShellUiStateTest {
         assertFalse(ui.archivedOpen)
         assertTrue(ui.overlayOpen)
 
-        val ui2 = ShellUiState().apply { archivedOpen = true }
+        val ui2 = ShellUiState().apply { navigate(DesktopRoute.Archived) }
         ui2.openUsage()
         assertTrue(ui2.usageOpen)
         assertFalse(ui2.archivedOpen)
     }
 
     @Test fun openLauncherClosesTheUsageOverlay() {
-        val ui = ShellUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.usageOpen)
@@ -90,7 +90,7 @@ class ShellUiStateTest {
     }
 
     @Test fun openArchivedClosesTheUsageOverlay() {
-        val ui = ShellUiState().apply { usageOpen = true }
+        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
         ui.openArchived()
         assertTrue(ui.archivedOpen)
         assertFalse(ui.usageOpen)
@@ -100,9 +100,9 @@ class ShellUiStateTest {
     @Test fun openPersonalAssistantsClosesEveryOtherOverlay() {
         val ui = ShellUiState().apply {
             launcherOpen = true
-            archivedOpen = true
-            usageOpen = true
-            lspSettingsOpen = true
+            navigate(DesktopRoute.Archived)
+            navigate(DesktopRoute.Usage)
+            openLspSettings()
         }
         ui.openPersonalAssistants()
         assertTrue(ui.personalAssistantsOpen)
@@ -117,7 +117,7 @@ class ShellUiStateTest {
 
     @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
         val ui = ShellUiState().apply {
-            usageOpen = true
+            navigate(DesktopRoute.Usage)
             openLspSettings()
         }
         ui.openSettings(SettingsSection.Agents)
@@ -134,5 +134,45 @@ class ShellUiStateTest {
         assertTrue(ui.settingsOpen)
         assertTrue(ui.lspSettingsOpen)
         assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
+    }
+
+    // ── Nav3 back stack is the source of truth ──────────────────────────────────────────────────
+
+    @Test fun backStackStartsAtHomeOnly() {
+        val ui = ShellUiState()
+        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        assertEquals(DesktopRoute.Home, ui.currentRoute)
+        assertFalse(ui.overlayOpen)
+    }
+
+    @Test fun navigatePushesOverlayAboveHome() {
+        val ui = ShellUiState()
+        ui.navigate(DesktopRoute.Settings(SettingsSection.Devices))
+        assertEquals(
+            listOf(DesktopRoute.Home, DesktopRoute.Settings(SettingsSection.Devices)),
+            ui.backStack.toList(),
+        )
+        assertTrue(ui.overlayOpen)
+        assertTrue(ui.settingsOpen)
+        assertEquals(SettingsSection.Devices, ui.settingsSection)
+    }
+
+    @Test fun goBackPopsToHome() {
+        val ui = ShellUiState()
+        ui.navigate(DesktopRoute.Usage)
+        assertTrue(ui.goBack())
+        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        assertFalse(ui.goBack()) // already at Home
+        assertFalse(ui.usageOpen)
+    }
+
+    @Test fun navigateIsExclusiveSingleOverlay() {
+        val ui = ShellUiState()
+        ui.navigate(DesktopRoute.Archived)
+        ui.navigate(DesktopRoute.Usage)
+        // Exclusive policy: stack is [Home, Usage], not [Home, Archived, Usage]
+        assertEquals(listOf(DesktopRoute.Home, DesktopRoute.Usage), ui.backStack.toList())
+        assertFalse(ui.archivedOpen)
+        assertTrue(ui.usageOpen)
     }
 }

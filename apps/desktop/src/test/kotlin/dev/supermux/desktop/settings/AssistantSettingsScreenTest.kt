@@ -66,6 +66,14 @@ class AssistantSettingsScreenTest {
     private fun screen(
         assistantLoad: suspend () -> Pair<String, String>? = { "Mux" to "Be helpful." },
         assistantSave: suspend (String, String) -> String? = { _, _ -> null },
+    ) = @Composable {
+        AssistantSettingsScreen(
+            assistantLoad = assistantLoad,
+            assistantSave = assistantSave,
+        )
+    }
+
+    private fun curatorScreen(
         curatorLoad: suspend () -> CuratorSettingsResponse? = {
             CuratorSettingsResponse(
                 config = CuratorConfig(enabled = true, hour = 2, minute = 30, agent = "claude"),
@@ -80,9 +88,7 @@ class AssistantSettingsScreenTest {
         loadModels: suspend (String) -> List<ModelInfo> = { emptyList() },
         loadReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
     ) = @Composable {
-        AssistantSettingsScreen(
-            assistantLoad = assistantLoad,
-            assistantSave = assistantSave,
+        CuratorSettingsScreen(
             curatorLoad = curatorLoad,
             curatorSave = curatorSave,
             curatorRunNow = curatorRunNow,
@@ -107,8 +113,22 @@ class AssistantSettingsScreenTest {
         onNodeWithTag("assistant_soul").assertIsDisplayed()
         onNodeWithText("soul.md").assertIsDisplayed()
         onNodeWithTag("assistant_save").assertIsDisplayed()
-        // Side-by-side layout: curator is visible without performScrollTo.
-        onNodeWithTag("assistant_curator_enabled").assertIsDisplayed()
+        // Curator is its own hub section now — not on the Identity screen.
+        onNodeWithTag("assistant_curator_enabled").assertDoesNotExist()
+    }
+
+    @Test fun curator_section_renders_controls() = runComposeUiTest {
+        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { curatorScreen()() } }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("assistant_curator_enabled").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("curator_settings_screen").assertIsDisplayed()
         onNodeWithTag("assistant_curator_run_now").assertIsDisplayed()
     }
 
@@ -219,7 +239,7 @@ class AssistantSettingsScreenTest {
         val ran = AtomicReference(false)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                screen(curatorRunNow = {
+                curatorScreen(curatorRunNow = {
                     ran.set(true)
                     true
                 })()
@@ -242,10 +262,18 @@ class AssistantSettingsScreenTest {
     @Test fun curator_run_now_failure_shows_error() = runComposeUiTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                screen(curatorRunNow = { false })()
+                curatorScreen(curatorRunNow = { false })()
             }
         }
         waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("assistant_curator_run_now").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
         onNodeWithTag("assistant_curator_run_now").performClick()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -261,7 +289,7 @@ class AssistantSettingsScreenTest {
         val saved = AtomicReference(false)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                screen(
+                curatorScreen(
                     curatorSave = { e, h, m, a, model, r ->
                         saved.set(true)
                         CuratorSettingsResponse(
@@ -284,18 +312,14 @@ class AssistantSettingsScreenTest {
         onNodeWithTag("assistant_curator_save").performClick()
         waitUntil(timeoutMillis = 5_000) { saved.get() }
         assertTrue(saved.get())
-        // Formatted local datetime from 2099-01-01 — must not still show the old next-run.
         waitUntil(timeoutMillis = 5_000) {
             try {
-                val label = onNodeWithTag("assistant_curator_next_run")
-                // parse-success path: contains 2099 year fragment in MEDIUM local style
-                label.assertIsDisplayed()
+                onNodeWithTag("assistant_curator_next_run").assertIsDisplayed()
                 true
             } catch (_: Throwable) {
                 false
             }
         }
-        // The raw ISO is parsed; assert the label is not the pre-save value and not blank.
         val expected = curatorNextRunLabel(true, "2099-01-01T00:00:00Z")
         onNodeWithText(expected).assertIsDisplayed()
     }
@@ -303,10 +327,18 @@ class AssistantSettingsScreenTest {
     @Test fun curator_save_failure_shows_error() = runComposeUiTest {
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                screen(curatorSave = { _, _, _, _, _, _ -> null })()
+                curatorScreen(curatorSave = { _, _, _, _, _, _ -> null })()
             }
         }
         waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("assistant_curator_save").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
         onNodeWithTag("assistant_curator_save").performClick()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -414,11 +446,6 @@ class AssistantSettingsScreenTest {
                         loaded
                     },
                     assistantSave = { n, s -> app.assistantSave(n, s) },
-                    curatorLoad = { app.curatorSettings() },
-                    curatorSave = { e, h, m, a, model, r -> app.saveCurator(e, h, m, a, model, r) },
-                    curatorRunNow = { app.runCuratorNow() },
-                    loadModels = { app.launcherModels(it) },
-                    loadReasoning = { a, model -> app.launcherReasoning(a, model) },
                 )
             }
         }
@@ -453,11 +480,6 @@ class AssistantSettingsScreenTest {
                         loaded
                     },
                     assistantSave = { n, s -> app.assistantSave(n, s) },
-                    curatorLoad = { app.curatorSettings() },
-                    curatorSave = { e, h, m, a, model, r -> app.saveCurator(e, h, m, a, model, r) },
-                    curatorRunNow = { app.runCuratorNow() },
-                    loadModels = { emptyList() },
-                    loadReasoning = { _, _ -> null },
                 )
             }
         }
@@ -487,11 +509,6 @@ class AssistantSettingsScreenTest {
                         saveErr = app.assistantSave(n, s)
                         saveErr
                     },
-                    curatorLoad = { app.curatorSettings() },
-                    curatorSave = { e, h, m, a, model, r -> app.saveCurator(e, h, m, a, model, r) },
-                    curatorRunNow = { app.runCuratorNow() },
-                    loadModels = { emptyList() },
-                    loadReasoning = { _, _ -> null },
                 )
             }
         }
@@ -523,9 +540,7 @@ class AssistantSettingsScreenTest {
         var ok = true
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                AssistantSettingsScreen(
-                    assistantLoad = { app.assistantLoad() },
-                    assistantSave = { n, s -> app.assistantSave(n, s) },
+                CuratorSettingsScreen(
                     curatorLoad = { app.curatorSettings() },
                     curatorSave = { e, h, m, a, model, r -> app.saveCurator(e, h, m, a, model, r) },
                     curatorRunNow = {
