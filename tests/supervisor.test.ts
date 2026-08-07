@@ -63,6 +63,36 @@ test("bootstrapPA supports codex agent and stores it in registry", async () => {
   expect(pa?.role).toBe("personal_assistant")
 })
 
+test("a sessionManager-equipped supervisor registers the adapter of a spawned non-Claude PA (half-filled-bag regression)", async () => {
+  const registry = new Registry(db)
+  const registered: Array<{ name: string }> = []
+  const supervisor = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    // No explicit registerAdapter seam: it must DERIVE from sessionManager.
+    sessionManager: {
+      registerSpawnedAdapter: (name: string) => { registered.push({ name }) },
+    },
+    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
+    codexSpawnAppServer: () => ({
+      pid: 123,
+      client: { request: async () => ({}) } as any,
+      child: null as any,
+      kill: () => {},
+      onExit: () => {},
+    }),
+    codexAdapterFactory: () => ({
+      start: async () => {},
+    } as any),
+  })
+
+  await supervisor.bootstrapPA("coder-reg", { agent: AgentKind.Codex })
+  supervisor.stop()
+
+  expect(registered.length).toBe(1)
+  expect(registered[0].name).toBe("coder-reg")
+})
+
 test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   const registry = new Registry(db)
   const registered = registry.registerPA({

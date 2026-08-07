@@ -5,9 +5,9 @@ import { ClaudeCodeAdapter } from "../agents/claude"
 import { CodexAdapter } from "../agents/codex/adapter"
 import { spawnCodexAppServer, type CodexSpawnHandle } from "../agents/codex/spawn"
 import { CursorAdapter } from "../agents/cursor/adapter"
-import type { OpenCodeAdapter } from "../agents/opencode/adapter"
+import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
-import type { GrokAdapter } from "../agents/grok/adapter"
+import { GrokAdapter } from "../agents/grok/adapter"
 import { resolveCodexAuth } from "../agents/codex/auth"
 import { writeCodexPreamble } from "../agents/codex/preamble-writer"
 import { resolveCursorAuth } from "../agents/cursor/auth"
@@ -645,6 +645,25 @@ export class SessionManager {
     } catch (err) {
       return { ok: false, error: String(err instanceof Error ? err.message : err) }
     }
+  }
+
+  /** Register a freshly spawned adapter under its session and wire its events.
+   *  One implementation of the instanceof dispatch that main.ts used to
+   *  duplicate 3× verbatim (and the supervisor silently lacked — the
+   *  half-filled-bag PA bug). The name→id fallback is preserved as-is. */
+  registerSpawnedAdapter(name: string, adapter: AgentAdapter, handle?: unknown): void {
+    const session = this.registry.resolveName(name)
+    const sid = session?.id ?? name
+    if (adapter instanceof CodexAdapter) {
+      this.registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
+    } else if (adapter instanceof CursorAdapter) {
+      this.registerCursorRuntime(sid, adapter)
+    } else if (adapter instanceof OpenCodeAdapter) {
+      this.registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
+    } else if (adapter instanceof GrokAdapter) {
+      this.registerGrokRuntime(sid, adapter)
+    }
+    this.ports.resume.wireAdapterEvents(adapter, sid)
   }
 
   // ── Resume: one flow, three sources, five kinds (Move 3) ──────────────────

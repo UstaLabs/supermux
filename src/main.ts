@@ -1542,20 +1542,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: (s) => sessionEffort(s),
-        registerAdapter: (name, adapter, handle) => {
-          const session = registry.resolveName(name)
-          const sid = session?.id ?? name
-          if (adapter instanceof CodexAdapter) {
-            registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-          } else if (adapter instanceof CursorAdapter) {
-            registerCursorRuntime(sid, adapter)
-          } else if (adapter instanceof OpenCodeAdapter) {
-            registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-          } else if (adapter instanceof GrokAdapter) {
-            registerGrokRuntime(sid, adapter)
-          }
-          wireAdapterEvents(adapter, sid)
-        },
+        registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
         onCodexSessionId: (brokerSessionId, sessionId) => {
           const session = registry.get(brokerSessionId)
           if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
@@ -2249,20 +2236,7 @@ async function spawnSession(args: {
       sessionBackend,
       tmuxSession: TMUX_SESSION,
       resolveAttachment: resolveAttachmentPath,
-      registerAdapter: (name, adapter, handle) => {
-        const session = registry.resolveName(name)
-        const sid = session?.id ?? name
-        if (adapter instanceof CodexAdapter) {
-          registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-        } else if (adapter instanceof CursorAdapter) {
-          registerCursorRuntime(sid, adapter)
-        } else if (adapter instanceof OpenCodeAdapter) {
-          registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-        } else if (adapter instanceof GrokAdapter) {
-          registerGrokRuntime(sid, adapter)
-        }
-        wireAdapterEvents(adapter, sid)
-      },
+      registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
       onThreadId: (name: string, threadId: string) => {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, threadId)
@@ -2604,20 +2578,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
           sessionBackend,
           tmuxSession: TMUX_SESSION,
           resolveEffort: (s) => sessionEffort(s),
-          registerAdapter: (name, adapter, handle) => {
-            const session = registry.resolveName(name)
-            const sid = session?.id ?? name
-            if (adapter instanceof CodexAdapter) {
-              registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-            } else if (adapter instanceof CursorAdapter) {
-              registerCursorRuntime(sid, adapter)
-            } else if (adapter instanceof OpenCodeAdapter) {
-              registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-            } else if (adapter instanceof GrokAdapter) {
-              registerGrokRuntime(sid, adapter)
-            }
-            wireAdapterEvents(adapter, sid)
-          },
+          registerAdapter: (name, adapter, handle) => sessionManager.registerSpawnedAdapter(name, adapter, handle),
           onCodexSessionId: (brokerSessionId, sessionId) => {
             const session = registry.get(brokerSessionId)
             if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
@@ -2957,6 +2918,10 @@ const supervisor = createSupervisor({
   sessionBackend,
   paWorkdir: appConfig.paWorkdir || undefined,
   resolveEffort: (s) => sessionEffort(s),
+  // Adapter registration + session-id persistence for supervisor-spawned
+  // non-claude PAs derive from the component — the half-filled-bag bug
+  // (adapters built then dropped) is structurally closed.
+  sessionManager,
   reapInternalWorkers: () => agentRpc.reapIdle(RPC_WORKER_IDLE_MS),
 })
 // Existing installs (any prior sessions, active/suspended/archived) are implicitly

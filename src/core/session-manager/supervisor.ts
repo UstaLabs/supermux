@@ -51,6 +51,11 @@ export type SupervisorOpts = {
   // (e.g. tests), falls back to the historical default.
   paWorkdir?: string
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
+  /** The session component. When present, adapter registration and session-id
+   *  persistence for non-claude PA spawns DERIVE from it — the supervisor can
+   *  no longer silently drop adapters because a bag member was not passed
+   *  (the old half-filled-bag bug). Explicit seams below still win (tests). */
+  sessionManager?: SessionManagerLike
   // Non-Claude PA spawn dependencies (injected by main.ts; optional for tests).
   onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
@@ -68,11 +73,30 @@ export type SupervisorOpts = {
   reapInternalWorkers?: () => Promise<void>
 }
 
+/** The slice of SessionManager the supervisor needs (type-only, avoids a
+ *  runtime import cycle: manager.ts imports isDraftSession from this file). */
+export type SessionManagerLike = {
+  registerSpawnedAdapter(name: string, adapter: unknown, handle?: unknown): void
+}
+
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
   const spawnTmux = opts.spawnTmux
   const sessionBackend = opts.sessionBackend ?? getSessionBackend()
+  // Derived non-claude PA spawn wiring: explicit test seams win; otherwise the
+  // session component provides the real behavior. Without either, spawnPA
+  // builds adapters and drops them (the pre-component bug this fixes).
+  const registerAdapter = opts.registerAdapter
+    ?? (opts.sessionManager
+      ? ((name: string, adapter: unknown, handle?: unknown) => opts.sessionManager!.registerSpawnedAdapter(name, adapter, handle)) as NonNullable<Parameters<typeof spawnPA>[0]["registerAdapter"]>
+      : undefined)
+  const persistAgentSessionId = (brokerSessionId: string, sid: string) => {
+    if (opts.registry.get(brokerSessionId)) opts.registry.sessions.setAgentSessionId(brokerSessionId, sid)
+  }
+  const onCodexSessionId = opts.onCodexSessionId ?? (opts.sessionManager ? persistAgentSessionId : undefined)
+  const onCursorSessionId = opts.onCursorSessionId ?? (opts.sessionManager ? persistAgentSessionId : undefined)
+  const onOpenCodeSessionId = opts.onOpenCodeSessionId ?? (opts.sessionManager ? persistAgentSessionId : undefined)
   // Prefer caller-supplied values (from config store); fall back to the built-in
   // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via
   // SettingsStore.getAppConfig) and forwarded as opts.paWorkdir.
@@ -132,10 +156,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         tmuxSession: TMUX_SESSION,
         id: pa.id,
         resolveEffort: opts.resolveEffort,
-        onCodexSessionId: opts.onCodexSessionId,
-        onCursorSessionId: opts.onCursorSessionId,
-        onOpenCodeSessionId: opts.onOpenCodeSessionId,
-        registerAdapter: opts.registerAdapter,
+        onCodexSessionId,
+        onCursorSessionId,
+        onOpenCodeSessionId,
+        registerAdapter,
         codexResolveAuth: opts.codexResolveAuth,
         codexSpawnAppServer: opts.codexSpawnAppServer,
         codexAdapterFactory: opts.codexAdapterFactory,
@@ -177,10 +201,10 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         sessionBackend,
         tmuxSession: TMUX_SESSION,
         resolveEffort: opts.resolveEffort,
-        onCodexSessionId: opts.onCodexSessionId,
-        onCursorSessionId: opts.onCursorSessionId,
-        onOpenCodeSessionId: opts.onOpenCodeSessionId,
-        registerAdapter: opts.registerAdapter,
+        onCodexSessionId,
+        onCursorSessionId,
+        onOpenCodeSessionId,
+        registerAdapter,
         codexResolveAuth: opts.codexResolveAuth,
         codexSpawnAppServer: opts.codexSpawnAppServer,
         codexAdapterFactory: opts.codexAdapterFactory,
