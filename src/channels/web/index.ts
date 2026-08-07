@@ -81,7 +81,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
 const MAX_CLIENT_LOG_RING = 800
 
 // Vue routes and REST APIs share several top-level paths (/settings, /devices,
@@ -113,7 +113,7 @@ export function isServerHandledDocumentGet(path: string, url: URL): boolean {
   return path === "/pair" && !!url.searchParams.get("t")
 }
 
-function isApiPath(path: string): boolean {
+export function isApiPath(path: string): boolean {
   return API_PREFIXES.some((p) => path === p || path.startsWith(p + "/"))
 }
 

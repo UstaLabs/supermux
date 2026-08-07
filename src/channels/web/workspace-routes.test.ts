@@ -91,3 +91,28 @@ test("moveView broadcasts view_moved naming both workspaces", () => {
   expect(frames.at(-1)).toEqual({ type: "view_moved", viewId: v.id, fromWorkspaceId: a.id, toWorkspaceId: b.id })
   expect(store.listViews(b.id).map((x) => x.id)).toEqual([v.id])
 })
+
+// ── Regression: /workspaces must be an API path, not an SPA route ────────────
+// Every GET under /workspaces fell through to the single-page-app document
+// handler and returned index.html, because API_PREFIXES never learned about the
+// new routes. The sidebar still worked (it is fed by the WS snapshot frame), so
+// the only visible symptom was an editor tab that showed nothing — its
+// workspaceFsList call was parsing HTML.
+//
+// POST/PATCH/DELETE were unaffected (the SPA fallback is GET-only), which is why
+// creating and archiving worked while reading did not.
+
+import { isApiPath } from "./index"
+
+test("workspace REST paths are treated as API, not as SPA routes", () => {
+  expect(isApiPath("/workspaces")).toBe(true)
+  expect(isApiPath("/workspaces/abc-123")).toBe(true)
+  expect(isApiPath("/workspaces/abc-123/fs")).toBe(true)
+  expect(isApiPath("/workspaces/abc-123/fs/read")).toBe(true)
+  expect(isApiPath("/workspaces/abc-123/views")).toBe(true)
+  expect(isApiPath("/views/v-1/move")).toBe(true)
+})
+
+test("an unrelated top-level path is still an SPA route", () => {
+  expect(isApiPath("/somewhere-else")).toBe(false)
+})
