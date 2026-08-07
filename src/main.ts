@@ -3081,34 +3081,38 @@ async function spawnSession(args: {
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
     { workdir: effectiveWorkdir, requestedName: requestedName ?? (wt ? deriveName(workdir) : undefined), agent: args.agent, model: args.model, reasoningLevel: args.reasoningLevel, effort, internal: args.internal, rpcMcpConfig: args.rpcMcpConfig },
   )
-  // Claude registers async via the shim — record the internal intent so
-  // onRegister can stamp the row. Non-claude agents are already registered
-  // synchronously by the helper (internal threaded through there).
-  if (args.internal && (args.agent ?? AgentKind.Claude) === AgentKind.Claude) pendingInternal.add(r.session_id)
+  // Claude's row now exists synchronously (born in the spawn path). Wait for
+  // the shim to CONNECT — proof the window survived and the agent came up —
+  // while polling window liveness so an instant death fast-fails instead of
+  // waiting out the full timeout.
   let registered = registry.get(r.session_id)
   if ((args.agent ?? "claude") === "claude") {
-    // No blind sleep: wait for the shim to register (proof the window survived
-    // AND the agent came up), while polling window liveness so an instant death
-    // fast-fails instead of waiting out the full registration timeout.
     registered = await waitForRegisteredSession({
       id: r.session_id,
       name: r.name,
-      lookup: (id, name) => registry.get(id) ?? registry.resolveName(name),
+      lookup: (id) => {
+        const s = registry.get(id)
+        return s?.connected ? s : undefined
+      },
       stillAlive: async () => {
-        // Pre-registration the row isn't in the registry yet — the freshly
-        // spawned window id lives in pendingRuntimeTargetId until onRegister drains
-        // it. Check both, else liveness fails on every claude spawn (~50ms in).
-        const wid = liveWindowId(
-          r.session_id,
-          (id) => registry.get(id)?.tmux_window_id,
-          (id) => pendingRuntimeTargetId.get(id),
-        )
+        const wid = registry.get(r.session_id)?.tmux_window_id
         return wid ? (await sessionBackend.livePid(wid)) !== null : false
       },
     }).catch((err) => {
       log.warn("spawn_post_check_failed", { name: r.name, workdir })
       throw err
     })
+    // onRegister no longer broadcasts (it only attaches) — announce the born
+    // session from the spawn path. Duplicate session_added frames are safe:
+    // clients upsert by id (see web sessions.add).
+    const bornRow = registry.get(r.session_id)
+    if (bornRow && !bornRow.internal) {
+      webChannel?.broadcastToAll({
+        type: "session_added",
+        session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
+      })
+      await refreshTelegramMenu()
+    }
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
