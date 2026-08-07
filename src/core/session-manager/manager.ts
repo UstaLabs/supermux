@@ -14,7 +14,9 @@ import { resolveCursorAuth } from "../agents/cursor/auth"
 import { makeRealCursorRunner } from "../agents/cursor/runner"
 import { writeCursorPreamble } from "../agents/cursor/preamble-writer"
 import { codexPrepareSessionHome, codexSpawnArgs, cursorSpawnArgs } from "../plugins"
-import { resumeOpenCodeSession, resumeGrokSession } from "./spawn-helper"
+import { resumeOpenCodeSession } from "./spawn-helper"
+import * as grokSession from "../agents/grok/session"
+import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
 import { sendChannelConsentEnter } from "./post-spawn-keys"
@@ -760,17 +762,20 @@ export class SessionManager {
     return handle
   }
 
-  private async resumeGrokArm(
-    session: { id: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; agent?: string; reasoningLevel?: string },
-    name: string,
-  ): Promise<void> {
-    const { adapter } = await resumeGrokSession(
-      {
-        resolveAttachment: this.ports.resume.resolveAttachment,
-        onGrokSessionId: (_name, sid) => { this.registry.sessions.setAgentSessionId(session.id, sid) },
-      },
-      { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, effort: this.ports.resume.sessionEffort(session), agent_session_id: session.agent_session_id },
-    )
+  /** The dialect's narrow view of this component (see agents/session-types.ts):
+   *  effort resolution, attachment resolution, and agent-session-id persistence
+   *  for ONE session. Registration + event wiring stay out — that's the state
+   *  half, done by the arms after the dialect returns. */
+  private resumeCtx(sessionId: string): ResumeCtx {
+    return {
+      sessionEffort: (s) => this.ports.resume.sessionEffort(s),
+      resolveAttachment: this.ports.resume.resolveAttachment,
+      persistAgentSessionId: (sid) => { this.registry.sessions.setAgentSessionId(sessionId, sid) },
+    }
+  }
+
+  private async resumeGrokArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await grokSession.resume(this.resumeCtx(session.id), session, name)
     this.registerGrokRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
