@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.sp
 import com.jediterm.terminal.ui.JediTermWidget
 import dev.supermux.desktop.ui.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield
+import dev.supermux.desktop.ui.LocalModalPresence
+import dev.supermux.desktop.ui.ModalInteropOverlay
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
@@ -196,23 +198,24 @@ fun DesktopTerminalPanel(
         // hides it by LAYOUT (0×0 + clip), the only kind a heavyweight AWT child
         // respects: the widget stays in the same composition slot, the client keeps
         // its websocket, and the grid and scrollback come back untouched.
-        // Hides on EVERY platform, blending or not.
+        // Under interop blending the terminal does NOT hide: Compose paints over
+        // it, and ModalInteropOverlay hands Compose the mouse events so the dialog
+        // is clickable too. Blending alone was not enough — it composites but does
+        // not re-route input, which is why a dialog once rendered perfectly over
+        // the terminal and swallowed every click. Read ModalInteropOverlay's KDoc
+        // before touching this; and do not "verify" it with a screenshot, which is
+        // exactly what missed the input bug. Prove a CLICK lands.
         //
-        // Interop blending does make Compose PAINT over this widget on Metal, and
-        // for a moment that looked like the fix. It is not: blending composites,
-        // it does not re-route input. The AWT child stays topmost for hit-testing,
-        // so a dialog painted over the terminal swallowed every click —
-        //
-        //   Ahmet: "it renders correctly on top of the terminal. But if I try to
-        //   click on any button, it doesn't work."
-        //
-        // A modal you can see but cannot press is worse than one that blanks the
-        // pane behind it, so this steps aside until input routing is solved too.
-        // Do not set evenWithBlending = false here again without proving that a
-        // CLICK lands, not just that the pixels look right.
-        HeavyweightModalShield(evenWithBlending = true) {
+        // Where blending cannot apply (Linux/OpenGL) the pane still steps aside.
+        val modalOpen = LocalModalPresence.current.anyOpen
+        val overlay = remember(widget) { ModalInteropOverlay(widget) }
+        // If Compose's interop parent is ever missing, forwarding cannot work and
+        // the pane must hide instead — degrading to the old behaviour rather than
+        // to an unclickable dialog.
+        HeavyweightModalShield(evenWithBlending = overlay.forwardingBroken) {
             SwingPanel(
-                factory = { widget },
+                factory = { overlay },
+                update = { it.setShieldActive(modalOpen) },
                 modifier = Modifier.fillMaxSize(),
             )
         }

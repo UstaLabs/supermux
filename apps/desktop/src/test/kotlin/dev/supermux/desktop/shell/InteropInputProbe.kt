@@ -72,6 +72,9 @@ private const val TAG = "PROBE4"
 
 private var composeClicks = 0
 private var swingClicks = 0
+private var zorderTimer: javax.swing.Timer? = null
+private var glassPane: javax.swing.JComponent? = null
+private var modalOpenLatch = false
 
 fun main() {
     System.getenv("SM_BLENDING")?.let { System.setProperty("compose.interop.blending", it) }
@@ -101,16 +104,31 @@ fun main() {
         },
         AWTEvent.MOUSE_EVENT_MASK,
     )
+    // Keyboard is the other half of "can you actually use the modal": a text
+    // field in a dialog is useless if the terminal still owns the focus.
+    Toolkit.getDefaultToolkit().addAWTEventListener(
+        AWTEventListener { e ->
+            if (e is java.awt.event.KeyEvent && e.id == java.awt.event.KeyEvent.KEY_PRESSED) {
+                println(
+                    "$TAG AWT-KEY '${e.keyChar}' source=${e.source?.javaClass?.name} " +
+                        "focusOwner=${java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner?.javaClass?.name}"
+                )
+                System.out.flush()
+            }
+        },
+        AWTEvent.KEY_EVENT_MASK,
+    )
 
     application {
         val state = rememberWindowState(
-            position = WindowPosition(120.dp, 120.dp),
+            position = WindowPosition(40.dp, 40.dp),
             size = DpSize(1100.dp, 820.dp),
         )
         Window(onCloseRequest = ::exitApplication, state = state, title = "interop-input-probe") {
             var compose by remember { mutableStateOf(0) }
             var swing by remember { mutableStateOf(0) }
             var modalOpen by remember { mutableStateOf(modal != "none") }
+            var field by remember { mutableStateOf("") }
 
             LaunchedEffect(Unit) {
                 kotlinx.coroutines.delay(2000)
@@ -143,22 +161,13 @@ fun main() {
                         SwingPanel(
                             background = Color(0xFF7B1FA2),
                             modifier = Modifier.fillMaxWidth().height(560.dp),
-                            factory = {
-                                JTextArea("HEAVYWEIGHT SWING PANEL\n".repeat(40)).apply {
-                                    font = Font(Font.MONOSPACED, Font.BOLD, 18)
-                                    background = java.awt.Color(0x7B, 0x1F, 0xA2)
-                                    foreground = java.awt.Color.WHITE
-                                    addMouseListener(object : java.awt.event.MouseAdapter() {
-                                        override fun mousePressed(e: MouseEvent) {
-                                            swingClicks += 1
-                                            swing = swingClicks
-                                            println("$TAG HIT swing total=$swingClicks at=(${e.xOnScreen},${e.yOnScreen})")
-                                            System.out.flush()
-                                        }
-                                    })
-                                }
-                            },
-                            update = { ta -> applyNeuter(ta, neuter, modalOpen) },
+                            factory = { makeTerminalStandIn { c, e ->
+                                swingClicks += 1
+                                swing = swingClicks
+                                println("$TAG HIT swing total=$swingClicks at=(${e.xOnScreen},${e.yOnScreen}) src=${c.javaClass.simpleName}")
+                                System.out.flush()
+                            } },
+                            update = { host -> applyNeuter(host, neuter, modalOpen) },
                         )
                         Text(
                             "below the swing panel",
@@ -172,7 +181,19 @@ fun main() {
                             AlertDialog(
                                 onDismissRequest = { modalOpen = false },
                                 title = { Text("DIALOG") },
-                                text = { Text("Click the magenta target below.") },
+                                text = {
+                                    Column {
+                                        Text("Click the magenta target below.")
+                                        androidx.compose.material3.OutlinedTextField(
+                                            value = field,
+                                            onValueChange = {
+                                                field = it
+                                                println("$TAG FIELD '$it'"); System.out.flush()
+                                            },
+                                            label = { Text("type here") },
+                                        )
+                                    }
+                                },
                                 confirmButton = { MagentaTarget("dialog") { onCompose("dialog") } },
                             )
                         }
@@ -182,7 +203,9 @@ fun main() {
                                 onDismissRequest = { modalOpen = false },
                             ) {
                                 DropdownMenuItem(
-                                    text = { MagentaTarget("menu") { } },
+                                    // The inner Button would otherwise swallow the click
+                                    // before DropdownMenuItem's onClick ever sees it.
+                                    text = { MagentaTarget("menu") { onCompose("menu-button") } },
                                     onClick = { onCompose("menu") },
                                 )
                                 repeat(2) { i ->
@@ -226,26 +249,124 @@ private fun MagentaTarget(label: String, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF00FF)),
-        shape = androidx.compose.foundation.shape.RectangleShape,
+        shape = androidx.compose.ui.graphics.RectangleShape,
         modifier = Modifier.size(220.dp, 70.dp),
     ) {
         Text("TARGET", color = Color.Black)
     }
 }
 
-/** Candidate 1: make the AWT child stop competing for the pointer. */
-private fun applyNeuter(ta: JTextArea, mode: String, modalOpen: Boolean) {
+/**
+ * Candidate 1: make the AWT child stop competing for the pointer.
+ *
+ * The tree that matters (measured, SM_DUMP=1) is
+ *
+ *   ComposeWindowPanel
+ *     [0] SwingInteropViewGroup   <- the Swing child; index 0 == TOPMOST for hit-testing
+ *     [1] ComposeSceneMediator$InvisibleComponent
+ *     [2] WindowSkiaLayerComponent$hierarchyRoot  -> SkiaLayer (heavyweight)
+ *
+ * Lightweight z-order is front-to-back by index, so the interop group wins every
+ * press inside its bounds no matter what the Skia canvas painted on top of it.
+ */
+private fun applyNeuter(host: OverlayHost, mode: String, modalOpen: Boolean) {
+    val ta = host.terminal
     when (mode) {
         "disable" -> {
+            // Only the child and its own interop group — never ComposeWindowPanel,
+            // which would disable Compose's own input as well.
             ta.isEnabled = !modalOpen
-            // Also the interop container chain, up to (not including) the Compose canvas.
-            var p: Container? = ta.parent
-            var hops = 0
-            while (p != null && hops < 3) {
-                p.isEnabled = !modalOpen
-                p = p.parent
-                hops += 1
+            ta.parent?.isEnabled = !modalOpen
+            println("$TAG NEUTER disable ta.enabled=${ta.isEnabled} group.enabled=${ta.parent?.isEnabled}")
+            System.out.flush()
+        }
+        // Candidate 5b: Compose re-asserts the interop z-order on every placement,
+        // so hold it down with a repeating timer instead of setting it once.
+        "sendtoback-timer" -> {
+            val group = ta.parent ?: return
+            val host = group.parent ?: return
+            if (zorderTimer == null) {
+                zorderTimer = javax.swing.Timer(100) {
+                    val want = if (modalOpenLatch) host.componentCount - 1 else 0
+                    if (host.getComponentZOrder(group) != want) {
+                        host.setComponentZOrder(group, want)
+                    }
+                }.also { it.start() }
             }
+            modalOpenLatch = modalOpen
+        }
+        // Candidate 5: leave the child fully alive, just stop it being topmost.
+        "sendtoback" -> {
+            val group = ta.parent ?: return
+            val host = group.parent ?: return
+            val want = if (modalOpen) host.componentCount - 1 else 0
+            if (host.getComponentZOrder(group) != want) {
+                host.setComponentZOrder(group, want)
+                println("$TAG ZORDER group -> $want of ${host.componentCount} (modalOpen=$modalOpen)")
+                System.out.flush()
+            }
+        }
+        // Candidate 6: keep the interop group exactly where it is — so blending
+        // still composites it and the terminal stays VISIBLE — and instead put a
+        // transparent lightweight child ON TOP of the terminal INSIDE the group,
+        // which swallows every mouse event and re-dispatches it to the Skia layer
+        // (i.e. to Compose). Nothing about the group's bounds or z-order changes.
+        "glass" -> {
+            val group = ta.parent as? javax.swing.JComponent ?: return
+            if (!modalOpen) {
+                glassPane?.let { group.remove(it); group.repaint() }
+                glassPane = null
+                return
+            }
+            if (glassPane == null) {
+                val skia = findSkia(group) ?: run {
+                    println("$TAG NEUTER glass NO_SKIA"); return
+                }
+                val g = object : javax.swing.JComponent() {}
+                g.isOpaque = false
+                val fwd = object : java.awt.event.MouseAdapter() {
+                    private fun send(e: MouseEvent) {
+                        skia.dispatchEvent(javax.swing.SwingUtilities.convertMouseEvent(e.component, e, skia))
+                    }
+                    override fun mousePressed(e: MouseEvent) {
+                        println("$TAG GLASS press -> skia"); System.out.flush(); send(e)
+                    }
+                    override fun mouseReleased(e: MouseEvent) = send(e)
+                    override fun mouseClicked(e: MouseEvent) = send(e)
+                    override fun mouseMoved(e: MouseEvent) = send(e)
+                    override fun mouseDragged(e: MouseEvent) = send(e)
+                    override fun mouseEntered(e: MouseEvent) = send(e)
+                    override fun mouseExited(e: MouseEvent) = send(e)
+                }
+                g.addMouseListener(fwd)
+                g.addMouseMotionListener(fwd)
+                group.add(g, 0)
+                glassPane = g
+                println("$TAG NEUTER glass installed skia=${skia.javaClass.name}")
+                System.out.flush()
+            }
+            // `update` only runs on recomposition, and the first one lands before the
+            // group has been laid out (width 0) — so keep bounds+z-order pinned.
+            if (zorderTimer == null) {
+                zorderTimer = javax.swing.Timer(100) {
+                    val g = glassPane ?: return@Timer
+                    if (g.parent !== group) return@Timer
+                    if (g.width != group.width || g.height != group.height) {
+                        g.setBounds(0, 0, group.width, group.height)
+                    }
+                    if (group.getComponentZOrder(g) != 0) group.setComponentZOrder(g, 0)
+                }.also { it.start() }
+            }
+            glassPane!!.setBounds(0, 0, group.width, group.height)
+            if (group.getComponentZOrder(glassPane) != 0) group.setComponentZOrder(glassPane, 0)
+        }
+        // Candidate 6b: the SAME idea, but the overlay lives in a container the APP
+        // owns (so an ordinary layout manager sizes it — no polling, no reaching
+        // into SwingInteropViewGroup), and the event is re-dispatched to the
+        // interop group, which already carries ComposeSceneMediator's own mouse
+        // listener. No skiko class is named anywhere.
+        "glass-own" -> {
+            host.setShieldActive(modalOpen)
         }
         "listeners" -> {
             ta.isFocusable = !modalOpen
@@ -272,15 +393,92 @@ private fun applyNeuter(ta: JTextArea, mode: String, modalOpen: Boolean) {
     }
 }
 
+
+/**
+ * What the app would really own: a container holding the terminal, plus a
+ * transparent shield it can raise over it while a modal is open.
+ *
+ * Every child is sized to the host by [doLayout], so nothing polls and nothing
+ * touches Compose's own SwingInteropViewGroup — the only Compose-side fact this
+ * relies on is that the interop group carries ComposeSceneMediator's mouse
+ * listener, which is what makes re-dispatching to `parent` route into the scene.
+ */
+class OverlayHost(val terminal: JTextArea) : javax.swing.JPanel(null) {
+    private val shield = object : javax.swing.JComponent() {
+        init { isOpaque = false }
+    }
+
+    init {
+        add(terminal)
+        val fwd = object : java.awt.event.MouseAdapter() {
+            private fun send(e: MouseEvent) {
+                val target = this@OverlayHost.parent ?: return
+                target.dispatchEvent(javax.swing.SwingUtilities.convertMouseEvent(e.component, e, target))
+            }
+            override fun mousePressed(e: MouseEvent) {
+                println("$TAG SHIELD press -> ${this@OverlayHost.parent?.javaClass?.simpleName}")
+                System.out.flush(); send(e)
+            }
+            override fun mouseReleased(e: MouseEvent) = send(e)
+            override fun mouseClicked(e: MouseEvent) = send(e)
+            override fun mouseMoved(e: MouseEvent) = send(e)
+            override fun mouseDragged(e: MouseEvent) = send(e)
+            override fun mouseEntered(e: MouseEvent) = send(e)
+            override fun mouseExited(e: MouseEvent) = send(e)
+        }
+        shield.addMouseListener(fwd)
+        shield.addMouseMotionListener(fwd)
+    }
+
+    fun setShieldActive(active: Boolean) {
+        val has = shield.parent === this
+        if (active == has) return
+        if (active) add(shield, 0) else remove(shield)
+        revalidate(); repaint()
+        println("$TAG SHIELD active=$active")
+        System.out.flush()
+    }
+
+    override fun doLayout() {
+        for (c in components) c.setBounds(0, 0, width, height)
+    }
+}
+
+private fun makeTerminalStandIn(onClick: (Component, MouseEvent) -> Unit): OverlayHost {
+    val ta = JTextArea("HEAVYWEIGHT SWING PANEL\n".repeat(40)).apply {
+        font = Font(Font.MONOSPACED, Font.BOLD, 18)
+        background = java.awt.Color(0x7B, 0x1F, 0xA2)
+        foreground = java.awt.Color.WHITE
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) = onClick(e.component, e)
+        })
+    }
+    return OverlayHost(ta)
+}
+
+/** The heavyweight skiko canvas that carries Compose's own mouse listener. */
+private fun findSkia(from: Component): Component? {
+    var root: Component = from
+    while (root.parent != null) root = root.parent
+    var hit: Component? = null
+    fun walk(c: Component) {
+        if (c.javaClass.name.startsWith("org.jetbrains.skiko.SkiaLayer")) hit = c
+        if (c is Container) c.components.forEach { walk(it) }
+    }
+    walk(root)
+    return hit
+}
+
 private fun dumpTree(root: Component) {
     fun walk(c: Component, depth: Int) {
         val pad = "  ".repeat(depth)
         val idx = (c.parent as? Container)?.let { par ->
             par.components.indexOfFirst { it === c }
         } ?: -1
+        val ml = c.mouseListeners.joinToString(",") { it.javaClass.name.substringAfterLast('.') }
         println(
             "$TAG TREE $pad[$idx] ${c.javaClass.name} bounds=${c.bounds} " +
-                "lw=${c.isLightweight} vis=${c.isVisible} en=${c.isEnabled}"
+                "lw=${c.isLightweight} vis=${c.isVisible} en=${c.isEnabled} mouseListeners=[$ml]"
         )
         if (c is Container) c.components.forEach { walk(it, depth + 1) }
     }
