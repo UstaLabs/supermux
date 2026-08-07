@@ -68,6 +68,7 @@ import dev.supermux.net.VncClient
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.net.AddViewBody
+import dev.supermux.net.PatchViewBody
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -1186,11 +1187,40 @@ class DesktopAppState(
             }
             dev.supermux.desktop.shell.NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
             dev.supermux.desktop.shell.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
-            dev.supermux.desktop.shell.NewViewKind.CHAT -> return
+            // A pending chat: no sessionId yet. The tab renders the new-session
+            // composer, and binds to a real session on first send (bindChatView).
+            dev.supermux.desktop.shell.NewViewKind.CHAT -> buildJsonObject { }
         }
         stateScope.launch {
             runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
                 .onFailure { println("[DesktopAppState] addWorkspaceView failed: $it") }
+        }
+    }
+
+    /**
+     * Close a view. Used for a pending chat tab the user backed out of — it has no
+     * session behind it, so nothing is ended; the broker just drops the view.
+     */
+    fun closeWorkspaceView(workspaceId: String, viewId: String) {
+        stateScope.launch {
+            runCatching { api.closeView(workspaceId, viewId) }
+                .onFailure { println("[DesktopAppState] closeWorkspaceView failed: $it") }
+        }
+    }
+
+    /**
+     * Bind a pending chat view to the session that was just created for it, so
+     * the tab stops being a composer and becomes the conversation. Same tab, same
+     * position — only its contents change.
+     */
+    fun bindChatView(workspaceId: String, viewId: String, sessionId: String) {
+        stateScope.launch {
+            runCatching {
+                api.patchView(
+                    workspaceId, viewId,
+                    PatchViewBody(state = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }),
+                )
+            }.onFailure { println("[DesktopAppState] bindChatView failed: $it") }
         }
     }
 

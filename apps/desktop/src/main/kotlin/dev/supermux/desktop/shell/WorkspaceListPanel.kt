@@ -14,7 +14,7 @@
 //  - One teal accent, used for state and agency only.
 //
 // Rule of thumb for reviewers: diff against SessionListPanel should be row-model changes +
-// the per-workspace "+" (onAddView). Chrome (new-session card, host chips, section header,
+// Chrome (new-session card, host chips, section header,
 // footer rail, Settled fold, context menus, drag-reorder) is intentional parity.
 package dev.supermux.desktop.shell
 
@@ -179,7 +179,6 @@ fun WorkspaceListPanel(
      * Per-workspace affordance: add a view/tab to this workspace.
      * Hover-revealed on the row; caller may open the launcher until a dedicated flow exists.
      */
-    onAddView: (workspaceId: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -377,7 +376,6 @@ fun WorkspaceListPanel(
                                 val s = primarySession(w)
                                 if (s != null) onMute(w.id, !(s.mute ?: false))
                             },
-                            onAddView = { onAddView(w.id) },
                         )
                     }
                 }
@@ -420,7 +418,6 @@ fun WorkspaceListPanel(
                                 val s = primarySession(w)
                                 if (s != null) onMute(w.id, !(s.mute ?: false))
                             },
-                            onAddView = { onAddView(w.id) },
                             onMoveUp = { reorderWithin(rest, w.id, -1) },
                             onMoveDown = { reorderWithin(rest, w.id, +1) },
                         )
@@ -501,7 +498,6 @@ fun WorkspaceListPanel(
                                 val s = primarySession(w)
                                 if (s != null) onMute(w.id, !(s.mute ?: false))
                             },
-                            onAddView = { onAddView(w.id) },
                             onMoveUp = if (canDrag) {
                                 { reorderWithin(ordered, w.id, -1) }
                             } else null,
@@ -690,7 +686,6 @@ private fun WorkspaceListEntry(
     onRename: () -> Unit,
     onKill: () -> Unit,
     onToggleMute: () -> Unit,
-    onAddView: () -> Unit,
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
 ) {
@@ -717,7 +712,6 @@ private fun WorkspaceListEntry(
             onRename = onRename,
             onKill = onKill,
             onToggleMute = onToggleMute,
-            onAddView = onAddView,
             onMoveUp = onMoveUp,
             onMoveDown = onMoveDown,
         )
@@ -762,7 +756,6 @@ fun workspaceRowContextLabels(
  * One workspace row: status rail, name, multi-agent mark, message preview, branch —
  * lean by design (SessionRow parity). No per-row avatar. Path is omitted (group header owns it).
  * Preview + lifecycle badge come from the primary session (SessionRow plumbing).
- * Hover reveals a lightweight "+" to add a view/tab ([onAddView]).
  */
 @Composable
 fun WorkspaceRow(
@@ -782,7 +775,6 @@ fun WorkspaceRow(
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
-    onAddView: () -> Unit = {},
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
 ) {
@@ -879,25 +871,6 @@ fun WorkspaceRow(
                                 modifier = Modifier.size(14.dp),
                             )
                         }
-                    }
-                    // Per-workspace "+" — always in the tree (tests + a11y); visually hover-revealed.
-                    Spacer(Modifier.width(4.dp))
-                    Box(
-                        Modifier
-                            .size(18.dp)
-                            .alpha(if (hovered) 1f else 0f)
-                            .testTag("workspace_add_view_${w.id}")
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable(onClick = onAddView)
-                            .pointerHoverIcon(PointerIcon.Hand),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Add,
-                            contentDescription = "Add view",
-                            tint = cs.primary,
-                            modifier = Modifier.size(14.dp),
-                        )
                     }
                     if (projectTag != null) {
                         Spacer(Modifier.width(Space.sm))

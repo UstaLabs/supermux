@@ -674,8 +674,6 @@ fun AppShell(
                             onDevices = { ui.openSettings(SettingsSection.Devices) },
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
-                            // No dedicated add-view flow yet — open the launcher (same as new session).
-                            onAddView = { onNewSession() },
                             modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                         )
                     } else {
@@ -720,6 +718,69 @@ fun AppShell(
                         // Close-view candidate (Task 7 wires the confirm dialog). Set by
                         // LayoutHost onCloseView; never ends work by itself.
                         var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+    // The new-session composer, usable in TWO places: as the full-pane launcher
+    // and inside a workspace tab (a chat view that has no session yet). Extracted
+    // so both render exactly the same thing — the tab is not a reimplementation.
+    //
+    // [onCreated] receives the new session id; the caller decides what that means
+    // (select it, or bind the pending view to it).
+    val launcherPane: @Composable (onBack: () -> Unit, onCreated: (String) -> Unit) -> Unit =
+        { onBack, onCreated ->
+                    SessionLauncherScreen(
+                        sessions = activeHostSessions,
+                        home = home,
+                        onBack = onBack,
+                        lastBySession = lastBySession,
+                        // Host-global lookups + spawn target the ACTIVE host (`hostApp`);
+                        // the host picker below switches it. Single-host → [app].
+                        loadProjects = { hostApp.listProjects() },
+                        validatePath = { hostApp.validatePath(it) },
+                        loadModels = { hostApp.launcherModels(it) },
+                        loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
+                        loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
+                        transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
+                        loadPrefs = { launcherStore.loadPrefs() },
+                        onPrefsChange = { launcherStore.savePrefs(it) },
+                        loadDraft = { launcherStore.loadDraft() },
+                        onDraftChange = { launcherStore.saveDraft(it) },
+                        onClearDraft = { launcherStore.clearDraft() },
+                        // Spawn → select + send the first message → close. A null id is
+                        // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
+                        // turns any thrown message into the inline launcher_error text.
+                        onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
+                            val newId = hostApp.createSessionWithFirstMessage(
+                                workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+                                replaceDraftId = replaceDraftId,
+                            )
+                            if (newId == null) {
+                                throw IllegalStateException(
+                                    "Couldn't create the session — check the working directory and try again.",
+                                )
+                            }
+                            ui.selectedId = newId
+                            hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
+                            ui.launcherOpen = false; ui.launcherDraftId = null
+                        },
+                        onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
+                            hostApp.createDraftSession(
+                                workdir, agent, model, text,
+                                reasoningLevel = reasoningLevel,
+                                replaceDraftId = replaceDraftId,
+                            )
+                        },
+                        initialDraftId = ui.launcherDraftId,
+                        initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
+                        hosts = hostViews,
+                        selectedHost = activeHostId,
+                        onSelectHost = { fleet?.setActiveHost(it) },
+                        loadAgents = { hostApp.launcherAgents() },
+                        loadForges = { hostApp.listForges() },
+                        searchForge = { hostApp.searchForge(it) },
+                        cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
+                        createLocalRepo = { hostApp.createLocalRepo(it) },
+                        createForge = { cid, name -> hostApp.createForge(cid, name) },
+                    )
+        }
                     when {
                         ui.launcherOpen -> {
                             Box(
@@ -735,59 +796,9 @@ fun AppShell(
                                         }
                                     },
                             ) {
-                                SessionLauncherScreen(
-                                    sessions = activeHostSessions,
-                                    home = home,
-                                    onBack = { ui.launcherOpen = false; ui.launcherDraftId = null },
-                                    lastBySession = lastBySession,
-                                    // Host-global lookups + spawn target the ACTIVE host (`hostApp`);
-                                    // the host picker below switches it. Single-host → [app].
-                                    loadProjects = { hostApp.listProjects() },
-                                    validatePath = { hostApp.validatePath(it) },
-                                    loadModels = { hostApp.launcherModels(it) },
-                                    loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
-                                    loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
-                                    transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
-                                    loadPrefs = { launcherStore.loadPrefs() },
-                                    onPrefsChange = { launcherStore.savePrefs(it) },
-                                    loadDraft = { launcherStore.loadDraft() },
-                                    onDraftChange = { launcherStore.saveDraft(it) },
-                                    onClearDraft = { launcherStore.clearDraft() },
-                                    // Spawn → select + send the first message → close. A null id is
-                                    // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
-                                    // turns any thrown message into the inline launcher_error text.
-                                    onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
-                                        val newId = hostApp.createSessionWithFirstMessage(
-                                            workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-                                            replaceDraftId = replaceDraftId,
-                                        )
-                                        if (newId == null) {
-                                            throw IllegalStateException(
-                                                "Couldn't create the session — check the working directory and try again.",
-                                            )
-                                        }
-                                        ui.selectedId = newId
-                                        hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
-                                        ui.launcherOpen = false; ui.launcherDraftId = null
-                                    },
-                                    onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
-                                        hostApp.createDraftSession(
-                                            workdir, agent, model, text,
-                                            reasoningLevel = reasoningLevel,
-                                            replaceDraftId = replaceDraftId,
-                                        )
-                                    },
-                                    initialDraftId = ui.launcherDraftId,
-                                    initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
-                                    hosts = hostViews,
-                                    selectedHost = activeHostId,
-                                    onSelectHost = { fleet?.setActiveHost(it) },
-                                    loadAgents = { hostApp.launcherAgents() },
-                                    loadForges = { hostApp.listForges() },
-                                    searchForge = { hostApp.searchForge(it) },
-                                    cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
-                                    createLocalRepo = { hostApp.createLocalRepo(it) },
-                                    createForge = { cid, name -> hostApp.createForge(cid, name) },
+                                launcherPane(
+                                    { ui.launcherOpen = false; ui.launcherDraftId = null },
+                                    { newId -> ui.selectedId = newId; ui.launcherOpen = false; ui.launcherDraftId = null },
                                 )
                             }
                         }
@@ -868,15 +879,28 @@ fun AppShell(
                                     // launcher (spec §9.2); the other kinds are pure views and are
                                     // created straight away.
                                     onAddView = { groupId, kind ->
-                                        when (kind) {
-                                            NewViewKind.CHAT -> ui.openLauncher()
-                                            else -> app.addWorkspaceView(current.id, kind, groupId)
-                                        }
+                                        // Every kind, chat included, becomes a TAB in this group.
+                                        // A chat tab starts as the new-session composer and binds to
+                                        // its session on first send — the pane is never replaced.
+                                        app.addWorkspaceView(current.id, kind, groupId)
                                     },
                                     modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
                                 ) { viewId ->
                                     val v = viewsById[viewId]
-                                    if (v != null) {
+                                    if (v != null && v.kind == "chat" && v.chatSessionId() == null) {
+                                        // A chat tab with no session yet: render the SAME new-session
+                                        // composer the full-pane launcher uses, inside this tab. The
+                                        // pane and sidebar do not move. On send we create the session
+                                        // in THIS workspace and bind the view to it, so the very same
+                                        // tab becomes the conversation.
+                                        launcherPane(
+                                            { app.closeWorkspaceView(current.id, v.id) },
+                                            { newId ->
+                                                app.bindChatView(current.id, v.id, newId)
+                                                ui.selectedId = newId
+                                            },
+                                        )
+                                    } else if (v != null) {
                                         ViewHost(
                                             view = v,
                                             workspaceId = current.id,

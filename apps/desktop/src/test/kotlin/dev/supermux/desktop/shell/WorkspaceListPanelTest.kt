@@ -204,23 +204,6 @@ class WorkspaceListPanelTest {
     }
 
     @Test
-    fun perWorkspaceAddView_firesWithWorkspaceId() = runComposeUiTest {
-        var added: String? = null
-        setContent {
-            WorkspaceListPanel(
-                workspaces = listOf(ws("w1", "a", "/p")),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
-                onAddView = { added = it },
-            )
-        }
-        // Always in the semantics tree (alpha=0 when not hovered) so chrome tests don't need hover.
-        onNodeWithTag("workspace_add_view_w1", useUnmergedTree = true).performClick()
-        assertEquals("w1", added)
-    }
-
-    @Test
     fun settledSection_appearsWhenArchivedDataIsSupplied() = runComposeUiTest {
         setContent {
             WorkspaceListPanel(
