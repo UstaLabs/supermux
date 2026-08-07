@@ -3,6 +3,7 @@ package dev.supermux.desktop.shell
 import androidx.compose.material3.Text
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -128,5 +129,66 @@ class LayoutHostTest {
             LayoutHost(layout = LayoutNode.Group("g1", emptyList(), null), onLayoutChange = {}) { Text("body") }
         }
         onNodeWithTag("layout-empty").assertIsDisplayed()
+    }
+
+    // ── The "+" belongs on the TAB STRIP, not the sidebar row ────────────────
+    // Ahmet: "the plus button is on the wrong place ... it should be next to the
+    // tabs, when i click on tab it should ask me (popover?) if i wanna start a
+    // terminal or a display or a chat etc. and if i click it then it should start
+    // it there as a new tab with a view".
+
+    @Test
+    fun theTabStripCarriesAnAddButton() = runComposeUiTest {
+        setContent {
+            LayoutHost(
+                layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
+                onLayoutChange = {},
+                onAddView = { _, _ -> },
+            ) { Text("body") }
+        }
+        onNodeWithTag("tab-add-view").assertIsDisplayed()
+    }
+
+    @Test
+    fun theAddButtonIsHiddenWhenTheCallerCannotCreateViews() = runComposeUiTest {
+        setContent {
+            LayoutHost(layout = LayoutNode.Group("g1", listOf("v1"), "v1"), onLayoutChange = {}) { Text("body") }
+        }
+        onNodeWithTag("tab-add-view").assertDoesNotExist()
+    }
+
+    @Test
+    fun clickingAddOpensAPopoverOfViewKinds() = runComposeUiTest {
+        setContent {
+            LayoutHost(
+                layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
+                onLayoutChange = {},
+                onAddView = { _, _ -> },
+            ) { Text("body") }
+        }
+        onNodeWithTag("tab-add-view").performClick()
+        onNodeWithTag("tab-add-view-chat").assertIsDisplayed()
+        onNodeWithTag("tab-add-view-terminal").assertIsDisplayed()
+        onNodeWithTag("tab-add-view-editor").assertIsDisplayed()
+        onNodeWithTag("tab-add-view-display").assertIsDisplayed()
+    }
+
+    @Test
+    fun pickingAKindReportsItWithTheGroupItWasClickedIn() = runComposeUiTest {
+        var got: Pair<String, NewViewKind>? = null
+        setContent {
+            LayoutHost(
+                layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
+                    LayoutNode.Group("left", listOf("v1"), "v1"),
+                    LayoutNode.Group("right", listOf("v2"), "v2"),
+                )),
+                onLayoutChange = {},
+                onAddView = { g, k -> got = g to k },
+            ) { Text("body") }
+        }
+        // Two strips, two "+" — the SECOND one must report the right-hand group.
+        onAllNodesWithTag("tab-add-view")[1].performClick()
+        onNodeWithTag("tab-add-view-terminal").performClick()
+        assertEquals("right" to NewViewKind.TERMINAL, got)
     }
 }

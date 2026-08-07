@@ -21,6 +21,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -73,11 +77,17 @@ fun LayoutHost(
     modifier: Modifier = Modifier,
     titleFor: (String) -> String = { it },
     onCloseView: (String) -> Unit = {},
+    /**
+     * "+" on each group's tab strip. Receives the GROUP the user clicked in, so a
+     * new view lands as a tab in that group rather than somewhere arbitrary.
+     * Null hides the button.
+     */
+    onAddView: ((groupId: String, kind: NewViewKind) -> Unit)? = null,
     content: @Composable (viewId: String) -> Unit,
 ) {
     when (layout) {
-        is LayoutNode.Group -> GroupHost(layout, onLayoutChange, modifier, titleFor, onCloseView, content)
-        is LayoutNode.Split -> SplitHost(layout, onLayoutChange, modifier, titleFor, onCloseView, content)
+        is LayoutNode.Group -> GroupHost(layout, onLayoutChange, modifier, titleFor, onCloseView, onAddView, content)
+        is LayoutNode.Split -> SplitHost(layout, onLayoutChange, modifier, titleFor, onCloseView, onAddView, content)
     }
 }
 
@@ -88,6 +98,7 @@ private fun GroupHost(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
+    onAddView: ((String, NewViewKind) -> Unit)?,
     content: @Composable (String) -> Unit,
 ) {
     if (group.viewIds.isEmpty()) {
@@ -106,6 +117,7 @@ private fun GroupHost(
             titleFor = titleFor,
             onSelect = { onLayoutChange(group.copy(activeViewId = it)) },
             onClose = onCloseView,
+            onAddView = onAddView?.let { add -> { kind -> add(group.id, kind) } },
         )
         // Only the ACTIVE view is composed — never mount inactive tabs (JediTerm / KCEF).
         Box(Modifier.weight(1f).fillMaxWidth()) { content(active) }
@@ -119,6 +131,7 @@ private fun SplitHost(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
+    onAddView: ((String, NewViewKind) -> Unit)?,
     content: @Composable (String) -> Unit,
 ) {
     // Reuse the existing ResizableSplit drag chrome rather than writing new
@@ -139,6 +152,7 @@ private fun SplitHost(
             },
             titleFor = titleFor,
             onCloseView = onCloseView,
+            onAddView = onAddView,
             content = content,
         )
     }
@@ -160,6 +174,14 @@ internal fun EmptyWorkspaceHint() {
  * affordance tagged `tab-close-<viewId>`. The active tab uses the teal primary
  * accent. No animation — this strip changes many times a day.
  */
+/** The view kinds the "+" offers. Order is the order they appear in the popover. */
+enum class NewViewKind(val wire: String, val label: String) {
+    CHAT("chat", "Chat"),
+    TERMINAL("terminal", "Terminal"),
+    EDITOR("editor", "Editor"),
+    DISPLAY("display", "Display"),
+}
+
 @Composable
 fun ViewTabStrip(
     viewIds: List<String>,
@@ -168,6 +190,12 @@ fun ViewTabStrip(
     onSelect: (String) -> Unit,
     onClose: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * "+" at the end of the strip. Opens a popover of view kinds; picking one
+     * adds it to THIS group as a new tab. Null hides the button entirely (tests
+     * and any caller that cannot create views).
+     */
+    onAddView: ((NewViewKind) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
@@ -215,6 +243,43 @@ fun ViewTabStrip(
                         tint = fg,
                         modifier = Modifier.size(12.dp),
                     )
+                }
+            }
+        }
+
+        // "+" lives HERE, at the end of the tabs — not on the sidebar row. Adding
+        // a view is a thing you do to the group you are looking at, so the
+        // affordance belongs where the tabs are.
+        if (onAddView != null) {
+            var pickerOpen by remember { mutableStateOf(false) }
+            Box {
+                Box(
+                    Modifier
+                        .size(20.dp)
+                        .clickable { pickerOpen = true }
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .testTag("tab-add-view"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = "Add a view",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = pickerOpen,
+                    onDismissRequest = { pickerOpen = false },
+                    modifier = Modifier.testTag("tab-add-view-menu"),
+                ) {
+                    for (kind in NewViewKind.entries) {
+                        DropdownMenuItem(
+                            text = { Text(kind.label, fontSize = 12.sp) },
+                            onClick = { pickerOpen = false; onAddView(kind) },
+                            modifier = Modifier.testTag("tab-add-view-${kind.wire}"),
+                        )
+                    }
                 }
             }
         }

@@ -67,6 +67,11 @@ import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.VncClient
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
+import dev.supermux.net.AddViewBody
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
@@ -1162,6 +1167,30 @@ class DesktopAppState(
         }
         stateScope.launch {
             runCatching { api.reorderSessions(orderedIds) }
+        }
+    }
+
+    /**
+     * Add a view to a workspace as a new tab in [groupId].
+     *
+     * Terminal / editor / display only — a chat needs an agent session, so that
+     * path goes through the launcher (spec §9.2). The broker answers with
+     * view_added + workspace_changed, which is what actually draws the tab.
+     */
+    fun addWorkspaceView(workspaceId: String, kind: dev.supermux.desktop.shell.NewViewKind, groupId: String) {
+        val state: JsonObject = when (kind) {
+            dev.supermux.desktop.shell.NewViewKind.TERMINAL -> buildJsonObject {
+                put("scope", JsonPrimitive("workspace"))
+                // Unique per tab so two terminals in one workspace are two shells.
+                put("terminalId", JsonPrimitive("t" + Instant.now().toEpochMilli().toString().takeLast(6)))
+            }
+            dev.supermux.desktop.shell.NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
+            dev.supermux.desktop.shell.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
+            dev.supermux.desktop.shell.NewViewKind.CHAT -> return
+        }
+        stateScope.launch {
+            runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
+                .onFailure { println("[DesktopAppState] addWorkspaceView failed: $it") }
         }
     }
 

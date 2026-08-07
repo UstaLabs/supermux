@@ -863,6 +863,16 @@ fun AppShell(
                                         localLayout = next
                                         layoutDirty = true
                                     },
+                                    // "+" on the tab strip → pick a kind → it opens as a new tab in
+                                    // THAT group. A chat needs an agent, so it goes through the
+                                    // launcher (spec §9.2); the other kinds are pure views and are
+                                    // created straight away.
+                                    onAddView = { groupId, kind ->
+                                        when (kind) {
+                                            NewViewKind.CHAT -> ui.openLauncher()
+                                            else -> app.addWorkspaceView(current.id, kind, groupId)
+                                        }
+                                    },
                                     modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
                                 ) { viewId ->
                                     val v = viewsById[viewId]
