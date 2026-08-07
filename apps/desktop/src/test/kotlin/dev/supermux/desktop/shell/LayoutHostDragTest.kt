@@ -6,6 +6,10 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -116,5 +120,60 @@ class LayoutHostDragTest {
             ) { Text("body") }
         }
         onNodeWithTag("drop-zone-right").assertDoesNotExist()
+    }
+
+    // ── Regression: a shared TabDragState must not carry stale bounds ────────
+    //
+    // AppShell hoists ONE TabDragState for the app's lifetime and hands it to
+    // whichever workspace is on screen. Nothing ever unregistered a group's
+    // bounds, so after visiting a second workspace the maps still held panes and
+    // strips from the first. resolveDrop hit-tests every registered rect, a stale
+    // one occupies the same screen area as the live one and can win, and the
+    // resolved group id then does not exist in the current tree — so
+    // reorderWithinGroup / moveViewToGroup / splitGroup all no-op, next == tree,
+    // and onLayoutChange is never called.
+    //
+    // Symptom, in the user's words: "if i am dragging from the tab title and
+    // leave it nothing happens."
+    //
+    // Every other test in this file builds a FRESH state and mounts ONE
+    // workspace, which is why they all passed while the app was broken.
+
+    @Test
+    fun aDragStillWorksAfterSwitchingWorkspacesWithASharedDragState() = runComposeUiTest {
+        val shared = TabDragState()
+        var workspace by mutableStateOf("a")
+        var treeB: LayoutNode = LayoutNode.Group("gb", listOf("x", "y", "z"), "x")
+
+        setContent {
+            if (workspace == "a") {
+                LayoutHost(
+                    layout = LayoutNode.Group("ga", listOf("p", "q"), "p"),
+                    onLayoutChange = {},
+                    dragState = shared,
+                    onAddView = { _, _, _ -> },
+                ) { Text("body-a") }
+            } else {
+                LayoutHost(
+                    layout = treeB,
+                    onLayoutChange = { treeB = it },
+                    dragState = shared,
+                    onAddView = { _, _, _ -> },
+                ) { Text("body-b") }
+            }
+        }
+
+        waitForIdle()
+        workspace = "b"
+        waitForIdle()
+
+        // An ordinary same-strip reorder inside the workspace now on screen.
+        onNodeWithTag("view-tab-x").performTouchInput {
+            down(Offset(10f, 12f))
+            moveBy(Offset(140f, 0f))
+            up()
+        }
+
+        assertEquals(listOf("y", "x", "z"), (treeB as LayoutNode.Group).viewIds)
     }
 }

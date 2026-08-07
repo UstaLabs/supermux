@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -254,6 +255,13 @@ private fun GroupHost(
             onDrop = onDrop,
             onAddView = onAddView?.let { add -> { kind, place -> add(group.id, kind, place) } },
         )
+        // A group that leaves composition (workspace switch, session switch, a split
+        // collapsing) must take its registered bounds with it. Otherwise resolveDrop
+        // hit-tests against panes that are no longer on screen, matches a group id
+        // absent from the current tree, and every drop silently no-ops.
+        DisposableEffect(group.id) {
+            onDispose { dragState.unregisterGroup(group.id) }
+        }
         // While a drag is active, SWAP the heavyweight body for a Compose
         // drop-zone surface. Overlaying zones above SwingPanel is invisible.
         Box(

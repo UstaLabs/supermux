@@ -64,9 +64,34 @@ class TabDragState {
         workspaceBounds[workspaceId] = bounds
     }
 
+    fun unregisterWorkspace(workspaceId: String) {
+        workspaceBounds.remove(workspaceId)
+    }
+
+    /**
+     * Drop every registered bound. Called when the open workspace changes: the whole
+     * previous tree left the screen at once, so its entries are all stale.
+     */
+    fun forgetAllBounds() {
+        stripBounds.clear()
+        paneBounds.clear()
+        tabBounds.clear()
+    }
+
     /** Last known root bounds for a tab, used to seed the drag origin. */
     fun tabBoundsFor(groupId: String, viewId: String): Rect? = tabBounds[tabKey(groupId, viewId)]
 
+    /**
+     * Forget everything registered for a group. MUST be called when a group leaves
+     * composition — a workspace switch, a session switch, a split collapsing.
+     *
+     * Without it the bounds maps grow for the lifetime of the app, and [resolveDrop]
+     * hit-tests against panes that are no longer on screen. A stale entry from a
+     * workspace you visited earlier occupies the same screen rectangle as the one you
+     * are looking at, so it can win the match; the resolved group id then does not
+     * exist in the current tree, every tree operation no-ops, `next == tree`, and
+     * onLayoutChange is never called. The drag silently does nothing.
+     */
     fun unregisterGroup(groupId: String) {
         stripBounds.remove(groupId)
         paneBounds.remove(groupId)

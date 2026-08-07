@@ -883,6 +883,10 @@ fun AppShell(
                                     workspaceViewingLayout = localLayout
                                     workspaceViewingViews = viewsById
                                 }
+                                // The entire previous tree left the screen at once, so every
+                                // bound registered for it is stale. Belt-and-braces alongside
+                                // GroupHost's per-group onDispose.
+                                LaunchedEffect(current.id) { tabDragState.forgetAllBounds() }
                                 LayoutHost(
                                     layout = localLayout,
                                     titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
