@@ -11,9 +11,9 @@ import { GrokAdapter } from "../agents/grok/adapter"
 import { resolveCodexAuth } from "../agents/codex/auth"
 import { writeCodexPreamble } from "../agents/codex/preamble-writer"
 import { codexPrepareSessionHome, codexSpawnArgs } from "../plugins"
-import { resumeOpenCodeSession } from "./spawn-helper"
 import * as cursorSession from "../agents/cursor/session"
 import * as grokSession from "../agents/grok/session"
+import * as opencodeSession from "../agents/opencode/session"
 import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { buildClaudeSpawnSpec } from "./spawn-command"
 import { preAcceptTrust } from "./trust"
@@ -724,17 +724,8 @@ export class SessionManager {
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
-  private async resumeOpenCodeArm(
-    session: { id: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
-    name: string,
-  ): Promise<OpenCodeSpawnHandle> {
-    const { adapter, handle } = await resumeOpenCodeSession(
-      {
-        resolveAttachment: this.ports.resume.resolveAttachment,
-        onOpenCodeSessionId: (_name, sid) => { this.registry.sessions.setAgentSessionId(session.id, sid) },
-      },
-      { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
-    )
+  private async resumeOpenCodeArm(session: ResumeRow, name: string): Promise<OpenCodeSpawnHandle> {
+    const { adapter, handle } = await opencodeSession.resume(this.resumeCtx(session.id), session, name)
     this.registerOpenCodeRuntime(session.id, name, adapter, handle)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
     return handle

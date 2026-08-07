@@ -2,7 +2,7 @@ import { test, expect } from "bun:test"
 import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { resumeOpenCodeSession } from "./spawn-helper"
+import { resumeOpenCodeSession } from "../agents/opencode/session"
 import type { OpenCodeClientLike } from "../agents/opencode/adapter"
 
 // A fake `opencode serve` handle: records prompt/create/abort calls so the test
