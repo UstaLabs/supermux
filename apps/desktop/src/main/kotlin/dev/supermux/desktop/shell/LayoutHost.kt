@@ -103,13 +103,32 @@ fun LayoutHost(
      * Null hides the button.
      */
     onAddView: ((groupId: String, kind: NewViewKind) -> Unit)? = null,
+    /**
+     * Shared drag state so the sidebar can register workspace-row drop targets.
+     * When null, [LayoutHost] owns a private instance (standalone / tests).
+     */
+    dragState: TabDragState? = null,
+    /**
+     * Cross-workspace drop (sidebar row). Spec §9.4 — session workdir is unchanged.
+     * Null ignores workspace drops.
+     */
+    onMoveToWorkspace: ((viewId: String, toWorkspaceId: String) -> Unit)? = null,
     content: @Composable (viewId: String) -> Unit,
 ) {
-    val dragState = remember { TabDragState() }
+    val ownedDrag = remember { TabDragState() }
+    val drag = dragState ?: ownedDrag
     val layoutState = rememberUpdatedState(layout)
     val onLayoutChangeState = rememberUpdatedState(onLayoutChange)
+    val onMoveToWorkspaceState = rememberUpdatedState(onMoveToWorkspace)
 
     fun applyDrop(target: TabDropTarget) {
+        when (target) {
+            is TabDropTarget.MoveToWorkspace -> {
+                onMoveToWorkspaceState.value?.invoke(target.viewId, target.toWorkspaceId)
+                return
+            }
+            else -> Unit
+        }
         val tree = layoutState.value
         val next: LayoutNode? = when (target) {
             is TabDropTarget.Reorder ->
@@ -137,6 +156,7 @@ fun LayoutHost(
                 )
                 if (target.newFirst) reverseNewSplit(split, target.groupId) else split
             }
+            is TabDropTarget.MoveToWorkspace -> null // handled above
         }
         if (next != null && next != tree) onLayoutChangeState.value(next)
     }
@@ -144,7 +164,7 @@ fun LayoutHost(
     LayoutHostNode(
         layout = layout,
         onLayoutChange = onLayoutChange,
-        dragState = dragState,
+        dragState = drag,
         onDrop = { applyDrop(it) },
         modifier = modifier,
         titleFor = titleFor,

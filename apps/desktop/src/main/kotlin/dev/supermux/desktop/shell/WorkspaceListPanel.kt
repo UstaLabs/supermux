@@ -76,6 +76,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
@@ -172,6 +173,11 @@ fun WorkspaceListPanel(
     onUsage: () -> Unit = {},
     onSettings: () -> Unit = {},
     onDevices: () -> Unit = {},
+    /**
+     * Shared tab-drag state from the layout host. When non-null, each workspace
+     * row registers as a drop target for cross-workspace view moves.
+     */
+    tabDragState: TabDragState? = null,
     /** Current app appearance — footer theme button shows the opposite affordance. */
     appearance: AppearanceMode = AppearanceMode.DARK,
     onToggleTheme: () -> Unit = {},
@@ -376,6 +382,7 @@ fun WorkspaceListPanel(
                                 val s = primarySession(w)
                                 if (s != null) onMute(w.id, !(s.mute ?: false))
                             },
+                            tabDragState = tabDragState,
                         )
                     }
                 }
@@ -414,6 +421,7 @@ fun WorkspaceListPanel(
                             onOpenSession = onOpenSession,
                             onRename = { renameTarget = w; renameText = w.name },
                             onKill = { killTarget = w },
+                            tabDragState = tabDragState,
                             onToggleMute = {
                                 val s = primarySession(w)
                                 if (s != null) onMute(w.id, !(s.mute ?: false))
@@ -504,6 +512,7 @@ fun WorkspaceListPanel(
                             onMoveDown = if (canDrag) {
                                 { reorderWithin(ordered, w.id, +1) }
                             } else null,
+                            tabDragState = tabDragState,
                         )
                     }
                     // Settled fold under this project (SessionListPanel: g.sections SETTLED).
@@ -688,6 +697,7 @@ private fun WorkspaceListEntry(
     onToggleMute: () -> Unit,
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
+    tabDragState: TabDragState? = null,
 ) {
     val activity = workspaceActivity(w, agentState)
     val primarySid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
@@ -714,6 +724,7 @@ private fun WorkspaceListEntry(
             onToggleMute = onToggleMute,
             onMoveUp = onMoveUp,
             onMoveDown = onMoveDown,
+            tabDragState = tabDragState,
         )
         if (w.isMultiAgent()) {
             Column(
@@ -777,10 +788,13 @@ fun WorkspaceRow(
     onToggleMute: () -> Unit = {},
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
+    /** When set, this row is a drop target for a tab dragged out of the layout. */
+    tabDragState: TabDragState? = null,
 ) {
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val working = activity == WorkspaceActivity.WORKING
+    val dropHover = tabDragState?.hoverWorkspaceId == w.id
     val hasUnread = dev.supermux.session.sessionListShowsUnread(
         active = active,
         working = working,
@@ -791,24 +805,22 @@ fun WorkspaceRow(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
 
-    val rowModifier = if (active) {
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .softElevation(radius = Radii.md)
-            .clip(RoundedCornerShape(6.dp))
-            .background(cs.surfaceContainer)
-            .hoverable(interaction)
-            .clickable(onClick = onClick)
-    } else {
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color.Transparent)
-            .hoverable(interaction)
-            .clickable(onClick = onClick)
+    val rowBg = when {
+        dropHover -> cs.primary.copy(alpha = 0.18f)
+        active -> cs.surfaceContainer
+        else -> Color.Transparent
     }
+    val rowModifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 8.dp, vertical = 4.dp)
+        .then(if (active) Modifier.softElevation(radius = Radii.md) else Modifier)
+        .clip(RoundedCornerShape(6.dp))
+        .background(rowBg)
+        .onGloballyPositioned { coords ->
+            tabDragState?.registerWorkspace(w.id, coords.boundsInRoot())
+        }
+        .hoverable(interaction)
+        .clickable(onClick = onClick)
 
     Box(modifier) {
     ContextMenuArea(

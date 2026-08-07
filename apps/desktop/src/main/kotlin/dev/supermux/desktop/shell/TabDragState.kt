@@ -35,8 +35,18 @@ class TabDragState {
     private val paneBounds = mutableStateMapOf<String, Rect>()
     /** Tab bounds in root coords, keyed by "groupId\\0viewId". */
     private val tabBounds = mutableStateMapOf<String, Rect>()
+    /** Workspace sidebar row bounds in root coords, keyed by workspace id. */
+    private val workspaceBounds = mutableStateMapOf<String, Rect>()
 
     val isDragging: Boolean get() = draggingViewId != null && pastThreshold
+
+    /** Workspace id under the pointer while dragging, if any (for row highlight). */
+    val hoverWorkspaceId: String?
+        get() {
+            if (!isDragging) return null
+            val p = pointerRoot
+            return workspaceBounds.entries.firstOrNull { it.value.contains(p) }?.key
+        }
 
     fun registerStrip(groupId: String, bounds: Rect) {
         stripBounds[groupId] = bounds
@@ -48,6 +58,10 @@ class TabDragState {
 
     fun registerTab(groupId: String, viewId: String, bounds: Rect) {
         tabBounds[tabKey(groupId, viewId)] = bounds
+    }
+
+    fun registerWorkspace(workspaceId: String, bounds: Rect) {
+        workspaceBounds[workspaceId] = bounds
     }
 
     /** Last known root bounds for a tab, used to seed the drag origin. */
@@ -93,6 +107,13 @@ class TabDragState {
         val viewId = draggingViewId ?: return null
         val origin = originGroupId ?: return null
         val p = pointerRoot
+
+        // Sidebar workspace row: cross-workspace move (POST /views/:id/move).
+        workspaceBounds.entries
+            .firstOrNull { (_, r) -> r.contains(p) }
+            ?.let { (wsId, _) ->
+                return TabDropTarget.MoveToWorkspace(viewId, wsId)
+            }
 
         // Prefer strip hits: reorder within a strip or move onto another strip.
         // A small vertical slop keeps a slightly-low release on the strip; deeper
@@ -257,6 +278,7 @@ sealed class TabDropTarget {
         val direction: String,
         val newFirst: Boolean,
     ) : TabDropTarget()
+    data class MoveToWorkspace(val viewId: String, val toWorkspaceId: String) : TabDropTarget()
 }
 
 /** Click-vs-drag threshold in px. Below this, release is a plain tab select. */

@@ -347,6 +347,9 @@ fun AppShell(
     // Read once — an env var cannot change under a hot reload anyway.
     val workspaceSidebar = remember { System.getenv("SM_WORKSPACES")?.isNotBlank() == true }
     val workspaces by app.workspaces.collectAsState()
+    // Shared across the sidebar and the layout host so a tab can drop onto a
+    // workspace row (cross-workspace move).
+    val tabDragState = remember { TabDragState() }
     var archivedForList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
     LaunchedEffect(sessions, ui.selectedId) {
         // Refresh settled fold when the live list changes (settle/resume/snapshot).
@@ -674,6 +677,7 @@ fun AppShell(
                             onDevices = { ui.openSettings(SettingsSection.Devices) },
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
+                            tabDragState = tabDragState,
                             modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
                         )
                     } else {
@@ -883,6 +887,12 @@ fun AppShell(
                                         // A chat tab starts as the new-session composer and binds to
                                         // its session on first send — the pane is never replaced.
                                         app.addWorkspaceView(current.id, kind, groupId)
+                                    },
+                                    dragState = tabDragState,
+                                    onMoveToWorkspace = { viewId, toWs ->
+                                        if (toWs != current.id) {
+                                            app.moveViewToWorkspace(viewId, toWs)
+                                        }
                                     },
                                     modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
                                 ) { viewId ->

@@ -68,6 +68,7 @@ import dev.supermux.net.VncClient
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.net.AddViewBody
+import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -1239,6 +1240,22 @@ class DesktopAppState(
         stateScope.launch {
             runCatching { api.archiveWorkspace(workspaceId) }
                 .onFailure { println("[DesktopAppState] archiveWorkspace failed: $it") }
+        }
+    }
+
+    /**
+     * Move a view to another workspace via POST /views/:id/move.
+     *
+     * Spec §9.4: the session's work directory does NOT change — a chat view in a
+     * workspace with a different workdir is valid. The broker broadcasts the
+     * resulting workspace_changed frames; we do not optimistically edit layouts
+     * here (the move can land in any group on the target).
+     */
+    fun moveViewToWorkspace(viewId: String, toWorkspaceId: String) {
+        stateScope.launch {
+            runCatching {
+                api.moveView(viewId, MoveViewBody(toWorkspaceId = toWorkspaceId))
+            }.onFailure { println("[DesktopAppState] moveViewToWorkspace failed: $it") }
         }
     }
 
