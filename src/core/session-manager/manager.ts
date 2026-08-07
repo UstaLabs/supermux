@@ -3,14 +3,12 @@ import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
 import { ClaudeCodeAdapter } from "../agents/claude"
 import { CodexAdapter } from "../agents/codex/adapter"
-import { spawnCodexAppServer, type CodexSpawnHandle } from "../agents/codex/spawn"
+import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import { CursorAdapter } from "../agents/cursor/adapter"
 import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { GrokAdapter } from "../agents/grok/adapter"
-import { resolveCodexAuth } from "../agents/codex/auth"
-import { writeCodexPreamble } from "../agents/codex/preamble-writer"
-import { codexPrepareSessionHome, codexSpawnArgs } from "../plugins"
+import * as codexSession from "../agents/codex/session"
 import * as cursorSession from "../agents/cursor/session"
 import * as grokSession from "../agents/grok/session"
 import * as opencodeSession from "../agents/opencode/session"
@@ -21,8 +19,6 @@ import { sendChannelConsentEnter } from "./post-spawn-keys"
 import { ensureUnique } from "./naming"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
-import { home } from "../../shared/home"
-import { join } from "path"
 import { AgentKind, isAgentKind } from "../../shared/agents"
 import { wireClaudeStateEvents } from "../agents/claude/state-projection"
 import { claudeTranscriptPath } from "../agents/claude/transcript-path"
@@ -684,35 +680,8 @@ export class SessionManager {
     return false
   }
 
-  private async resumeCodexArm(
-    session: { id: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; agent?: string; reasoningLevel?: string },
-    name: string,
-  ): Promise<CodexSpawnHandle> {
-    const auth = await resolveCodexAuth({
-      apiKey: process.env.OPENAI_API_KEY,
-      userCodexHome: join(home(), ".codex"),
-      sessionCodexHome: session.agent_home,
-    })
-    await codexPrepareSessionHome(session.agent_home)
-    writeCodexPreamble({ codexHome: session.agent_home, sessionName: name, workdir: session.workdir })
-    const effort = this.ports.resume.sessionEffort(session)
-    const handle = spawnCodexAppServer({
-      codexHome: session.agent_home,
-      workdir: session.workdir,
-      authEnv: auth.env,
-      model: session.model,
-      reasoningLevel: effort,
-      pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
-    })
-    const adapter = new CodexAdapter({
-      sessionName: name,
-      workdir: session.workdir,
-      client: handle.client,
-      persistThreadId: async () => {},
-      initialThreadId: session.agent_session_id,
-      resolveAttachment: this.ports.resume.resolveAttachment,
-    })
-    await adapter.resume()
+  private async resumeCodexArm(session: ResumeRow, name: string): Promise<CodexSpawnHandle> {
+    const { adapter, handle } = await codexSession.resume(this.resumeCtx(session.id), session, name)
     this.registerCodexRuntime(session.id, name, adapter, handle)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
     return handle
