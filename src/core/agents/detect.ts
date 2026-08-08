@@ -5,6 +5,7 @@
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind } from "../../shared/agents"
+import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
 
 export interface AgentStatus {
   kind: AgentKind
@@ -16,6 +17,8 @@ export interface DetectProbes {
   hasBinary: (bin: string) => boolean
   fileExists: (path: string) => boolean
   hasCredential?: (kind: AgentKind) => boolean
+  /** Injected `claude auth status` runner; claude's module owns the default. */
+  claudeAuthStatus?: AuthStatusRunner
 }
 
 export interface DetectPaths {
@@ -25,6 +28,9 @@ export interface DetectPaths {
   appData?: string
   localAppData?: string
   platform?: NodeJS.Platform
+  /** Environment to treat as a credential source. Empty by default, so detection
+   * reads no ambient state unless the caller opts in. Only claude uses it. */
+  env?: Record<string, string | undefined>
 }
 
 const ALL_KINDS: readonly AgentKind[] = AGENT_KINDS
@@ -61,6 +67,30 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
   }
 }
 
+/** One credential probe per kind. Four kinds answer with a single file test.
+ * Claude has three sources — environment, stored settings, credential file, and
+ * the darwin Keychain — so `claude/auth.ts` owns claude's answer and this table
+ * only calls it. A table, not a kind test: no service branches on the kind. */
+const CRED_PROBE: Record<AgentKind, (probes: DetectProbes, paths: DetectPaths) => boolean> = {
+  claude: (probes, paths) => claudeIsAuthed({
+    home: paths.home,
+    platform: paths.platform,
+    env: paths.env,
+    fileExists: probes.fileExists,
+    storedCredential: probes.hasCredential?.(AgentKind.Claude) ?? false,
+    runner: probes.claudeAuthStatus,
+  }),
+  codex: credFileOrStored(AgentKind.Codex),
+  cursor: credFileOrStored(AgentKind.Cursor),
+  opencode: credFileOrStored(AgentKind.OpenCode),
+  grok: credFileOrStored(AgentKind.Grok),
+}
+
+function credFileOrStored(kind: AgentKind) {
+  return (probes: DetectProbes, paths: DetectPaths): boolean =>
+    probes.fileExists(authCredPath(kind, paths)) || (probes.hasCredential?.(kind) ?? false)
+}
+
 export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: DetectPaths): AgentStatus {
   const installed = BINARIES[kind].some(probes.hasBinary)
   // `authed` means a real credential is present: the CLI's auth file exists (or a
@@ -69,7 +99,7 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
   // but NOT `authed` (no provider connected). The UI renders that free-tier state as
   // "Ready · free tier"; opencode spawning never fail-closes on auth, so this only
   // affects the status badge, not usability.
-  const authed = installed && (probes.fileExists(authCredPath(kind, paths)) || (probes.hasCredential?.(kind) ?? false))
+  const authed = installed && CRED_PROBE[kind](probes, paths)
   return { kind, installed, authed }
 }
 

@@ -113,11 +113,11 @@ test("omits instructions when no preamble path is given", () => {
   expect(cfg.instructions).toBeUndefined()
 })
 
-test("uses LOCALAPPDATA for native Windows opencode auth without changing POSIX XDG", () => {
-  expect(resolveOpenCodeAuth({
+test("uses LOCALAPPDATA for native Windows opencode auth without changing POSIX XDG", async () => {
+  expect((await resolveOpenCodeAuth({
     home: "C:\\Users\\u", platform: "win32", localAppData: "D:\\Data", fileExists: () => false,
-  }).authPath).toBe("D:\\Data\\opencode\\auth.json")
-  expect(resolveOpenCodeAuth({
+  })).authPath).toBe("D:\\Data\\opencode\\auth.json")
+  expect((await resolveOpenCodeAuth({
     home: "/home/u", platform: "linux", xdgDataHome: "/xdg", fileExists: () => false,
-  }).authPath).toBe("/xdg/opencode/auth.json")
+  })).authPath).toBe("/xdg/opencode/auth.json")
 })

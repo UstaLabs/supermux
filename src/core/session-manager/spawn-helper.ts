@@ -300,7 +300,7 @@ export async function spawnPA(opts: {
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
     const configHome = join(sessionHome, "config")
 
-    const auth = resolveOpenCodeAuth({ home: HOME })
+    const auth = await resolveOpenCodeAuth({ home: HOME })
     const instructionsPath = writeOpenCodePreamble({ sessionHome, sessionName: name, workdir })
     const { pluginPaths, skillsPaths } = opencodeConfigEntries({ sessionName: name })
 
@@ -356,7 +356,7 @@ export async function spawnPA(opts: {
     // HOME is redirected to sessionHome so grok reads a private config.toml and
     // does NOT auto-import the user's ~/.claude.json MCP servers (which would pull
     // the global mux-shim/mux-channel into this session).
-    const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
+    const auth = await resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
     writeGrokConfig({
       sessionHome,
       ...shimSpawnSpec(),
