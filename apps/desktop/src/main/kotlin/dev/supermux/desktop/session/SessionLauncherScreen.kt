@@ -20,17 +20,12 @@
 // [shouldResetBaseBranchOnWorkdirChange] and unit-tested (SessionLauncherScreenTest).
 package dev.supermux.desktop.session
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -57,10 +52,12 @@ import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import dev.supermux.desktop.ui.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -85,7 +82,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -107,9 +103,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.ui.Dialog
+import dev.supermux.desktop.ui.Speedometer
 import dev.supermux.desktop.chat.MicButton
 import dev.supermux.desktop.chat.MicCapture
 import dev.supermux.desktop.chat.MicRecorder
+import dev.supermux.desktop.chat.isComposerSendKey
 import dev.supermux.desktop.chat.rememberDesktopDictation
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.host.HostView
@@ -127,6 +125,7 @@ import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.effortSpeedometerParams
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.net.sortEffortLevelsLowToHigh
@@ -535,21 +534,14 @@ fun SessionLauncherScreen(
         )
     }
 
-    // ── Composer focus/send affordances ──────────────────────────────────────────────────────────
+    // ── Composer focus/send affordances (DesktopComposer chrome parity) ─────────────────────────
     val composerInteraction = remember { MutableInteractionSource() }
     val composerFocused by composerInteraction.collectIsFocusedAsState()
-    val cardBorder by animateColorAsState(
-        targetValue = if (composerFocused) cs.primary else cs.outlineVariant,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "composer_card_border",
-    )
-    val sendInteraction = remember { MutableInteractionSource() }
-    val sendPressed by sendInteraction.collectIsPressedAsState()
-    val sendScale by animateFloatAsState(
-        targetValue = if (sendPressed) 0.88f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "send_scale",
-    )
+    // Capsule card like chat, but solid fill — launcher sits on surfaceContainerHigh, so a
+    // translucent high fill would disappear; surfaceContainerLowest lifts it off the page.
+    val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp capsule
+    val cardBorder = if (composerFocused) cs.outline.copy(alpha = 0.55f)
+    else cs.outlineVariant.copy(alpha = 0.65f)
     val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
     val canSaveDraft = workdir.isNotBlank() && message.text.isNotBlank()
     fun doSaveDraft() {
@@ -706,14 +698,15 @@ fun SessionLauncherScreen(
             }
         }
 
-        // ── Composer card ──
+        // ── Composer card — same soft capsule + bottom toolbar as chat DesktopComposer ──
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
+                .clip(cardShape)
                 .background(cs.surfaceContainerLowest)
-                .border(1.dp, cardBorder, RoundedCornerShape(24.dp))
-                .padding(14.dp),
+                .border(1.dp, cardBorder, cardShape)
+                .padding(horizontal = 14.dp, vertical = 14.dp)
+                .testTag("launcher_composer_card"),
         ) {
             // Staged attachment chips (name + remove; upload happens post-spawn).
             if (staged.isNotEmpty()) {
@@ -721,13 +714,13 @@ fun SessionLauncherScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(bottom = Space.sm),
-                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     staged.forEach { att ->
                         Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
+                                .clip(RoundedCornerShape(Radii.pill))
                                 .background(cs.surfaceContainerHigh)
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -747,182 +740,274 @@ fun SessionLauncherScreen(
                 }
             }
 
-            // Text input (placeholder overlay + primary cursor + card focus border).
-            Box(modifier = Modifier.fillMaxWidth().heightIn(min = 116.dp)) {
-                if (message.text.isEmpty()) {
-                    Text("What should the agent do?", color = cs.onSurfaceVariant, fontSize = 15.sp)
-                }
-                BasicTextField(
-                    value = message,
-                    onValueChange = { message = it; error = null },
-                    textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp),
-                    cursorBrush = SolidColor(cs.primary),
-                    interactionSource = composerInteraction,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("launcher_message")
-                        // Enter submits; Shift+Enter inserts a newline.
-                        .onPreviewKeyEvent { e ->
-                            if (
-                                e.type == KeyEventType.KeyDown &&
-                                (e.key == Key.Enter || e.key == Key.NumPadEnter) &&
-                                !e.isShiftPressed
-                            ) {
-                                doSubmit(); true
+            // First-message field is taller than chat's (launcher is the only content on the page).
+            BasicTextField(
+                value = message,
+                onValueChange = { message = it; error = null },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 280.dp)
+                    .testTag("launcher_message")
+                    .onPreviewKeyEvent { e ->
+                        if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
+                            if (canSend && !submitting) {
+                                doSubmit()
+                                true
                             } else {
                                 false
                             }
-                        },
-                )
-            }
+                        } else {
+                            false
+                        }
+                    },
+                textStyle = TextStyle(
+                    color = cs.onSurface,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                ),
+                cursorBrush = SolidColor(cs.primary),
+                maxLines = 12,
+                interactionSource = composerInteraction,
+                decorationBox = { inner ->
+                    Box(Modifier.fillMaxWidth()) {
+                        if (message.text.isEmpty()) {
+                            Text(
+                                text = "What should the agent do?",
+                                color = cs.onSurfaceVariant.copy(alpha = 0.72f),
+                                fontSize = 15.sp,
+                                lineHeight = 22.sp,
+                                maxLines = 2,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
 
-            Spacer(Modifier.height(10.dp))
-
-            // Pickers row: [agent ▾]  [model ▾]  [effort ▾]
+            // Bottom toolbar: + · agent · model · effort | mic · save draft · send
+            // (DesktopComposer layout: controls left, send-cluster right.)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
-                Box {
-                    AgentPill(
-                        agent = agent,
-                        enabled = !launcherRestoring,
-                        onClick = { agentMenu = true },
-                        modifier = Modifier.testTag("launcher_agent_pill"),
-                    )
-                    DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
-                        agents.forEach { a ->
-                            DropdownMenuItem(
-                                text = { Text(a.replaceFirstChar { it.uppercase() }) },
-                                leadingIcon = { AgentLogo(a, size = 14.dp) },
-                                modifier = Modifier.testTag("agent_$a"),
-                                onClick = {
-                                    agent = a
-                                    onPrefsChange(LauncherPrefs(agent = a, models = launcherModels, reasoningLevels = launcherReasoning))
-                                    agentMenu = false
-                                },
-                            )
-                        }
-                    }
-                }
-
-                Box(Modifier.testTag("launcher_model_picker")) {
-                    val modelLabel = model?.let { id -> models.firstOrNull { it.id == id }?.displayName ?: id } ?: "Default"
-                    LauncherPill(label = modelLabel, onClick = { if (!launcherRestoring) modelMenu = true })
-                    DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                        val opts = listOf(DEFAULT_MODEL_ID to "Default") + models.map { it.id to it.displayName }
-                        opts.forEach { (id, label) ->
-                            val selected = (model ?: DEFAULT_MODEL_ID) == id
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                trailingIcon = { if (selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary) },
-                                modifier = Modifier.testTag("model_$id"),
-                                onClick = {
-                                    val newModel = if (id == DEFAULT_MODEL_ID) null else id
-                                    model = newModel
-                                    launcherModels = if (newModel != null) launcherModels + (agent to newModel) else launcherModels - agent
-                                    onPrefsChange(LauncherPrefs(agent = agent, models = launcherModels, reasoningLevels = launcherReasoning))
-                                    modelMenu = false
-                                },
-                            )
-                        }
-                    }
-                }
-
-                if (reasoningVisible) {
-                    Box(Modifier.testTag("launcher_effort_picker")) {
-                        // Short wire ids only (low / medium / high / …) — not long descriptions.
-                        LauncherPill(
-                            label = reasoningLevel ?: "effort",
-                            onClick = { if (!launcherRestoring) reasoningMenu = true },
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    IconButton(
+                        onClick = {
+                            pickFiles().forEach { file ->
+                                val up = stagedUploadFor(file)
+                                staged.add(StagedChip(stagedIdGen.incrementAndGet(), up.name, up.source, up.mime))
+                            }
+                        },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("launcher_attach"),
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "Attach",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
                         )
-                        DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
-                            // low → high regardless of broker array order
-                            sortEffortLevelsLowToHigh(reasoningLevels).forEach { level ->
-                                val selected = level.id == reasoningLevel
+                    }
+
+                    Box {
+                        AgentPill(
+                            agent = agent,
+                            enabled = !launcherRestoring,
+                            onClick = { agentMenu = true },
+                            modifier = Modifier.testTag("launcher_agent_pill"),
+                        )
+                        DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
+                            agents.forEach { a ->
                                 DropdownMenuItem(
-                                    text = { Text(level.id) },
-                                    trailingIcon = { if (selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary) },
-                                    modifier = Modifier.testTag("effort_${level.id}"),
+                                    text = { Text(a.replaceFirstChar { it.uppercase() }) },
+                                    leadingIcon = { AgentLogo(a, size = 14.dp) },
+                                    modifier = Modifier.testTag("agent_$a"),
                                     onClick = {
-                                        reasoningLevel = level.id
-                                        launcherReasoning = launcherReasoning + (agent to level.id)
-                                        onPrefsChange(LauncherPrefs(agent = agent, models = launcherModels, reasoningLevels = launcherReasoning))
-                                        reasoningMenu = false
+                                        agent = a
+                                        onPrefsChange(
+                                            LauncherPrefs(
+                                                agent = a,
+                                                models = launcherModels,
+                                                reasoningLevels = launcherReasoning,
+                                            ),
+                                        )
+                                        agentMenu = false
                                     },
                                 )
                             }
                         }
                     }
-                }
-                Spacer(Modifier.weight(1f))
-            }
 
-            Spacer(Modifier.height(10.dp))
-
-            // Actions row: [+ attach]  <spacer>  [● send]
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.sm),
-            ) {
-                IconButton(
-                    onClick = {
-                        // AWT FileDialog is modal + blocks the UI thread; stage each pick.
-                        pickFiles().forEach { file ->
-                            val up = stagedUploadFor(file)
-                            staged.add(StagedChip(stagedIdGen.incrementAndGet(), up.name, up.source, up.mime))
+                    Box(Modifier.testTag("launcher_model_picker")) {
+                        val modelLabel = model?.let { id ->
+                            models.firstOrNull { it.id == id }?.displayName ?: id
+                        } ?: "Default"
+                        LauncherPill(
+                            label = modelLabel,
+                            onClick = { if (!launcherRestoring) modelMenu = true },
+                            leadingIcon = {
+                                if (hasAgentLogo(agent)) {
+                                    AgentLogo(agent, size = 12.dp)
+                                }
+                            },
+                        )
+                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                            val opts = listOf(DEFAULT_MODEL_ID to "Default") +
+                                models.map { it.id to it.displayName }
+                            opts.forEach { (id, label) ->
+                                val selected = (model ?: DEFAULT_MODEL_ID) == id
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    trailingIcon = {
+                                        if (selected) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                null,
+                                                Modifier.size(16.dp),
+                                                tint = cs.primary,
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("model_$id"),
+                                    onClick = {
+                                        val newModel = if (id == DEFAULT_MODEL_ID) null else id
+                                        model = newModel
+                                        launcherModels = if (newModel != null) {
+                                            launcherModels + (agent to newModel)
+                                        } else {
+                                            launcherModels - agent
+                                        }
+                                        onPrefsChange(
+                                            LauncherPrefs(
+                                                agent = agent,
+                                                models = launcherModels,
+                                                reasoningLevels = launcherReasoning,
+                                            ),
+                                        )
+                                        modelMenu = false
+                                    },
+                                )
+                            }
                         }
-                    },
-                    modifier = Modifier.testTag("launcher_attach"),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(cs.surfaceContainerHigh),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Attach", tint = cs.onSurfaceVariant, modifier = Modifier.size(19.dp))
+                    }
+
+                    if (reasoningVisible) {
+                        val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
+                            current = reasoningLevel,
+                            levels = reasoningLevels,
+                        )
+                        Box(Modifier.testTag("launcher_effort_picker")) {
+                            LauncherPill(
+                                label = reasoningLevel ?: "effort",
+                                onClick = { if (!launcherRestoring) reasoningMenu = true },
+                                leadingIcon = {
+                                    Speedometer(
+                                        levels = gaugeLevels,
+                                        value = gaugeValue,
+                                        tint = cs.onSurfaceVariant,
+                                        activeTint = cs.primary,
+                                        iconSize = 14.dp,
+                                        testTag = "launcher_effort_gauge",
+                                    )
+                                },
+                            )
+                            DropdownMenu(
+                                expanded = reasoningMenu,
+                                onDismissRequest = { reasoningMenu = false },
+                            ) {
+                                sortEffortLevelsLowToHigh(reasoningLevels).forEach { level ->
+                                    val selected = level.id == reasoningLevel
+                                    DropdownMenuItem(
+                                        text = { Text(level.id) },
+                                        trailingIcon = {
+                                            if (selected) {
+                                                Icon(
+                                                    Icons.Filled.Check,
+                                                    null,
+                                                    Modifier.size(16.dp),
+                                                    tint = cs.primary,
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("effort_${level.id}"),
+                                        onClick = {
+                                            reasoningLevel = level.id
+                                            launcherReasoning = launcherReasoning + (agent to level.id)
+                                            onPrefsChange(
+                                                LauncherPrefs(
+                                                    agent = agent,
+                                                    models = launcherModels,
+                                                    reasoningLevels = launcherReasoning,
+                                                ),
+                                            )
+                                            reasoningMenu = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
-                Spacer(Modifier.width(Space.xs))
-
-                MicButton(
-                    recording = dictation.recording,
-                    transcribing = dictation.transcribing,
-                    micUnavailable = dictation.micUnavailable,
-                    onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
-                    modifier = Modifier.testTag("launcher_mic"),
-                )
-
-                Spacer(Modifier.weight(1f))
-
-                TextButton(
-                    onClick = { doSaveDraft() },
-                    enabled = canSaveDraft && !submitting,
-                    modifier = Modifier.testTag("launcher_save_draft"),
-                ) { Text("Save draft", fontSize = 12.sp) }
-                IconButton(
-                    onClick = { doSubmit() },
-                    enabled = canSend && !submitting,
-                    interactionSource = sendInteraction,
-                    modifier = Modifier.testTag("launcher_submit"),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .scale(sendScale)
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(if (canSend && !submitting) cs.primary else cs.primary.copy(alpha = 0.35f)),
-                        contentAlignment = Alignment.Center,
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MicButton(
+                        recording = dictation.recording,
+                        transcribing = dictation.transcribing,
+                        micUnavailable = dictation.micUnavailable,
+                        onClick = {
+                            if (dictation.recording) dictation.stopMic() else dictation.startMic()
+                        },
+                        modifier = Modifier.testTag("launcher_mic"),
+                    )
+                    TextButton(
+                        onClick = { doSaveDraft() },
+                        enabled = canSaveDraft && !submitting,
+                        modifier = Modifier.testTag("launcher_save_draft"),
                     ) {
-                        if (submitting) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = cs.onPrimary)
-                        } else {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Start session", tint = cs.onPrimary, modifier = Modifier.size(18.dp))
+                        Text("Save draft", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                    }
+                    IconButton(
+                        onClick = { doSubmit() },
+                        enabled = canSend && !submitting,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("launcher_submit"),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canSend && !submitting) cs.primary
+                                    else cs.surfaceContainerHighest,
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (submitting) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = cs.onPrimary,
+                                )
+                            } else {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = "Start session",
+                                    tint = if (canSend && !submitting) {
+                                        cs.onPrimary
+                                    } else {
+                                        cs.onSurfaceVariant.copy(alpha = 0.45f)
+                                    },
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -1005,60 +1090,63 @@ private fun LauncherHostPicker(
     }
 }
 
-/** Compact agent chip (letter + capitalized name + chevron) — the launcher's agent selector. */
+/** Borderless agent chip matching chat [ComposerPill] chrome (logo + name + chevron). */
 @Composable
 private fun AgentPill(agent: String, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.92f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "agent_pill_scale",
-    )
     Row(
         modifier = modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
-            .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled) { onClick() }
-            .padding(start = 8.dp, end = 10.dp, top = 5.dp, bottom = 5.dp),
+            .clip(RoundedCornerShape(Radii.pill))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        // Cap to label line height (~13.sp) so the mark reads as text-adjacent, not a badge.
-        AgentLogo(agent, size = 14.dp)
-        Text(agent.replaceFirstChar { it.uppercase() }, color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        AgentLogo(agent, size = 12.dp)
+        Text(
+            agent.replaceFirstChar { it.uppercase() },
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
 
-/** Shared rounded chip (label + chevron) for the model / effort pickers — desktop take on Android's
- *  ModelPill/EffortPill (which don't exist in the desktop chat package). */
+/** Borderless model/effort pill matching chat DesktopComposer pills (optional leading icon). */
 @Composable
-private fun LauncherPill(label: String, onClick: () -> Unit) {
+private fun LauncherPill(
+    label: String,
+    onClick: () -> Unit,
+    leadingIcon: (@Composable () -> Unit)? = null,
+) {
     val cs = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.92f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "pill_scale",
-    )
     Row(
         modifier = Modifier
-            .scale(scale)
-            .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
-            .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
-            .clickable(interactionSource = interaction, indication = null) { onClick() }
-            .padding(horizontal = 8.dp, vertical = 3.dp),
+            .clip(RoundedCornerShape(Radii.pill))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(label.take(20), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        leadingIcon?.invoke()
+        Text(
+            label.take(22),
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
 
@@ -1117,9 +1205,9 @@ internal fun omniboxKeyAction(
 }
 
 /**
- * Project picker with forge omnibox (Android [ProjectPickerSheet] parity): search known projects,
- * type an arbitrary path, clone a remote repo, or create a new one (local / on a forge).
- * Rendered as a [DropdownMenu] (desktop convention for the project heading-dropdown).
+ * Project picker with forge omnibox — Android [ProjectPickerSheet] parity on desktop:
+ * **one** search field (filter locals / forge / create, or type a free path → "Use this path"),
+ * not a separate path box. Rendered as a [DropdownMenu] (desktop heading-dropdown convention).
  *
  * Clone/create is long-running and **not abortable** on the broker (`git clone` via
  * `execFileSync`). The progress overlay offers **Hide** (not Cancel): the host keeps working;
@@ -1152,7 +1240,6 @@ internal fun ProjectPicker(
     val scope = rememberCoroutineScope()
     val searchFocus = remember { FocusRequester() }
     var search by remember(expanded) { mutableStateOf("") }
-    var manualPath by remember(expanded) { mutableStateOf("") }
     var validating by remember(expanded) { mutableStateOf(false) }
     var validationError by remember(expanded) { mutableStateOf<String?>(null) }
     var connections by remember(expanded) { mutableStateOf(emptyList<ForgeConnection>()) }
@@ -1173,6 +1260,8 @@ internal fun ProjectPicker(
     var highlight by remember(expanded) { mutableStateOf(0) }
 
     val query = search.trim()
+    // Android: offer free-path pick when the typed query isn't already an exact known project path.
+    val showTypedPath = query.isNotEmpty() && projects.none { it == query }
     val projectOptions = remember(projects, home) {
         projects.map { ProjectOption(it, formatWorkdir(it, home)) }
     }
@@ -1247,9 +1336,11 @@ internal fun ProjectPicker(
     }
     val hasMoreCloud = cloudRepos.size > cloudVisible
 
-    // Flat actionable rows for keyboard navigation (local pick / clone / create).
-    val navTargets = remember(locals, clouds, creates) {
+    // Flat actionable rows for keyboard navigation (typed path / local / clone / create).
+    // "Use this path" leads so Enter on a free-path query activates it first (Android row order).
+    val navTargets = remember(showTypedPath, locals, clouds, creates) {
         buildList {
+            if (showTypedPath) add(OmniNav.TypedPath)
             locals.forEach { add(OmniNav.Local(it.path)) }
             clouds.forEach { add(OmniNav.Clone(it.repo)) }
             creates.forEach { add(OmniNav.Create(it.createTarget, it.label)) }
@@ -1310,21 +1401,9 @@ internal fun ProjectPicker(
         }
     }
 
-    fun activateNav(target: OmniNav) {
-        when (target) {
-            is OmniNav.Local -> pick(target.path)
-            is OmniNav.Clone -> resolve("clone ${target.repo.fullName}") {
-                cloneForge(target.repo.connectionId, target.repo.owner, target.repo.name)
-            }
-            is OmniNav.Create -> resolve("create $query") {
-                if (target.target == "local") createLocalRepo(query)
-                else createForge(target.target, query)
-            }
-        }
-    }
-
-    fun confirmPath() {
-        val p = manualPath.trim()
+    /** Android "Use this path" — desktop still runs [validatePath] (tilde expand / exists). */
+    fun confirmTypedPath() {
+        val p = query
         if (p.isEmpty() || validating || resolving) return
         validating = true
         validationError = null
@@ -1336,6 +1415,20 @@ internal fun ProjectPicker(
                 pick(resolved)
             } else {
                 validationError = res?.error ?: "Invalid path"
+            }
+        }
+    }
+
+    fun activateNav(target: OmniNav) {
+        when (target) {
+            is OmniNav.TypedPath -> confirmTypedPath()
+            is OmniNav.Local -> pick(target.path)
+            is OmniNav.Clone -> resolve("clone ${target.repo.fullName}") {
+                cloneForge(target.repo.connectionId, target.repo.owner, target.repo.name)
+            }
+            is OmniNav.Create -> resolve("create $query") {
+                if (target.target == "local") createLocalRepo(query)
+                else createForge(target.target, query)
             }
         }
     }
@@ -1377,6 +1470,8 @@ internal fun ProjectPicker(
 
     @Composable
     fun MenuBody() {
+        // Outer Box is ONLY for the resolving overlay (matchParentSize). Content is a Column —
+        // siblings of a Box stack at TopStart (the old layout drew the list under the fields).
         Box(
             Modifier
                 .width(Size.omniboxWidth)
@@ -1384,6 +1479,8 @@ internal fun ProjectPicker(
                 .onPreviewKeyEvent { onOmniboxKey(it) }
                 .testTag("launcher_omnibox_root"),
         ) {
+            Column(Modifier.padding(bottom = Space.sm)) {
+            // ── Single search field (Android ProjectPickerSheet parity) ──
             Column(Modifier.padding(horizontal = Space.md, vertical = Space.xs)) {
                 OutlinedTextField(
                     value = search,
@@ -1391,15 +1488,32 @@ internal fun ProjectPicker(
                         search = it
                         resolveError = null
                         readyPath = null
+                        validationError = null
                         highlight = 0
                     },
                     placeholder = {
                         Text(
-                            if (connections.isEmpty()) "Search projects…"
-                            else "Search projects, repos, or type a path",
+                            "Search projects, repos, or type a path",
                             color = cs.onSurfaceVariant,
                         )
                     },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = null,
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(Space.lg + Space.xs),
+                        )
+                    },
+                    trailingIcon = if (validating) {
+                        {
+                            CircularProgressIndicator(
+                                Modifier.size(Space.lg),
+                                strokeWidth = Stroke.thin,
+                                color = cs.primary,
+                            )
+                        }
+                    } else null,
                     singleLine = true,
                     enabled = !resolving,
                     modifier = Modifier
@@ -1410,7 +1524,6 @@ internal fun ProjectPicker(
                         .onPreviewKeyEvent { onOmniboxKey(it) },
                 )
                 // Ready only after the search field actually receives focus (onFocusChanged).
-                // Holds while loadForges is still pending when autofocus is independent of forges.
                 if (searchAutofocused) {
                     Text(
                         "",
@@ -1419,51 +1532,6 @@ internal fun ProjectPicker(
                             .testTag("launcher_project_autofocus_ready"),
                     )
                 }
-                Spacer(Modifier.height(Space.xs))
-                OutlinedTextField(
-                    value = manualPath,
-                    onValueChange = { manualPath = it; validationError = null },
-                    placeholder = { Text("Type a path…", color = cs.onSurfaceVariant) },
-                    singleLine = true,
-                    enabled = !resolving,
-                    trailingIcon = {
-                        IconButton(
-                            onClick = { confirmPath() },
-                            enabled = manualPath.isNotBlank() && !validating && !resolving,
-                            modifier = Modifier.testTag("launcher_path_confirm"),
-                        ) {
-                            if (validating) {
-                                CircularProgressIndicator(
-                                    Modifier.size(Space.lg),
-                                    strokeWidth = Stroke.thin,
-                                    color = cs.primary,
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Filled.Check,
-                                    contentDescription = "Use this path",
-                                    tint = cs.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("launcher_path_input")
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown &&
-                                (e.key == Key.Enter || e.key == Key.NumPadEnter)
-                            ) {
-                                confirmPath()
-                                true
-                            } else if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                if (resolving) hideResolveProgress() else onDismiss()
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                )
                 validationError?.let {
                     Spacer(Modifier.height(Space.xs))
                     Text(
@@ -1530,9 +1598,12 @@ internal fun ProjectPicker(
                 }
             }
 
-            val nothingLocal = locals.isEmpty() && cloudGroups.isEmpty() &&
-                creates.isEmpty() && !searching && projects.isNotEmpty() && query.isNotEmpty()
-            if (nothingLocal && connections.isEmpty()) {
+            // Android: empty only when there is truly nothing to show (incl. no typed-path row).
+            val nothing = !showTypedPath && locals.isEmpty() && cloudGroups.isEmpty() &&
+                creates.isEmpty() && !searching && !hasMoreCloud
+            val nothingLocalMatch = nothing && connections.isEmpty() && projects.isNotEmpty() &&
+                query.isNotEmpty()
+            if (nothingLocalMatch) {
                 Text(
                     "No projects match \"${query}\".",
                     color = cs.onSurfaceVariant,
@@ -1555,18 +1626,65 @@ internal fun ProjectPicker(
                 )
             }
 
-            if (locals.isNotEmpty() || cloudGroups.isNotEmpty() || creates.isNotEmpty() ||
-                searching || hasMoreCloud
+            if (nothing && !nothingLocalMatch) {
+                Text(
+                    "Type a path or search your projects.",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(
+                        horizontal = Space.xl - Space.xs,
+                        vertical = Space.lg + Space.xs,
+                    ),
+                )
+            } else if (!nothing || showTypedPath || locals.isNotEmpty() || cloudGroups.isNotEmpty() ||
+                creates.isNotEmpty() || searching || hasMoreCloud
             ) {
-                HorizontalDivider()
-            }
-
             Column(
                 Modifier
                     .heightIn(max = Size.omniboxListMax)
                     .verticalScroll(rememberScrollState())
                     .testTag("launcher_omnibox_list"),
             ) {
+                // "Use this path" — Android first row when the query is a free path.
+                if (showTypedPath) {
+                    val hi = highlight == 0 && navTargets.firstOrNull() is OmniNav.TypedPath
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    "Use this path",
+                                    color = if (hi) cs.primary else cs.onSurface,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    query,
+                                    color = cs.onSurfaceVariant,
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                )
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.ChevronRight,
+                                contentDescription = null,
+                                tint = cs.onSurfaceVariant,
+                                modifier = Modifier.size(Space.lg + Space.xs),
+                            )
+                        },
+                        enabled = !resolving && !validating,
+                        modifier = Modifier
+                            .testTag("launcher_use_path")
+                            .then(
+                                if (hi) Modifier.background(cs.primary.copy(alpha = 0.08f))
+                                else Modifier,
+                            ),
+                        onClick = { confirmTypedPath() },
+                    )
+                }
+
                 if (locals.isNotEmpty()) {
                     Text(
                         "Projects",
@@ -1578,7 +1696,7 @@ internal fun ProjectPicker(
                             vertical = Space.xs,
                         ),
                     )
-                    locals.forEachIndexed { i, o ->
+                    locals.forEach { o ->
                         val selected = o.path == current
                         val navIndex = navTargets.indexOfFirst {
                             it is OmniNav.Local && it.path == o.path
@@ -1629,16 +1747,6 @@ internal fun ProjectPicker(
                             onClick = { pick(o.path) },
                         )
                     }
-                } else if (query.isEmpty() && projects.isEmpty() && connections.isEmpty()) {
-                    Text(
-                        "Type a path or search your projects.",
-                        color = cs.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(
-                            horizontal = Space.xl - Space.xs,
-                            vertical = Space.lg + Space.xs,
-                        ),
-                    )
                 }
 
                 cloudGroups.forEach { (conn, repos) ->
@@ -1806,7 +1914,9 @@ internal fun ProjectPicker(
                         )
                     }
                 }
-            }
+            } // list Column
+            } // else: has rows to show
+            } // content Column (fields + list); resolving overlay is a Box sibling
 
             if (resolving) {
                 Box(
@@ -1883,6 +1993,8 @@ internal fun ProjectPicker(
 
 /** Keyboard-navigable row in the forge omnibox. */
 private sealed class OmniNav {
+    /** Free-path row ("Use this path") — Android first row when query is not an exact project. */
+    data object TypedPath : OmniNav()
     data class Local(val path: String) : OmniNav()
     data class Clone(val repo: RemoteRepo) : OmniNav()
     data class Create(val target: String, val label: String) : OmniNav()

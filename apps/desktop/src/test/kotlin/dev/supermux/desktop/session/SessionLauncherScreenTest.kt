@@ -21,6 +21,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.theme.AppearanceMode
@@ -315,6 +316,8 @@ class SessionLauncherScreenTest {
     }
 
     @Test fun project_picker_invalid_path_shows_validation_and_does_not_pick() = runComposeUiTest {
+        // Android: free path is typed into the single search field → "Use this path" row.
+        // Desktop still validates via validatePath before pick.
         var picked: String? = null
         var dismissed = false
         setContent {
@@ -332,8 +335,10 @@ class SessionLauncherScreenTest {
                 }
             }
         }
-        onNodeWithTag("launcher_path_input").performTextInput("/nope")
-        onNodeWithTag("launcher_path_confirm").performClick()
+        onNodeWithTag("launcher_project_search").performTextInput("/nope")
+        waitForIdle()
+        onNodeWithTag("launcher_use_path").assertIsDisplayed()
+        onNodeWithTag("launcher_use_path").performClick()
         waitForIdle()
         onNodeWithTag("launcher_path_error").assertIsDisplayed()
         onNodeWithText("no such directory").assertIsDisplayed()
@@ -359,11 +364,42 @@ class SessionLauncherScreenTest {
                 }
             }
         }
-        onNodeWithTag("launcher_path_input").performTextInput("~/proj")
-        onNodeWithTag("launcher_path_confirm").performClick()
+        onNodeWithTag("launcher_project_search").performTextInput("~/proj")
+        waitForIdle()
+        onNodeWithTag("launcher_use_path").performClick()
         waitForIdle()
         assertEquals("/home/u/proj", picked) // the RESOLVED path, not the typed one
         assertTrue(dismissed)
+    }
+
+    @Test fun project_picker_use_this_path_appears_for_free_query() = runComposeUiTest {
+        // Android showTypedPath: query non-empty and not an exact known project path.
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box {
+                    ProjectPicker(
+                        expanded = true,
+                        current = "/home/u/alpha",
+                        projects = listOf("/home/u/alpha", "/home/u/beta"),
+                        home = "/home/u",
+                        validatePath = { null },
+                        onPick = {},
+                        onDismiss = {},
+                    )
+                }
+            }
+        }
+        onNodeWithTag("launcher_use_path").assertDoesNotExist()
+        onNodeWithTag("launcher_project_search").performTextInput("misc")
+        waitForIdle()
+        onNodeWithTag("launcher_use_path").assertIsDisplayed()
+        onNodeWithText("Use this path").assertIsDisplayed()
+        // Exact project path match → no free-path row.
+        onNodeWithTag("launcher_project_search").performTextClearance()
+        onNodeWithTag("launcher_project_search").performTextInput("/home/u/alpha")
+        waitForIdle()
+        onNodeWithTag("launcher_use_path").assertDoesNotExist()
+        onNodeWithTag("project_row_/home/u/alpha").assertIsDisplayed()
     }
 
     // ── Forge omnibox (desktop-parity Task 4) ───────────────────────────────────────────────────
