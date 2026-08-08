@@ -277,7 +277,7 @@ class ShellUiState {
     /**
      * One-shot "paste image from clipboard into the selected session's composer" request. Bumped by
      * Edit ▸ Paste image in the native MenuBar; the selected session's [DesktopComposer] runs the
-     * same [launchPasteImages] path as Ctrl/Cmd+V / Attach ▸ Paste image, then clears the nonce.
+     * same [launchPasteImages] path as Ctrl/Cmd+V / right-click Paste image, then clears the nonce.
      * Zero in normal operation.
      */
     var pasteImageRequestNonce by mutableStateOf(0L)

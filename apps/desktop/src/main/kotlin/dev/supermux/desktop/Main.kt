@@ -399,7 +399,7 @@ fun main() {
                         Item("Unpair…") { showUnpairConfirm = true }
                     }
                     Menu("Edit", mnemonic = 'E') {
-                        // Same paste-image path as Attach ▸ Paste image / Ctrl+V in the composer.
+                        // Same paste-image path as Ctrl/Cmd+V / right-click in the composer.
                         // Accelerator label documents the chord; the composer's onPreviewKeyEvent
                         // owns the live key handling when the field is focused.
                         Item("Paste image", shortcut = KeyShortcut(Key.V, ctrl = true)) {

@@ -701,7 +701,7 @@ fun DesktopComposer(
     /**
      * One-shot paste-image request from the native Edit ▸ Paste image menu (or tests). When the
      * nonce changes to a non-zero value, runs the same [launchPasteImages] path as Ctrl/Cmd+V /
-     * Attach ▸ Paste image, then calls [onPasteImageRequestConsumed].
+     * right-click Paste image, then calls [onPasteImageRequestConsumed].
      */
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
@@ -820,7 +820,7 @@ fun DesktopComposer(
         }
     }
 
-    // Edit ▸ Paste image / ShellUiState.pasteImageRequestNonce — same funnel as the Attach menu.
+    // Edit ▸ Paste image / ShellUiState.pasteImageRequestNonce — same funnel as Ctrl/Cmd+V.
     LaunchedEffect(pasteImageRequestNonce) {
         if (pasteImageRequestNonce > 0L) {
             launchPasteImages()
@@ -1011,7 +1011,6 @@ fun DesktopComposer(
         val cs = MaterialTheme.colorScheme
         var modelMenu by remember { mutableStateOf(false) }
         var reasoningMenu by remember { mutableStateOf(false) }
-        var attachMenu by remember { mutableStateOf(false) }
         val modelCurrent = models?.current ?: sessionModel
         val showModelPill = models != null || !sessionModel.isNullOrBlank()
         val r = reasoning
@@ -1127,36 +1126,13 @@ fun DesktopComposer(
                 maxLines = 8,
                 leadingIcon = if (onUpload != null) {
                     {
-                        // Attach menu: "Attach files…" (picker) + "Paste image" (clipboard) so paste
-                        // is mouse-discoverable without relying solely on the keyboard chord.
-                        Box {
-                            IconButton(
-                                onClick = { attachMenu = true },
-                                modifier = Modifier.testTag("composer-attach"),
-                            ) {
-                                Icon(Icons.Filled.Add, contentDescription = "Attach")
-                            }
-                            DropdownMenu(
-                                expanded = attachMenu,
-                                onDismissRequest = { attachMenu = false },
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Attach files…") },
-                                    onClick = {
-                                        attachMenu = false
-                                        stageFiles(pickFiles())
-                                    },
-                                    modifier = Modifier.testTag("composer-attach-files"),
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Paste image") },
-                                    onClick = {
-                                        attachMenu = false
-                                        launchPasteImages()
-                                    },
-                                    modifier = Modifier.testTag("composer-paste-image"),
-                                )
-                            }
+                        // + opens the file picker directly. Paste image stays on Ctrl/Cmd+V,
+                        // right-click context menu, and Edit ▸ Paste image — not under +.
+                        IconButton(
+                            onClick = { stageFiles(pickFiles()) },
+                            modifier = Modifier.testTag("composer-attach"),
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = "Attach")
                         }
                     }
                 } else {

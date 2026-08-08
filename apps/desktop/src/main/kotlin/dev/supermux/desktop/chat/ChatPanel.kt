@@ -274,7 +274,9 @@ fun ChatPanel(
         }
 
         // Composer — reading-width capped + centered to line up with the timeline.
-        Box(Modifier.fillMaxWidth().background(cs.surface), contentAlignment = Alignment.TopCenter) {
+        // No separate surface strip: share the panel's surfaceContainerLow so the composer
+        // doesn't sit in a contrasting band under the timeline.
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             DesktopComposer(
                 draft = draft,
                 onDraftChange = onDraftChange,

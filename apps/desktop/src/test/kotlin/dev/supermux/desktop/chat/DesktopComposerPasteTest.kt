@@ -40,9 +40,9 @@ import kotlin.test.assertTrue
 
 /**
  * Paste-image contract for [DesktopComposer]: pure key/MIME helpers, clipboard Transferable
- * extraction, paste-cache layout + age pruner, real Ctrl/Meta key injection, and the Attach-menu
- * "Paste image" path that drives the SAME [stageFiles] funnel (via [launchPasteImages] / the
- * `pasteImageFiles` seam). Never touches the real system clipboard for image paste — tests inject
+ * extraction, paste-cache layout + age pruner, real Ctrl/Meta key injection, and the menu-nonce
+ * path that drives the SAME [stageFiles] funnel (via [launchPasteImages] / the `pasteImageFiles`
+ * seam). Never touches the real system clipboard for image paste — tests inject
  * [DesktopComposer]'s `pasteImageFiles` / `clipboardLikelyHasImage` seams.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -613,10 +613,9 @@ class DesktopComposerPasteTest {
                 onUpload = { _, _, _, _, _ -> "file-1" },
                 pickFiles = { emptyList() },
                 pasteImageFiles = { listOf(temp) },
+                pasteImageRequestNonce = 1L,
             )
         }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
         }
@@ -775,10 +774,9 @@ class DesktopComposerPasteTest {
                     gate.await(5, java.util.concurrent.TimeUnit.SECONDS)
                     listOf(png)
                 },
+                pasteImageRequestNonce = 1L,
             )
         }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isNotEmpty()
         }
@@ -794,11 +792,10 @@ class DesktopComposerPasteTest {
     }
 
     /**
-     * Production wiring: Attach menu → "Paste image" → [launchPasteImages] → `pasteImageFiles`
-     * seam → [stageFiles]. This is the mouse-discoverable path and exercises the real seam
-     * (unlike the old test that only clicked Attach/picker).
+     * Production wiring: [pasteImageRequestNonce] (Edit ▸ Paste image) → [launchPasteImages] →
+     * `pasteImageFiles` seam → [stageFiles].
      */
-    @Test fun pasteImage_viaAttachMenu_uploadsAndEnablesSend() = runComposeUiTest {
+    @Test fun pasteImage_viaMenuNonce_uploadsAndEnablesSend() = runComposeUiTest {
         val png = tempNamed("pasted.png") { writeBytes(tinyPng()) }
         val uploaded = mutableListOf<String>()
         setContent {
@@ -812,10 +809,9 @@ class DesktopComposerPasteTest {
                 onUpload = { _, name, _, _, _ -> uploaded.add(name); "file-$name" },
                 pickFiles = { emptyList() },
                 pasteImageFiles = { listOf(png) },
+                pasteImageRequestNonce = 1L,
             )
         }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
         }
@@ -827,10 +823,11 @@ class DesktopComposerPasteTest {
     }
 
     /**
-     * Production paste encode path: drive the real [DesktopComposer] entry point (Attach →
-     * "Paste image" → [launchPasteImages] → `withContext(IO)` → `pasteImageFiles`), not a
-     * hand-rolled `withContext(IO) { clipboardImageToTempFile(...) }` that bypasses the entry point.
-     * Uses 3072² so [PASTE_IMAGE_ENCODE_MAX_EDGE] (2048) downscale is exercised through the seam.
+     * Production paste encode path: drive the real [DesktopComposer] entry point
+     * ([pasteImageRequestNonce] → [launchPasteImages] → `withContext(IO)` → `pasteImageFiles`),
+     * not a hand-rolled `withContext(IO) { clipboardImageToTempFile(...) }` that bypasses the
+     * entry point. Uses 3072² so [PASTE_IMAGE_ENCODE_MAX_EDGE] (2048) downscale is exercised
+     * through the seam.
      */
     @Test fun largeRasterEncode_viaLaunchPasteImages_completes() = runComposeUiTest {
         // Above the 2048 downscale threshold so scaleBufferedImageToMaxEdge runs in production.
@@ -858,10 +855,9 @@ class DesktopComposerPasteTest {
                     encoded.set(file)
                     listOfNotNull(file)
                 },
+                pasteImageRequestNonce = 1L,
             )
         }
-        onNodeWithTag("composer-attach").performClick()
-        onNodeWithTag("composer-paste-image").performClick()
         waitUntil(timeoutMillis = 15_000L) {
             onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
         }
