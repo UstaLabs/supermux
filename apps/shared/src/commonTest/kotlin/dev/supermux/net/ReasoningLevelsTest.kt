@@ -44,4 +44,27 @@ class ReasoningLevelsTest {
         assertFalse(showReasoningPicker(emptyList()))
         assertFalse(showReasoningPicker(listOf(ReasoningLevel("only"))))
     }
+
+    @Test fun sortsReversedBrokerOrderLowToHigh() {
+        val reversed = listOf("max", "xhigh", "high", "medium", "low").map { ReasoningLevel(it) }
+        assertEquals(
+            listOf("low", "medium", "high", "xhigh", "max"),
+            sortEffortLevelsLowToHigh(reversed).map { it.id },
+        )
+    }
+
+    @Test fun speedometerParams_mapLowToHigh_evenWhenReversed() {
+        val reversed = listOf("max", "xhigh", "high", "medium", "low").map { ReasoningLevel(it) }
+        assertEquals(5 to 1, effortSpeedometerParams("low", reversed))
+        assertEquals(5 to 3, effortSpeedometerParams("high", reversed))
+        assertEquals(5 to 5, effortSpeedometerParams("max", reversed))
+        assertEquals(5 to 3, effortSpeedometerParams(null, reversed)) // mid when unknown
+        assertEquals(1 to 1, effortSpeedometerParams("x", emptyList()))
+    }
+
+    @Test fun resolveStillDefaultsToHighWhenListIsReversed() {
+        val reversed = listOf("max", "xhigh", "high", "medium", "low").map { ReasoningLevel(it) }
+        assertEquals("high", resolveReasoningLevel(reversed, null))
+        assertEquals("max", resolveReasoningLevel(reversed, "max"))
+    }
 }

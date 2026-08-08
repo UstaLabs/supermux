@@ -53,6 +53,7 @@ import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.KeepAlivePanel
+
 import dev.supermux.net.TerminalClient
 import kotlin.random.Random
 
@@ -172,10 +173,10 @@ fun TerminalTabs(
             Modifier
                 .fillMaxWidth()
                 .background(cs.surfaceContainerLow)
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Space.xs, vertical = 3.dp),
+                .horizontalScroll(rememberScrollState()),
+            // Square flush tabs — no strip padding / no inter-tab gap.
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             tabs.forEach { id ->
                 key(id) {
@@ -253,8 +254,9 @@ private fun TerminalTabChip(
             .onPointerEvent(PointerEventType.Press) { e ->
                 if (e.button == PointerButton.Tertiary) onClose()
             }
-            .background(bg, RoundedCornerShape(Radii.sm))
-            .padding(start = Space.sm, end = 3.dp, top = 3.dp, bottom = 3.dp)
+            // Square tabs; horizontal padding so label + × look centered.
+            .background(bg)
+            .padding(start = 14.dp, end = 8.dp)
             .testTag("term-tab-$id"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),

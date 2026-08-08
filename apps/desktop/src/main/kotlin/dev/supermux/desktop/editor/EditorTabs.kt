@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Space
 
 @Composable
 fun EditorTabs(
@@ -62,9 +61,9 @@ fun EditorTabs(
         modifier
             .fillMaxWidth()
             .background(cs.surfaceContainerHigh)
-            .horizontalScroll(scroll)
-            .padding(horizontal = Space.sm, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .horizontalScroll(scroll),
+        // Square flush tabs — no strip padding / no inter-tab gap.
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         tabs.forEach { tab ->
@@ -104,11 +103,11 @@ private fun TabChip(
     Row(
         Modifier
             .height(28.dp)
-            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+            // Square tabs; horizontal padding so label + × look centered.
             .background(if (active) cs.surfaceContainer else Color.Transparent)
             .clickable(enabled = !loading) { onSelect() }
             .pointerHoverIcon(if (loading) PointerIcon.Default else PointerIcon.Hand)
-            .padding(horizontal = 10.dp),
+            .padding(start = 14.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {

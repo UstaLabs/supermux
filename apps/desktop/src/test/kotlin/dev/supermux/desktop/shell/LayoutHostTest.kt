@@ -175,7 +175,7 @@ class LayoutHostTest {
 
     @Test
     fun pickingAKindReportsItWithTheGroupItWasClickedIn() = runComposeUiTest {
-        var got: Pair<String, NewViewKind>? = null
+        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
         setContent {
             LayoutHost(
                 layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
@@ -183,41 +183,18 @@ class LayoutHostTest {
                     LayoutNode.Group("right", listOf("v2"), "v2"),
                 )),
                 onLayoutChange = {},
-                onAddView = { g, k, _ -> got = g to k },
+                onAddView = { g, k, p -> got = Triple(g, k, p) },
             ) { Text("body") }
         }
         // Two strips, two "+" — the SECOND one must report the right-hand group.
+        // One step only: pick kind → always HERE (no placement submenu).
         onAllNodesWithTag("tab-add-view")[1].performClick()
         onNodeWithTag("tab-add-view-terminal").performClick()
-        onNodeWithTag("tab-add-place-here").performClick()
-        assertEquals("right" to NewViewKind.TERMINAL, got)
-    }
-
-    // ── A single-view pane must still be able to become two panes ────────────
-    // Ahmet dragged the only tab of a pane to the edge and nothing happened.
-    // Correct — splitGroup refuses a group with one view, because splitting it
-    // would leave an empty pane. But then there was NO way to get a second pane
-    // from a single view, which is what he actually wanted. Hence the placements.
-
-    @Test
-    fun pickingAKindOffersWhereToPutIt() = runComposeUiTest {
-        setContent {
-            LayoutHost(
-                layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
-                onLayoutChange = {},
-                onAddView = { _, _, _ -> },
-            ) { Text("body") }
-        }
-        onNodeWithTag("tab-add-view").performClick()
-        onNodeWithTag("tab-add-view-terminal").performClick()
-        onNodeWithTag("tab-add-place-here").assertIsDisplayed()
-        onNodeWithTag("tab-add-place-split_right").assertIsDisplayed()
-        onNodeWithTag("tab-add-place-split_down").assertIsDisplayed()
+        assertEquals(Triple("right", NewViewKind.TERMINAL, NewViewPlacement.HERE), got)
     }
 
     @Test
-    fun splitPlacementsAreOfferedEvenForAPaneHoldingOneView() = runComposeUiTest {
-        // The whole point: a drag cannot split this pane, so the menu must.
+    fun pickingAKindAlwaysLandsInThisPane() = runComposeUiTest {
         var got: Triple<String, NewViewKind, NewViewPlacement>? = null
         setContent {
             LayoutHost(
@@ -228,7 +205,9 @@ class LayoutHostTest {
         }
         onNodeWithTag("tab-add-view").performClick()
         onNodeWithTag("tab-add-view-terminal").performClick()
-        onNodeWithTag("tab-add-place-split_right").performClick()
-        assertEquals(Triple("only", NewViewKind.TERMINAL, NewViewPlacement.SPLIT_RIGHT), got)
+        // No second step; placement submenu is gone.
+        onNodeWithTag("tab-add-place-here").assertDoesNotExist()
+        onNodeWithTag("tab-add-place-split_right").assertDoesNotExist()
+        assertEquals(Triple("only", NewViewKind.TERMINAL, NewViewPlacement.HERE), got)
     }
 }

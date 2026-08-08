@@ -66,13 +66,6 @@ import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
 import java.io.File
 
-/**
- * Height reserved at the top of the macOS window for the traffic-light buttons, which float over
- * our content once the title bar is made transparent + full-size (see the Window block). Matches
- * the standard macOS title-bar height (28pt) so the buttons sit vertically centred in the strip.
- */
-private val MAC_TITLE_BAR_INSET = 28.dp
-
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
 //   SM_PAIR_TOKEN + SM_PAIR_BASE  — seed a pairing without onboarding (both required)   [main, below]
@@ -327,8 +320,9 @@ fun main() {
             // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
             // and only the traffic lights (close / minimize / zoom) float over it. These three
             // root-pane client properties are AWT's route to NSWindow's FullSizeContentView +
-            // titlebarAppearsTransparent + hidden title; MAC_TITLE_BAR_INSET below keeps our own UI
-            // out from under the buttons. No-ops off macOS, but gated anyway to keep it obvious.
+            // titlebarAppearsTransparent + hidden title. Content is edge-to-edge; AppShell leaves a
+            // left inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
+            // No-ops off macOS, but gated anyway to keep it obvious.
             if (isMacOs()) {
                 LaunchedEffect(window) {
                     window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
@@ -433,14 +427,13 @@ fun main() {
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
             SupermuxTheme(appearance = appearance) {
-              // See the macOS chrome note on Window above: the app paints its own background all
-              // the way to the top edge, inset by the traffic-light height so nothing hides under
-              // the buttons. Zero inset (and a plain background fill) everywhere else.
+              // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
+              // places the sidebar toggle next to them and pads only the sidebar body under that
+              // band — no full-window dead strip across the title bar.
               Box(
                   Modifier
                       .fillMaxSize()
-                      .background(MaterialTheme.colorScheme.background)
-                      .padding(top = if (isMacOs()) MAC_TITLE_BAR_INSET else 0.dp),
+                      .background(MaterialTheme.colorScheme.background),
               ) {
                 if (!paired) {
                     val scope = rememberCoroutineScope()

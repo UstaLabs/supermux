@@ -155,8 +155,26 @@ class DesktopComposerPillsTest {
             )
         }
         onNodeWithTag("composer-reasoning-pill").assertIsDisplayed()
+        // Short id on the pill — never the long description ("High" / "Greater reasoning depth").
+        onNodeWithText("high").assertIsDisplayed()
         onNodeWithTag("composer-reasoning-pill").performClick()
         onNodeWithTag("composer-reasoning-low").performClick()
         assertEquals("low", picked)
     }
+
+    @Test fun reasoning_label_uses_short_id_not_description() {
+        val r = ReasoningResponse(
+            agent = "claude",
+            current = "xhigh",
+            levels = listOf(
+                ReasoningLevel("low", "Fast responses with lighter reasoning"),
+                ReasoningLevel("xhigh", "Extra high reasoning depth"),
+            ),
+            visible = true,
+        )
+        assertEquals("xhigh", composerReasoningLabel(r))
+        assertEquals("low", composerReasoningLevelLabel(r.levels[0]))
+        assertEquals("effort", composerReasoningLabel(r.copy(current = null)))
+    }
+
 }

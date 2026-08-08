@@ -7,6 +7,8 @@
 //     ic_plus → Icons.Filled.Add.
 //   - Desktop `SessionAvatar(name, agent, modifier)` has no `sessionId` param (see SessionListPanel).
 //   - `pointerHoverIcon(PointerIcon.Hand)` on the tappable avatars (mouse affordance).
+//   - Seam collapse chip removed. Collapse: title-bar toggle (macOS, expanded only) /
+//     View ▸ Show Sidebar / Ctrl+B. Expand when collapsed: this rail's chevron only.
 package dev.supermux.desktop.shell
 
 import dev.supermux.ui.TestIds

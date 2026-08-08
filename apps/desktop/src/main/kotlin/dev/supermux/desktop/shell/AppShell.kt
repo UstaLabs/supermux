@@ -18,9 +18,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import dev.supermux.desktop.ui.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -34,12 +46,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.material3.MaterialTheme
-import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -49,10 +55,13 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import dev.supermux.desktop.editor.isMacOs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -88,6 +97,40 @@ import dev.supermux.session.inferHomeDir
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.flow.MutableStateFlow
+
+/**
+ * macOS title-bar sidebar collapse control — next to the traffic lights, **only while the
+ * sidebar is expanded**. When collapsed, expand is the rail chevron only (no title-bar toggle).
+ */
+@Composable
+private fun MacSidebarToggle(
+    onCollapse: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier
+            .height(MacTitleBarHeight)
+            .padding(start = MacTrafficLightsWidth)
+            .testTag("mac_sidebar_toggle"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = onCollapse,
+            modifier = Modifier
+                .size(MacTitleBarHeight)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .testTag("sidebar_collapse_title"),
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.MenuOpen,
+                contentDescription = "Hide sidebar",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
 
 /**
  * Sections of the Settings hub (left rail), in rail order.
@@ -595,8 +638,19 @@ fun AppShell(
                 entryProvider = entryProvider {
                     entry<DesktopRoute.Home> {
                 Box(Modifier.fillMaxSize()) {
+                // macOS: no full-window dead strip under the transparent title bar. Detail content
+                // (tabs) runs to the top edge; only the sidebar body is padded under the traffic-
+                // light band so list chrome stays clear of ●●●.
+                val macChrome = isMacOs()
+                val sidebarTopPad = if (macChrome) MacTitleBarHeight else 0.dp
+                val cs = MaterialTheme.colorScheme
                 Row(Modifier.fillMaxSize()) {
                     // ── Sidebar: collapsed rail, or the full list ──
+                    // Paint the surface under the traffic-light pad so the top-left band isn't a hole.
+                    val sidebarMod = Modifier
+                        .fillMaxHeight()
+                        .background(cs.surfaceContainerHigh)
+                        .then(if (sidebarTopPad > 0.dp) Modifier.padding(top = sidebarTopPad) else Modifier)
                     if (layout.sidebarCollapsed) {
                         SessionsRail(
                             sessions = sessions,
@@ -607,6 +661,7 @@ fun AppShell(
                             onNewSession = onNewSession,
                             lastBySession = lastBySession,
                             lastRead = lastRead,
+                            modifier = sidebarMod,
                         )
                     } else if (workspaceSidebar) {
                         // Design-review swap only: the sidebar lists workspaces, but selection
@@ -678,7 +733,9 @@ fun AppShell(
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
                             tabDragState = tabDragState,
-                            modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
+                            modifier = Modifier
+                                .width(layout.sidebarWidth)
+                                .then(sidebarMod),
                         )
                     } else {
                         SessionListPanel(
@@ -710,7 +767,9 @@ fun AppShell(
                             onDevices = { ui.openSettings(SettingsSection.Devices) },
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
-                            modifier = Modifier.width(layout.sidebarWidth).fillMaxHeight(),
+                            modifier = Modifier
+                                .width(layout.sidebarWidth)
+                                .then(sidebarMod),
                         )
                     }
 
@@ -1007,13 +1066,10 @@ fun AppShell(
                     }
                 }
 
-                // Resize + collapse OVERLAY on the sidebar seam (not a Row child — zero layout width,
-                // paints above both panes so the chip stays visible). Sits next to the detail-pane
-                // launcher, not over a full-workspace modal.
+                // Resize OVERLAY on the sidebar seam (not a Row child — zero layout width).
                 if (!layout.sidebarCollapsed) {
                     SidebarDivider(
                         onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
-                        onCollapse = { layout.sidebarCollapsed = true },
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .offset(x = layout.sidebarWidth - SidebarDividerCenterOffset)
@@ -1021,6 +1077,15 @@ fun AppShell(
                     )
                 }
 
+                // macOS title-bar collapse: only when expanded. Collapsed → rail chevron only.
+                if (macChrome && !layout.sidebarCollapsed) {
+                    MacSidebarToggle(
+                        onCollapse = { layout.sidebarCollapsed = true },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .zIndex(30f),
+                    )
+                }
 
                 }
                     }
