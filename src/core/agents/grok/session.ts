@@ -25,9 +25,10 @@ import { AgentKind } from "../../../shared/agents"
  * give the row an agent_home for resume. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
-  const id = randomUUID()
-  deps.registry.reserveName(name)
+  // PA spawns keep the exact requested name (the row may already exist).
+  const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
+  const id = args.id ?? randomUUID()
+  if (!args.pa) deps.registry.reserveName(name)
 
   const sessionHome = join(STATE_DIR, "agents", "grok", name)
   mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
@@ -59,22 +60,39 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   // Register BEFORE adapter.start(): start() completes the ACP handshake, which
   // fires persistSessionId — that callback resolves the row by name, so the row
   // must already exist or the grok session id is lost (breaking resume).
-  deps.registry.register({
-    id,
-    name,
-    workdir: args.workdir,
-    pid: 0,
-    agent: AgentKind.Grok,
-    agent_home: sessionHome,
-    base_commits: captureBaseCommits(args.workdir),
-    internal: args.internal,
-  } as any)
+  if (args.pa) {
+    if (!args.pa.skipRegister) {
+      deps.registry.registerPA({
+        id,
+        name,
+        agent: AgentKind.Grok,
+        workdir: args.workdir,
+        model: args.model,
+        reasoningLevel: args.reasoningLevel,
+        pid: 0,
+        is_default: deps.registry.listPAs().length === 0,
+        agent_home: sessionHome,
+        base_commits: captureBaseCommits(args.workdir),
+      })
+    }
+  } else {
+    deps.registry.register({
+      id,
+      name,
+      workdir: args.workdir,
+      pid: 0,
+      agent: AgentKind.Grok,
+      agent_home: sessionHome,
+      base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
+    } as any)
+  }
 
   await adapter.start()
 
   deps.registerAdapter?.(name, adapter, { onExit: () => {} })
 
-  return { name, session_id: id, model: args.model }
+  return { name, session_id: id, model: args.model, pid: 0 }
 }
 
 /** Rebuild a grok session's adapter + stdio child after a broker restart. The child

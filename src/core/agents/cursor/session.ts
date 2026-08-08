@@ -20,9 +20,10 @@ import { home } from "../../../shared/home"
 
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
-  const id = randomUUID()
-  deps.registry.reserveName(name)
+  // PA spawns keep the exact requested name (the row may already exist).
+  const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
+  const id = args.id ?? randomUUID()
+  if (!args.pa) deps.registry.reserveName(name)
   try {
     const sessionHome = join(STATE_DIR, "agents", "cursor", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
@@ -61,20 +62,40 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       resolveAttachment: deps.resolveAttachment,
     })
 
-    deps.registry.register({
-      id,
-      name,
-      workdir: args.workdir,
-      pid: 0,
-      agent: AgentKind.Cursor,
-      agent_home: sessionHome,
-      base_commits: captureBaseCommits(args.workdir),
-      internal: args.internal,
-    })
+    if (args.pa) {
+      // Mirror of the old spawnPA order: the PA adapter starts before its row
+      // is registered (cursor is per-turn; start() is a lightweight init).
+      await adapter.start()
+      if (!args.pa.skipRegister) {
+        deps.registry.registerPA({
+          id,
+          name,
+          agent: AgentKind.Cursor,
+          workdir: args.workdir,
+          model: args.model,
+          reasoningLevel: args.reasoningLevel,
+          pid: 0,
+          is_default: deps.registry.listPAs().length === 0,
+          agent_home: sessionHome,
+          base_commits: captureBaseCommits(args.workdir),
+        })
+      }
+    } else {
+      deps.registry.register({
+        id,
+        name,
+        workdir: args.workdir,
+        pid: 0,
+        agent: AgentKind.Cursor,
+        agent_home: sessionHome,
+        base_commits: captureBaseCommits(args.workdir),
+        internal: args.internal,
+      })
+    }
 
     deps.registerAdapter?.(name, adapter, { onExit: () => {} })
 
-    return { name, session_id: id, model: args.model }
+    return { name, session_id: id, model: args.model, pid: 0 }
   } catch (err) {
     throw err
   }

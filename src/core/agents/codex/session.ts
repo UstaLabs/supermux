@@ -31,9 +31,10 @@ export function commandContext(ctx: CommandContextCtx): CodexRpc | undefined {
 
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
-  const id = randomUUID()
-  deps.registry.reserveName(name)
+  // PA spawns keep the exact requested name (the row may already exist).
+  const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
+  const id = args.id ?? randomUUID()
+  if (!args.pa) deps.registry.reserveName(name)
   try {
     const sessionHome = join(STATE_DIR, "agents", "codex", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
@@ -71,16 +72,33 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     // (which does registry.resolveName(name)) can find the entry. Previously
     // register was after start, so the callback saw undefined and the
     // thread ID was silently lost — breaking resume on broker restart.
-    deps.registry.register({
-      id,
-      name,
-      workdir: args.workdir,
-      pid: handle.pid,
-      agent: AgentKind.Codex,
-      agent_home: sessionHome,
-      base_commits: captureBaseCommits(args.workdir),
-      internal: args.internal,
-    } as any)
+    if (args.pa) {
+      if (!args.pa.skipRegister) {
+        deps.registry.registerPA({
+          id,
+          name,
+          agent: AgentKind.Codex,
+          workdir: args.workdir,
+          model: args.model,
+          reasoningLevel: args.reasoningLevel,
+          pid: handle.pid,
+          is_default: deps.registry.listPAs().length === 0,
+          agent_home: sessionHome,
+          base_commits: captureBaseCommits(args.workdir),
+        })
+      }
+    } else {
+      deps.registry.register({
+        id,
+        name,
+        workdir: args.workdir,
+        pid: handle.pid,
+        agent: AgentKind.Codex,
+        agent_home: sessionHome,
+        base_commits: captureBaseCommits(args.workdir),
+        internal: args.internal,
+      } as any)
+    }
 
     const adapter = new CodexAdapter({
       sessionName: name,
@@ -97,7 +115,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     deps.registerAdapter?.(name, adapter, handle)
 
-    return { name, session_id: id, model: args.model }
+    return { name, session_id: id, model: args.model, pid: handle.pid }
   } catch (err) {
     throw err
   }
