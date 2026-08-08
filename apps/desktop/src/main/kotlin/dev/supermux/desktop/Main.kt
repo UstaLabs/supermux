@@ -62,6 +62,8 @@ import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.LocalMacWindowChrome
+import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
 import java.io.File
@@ -318,12 +320,18 @@ fun main() {
             state = windowState,
         ) {
             // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
-            // and only the traffic lights (close / minimize / zoom) float over it. These three
-            // root-pane client properties are AWT's route to NSWindow's FullSizeContentView +
-            // titlebarAppearsTransparent + hidden title. Content is edge-to-edge; AppShell leaves a
-            // left inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
+            // and only the traffic lights (close / minimize / zoom) float over it. Preferred route
+            // is the JBR custom title bar (rememberMacWindowChrome): same edge-to-edge look, but
+            // the title-bar band stops hijacking drags over Compose content (tabs!) — the window
+            // only drags from areas opted in via macTitleBarDragRegion (see MacWindowChrome.kt).
+            // On a non-JBR runtime (packaged Corretto) it returns null and we fall back to the
+            // plain client properties — AWT's route to NSWindow's FullSizeContentView +
+            // titlebarAppearsTransparent + hidden title — where the band drag (and the tab-drag
+            // collision) remains, since stock AWT has no hit-test hook. AppShell leaves a left
+            // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
             // No-ops off macOS, but gated anyway to keep it obvious.
-            if (isMacOs()) {
+            val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
+            if (isMacOs() && macChrome == null) {
                 LaunchedEffect(window) {
                     window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
                     window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
@@ -1339,22 +1347,27 @@ fun main() {
                         }
                     }
 
-                    AppShell(
-                        app,
-                        ui,
-                        uiStore,
-                        launcherStore,
-                        notificationController,
-                        fleet = fleet,
-                        appearance = appearance,
-                        onToggleTheme = {
-                            appearance = if (appearance == AppearanceMode.DARK) {
-                                AppearanceMode.LIGHT
-                            } else {
-                                AppearanceMode.DARK
-                            }
-                        },
-                    )
+                    // macChrome (JBR title-bar hit test) scoped to the shell only: the drag-region
+                    // modifiers inside AppShell resolve it via LocalMacWindowChrome; overlays and
+                    // onboarding have no chrome in the title-bar band. Null provider = no-op.
+                    CompositionLocalProvider(LocalMacWindowChrome provides macChrome) {
+                        AppShell(
+                            app,
+                            ui,
+                            uiStore,
+                            launcherStore,
+                            notificationController,
+                            fleet = fleet,
+                            appearance = appearance,
+                            onToggleTheme = {
+                                appearance = if (appearance == AppearanceMode.DARK) {
+                                    AppearanceMode.LIGHT
+                                } else {
+                                    AppearanceMode.DARK
+                                }
+                            },
+                        )
+                    }
 
                     // Unpair confirmation (File ▸ Unpair…): clears the credential store and flips
                     // back to onboarding, which disposes `app` (DisposableEffect above).

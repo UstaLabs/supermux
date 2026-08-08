@@ -120,6 +120,9 @@ private fun MacSidebarToggle(
             modifier = Modifier
                 .size(MacTitleBarHeight)
                 .pointerHoverIcon(PointerIcon.Hand)
+                // Inside the sidebar-band drag region below — keep the button client-only so a
+                // drag or double-click on it never moves/zooms the window (MacWindowChrome.kt).
+                .macTitleBarNoDragRegion("sidebar-toggle")
                 .testTag("sidebar_collapse_title"),
         ) {
             Icon(
@@ -1079,6 +1082,17 @@ fun AppShell(
 
                 // macOS title-bar collapse: only when expanded. Collapsed → rail chevron only.
                 if (macChrome && !layout.sidebarCollapsed) {
+                    // Native window-drag handle: the empty sidebar band under the traffic lights.
+                    // Layout-only Box (draws nothing, no pointer input — clicks fall through); the
+                    // toggle above punches itself out via macTitleBarNoDragRegion. No-op when the
+                    // JBR chrome isn't installed (LocalMacWindowChrome == null).
+                    Box(
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .width(layout.sidebarWidth)
+                            .height(MacTitleBarHeight)
+                            .macTitleBarDragRegion("sidebar-band"),
+                    )
                     MacSidebarToggle(
                         onCollapse = { layout.sidebarCollapsed = true },
                         modifier = Modifier
