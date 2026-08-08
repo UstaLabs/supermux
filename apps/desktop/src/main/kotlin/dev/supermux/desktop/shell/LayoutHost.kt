@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -58,8 +57,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.moveViewToGroup
@@ -416,10 +413,9 @@ enum class NewViewKind(val wire: String, val label: String) {
 /**
  * Where a new view lands relative to the pane its "+" was clicked in.
  *
- * [HERE] is a tab in the same pane. The two split placements exist because
- * drag-to-split can only ever DIVIDE existing tabs — a pane holding one view has
- * nothing to divide, so with a single chat there was no way to get a second pane
- * at all. This is that way.
+ * The "+" menu always uses [HERE] (tab in this pane). [SPLIT_RIGHT] / [SPLIT_DOWN]
+ * remain for callers that still create splits programmatically; users split by
+ * dragging a tab to a pane edge instead of a second menu step.
  */
 enum class NewViewPlacement(val label: String) {
     HERE("In this pane"),
@@ -427,7 +423,7 @@ enum class NewViewPlacement(val label: String) {
     SPLIT_DOWN("Split down"),
 }
 
-/** First step of the "+" popover: which kind of view. */
+/** "+" popover: pick a view kind; always lands as a tab in this pane. */
 @Composable
 private fun KindMenuItems(onPick: (NewViewKind) -> Unit) {
     for (k in NewViewKind.entries) {
@@ -435,18 +431,6 @@ private fun KindMenuItems(onPick: (NewViewKind) -> Unit) {
             text = { Text(k.label, fontSize = 12.sp) },
             onClick = { onPick(k) },
             modifier = Modifier.testTag("tab-add-view-${k.wire}"),
-        )
-    }
-}
-
-/** Second step: in this pane, or in a new pane beside it. */
-@Composable
-private fun PlacementMenuItems(onPick: (NewViewPlacement) -> Unit) {
-    for (p in NewViewPlacement.entries) {
-        DropdownMenuItem(
-            text = { Text(p.label, fontSize = 12.sp) },
-            onClick = { onPick(p) },
-            modifier = Modifier.testTag("tab-add-place-${p.name.lowercase()}"),
         )
     }
 }
@@ -461,8 +445,8 @@ fun ViewTabStrip(
     modifier: Modifier = Modifier,
     /**
      * "+" at the end of the strip. Opens a popover of view kinds; picking one
-     * adds it to THIS group as a new tab. Null hides the button entirely (tests
-     * and any caller that cannot create views).
+     * adds it as a tab in THIS group ([NewViewPlacement.HERE]). Null hides the
+     * button entirely (tests and any caller that cannot create views).
      */
     onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
@@ -501,7 +485,7 @@ internal fun ViewTabStrip(
             .height(32.dp)
             .background(cs.surfaceContainerLow)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = Space.xs)
+            // No strip padding — tabs flush to the strip edges (square chrome).
             .onGloballyPositioned { coords ->
                 if (groupId.isNotEmpty()) {
                     dragState?.registerStrip(groupId, coords.boundsInRoot())
@@ -509,7 +493,7 @@ internal fun ViewTabStrip(
             }
             .testTag("view-tab-strip"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         for (id in viewIds) {
             val selected = id == activeViewId
@@ -521,6 +505,7 @@ internal fun ViewTabStrip(
                     // Min width keeps the geometric centre on the label so
                     // performClick("view-tab-x") selects instead of hitting ×.
                     .defaultMinSize(minWidth = 56.dp)
+                    .fillMaxHeight()
                     .onGloballyPositioned { coords ->
                         if (groupId.isNotEmpty()) {
                             dragState?.registerTab(groupId, id, coords.boundsInRoot())
@@ -539,8 +524,9 @@ internal fun ViewTabStrip(
                             Modifier.clickable { onSelect(id) }
                         },
                     )
-                    .background(bg, RoundedCornerShape(Radii.sm))
-                    .padding(start = Space.sm, end = 3.dp, top = 3.dp, bottom = 3.dp)
+                    // Square tabs; left/horizontal padding so the label + × read centered.
+                    .background(bg)
+                    .padding(start = 14.dp, end = 8.dp)
                     .alpha(if (dimmed) 0.35f else 1f)
                     .testTag("view-tab-$id"),
                 verticalAlignment = Alignment.CenterVertically,
@@ -576,11 +562,11 @@ internal fun ViewTabStrip(
         // affordance belongs where the tabs are.
         if (onAddView != null) {
             var pickerOpen by remember { mutableStateOf(false) }
-            var pickedKind by remember { mutableStateOf<NewViewKind?>(null) }
-            Box {
+            Box(Modifier.fillMaxHeight()) {
                 Box(
                     Modifier
-                        .size(20.dp)
+                        .fillMaxHeight()
+                        .width(36.dp)
                         .clickable { pickerOpen = true }
                         .pointerHoverIcon(PointerIcon.Hand)
                         .testTag("tab-add-view"),
@@ -590,27 +576,20 @@ internal fun ViewTabStrip(
                         Icons.Filled.Add,
                         contentDescription = "Add a view",
                         tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(14.dp),
+                        modifier = Modifier.size(16.dp),
                     )
                 }
                 DropdownMenu(
                     expanded = pickerOpen,
-                    onDismissRequest = { pickerOpen = false; pickedKind = null },
+                    onDismissRequest = { pickerOpen = false },
                     modifier = Modifier.testTag("tab-add-view-menu"),
                 ) {
-                    val kind = pickedKind
-                    if (kind == null) {
-                        KindMenuItems(onPick = { pickedKind = it })
-                    } else {
-                        // Second step: where it goes. Splitting is offered even for a
-                        // one-view pane — that is the whole point, since a drag cannot
-                        // split a pane that has nothing to divide.
-                        PlacementMenuItems(onPick = { place ->
-                            pickerOpen = false
-                            pickedKind = null
-                            onAddView(kind, place)
-                        })
-                    }
+                    // One step only: pick a kind → always a tab in this pane.
+                    // Split panes via drag-to-edge, not a second menu.
+                    KindMenuItems(onPick = { kind ->
+                        pickerOpen = false
+                        onAddView(kind, NewViewPlacement.HERE)
+                    })
                 }
             }
         }
