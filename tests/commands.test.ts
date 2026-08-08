@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { handleSlash, CommandCtx } from "../src/core/commands"
+import { AGENT_KINDS, spawnCommandForAgent } from "../src/shared/agents"
 import { Registry } from "../src/core/session-manager/registry"
 import { MessageStore } from "../src/core/session-manager/messages"
 import { openDb, runMigrations } from "../src/core/storage/db"
@@ -94,6 +95,23 @@ test("/spawn_cursor routes through cmdSpawn with --agent cursor appended", async
   await handleSlash({ command: "spawn_cursor", rest: "/tmp/bar" }, ctx)
   expect(spawned).toEqual([{ workdir: "/tmp/bar", name: undefined, agent: "cursor", model: undefined }])
   expect(menuRefreshed).toBe(1)
+})
+
+// Parameterized over AGENT_KINDS: every kind must be spawnable by slash
+// command. Guards audit finding B21, where the hard-coded alias list had
+// drifted and grok could not be spawned at all.
+for (const kind of AGENT_KINDS) {
+  test(`/${spawnCommandForAgent(kind)} spawns a ${kind} session and refreshes the menu`, async () => {
+    await handleSlash({ command: spawnCommandForAgent(kind), rest: "/tmp/foo" }, ctx)
+    expect(spawned).toEqual([{ workdir: "/tmp/foo", name: undefined, agent: kind, model: undefined }])
+    expect(menuRefreshed).toBe(1)
+  })
+}
+
+test("claude keeps the bare /spawn — /spawn_claude stays unknown", async () => {
+  const r1 = await handleSlash({ command: "spawn_claude", rest: "/tmp/foo" }, ctx)
+  expect(r1.text).toMatch(/unknown command/i)
+  expect(spawned).toEqual([])
 })
 
 test("/spawn --agent unknown returns error", async () => {
