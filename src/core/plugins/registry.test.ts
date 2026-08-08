@@ -89,9 +89,26 @@ test("throws on an invalid source type", () => {
   expect(() => parsePluginsRegistry(raw, PLUGINS_DIR)).toThrow(/source\.type/)
 })
 
-test("throws on an unknown CLI scope", () => {
-  const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, scopes: ["emacs"] }] })
-  expect(() => parsePluginsRegistry(raw, PLUGINS_DIR)).toThrow(/scope/)
+test("skips an unknown CLI scope and keeps the known ones (forward-compat, no throw)", () => {
+  // A hand-added or newer-broker scope must not invalidate the whole registry:
+  // that would strip EVERY plugin from EVERY session over one string.
+  const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, scopes: ["claude", "emacs", "grok"] }] })
+  const reg = parsePluginsRegistry(raw, PLUGINS_DIR)
+  expect(reg.plugins[0]!.scopes).toEqual(["claude", "grok"])
+})
+
+test("skips a non-string scope entry without throwing", () => {
+  const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, scopes: [7, "cursor"] }] })
+  const reg = parsePluginsRegistry(raw, PLUGINS_DIR)
+  expect(reg.plugins[0]!.scopes).toEqual(["cursor"])
+})
+
+test("grok is a valid scope and round-trips through serialize", () => {
+  const raw = JSON.stringify({ version: 1, plugins: [{ name: "x", source: { type: "git", url: "u" }, enabled: true, scopes: ["grok"] }] })
+  const reg = parsePluginsRegistry(raw, PLUGINS_DIR)
+  expect(reg.plugins[0]!.scopes).toEqual(["grok"])
+  const reparsed = parsePluginsRegistry(serializePluginsRegistry(reg), PLUGINS_DIR)
+  expect(reparsed.plugins[0]!.scopes).toEqual(["grok"])
 })
 
 test("loadPluginsRegistry returns an empty registry when the file is absent", () => {
