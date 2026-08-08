@@ -98,7 +98,13 @@ fun rememberMacWindowChrome(window: ComposeWindow): MacChromeRegions? {
                 tb.height = MacTitleBarHeight.value
                 decorations.setCustomTitleBar(window, tb)
             }
-        }.getOrNull()
+        }.getOrNull().also {
+            // One-line breadcrumb for remote verification — which chrome path engaged.
+            println(
+                if (it != null) "[MacWindowChrome] JBR custom title bar installed (band drag arbitrated)"
+                else "[MacWindowChrome] no JBR WindowDecorations — falling back to client properties",
+            )
+        }
     } ?: return null
     val regions = remember(window) { MacChromeRegions() }
     DisposableEffect(window, titleBar) {
