@@ -256,15 +256,6 @@ fun WorkspaceListPanel(
     val workingOrders = remember { mutableStateMapOf<String, List<String>>() }
     val dragWorkingState = remember { WorkspaceDragWorkingState() }
 
-    fun reorderWithin(list: List<WorkspaceDto>, id: String, delta: Int) {
-        val ids = list.map { it.id }.toMutableList()
-        val i = ids.indexOf(id)
-        val j = i + delta
-        if (i < 0 || j !in ids.indices) return
-        java.util.Collections.swap(ids, i, j)
-        onReorder(ids)
-    }
-
     fun finishDrag() {
         val finished = dragWorkingState.finish(commit = true)
         finished?.let { move ->
@@ -485,8 +476,6 @@ fun WorkspaceListPanel(
                                     val s = primarySession(w)
                                     if (s != null) onMute(w.id, !(s.mute ?: false))
                                 },
-                                onMoveUp = { reorderWithin(orderedRest, w.id, -1) },
-                                onMoveDown = { reorderWithin(orderedRest, w.id, +1) },
                             )
                         }
                     }
@@ -581,8 +570,6 @@ fun WorkspaceListPanel(
                                         val s = primarySession(w)
                                         if (s != null) onMute(w.id, !(s.mute ?: false))
                                     },
-                                    onMoveUp = { reorderWithin(ordered, w.id, -1) },
-                                    onMoveDown = { reorderWithin(ordered, w.id, +1) },
                                     tabDragState = tabDragState,
                                 )
                             }
@@ -751,8 +738,6 @@ private fun WorkspaceListEntry(
     onRename: () -> Unit,
     onKill: () -> Unit,
     onToggleMute: () -> Unit,
-    onMoveUp: (() -> Unit)? = null,
-    onMoveDown: (() -> Unit)? = null,
     tabDragState: TabDragState? = null,
 ) {
     val activity = workspaceActivity(w, agentState)
@@ -781,8 +766,6 @@ private fun WorkspaceListEntry(
             onRename = onRename,
             onKill = onKill,
             onToggleMute = onToggleMute,
-            onMoveUp = onMoveUp,
-            onMoveDown = onMoveDown,
             tabDragState = tabDragState,
         )
         if (w.isMultiAgent()) {
@@ -809,16 +792,13 @@ private fun WorkspaceListEntry(
 /**
  * Labels offered by a workspace row's right-click menu.
  * Extracted so chrome tests can assert rename/mute/archive without driving the desktop context menu.
+ * Reorder is drag-only (no Move up / Move down) — same as Android.
  */
 fun workspaceRowContextLabels(
     mute: Boolean = false,
-    canMoveUp: Boolean = false,
-    canMoveDown: Boolean = false,
 ): List<String> = buildList {
     add("Rename")
     add(if (mute) "Unmute" else "Mute")
-    if (canMoveUp) add("Move up")
-    if (canMoveDown) add("Move down")
     add("Archive")
 }
 
@@ -850,8 +830,6 @@ fun WorkspaceRow(
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
-    onMoveUp: (() -> Unit)? = null,
-    onMoveDown: (() -> Unit)? = null,
     /** When set, this row is a drop target for a tab dragged out of the layout. */
     tabDragState: TabDragState? = null,
 ) {
@@ -901,18 +879,11 @@ fun WorkspaceRow(
     ) {
     ContextMenuArea(
         items = {
-            val labels = workspaceRowContextLabels(
-                mute = mute,
-                canMoveUp = onMoveUp != null,
-                canMoveDown = onMoveDown != null,
-            )
-            labels.map { label ->
+            workspaceRowContextLabels(mute = mute).map { label ->
                 ContextMenuItem(label) {
                     when (label) {
                         "Rename" -> onRename()
                         "Mute", "Unmute" -> onToggleMute()
-                        "Move up" -> onMoveUp?.invoke()
-                        "Move down" -> onMoveDown?.invoke()
                         "Archive" -> onKill()
                     }
                 }
