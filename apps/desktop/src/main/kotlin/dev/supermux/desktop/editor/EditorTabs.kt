@@ -109,7 +109,7 @@ private fun TabChip(
             .pointerHoverIcon(if (loading) PointerIcon.Default else PointerIcon.Hand)
             .padding(start = 14.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         when {
             loading -> {
