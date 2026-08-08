@@ -2,7 +2,8 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow } from "../session-types"
+import type { CodexRpc } from "../../slash-commands/types"
 import { resolveCodexAuth } from "./auth"
 import { writeCodexConfig } from "./config-writer"
 import { writeCodexPreamble } from "./preamble-writer"
@@ -15,6 +16,18 @@ import { randomUUID } from "crypto"
 import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { home } from "../../../shared/home"
+
+/** Slash-command discovery context: the live app-server JSON-RPC client.
+ * A session uses its own adapter's client; a launcher preview (no session of
+ * its own) borrows any live codex adapter's — the skills list is global. */
+export function commandContext(ctx: CommandContextCtx): CodexRpc | undefined {
+  if (ctx.adapter) return (ctx.adapter as { rpc?: CodexRpc }).rpc
+  for (const a of ctx.kindAdapters?.() ?? []) {
+    const rpc = (a as { rpc?: CodexRpc } | undefined)?.rpc
+    if (rpc) return rpc
+  }
+  return undefined
+}
 
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)

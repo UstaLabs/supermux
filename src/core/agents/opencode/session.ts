@@ -2,7 +2,8 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow } from "../session-types"
+import type { OpenCodeCommandClient } from "../../slash-commands/types"
 import { resolveOpenCodeAuth } from "./auth"
 import { writeOpenCodeConfig } from "./config-writer"
 import { writeOpenCodePreamble } from "./preamble-writer"
@@ -14,6 +15,21 @@ import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+
+/** Slash-command discovery context for the opencode provider. */
+export type OpenCodeCommandContext = {
+  /** Live `opencode serve` client (session discovery only; a preview scans disk). */
+  client?: OpenCodeCommandClient
+  /** Enabled plugin roots for the disk-scan preview / client fallback. */
+  pluginDirs: string[]
+}
+
+export function commandContext(ctx: CommandContextCtx): OpenCodeCommandContext {
+  return {
+    client: (ctx.adapter as { commandClient?: OpenCodeCommandClient } | undefined)?.commandClient,
+    pluginDirs: opencodeConfigEntries({ sessionName: ctx.sessionName }).pluginPaths,
+  }
+}
 
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)

@@ -47,7 +47,8 @@ import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
+import { codexSpawnArgs, pluginSpawnArgsForKind, codexPrepareGlobal, codexPrepareSessionHome, ensureOpenCodePluginScopes } from "./core/plugins"
+import { agentModules } from "./core/agents/registry"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
@@ -659,12 +660,21 @@ const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessio
 
 // Slash-command discovery: per-session command list (control + agent commands
 // tapped from each CLI's native protocol). Broadcast to web on change.
-function opencodePluginDirs(sessionName: string): string[] {
-  return opencodeConfigEntries({ sessionName }).pluginPaths
+
+/** Live adapters of one kind — preview commandContext leaves borrow one (a preview probe has no session of its own). */
+function adaptersOfKind(kind: AgentKind): unknown[] {
+  const out: unknown[] = []
+  for (const s of registry.list()) {
+    if (((s.agent ?? "claude") as AgentKind) !== kind) continue
+    const adapter = runtimes.get(s.id)?.adapter
+    if (adapter) out.push(adapter)
+  }
+  return out
 }
 
 const cursorCommandProvider = new CursorCommandProvider()
-const commandRegistry = new CommandRegistry({
+// Annotated to cut the top-level inference cycle (sessionManager → commandRegistry → runtimes → sessionManager).
+const commandRegistry: CommandRegistry = new CommandRegistry({
   providers: {
     claude: new ClaudeCommandProvider(),
     codex: new CodexCommandProvider(),
@@ -675,21 +685,13 @@ const commandRegistry = new CommandRegistry({
     const s = registry.resolveName(name)
     if (!s) return undefined
     const kind = ((s.agent ?? "claude") as AgentKind)
-    const pluginSpawnArgs =
-      kind === "codex" ? codexSpawnArgs({ sessionName: s.name }).args
-      : kind === "cursor" ? cursorSpawnArgs({ sessionName: s.name }).args
-      : kind === "opencode" ? []
-      : claudeSpawnArgs({ sessionName: s.name }).args
-    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient } | undefined
     return {
       name: s.name,
       kind,
       workdir: s.workdir,
       muted: !!s.mute,
-      pluginSpawnArgs,
-      codexClient: kind === "codex" ? adapter?.rpc : undefined,
-      opencodeClient: kind === "opencode" ? adapter?.commandClient : undefined,
-      opencodePluginDirs: kind === "opencode" ? opencodePluginDirs(s.name) : undefined,
+      pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: s.name }),
+      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -702,26 +704,6 @@ const commandRegistry = new CommandRegistry({
     webChannel?.broadcastToAll({ type: "commands_changed", session: id, commands, resolved: true })
   },
 })
-
-function findCodexClient(): import("./core/slash-commands/types").CodexRpc | undefined {
-  for (const s of registry.list()) {
-    if (s.agent !== "codex") continue
-    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc } | undefined
-    if (adapter?.rpc) return adapter.rpc
-  }
-  return undefined
-}
-
-function pluginSpawnArgsForAgent(kind: import("./core/agents/types").AgentKind): string[] {
-  return kind === "codex" ? codexSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "cursor" ? cursorSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "opencode" ? []
-    : claudeSpawnArgs({ sessionName: "__preview__" }).args
-}
-
-function opencodePluginDirsForPreview(): string[] {
-  return opencodeConfigEntries({ sessionName: "__preview__" }).pluginPaths
-}
 
 const unregisterSession = (id: string) => sessionManager.unregister(id)
 
@@ -1315,9 +1297,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       await commandRegistry.refreshPreview({
         kind,
         workdir,
-        pluginSpawnArgs: pluginSpawnArgsForAgent(kind),
-        codexClient: kind === "codex" ? findCodexClient() : undefined,
-        opencodePluginDirs: kind === "opencode" ? opencodePluginDirsForPreview() : undefined,
+        pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
+        agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
       return {
         commands: commandRegistry.getPreview(kind, workdir),
