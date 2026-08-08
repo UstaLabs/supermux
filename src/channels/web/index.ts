@@ -151,6 +151,10 @@ export interface SessionSnapshot {
   mute: boolean
   connected: boolean
   agent: AgentKind
+  /** Broker-derived behavior flags (core/agents/capabilities.ts) so clients do
+   *  not branch on `agent` for behavior. Optional only for old fixtures —
+   *  main.ts always sends it. */
+  capabilities?: import("../../core/agents/capabilities").SessionCapabilities
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
   model?: string

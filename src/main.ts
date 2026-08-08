@@ -95,6 +95,7 @@ import { makeLogger } from "./shared/log"
 import { resolveCommand, spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary } from "./shared/preflight"
 import { detectAllAgents, detectAgent } from "./core/agents/detect"
+import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import { homedir, hostname } from "os"
@@ -1296,6 +1297,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         mute: !!s.mute,
         connected: !!s.connected,
         agent: s.agent,
+        capabilities: sessionCapabilities(s.agent),
         role: s.role,
         isDefault: s.is_default,
         model: s.model,
@@ -1481,6 +1483,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             mute: !!entry.mute,
             connected: true,
             agent: entry.agent,
+            capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
             repo_root: entry.repo_root || undefined,
@@ -1534,6 +1537,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           mute: !!s.mute,
           connected: false,
           agent: s.agent,
+          capabilities: sessionCapabilities(s.agent),
           model: s.model,
           reasoningLevel: sessionEffort(s),
           repo_root: s.repo_root || undefined,
@@ -1588,6 +1592,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             mute: !!entry.mute,
             connected: true,
             agent: entry.agent,
+            capabilities: sessionCapabilities(entry.agent),
             model: entry.model,
             reasoningLevel: sessionEffort(entry),
             repo_root: entry.repo_root || undefined,
@@ -2300,7 +2305,7 @@ async function spawnSession(args: {
     if (bornRow && !bornRow.internal) {
       webChannel?.broadcastToAll({
         type: "session_added",
-        session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
+        session: { id: bornRow.id, name: bornRow.name, workdir: bornRow.workdir, mute: false, connected: bornRow.connected, agent: bornRow.agent, capabilities: sessionCapabilities(bornRow.agent), user_status: bornRow.user_status, sort_order: bornRow.sort_order, draft_payload: bornRow.draft_payload },
       })
       await refreshTelegramMenu()
     }
@@ -2450,6 +2455,7 @@ ch.on("inbound", async (msg: InboundMessage) => {
               mute: !!entry.mute,
               connected: true,
               agent: entry.agent,
+              capabilities: sessionCapabilities(entry.agent),
               model: entry.model,
               reasoningLevel: sessionEffort(entry),
               repo_root: entry.repo_root || undefined,
@@ -2671,6 +2677,7 @@ if (webChannel) {
             mute: false,
             connected: false,
             agent: draftSnapshot.agent,
+            capabilities: sessionCapabilities(draftSnapshot.agent),
             model: draftSnapshot.model,
             reasoningLevel: draftSnapshot.reasoningLevel,
             status: "active",

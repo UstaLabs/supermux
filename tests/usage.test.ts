@@ -64,6 +64,8 @@ test("fetchClaudeUsage returns usage when credentials valid", async () => {
   expect(result).not.toBeNull()
   expect(result!.fiveHour.used).toBe(42)
   expect(result!.fiveHour.resetsAt).toBe("2026-05-25T12:00:00Z")
+  // Broker-normalized ISO timestamp for clients (no per-provider unit logic).
+  expect(result!.fiveHour.resetsAtIso).toBe("2026-05-25T12:00:00.000Z")
   expect(result!.sevenDay.used).toBe(15)
   // No limits[] array → Sonnet falls back to the legacy top-level field.
   expect(result!.sevenDaySonnet!.used).toBe(8)
@@ -240,8 +242,8 @@ test("fetchCodexUsage returns usage when auth valid", async () => {
   expect(result).not.toBeNull()
   expect(result!.plan).toBe("plus")
   expect(result!.windows).toEqual([
-    { id: "primary", used: 60, resetsAt: 1748200000, label: "5-hour window", windowSeconds: 18000 },
-    { id: "secondary", used: 20, resetsAt: 1748300000, label: "7-day window", windowSeconds: 604800 },
+    { id: "primary", used: 60, resetsAt: 1748200000, resetsAtIso: new Date(1748200000 * 1000).toISOString(), label: "5-hour window", windowSeconds: 18000 },
+    { id: "secondary", used: 20, resetsAt: 1748300000, resetsAtIso: new Date(1748300000 * 1000).toISOString(), label: "7-day window", windowSeconds: 604800 },
   ])
   expect(result!.credits).not.toBeNull()
   expect(result!.credits!.hasCredits).toBe(true)
@@ -273,10 +275,10 @@ test("fetchCodexUsage accepts legacy resets_at field", async () => {
 
   const result = await fetchCodexUsage(authPath)
   expect(result!.windows[0]).toEqual({
-    id: "primary", used: 10, resetsAt: 1748200000, label: "5-hour window", windowSeconds: null,
+    id: "primary", used: 10, resetsAt: 1748200000, resetsAtIso: new Date(1748200000 * 1000).toISOString(), label: "5-hour window", windowSeconds: null,
   })
   expect(result!.windows[1]).toEqual({
-    id: "secondary", used: 5, resetsAt: 1748300000, label: "7-day window", windowSeconds: null,
+    id: "secondary", used: 5, resetsAt: 1748300000, resetsAtIso: new Date(1748300000 * 1000).toISOString(), label: "7-day window", windowSeconds: null,
   })
   expect(result!.resetCredits).toBe(0)
 })
@@ -301,6 +303,7 @@ test("fetchCodexUsage labels the live single primary window by duration", async 
     id: "primary",
     used: 25,
     resetsAt: 1784788528,
+    resetsAtIso: new Date(1784788528 * 1000).toISOString(),
     label: "7-day window",
     windowSeconds: 604800,
   }])
@@ -371,6 +374,8 @@ test("fetchCursorUsage marks spend unavailable for the current planUsage shape",
   expect(result!.spendAvailable).toBe(false)
   expect(result!.totalSpendCents).toBe(0)
   expect(result!.includedCents).toBe(0)
+  // Unix-ms string from the API is normalized to ISO for clients.
+  expect(result!.billingCycleEndIso).toBe(new Date(1785572625499).toISOString())
 })
 
 test("fetchCursorUsage returns null when db missing", async () => {
@@ -531,6 +536,7 @@ test("fetchGrokUsage maps monthly credits and plan from cli-chat-proxy", async (
   expect(result!.onDemandCap).toBe(1000)
   expect(result!.onDemandUsed).toBe(25)
   expect(result!.billingPeriodEnd).toBe("2026-08-01T00:00:00+00:00")
+  expect(result!.billingPeriodEndIso).toBe("2026-08-01T00:00:00.000Z")
   expect(seen.some((u) => u.includes("/billing"))).toBe(true)
 })
 

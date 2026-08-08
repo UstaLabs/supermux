@@ -6,11 +6,15 @@
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind } from "../../shared/agents"
 import { claudeIsAuthed, type AuthStatusRunner } from "./claude/auth"
+import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
 
 export interface AgentStatus {
   kind: AgentKind
   installed: boolean
   authed: boolean
+  /** Kind-derived behavior flags for login UIs — clients must not branch on
+   *  `kind` for behavior (see core/agents/capabilities.ts). */
+  capabilities: AgentAuthCapabilities
 }
 
 export interface DetectProbes {
@@ -99,8 +103,9 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
   // but NOT `authed` (no provider connected). The UI renders that free-tier state as
   // "Ready · free tier"; opencode spawning never fail-closes on auth, so this only
   // affects the status badge, not usability.
+  // Step-2's CRED_PROBE table stays the auth oracle; C's capability flags ride along.
   const authed = installed && CRED_PROBE[kind](probes, paths)
-  return { kind, installed, authed }
+  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind) }
 }
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {

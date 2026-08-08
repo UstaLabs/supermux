@@ -4,14 +4,14 @@ import { ChevronLeft, RefreshCw } from "@lucide/vue"
 import { api } from "@/api/client"
 import { codexResetNote } from "@/lib/codex-reset"
 
-interface UsageWindow { used: number; resetsAt: string | number | null }
+interface UsageWindow { used: number; resetsAt: string | number | null; resetsAtIso?: string | null }
 interface ClaudeExtraUsage { enabled: boolean; monthlyLimit: number; usedCredits: number; currency: string }
 interface ClaudeUsage { fiveHour: UsageWindow; sevenDay: UsageWindow; sevenDaySonnet: UsageWindow | null; sevenDayFable: UsageWindow | null; extraUsage: ClaudeExtraUsage | null }
 interface CodexWindow extends UsageWindow { id: string; label: string; windowSeconds: number | null }
 interface CodexUsage { plan: string; windows: CodexWindow[]; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
-interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; spendAvailable: boolean; billingCycleStart: string; billingCycleEnd: string }
+interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; spendAvailable: boolean; billingCycleStart: string; billingCycleEnd: string; billingCycleEndIso?: string | null }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
-interface GrokUsage { plan: string; percentUsed: number; used: number; monthlyLimit: number; onDemandCap: number; onDemandUsed: number; prepaidBalance: number; billingPeriodStart: string; billingPeriodEnd: string }
+interface GrokUsage { plan: string; percentUsed: number; used: number; monthlyLimit: number; onDemandCap: number; onDemandUsed: number; prepaidBalance: number; billingPeriodStart: string; billingPeriodEnd: string; billingPeriodEndIso?: string | null }
 interface UsageResponse { claude: ClaudeUsage | null; codex: CodexUsage | null; cursor: CursorUsage | null; opencode: OpenCodeUsage | null; grok: GrokUsage | null; errors: Record<string, string> }
 
 const data = ref<UsageResponse | null>(null)
@@ -48,15 +48,28 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function formatReset(resetsAt: string | number | null, kind: "claude" | "codex" | "cursor" | "grok"): string {
-  if (resetsAt == null) return ""
+// The broker normalizes every reset timestamp to an ISO field (resetsAtIso,
+// billingCycleEndIso, billingPeriodEndIso — see core/usage/index.ts), so no
+// per-agent unit logic is needed here. `legacyFormat` names the raw field's
+// wire format and is used ONLY as a fallback for an old broker that sends no
+// normalized field: "iso" strings (claude/grok), "unix-s" seconds (codex),
+// "unix-ms-str" millisecond strings (cursor) — identical to the old behavior.
+function formatReset(
+  iso: string | null | undefined,
+  raw: string | number | null,
+  legacyFormat: "iso" | "unix-s" | "unix-ms-str",
+): string {
   let ms: number
-  if (kind === "claude" || kind === "grok") {
-    ms = new Date(resetsAt as string).getTime()
-  } else if (kind === "codex") {
-    ms = Number(resetsAt) * 1000
+  if (iso != null) {
+    ms = new Date(iso).getTime()
+  } else if (raw == null) {
+    return ""
+  } else if (legacyFormat === "iso") {
+    ms = new Date(raw as string).getTime()
+  } else if (legacyFormat === "unix-s") {
+    ms = Number(raw) * 1000
   } else {
-    ms = Number(resetsAt)
+    ms = Number(raw)
   }
   if (isNaN(ms)) return ""
   const diff = ms - Date.now()
@@ -155,7 +168,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(claude.fiveHour.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claude.fiveHour.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claude.fiveHour.resetsAt, 'claude') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claude.fiveHour.resetsAtIso, claude.fiveHour.resetsAt, 'iso') }}</p>
             </div>
             <!-- 7-day window -->
             <div class="mb-3">
@@ -166,7 +179,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(claude.sevenDay.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claude.sevenDay.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claude.sevenDay.resetsAt, 'claude') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claude.sevenDay.resetsAtIso, claude.sevenDay.resetsAt, 'iso') }}</p>
             </div>
             <!-- 7-day Sonnet (per-model weekly cap; hidden when Anthropic returns none) -->
             <div v-if="claudeSonnet" class="mb-3">
@@ -177,7 +190,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(claudeSonnet.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claudeSonnet.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claudeSonnet.resetsAt, 'claude') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claudeSonnet.resetsAtIso, claudeSonnet.resetsAt, 'iso') }}</p>
             </div>
             <!-- 7-day Fable (per-model weekly cap; hidden when Anthropic returns none) -->
             <div v-if="claudeFable" class="mb-3">
@@ -188,7 +201,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(claudeFable.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(claudeFable.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claudeFable.resetsAt, 'claude') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(claudeFable.resetsAtIso, claudeFable.resetsAt, 'iso') }}</p>
             </div>
             <!-- Extra usage -->
             <div v-if="claude.extraUsage && claude.extraUsage.enabled" class="pt-2 border-t border-border">
@@ -219,7 +232,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(window.used)" class="h-full rounded-full transition-all" :style="{ width: clamp(window.used) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(window.resetsAt, 'codex') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(window.resetsAtIso, window.resetsAt, 'unix-s') }}</p>
             </div>
             <!-- Credits -->
             <div v-if="codex.credits && codex.credits.hasCredits" class="pt-2 border-t border-border">
@@ -280,7 +293,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(cursor.totalPercentUsed)" class="h-full rounded-full transition-all" :style="{ width: clamp(cursor.totalPercentUsed) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(cursor.billingCycleEnd, 'cursor') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(cursor.billingCycleEndIso, cursor.billingCycleEnd, 'unix-ms-str') }}</p>
             </div>
             <div v-if="cursor.spendAvailable" class="pt-2 border-t border-border">
               <div class="flex items-center justify-between text-xs">
@@ -344,7 +357,7 @@ async function useReset() {
               <div class="h-2 rounded-full bg-muted overflow-hidden">
                 <div :class="barColor(grok.percentUsed)" class="h-full rounded-full transition-all" :style="{ width: clamp(grok.percentUsed) + '%' }" />
               </div>
-              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(grok.billingPeriodEnd, 'grok') }}</p>
+              <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(grok.billingPeriodEndIso, grok.billingPeriodEnd, 'iso') }}</p>
             </div>
             <div v-if="grok.monthlyLimit > 0" class="pt-2 border-t border-border">
               <div class="flex items-center justify-between text-xs">
