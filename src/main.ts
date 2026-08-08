@@ -47,7 +47,7 @@ import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
+import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
@@ -2934,6 +2934,9 @@ if (!IS_TEST_BROKER) {
     }
     if (ensureOpenCodePluginScopes()) {
       log.info("opencode_plugin_scopes_synced")
+    }
+    if (ensureGrokPluginScopes()) {
+      log.info("grok_plugin_scopes_synced")
     }
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })

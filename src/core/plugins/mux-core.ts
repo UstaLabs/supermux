@@ -209,7 +209,7 @@ export function ensureMuxCoreSkills(opts: { pluginDir?: string } = {}): boolean 
 }
 
 const MUX_CORE_DIR_NAME = "mux-core"
-const MUX_CORE_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode"]
+const MUX_CORE_SCOPES: CliScope[] = ["claude", "codex", "cursor", "opencode", "grok"]
 
 /**
  * Ensure the mux-core plugin is REGISTERED + enabled in the plugins registry
