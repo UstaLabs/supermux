@@ -18,14 +18,13 @@
 // footer rail, Settled fold, context menus, drag-reorder) is intentional parity.
 package dev.supermux.desktop.shell
 
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ContextMenuArea
 import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,15 +33,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -64,35 +60,31 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import dev.supermux.desktop.host.HostBadge
 import dev.supermux.desktop.host.HostFilterChips
 import dev.supermux.desktop.host.HostView
 import dev.supermux.desktop.host.filterSessions
 import dev.supermux.desktop.session.NewSessionListRow
 import dev.supermux.desktop.session.PathGroupHeader
-import dev.supermux.desktop.session.SessionDragReorderState
 import dev.supermux.desktop.session.SessionRow
 import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.session.relTime
@@ -109,7 +101,6 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
 import dev.supermux.session.SectionKey
-import dev.supermux.session.TaskSection
 import dev.supermux.session.buildTaskSections
 import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.inferHomeDir
@@ -121,6 +112,8 @@ import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.workspace.isMultiAgent
 import dev.supermux.workspace.workspaceActivity
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 /**
  * Workspace sidebar (spec §13.6). Same chrome as [dev.supermux.desktop.session.SessionListPanel]
@@ -258,28 +251,10 @@ fun WorkspaceListPanel(
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val dragReorder = remember(listState) {
-        SessionDragReorderState(scope, listState) { ids -> onReorder(ids) }
-    }
-    var listRootOffset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
-
-    fun groupOrder(ws: List<WorkspaceDto>): List<WorkspaceDto> {
-        val live = dragReorder.liveOrder
-        if (live == null || dragReorder.draggingId !in ws.map { it.id }) return ws
-        val byId = ws.associateBy { it.id }
-        return live.mapNotNull { byId[it] }
-    }
-
-    fun dragMod(ws: List<WorkspaceDto>, can: Boolean): (String) -> Modifier = { id ->
-        val label = ws.firstOrNull { it.id == id }?.name ?: id
-        dragReorder.rowModifier(
-            id,
-            { dragReorder.liveOrder ?: ws.map { it.id } },
-            enabled = can,
-            label = label,
-        )
-    }
+    // Live order while dragging (Android SessionListScreen / calvin pattern). Keyed by
+    // group path or WORKSPACE_FLAT_SCOPE so neighbors can animate before the PATCH returns.
+    val workingOrders = remember { mutableStateMapOf<String, List<String>>() }
+    val dragWorkingState = remember { WorkspaceDragWorkingState() }
 
     fun reorderWithin(list: List<WorkspaceDto>, id: String, delta: Int) {
         val ids = list.map { it.id }.toMutableList()
@@ -288,6 +263,68 @@ fun WorkspaceListPanel(
         if (i < 0 || j !in ids.indices) return
         java.util.Collections.swap(ids, i, j)
         onReorder(ids)
+    }
+
+    fun finishDrag() {
+        val finished = dragWorkingState.finish(commit = true)
+        finished?.let { move ->
+            onReorder(move.orderedIds)
+            // Drop gesture overlay so a later server snapshot (or failed PATCH rollback) can win.
+            workingOrders.remove(move.scope.key)
+        }
+    }
+
+    // Scope → current rows used by onMove to keep calvin mutations section-local.
+    fun rowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
+        WORKSPACE_FLAT_SCOPE -> groups
+            .filter { it.key != PA_GROUP_KEY }
+            .flatMap { it.workspaces }
+            .sortedWith(compareBy({ it.sortOrder }, { it.id }))
+        else -> groups.firstOrNull { it.key == scopeKey }?.workspaces.orEmpty()
+    }
+
+    fun scopeOf(workspaceId: String): String? {
+        if (!groupByProject) {
+            val restIds = rowsForScope(WORKSPACE_FLAT_SCOPE).map { it.id }
+            return if (workspaceId in restIds) WORKSPACE_FLAT_SCOPE else null
+        }
+        return groups.firstOrNull { g ->
+            g.key != PA_GROUP_KEY && g.workspaces.any { it.id == workspaceId }
+        }?.key
+    }
+
+    // Native Compose reorder (sh.calvin.reorderable) — elevates the item, auto-scrolls,
+    // animates neighbors. Same library + pattern as Android SessionListScreen.
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
+        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+        if (!fromKey.startsWith("ws:") || !toKey.startsWith("ws:")) {
+            return@rememberReorderableLazyListState
+        }
+        val fromId = fromKey.removePrefix("ws:")
+        val toId = toKey.removePrefix("ws:")
+        val scopeKey = scopeOf(fromId) ?: return@rememberReorderableLazyListState
+        if (scopeOf(toId) != scopeKey) return@rememberReorderableLazyListState
+        val rows = rowsForScope(scopeKey)
+        val move = moveWorkspaceWithinScope(
+            rows = rows,
+            workingOrders = workingOrders,
+            scopeKey = scopeKey,
+            fromId = fromId,
+            toId = toId,
+        ) ?: return@rememberReorderableLazyListState
+        val originalIds = workingOrders[scopeKey] ?: rows.map { it.id }
+        dragWorkingState.beginIfIdle(move.scope, originalIds)
+        // Calvin requires this mutation before onMove returns so neighbors can animate.
+        workingOrders[scopeKey] = move.orderedIds
+        dragWorkingState.move(move.orderedIds)
+    }
+    LaunchedEffect(reorderableState) {
+        var wasDragging = reorderableState.isAnyItemDragging
+        snapshotFlow { reorderableState.isAnyItemDragging }.collect { dragging ->
+            if (wasDragging && !dragging) finishDrag()
+            wasDragging = dragging
+        }
     }
 
     fun openDraft(s: SessionInfo) {
@@ -305,8 +342,7 @@ fun WorkspaceListPanel(
     Column(
         modifier
             .background(cs.surfaceContainerHigh)
-            .fillMaxSize()
-            .onGloballyPositioned { listRootOffset = it.positionInRoot() },
+            .fillMaxSize(),
     ) {
         // ── Header: full "Start a new session" card (same chrome as SessionListPanel) ─
         NewSessionListRow(
@@ -400,39 +436,59 @@ fun WorkspaceListPanel(
                             )
                         }
                     }
-                    items(rest, key = { "f:${it.id}" }) { w ->
-                        WorkspaceListEntry(
-                            w = w,
-                            activeId = activeId,
-                            agentState = agentState,
-                            names = names,
-                            sessionById = sessionById,
-                            lastBySession = lastBySession,
-                            lastRead = lastRead,
-                            host = if (showRowHostBadge) {
-                                val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
-                                sid?.let { hostByRecord[sessionHost[it]] }
-                            } else null,
-                            projectTag = projectLabel(
-                                primarySession(w) ?: SessionInfo(
-                                    id = w.id, name = w.name, workdir = w.workdir, agent = "claude",
-                                    repo_root = w.repoRoot,
+                    val orderedRest = applyWorkspaceWorkingOrder(
+                        rest,
+                        workingOrders[WORKSPACE_FLAT_SCOPE],
+                    )
+                    items(orderedRest, key = { "ws:${it.id}" }) { w ->
+                        ReorderableItem(reorderableState, key = "ws:${w.id}") { isDragging ->
+                            val rowInteraction = remember { MutableInteractionSource() }
+                            WorkspaceListEntry(
+                                w = w,
+                                activeId = activeId,
+                                agentState = agentState,
+                                names = names,
+                                sessionById = sessionById,
+                                lastBySession = lastBySession,
+                                lastRead = lastRead,
+                                host = if (showRowHostBadge) {
+                                    val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+                                    sid?.let { hostByRecord[sessionHost[it]] }
+                                } else null,
+                                projectTag = projectLabel(
+                                    primarySession(w) ?: SessionInfo(
+                                        id = w.id, name = w.name, workdir = w.workdir, agent = "claude",
+                                        repo_root = w.repoRoot,
+                                    ),
+                                    effectiveHome,
                                 ),
-                                effectiveHome,
-                            ),
-                            modifier = dragMod(rest, true)(w.id),
-                            onOpen = onOpen,
-                            onOpenSession = onOpenSession,
-                            onRename = { renameTarget = w; renameText = w.name },
-                            onKill = { killTarget = w },
-                            tabDragState = tabDragState,
-                            onToggleMute = {
-                                val s = primarySession(w)
-                                if (s != null) onMute(w.id, !(s.mute ?: false))
-                            },
-                            onMoveUp = { reorderWithin(rest, w.id, -1) },
-                            onMoveDown = { reorderWithin(rest, w.id, +1) },
-                        )
+                                isDragging = isDragging,
+                                interactionSource = rowInteraction,
+                                dragModifier = Modifier.draggableHandle(
+                                    interactionSource = rowInteraction,
+                                    onDragStarted = {
+                                        val ids = workingOrders[WORKSPACE_FLAT_SCOPE]
+                                            ?: orderedRest.map { it.id }
+                                        dragWorkingState.begin(
+                                            WorkspaceReorderScope(WORKSPACE_FLAT_SCOPE),
+                                            ids,
+                                        )
+                                    },
+                                    onDragStopped = { finishDrag() },
+                                ),
+                                onOpen = onOpen,
+                                onOpenSession = onOpenSession,
+                                onRename = { renameTarget = w; renameText = w.name },
+                                onKill = { killTarget = w },
+                                tabDragState = tabDragState,
+                                onToggleMute = {
+                                    val s = primarySession(w)
+                                    if (s != null) onMute(w.id, !(s.mute ?: false))
+                                },
+                                onMoveUp = { reorderWithin(orderedRest, w.id, -1) },
+                                onMoveDown = { reorderWithin(orderedRest, w.id, +1) },
+                            )
+                        }
                     }
                 }
                 if (draftSessions.isNotEmpty()) {
@@ -486,38 +542,76 @@ fun WorkspaceListPanel(
                 //   chrome SessionListPanel never draws.
                 groups.forEach { g ->
                     item(key = "h:${g.key}") { PathGroupHeader(g.label, g.workspaces.size) }
-                    val ordered = groupOrder(g.workspaces)
                     val canDrag = g.key != PA_GROUP_KEY
-                    items(ordered, key = { it.id }) { w ->
-                        WorkspaceListEntry(
-                            w = w,
-                            activeId = activeId,
-                            agentState = agentState,
-                            names = names,
-                            sessionById = sessionById,
-                            lastBySession = lastBySession,
-                            lastRead = lastRead,
-                            host = if (showRowHostBadge) {
-                                val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
-                                sid?.let { hostByRecord[sessionHost[it]] }
-                            } else null,
-                            modifier = dragMod(g.workspaces, canDrag)(w.id),
-                            onOpen = onOpen,
-                            onOpenSession = onOpenSession,
-                            onRename = { renameTarget = w; renameText = w.name },
-                            onKill = { killTarget = w },
-                            onToggleMute = {
-                                val s = primarySession(w)
-                                if (s != null) onMute(w.id, !(s.mute ?: false))
-                            },
-                            onMoveUp = if (canDrag) {
-                                { reorderWithin(ordered, w.id, -1) }
-                            } else null,
-                            onMoveDown = if (canDrag) {
-                                { reorderWithin(ordered, w.id, +1) }
-                            } else null,
-                            tabDragState = tabDragState,
-                        )
+                    val ordered = applyWorkspaceWorkingOrder(
+                        g.workspaces,
+                        if (canDrag) workingOrders[g.key] else null,
+                    )
+                    if (canDrag) {
+                        items(ordered, key = { "ws:${it.id}" }) { w ->
+                            ReorderableItem(reorderableState, key = "ws:${w.id}") { isDragging ->
+                                val rowInteraction = remember { MutableInteractionSource() }
+                                WorkspaceListEntry(
+                                    w = w,
+                                    activeId = activeId,
+                                    agentState = agentState,
+                                    names = names,
+                                    sessionById = sessionById,
+                                    lastBySession = lastBySession,
+                                    lastRead = lastRead,
+                                    host = if (showRowHostBadge) {
+                                        val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+                                        sid?.let { hostByRecord[sessionHost[it]] }
+                                    } else null,
+                                    isDragging = isDragging,
+                                    interactionSource = rowInteraction,
+                                    dragModifier = Modifier.draggableHandle(
+                                        interactionSource = rowInteraction,
+                                        onDragStarted = {
+                                            val ids = workingOrders[g.key] ?: ordered.map { it.id }
+                                            dragWorkingState.begin(WorkspaceReorderScope(g.key), ids)
+                                        },
+                                        onDragStopped = { finishDrag() },
+                                    ),
+                                    onOpen = onOpen,
+                                    onOpenSession = onOpenSession,
+                                    onRename = { renameTarget = w; renameText = w.name },
+                                    onKill = { killTarget = w },
+                                    onToggleMute = {
+                                        val s = primarySession(w)
+                                        if (s != null) onMute(w.id, !(s.mute ?: false))
+                                    },
+                                    onMoveUp = { reorderWithin(ordered, w.id, -1) },
+                                    onMoveDown = { reorderWithin(ordered, w.id, +1) },
+                                    tabDragState = tabDragState,
+                                )
+                            }
+                        }
+                    } else {
+                        items(ordered, key = { "ws:${it.id}" }) { w ->
+                            WorkspaceListEntry(
+                                w = w,
+                                activeId = activeId,
+                                agentState = agentState,
+                                names = names,
+                                sessionById = sessionById,
+                                lastBySession = lastBySession,
+                                lastRead = lastRead,
+                                host = if (showRowHostBadge) {
+                                    val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+                                    sid?.let { hostByRecord[sessionHost[it]] }
+                                } else null,
+                                onOpen = onOpen,
+                                onOpenSession = onOpenSession,
+                                onRename = { renameTarget = w; renameText = w.name },
+                                onKill = { killTarget = w },
+                                onToggleMute = {
+                                    val s = primarySession(w)
+                                    if (s != null) onMute(w.id, !(s.mute ?: false))
+                                },
+                                tabDragState = tabDragState,
+                            )
+                        }
                     }
                     // Settled fold under this project (SessionListPanel: g.sections SETTLED).
                     val pathKey = g.key
@@ -574,52 +668,6 @@ fun WorkspaceListPanel(
                 }
             }
             item(key = "bottom_spacer") { Spacer(Modifier.height(Space.lg)) }
-        }
-
-        // Floating drag ghost (SessionListPanel parity).
-        dragReorder.ghost?.let { g ->
-            val density = androidx.compose.ui.platform.LocalDensity.current
-            Surface(
-                modifier = Modifier
-                    .zIndex(10f)
-                    .offset {
-                        IntOffset(
-                            (g.x - listRootOffset.x).toInt(),
-                            (g.y - listRootOffset.y).toInt(),
-                        )
-                    }
-                    .width(with(density) { g.width.toDp() })
-                    .heightIn(min = with(density) { g.height.toDp() }),
-                shape = RoundedCornerShape(6.dp),
-                tonalElevation = 6.dp,
-                shadowElevation = 8.dp,
-                border = BorderStroke(1.dp, cs.primary.copy(alpha = 0.35f)),
-                color = cs.surface,
-            ) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .size(6.dp)
-                                .background(cs.primary, CircleShape),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            g.label,
-                            color = cs.onSurface,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                        )
-                    }
-                    Text(
-                        "Release to drop",
-                        color = cs.onSurfaceVariant.copy(alpha = 0.7f),
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
-            }
         }
         } // end list Box
 
@@ -694,6 +742,10 @@ private fun WorkspaceListEntry(
     host: HostView? = null,
     projectTag: String? = null,
     modifier: Modifier = Modifier,
+    /** Calvin drag handle — whole-row press-drag on desktop (Android uses long-press). */
+    dragModifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource? = null,
+    isDragging: Boolean = false,
     onOpen: (String) -> Unit,
     onOpenSession: (workspaceId: String, sessionId: String) -> Unit,
     onRename: () -> Unit,
@@ -722,6 +774,9 @@ private fun WorkspaceListEntry(
             host = host,
             projectTag = projectTag,
             modifier = modifier,
+            dragModifier = dragModifier,
+            interactionSource = interactionSource,
+            isDragging = isDragging,
             onClick = { onOpen(w.id) },
             onRename = onRename,
             onKill = onKill,
@@ -786,6 +841,11 @@ fun WorkspaceRow(
     host: HostView? = null,
     projectTag: String? = null,
     modifier: Modifier = Modifier,
+    /** Applied outside the clickable so press-drag can own the gesture (Calvin handle). */
+    dragModifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource? = null,
+    /** Elevation while the row is being dragged by the reorder library. */
+    isDragging: Boolean = false,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
     onKill: () -> Unit = {},
@@ -806,8 +866,11 @@ fun WorkspaceRow(
         lastReadAt = lastReadAt,
     )
 
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
+    val interaction = interactionSource ?: remember { MutableInteractionSource() }
+    val elevation by animateDpAsState(
+        if (isDragging) 6.dp else 0.dp,
+        label = "workspace-drag-elevation",
+    )
 
     val rowBg = when {
         dropHover -> cs.primary.copy(alpha = 0.18f)
@@ -817,16 +880,25 @@ fun WorkspaceRow(
     val rowModifier = Modifier
         .fillMaxWidth()
         .padding(horizontal = 8.dp, vertical = 4.dp)
-        .then(if (active) Modifier.softElevation(radius = Radii.md) else Modifier)
+        .then(if (active && !isDragging) Modifier.softElevation(radius = Radii.md) else Modifier)
         .clip(RoundedCornerShape(6.dp))
         .background(rowBg)
         .onGloballyPositioned { coords ->
             tabDragState?.registerWorkspace(w.id, coords.boundsInRoot())
         }
         .hoverable(interaction)
-        .clickable(onClick = onClick)
+        .clickable(
+            interactionSource = interaction,
+            indication = null,
+            enabled = !isDragging,
+            onClick = onClick,
+        )
 
-    Box(modifier) {
+    Box(
+        modifier
+            .then(dragModifier)
+            .fillMaxWidth(),
+    ) {
     ContextMenuArea(
         items = {
             val labels = workspaceRowContextLabels(
@@ -847,6 +919,12 @@ fun WorkspaceRow(
             }
         },
     ) {
+        Surface(
+            tonalElevation = elevation,
+            shadowElevation = elevation,
+            color = Color.Transparent,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
         Row(
             rowModifier
                 .testTag("workspace_row_${w.id}")
@@ -959,8 +1037,9 @@ fun WorkspaceRow(
                 }
             }
         }
-    }
-    }
+        } // Surface
+    } // ContextMenuArea
+    } // Box
 }
 
 /** Indented child session under a multi-agent workspace. */

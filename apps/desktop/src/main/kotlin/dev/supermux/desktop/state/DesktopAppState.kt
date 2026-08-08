@@ -1172,6 +1172,18 @@ class DesktopAppState(
         }
     }
 
+    /** PATCH /workspaces/reorder — optimistic sortOrder; peers via workspaces_reordered. */
+    fun reorderWorkspaces(orderedIds: List<String>) {
+        val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+        if (order.isEmpty()) return
+        _workspaces.update { current ->
+            current.map { w -> order[w.id]?.let { w.copy(sortOrder = it) } ?: w }
+        }
+        stateScope.launch {
+            runCatching { api.reorderWorkspaces(orderedIds) }
+        }
+    }
+
     /**
      * Add a view to a workspace as a new tab in [groupId].
      *

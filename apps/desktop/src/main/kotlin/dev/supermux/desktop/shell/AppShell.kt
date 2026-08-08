@@ -717,14 +717,7 @@ fun AppShell(
                                 }
                             },
                             onOpenDraft = { id -> ui.openLauncher(draftId = id) },
-                            onReorder = { ids ->
-                                // Workspace reorder: map to primary session ids when the broker
-                                // only knows session order (Phase 3 may grow a workspace reorder API).
-                                val sessionIds = ids.mapNotNull { wid ->
-                                    wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
-                                }
-                                if (sessionIds.isNotEmpty()) app.reorderSessions(sessionIds)
-                            },
+                            onReorder = { ids -> app.reorderWorkspaces(ids) },
                             hosts = hostViews,
                             sessionHost = sessionHost,
                             hostFilter = hostFilter,
