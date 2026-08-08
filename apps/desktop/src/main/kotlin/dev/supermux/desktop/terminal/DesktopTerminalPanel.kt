@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jediterm.terminal.ui.JediTermWidget
+import com.jediterm.terminal.ui.settings.SettingsProvider
 import dev.supermux.desktop.ui.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.LocalModalPresence
@@ -42,6 +43,8 @@ import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
+import java.awt.Dimension
+import javax.swing.JScrollBar
 import kotlinx.coroutines.launch
 
 /**
@@ -106,7 +109,10 @@ fun DesktopTerminalPanel(
     // the AWT EDT, so constructing a Swing component here is thread-correct.
     // widget.start() spawns JediTerm's emulator thread, which drives connector.read().
     val widget = remember(client) {
-        JediTermWidget(80, 24, SupermuxTermSettings(background = c.terminal, foreground = c.terminalForeground)).also {
+        // SupermuxJediTermWidget hides the stock vertical scrollbar (web-parity: xterm.js
+        // clients don't show a gutter). Wheel/keyboard scrollback still works via the
+        // BoundedRangeModel TerminalPanel already owns.
+        SupermuxJediTermWidget(80, 24, SupermuxTermSettings(background = c.terminal, foreground = c.terminalForeground)).also {
             it.ttyConnector = connector
             it.start()
         }
@@ -220,6 +226,25 @@ fun DesktopTerminalPanel(
             )
         }
     }
+}
+
+/**
+ * JediTerm always builds a vertical [JScrollBar] and [JediTermWidget.TerminalLayout] reserves
+ * its preferred width as a right gutter. Override [createScrollBar] to collapse that gutter to
+ * zero so the terminal fills the pane edge-to-edge (matches web xterm). The bar stays in the
+ * component tree and keeps its scroll model so wheel/PageUp/PageDown scrollback still works.
+ */
+private class SupermuxJediTermWidget(
+    columns: Int,
+    rows: Int,
+    settings: SettingsProvider,
+) : JediTermWidget(columns, rows, settings) {
+    override fun createScrollBar(): JScrollBar =
+        super.createScrollBar().apply {
+            isVisible = false
+            preferredSize = Dimension(0, 0)
+            minimumSize = Dimension(0, 0)
+        }
 }
 
 /** Connection-status pill (Android TerminalPanel StatusChip port, same colors/typography). */
