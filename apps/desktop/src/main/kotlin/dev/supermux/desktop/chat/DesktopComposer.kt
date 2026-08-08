@@ -1,7 +1,8 @@
-// The desktop chat composer — a keyboard-first input with attachment chips (M4d). One
-// OutlinedTextField + a leading Attach icon + a trailing Send/Stop icon, with a chip row above the
-// field for staged uploads. Enter sends, Shift+Enter inserts a newline — the same preview-phase key
-// handling as OnboardingScreen.submitOnEnter, so hardware Enter never also drops a newline and a
+// The desktop chat composer — a keyboard-first input with attachment chips (M4d). A single soft
+// rounded card holds the multiline draft (top), a chip row when attachments are staged, and a
+// bottom toolbar: + attach · model pill · reasoning/"mode" pill on the left; mic + send/stop on
+// the right. Enter sends, Shift+Enter inserts a newline — the same preview-phase key handling as
+// OnboardingScreen.submitOnEnter, so hardware Enter never also drops a newline and a
 // blank/sending/upload-blocked draft lets the field keep the key.
 //
 // Unlike the launcher (which STAGES files pre-spawn and uploads them post-spawn), the chat composer
@@ -32,18 +33,24 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -54,7 +61,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -73,6 +79,7 @@ import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.DragData
 import androidx.compose.ui.draganddrop.dragData
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.key.Key
@@ -85,18 +92,23 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.desktop.session.AgentLogo
 import dev.supermux.desktop.session.hasAgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
-import dev.supermux.desktop.theme.Space
+import dev.supermux.desktop.theme.Radii
+import dev.supermux.desktop.ui.Speedometer
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.effortSpeedometerParams
+import dev.supermux.net.sortEffortLevelsLowToHigh
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -963,6 +975,26 @@ fun DesktopComposer(
         }
     }
 
+    // Soft capsule card (reference mock): one surface for draft + bottom toolbar. Drop highlight
+    // thickens the border; focus uses a quieter primary-tint outline so the field still reads
+    // as "the" input without the old OutlinedTextField chrome.
+    val cs = MaterialTheme.colorScheme
+    val inputInteraction = remember { MutableInteractionSource() }
+    val inputFocused by inputInteraction.collectIsFocusedAsState()
+    var modelMenu by remember { mutableStateOf(false) }
+    var reasoningMenu by remember { mutableStateOf(false) }
+    val modelCurrent = models?.current ?: sessionModel
+    val showModelPill = models != null || !sessionModel.isNullOrBlank()
+    val r = reasoning
+    val showReasoningPill = r != null && r.visible && r.levels.size > 1
+    val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp — matches the mock capsule
+    val cardBorder = when {
+        dragOver -> cs.primary
+        inputFocused -> cs.outline.copy(alpha = 0.55f)
+        else -> cs.outlineVariant.copy(alpha = 0.65f)
+    }
+    val cardBorderWidth = if (dragOver) 2.dp else 1.dp
+
     Column(
         modifier
             .fillMaxWidth()
@@ -972,115 +1004,8 @@ fun DesktopComposer(
                 } else {
                     Modifier
                 },
-            )
-            .then(
-                if (dragOver) {
-                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
-                } else {
-                    Modifier
-                },
             ),
     ) {
-        if (attachments.isNotEmpty() || pastePending) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                if (pastePending) {
-                    PastePendingChip()
-                }
-                attachments.forEach { att ->
-                    key(att.id) {
-                        ComposerChip(
-                            att = att,
-                            onRemove = { removeAttachment(att.id) },
-                            onRetry = { launchUpload(att.id) },
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Model + reasoning pills (M-uxfix): compact chips ABOVE the input that switch the
-        //    session's model / thinking level via the desktop DropdownMenu convention (not Android's
-        //    ModalBottomSheet). The model pill shows whenever a catalog or a known session model is
-        //    available; the reasoning pill is gated on `visible && levels > 1` (Android parity). ──
-        val cs = MaterialTheme.colorScheme
-        var modelMenu by remember { mutableStateOf(false) }
-        var reasoningMenu by remember { mutableStateOf(false) }
-        val modelCurrent = models?.current ?: sessionModel
-        val showModelPill = models != null || !sessionModel.isNullOrBlank()
-        val r = reasoning
-        val showReasoningPill = r != null && r.visible && r.levels.size > 1
-        if (showModelPill || showReasoningPill) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Space.sm),
-            ) {
-                if (showModelPill) {
-                    Box(Modifier.testTag("composer-model-picker")) {
-                        ComposerPill(
-                            label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
-                            testTag = "composer-model-pill",
-                            onClick = { modelMenu = true },
-                            agent = sessionAgent,
-                        )
-                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                            val selectedId = composerModelSelectedId(modelCurrent)
-                            val opts = listOf(DEFAULT_MODEL_ID to "Default") +
-                                (models?.models?.map { it.id to it.displayName } ?: emptyList())
-                            opts.forEach { (id, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    trailingIcon = {
-                                        if (id == selectedId) {
-                                            Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary)
-                                        }
-                                    },
-                                    modifier = Modifier.testTag("composer-model-$id"),
-                                    onClick = {
-                                        modelMenu = false
-                                        onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-                if (r != null && r.visible && r.levels.size > 1) {
-                    Box(Modifier.testTag("composer-reasoning-picker")) {
-                        ComposerPill(
-                            label = r.current?.replaceFirstChar { it.uppercase() } ?: "Effort",
-                            testTag = "composer-reasoning-pill",
-                            onClick = { reasoningMenu = true },
-                        )
-                        DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
-                            r.levels.forEach { level ->
-                                DropdownMenuItem(
-                                    text = { Text(level.description ?: level.id) },
-                                    trailingIcon = {
-                                        if (level.id == r.current) {
-                                            Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary)
-                                        }
-                                    },
-                                    modifier = Modifier.testTag("composer-reasoning-${level.id}"),
-                                    onClick = {
-                                        reasoningMenu = false
-                                        onPickReasoning(level.id)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Right-click Paste image (discoverable without the keyboard) + the text field itself.
         ContextMenuArea(
             items = {
                 if (onUpload != null) {
@@ -1090,81 +1015,291 @@ fun DesktopComposer(
                 }
             },
         ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = onDraftChange,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("composer-input")
-                    .onPreviewKeyEvent { e: KeyEvent ->
-                        if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
-                            // Consume ONLY when we actually send; a blank/sending/upload-blocked draft
-                            // falls through so the multiline field handles Enter itself (no stray
-                            // newline, no double-send).
-                            if (canSend) { doSend(); true } else false
-                        } else if (
-                            handleComposerPasteKey(
-                                key = e.key,
-                                type = e.type,
-                                ctrlPressed = e.isCtrlPressed,
-                                metaPressed = e.isMetaPressed,
-                                shiftPressed = e.isShiftPressed,
-                                uploadBound = onUpload != null,
-                                // Probe clipboard ONLY after the paste chord matches — not on every
-                                // keystroke (cross-process X11/Wayland selection can stall).
-                                likelyHasImage = clipboardLikelyHasImage,
-                                onPasteImage = { launchPasteImages() },
-                            )
-                        ) {
-                            // Consumed: paste-image launched on IO (see [launchPasteImages]).
-                            true
-                        } else {
-                            false
+                    .clip(cardShape)
+                    .background(cs.surfaceContainerHigh.copy(alpha = 0.72f))
+                    .border(cardBorderWidth, cardBorder, cardShape)
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .testTag("composer-card"),
+            ) {
+                if (attachments.isNotEmpty() || pastePending) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (pastePending) {
+                            PastePendingChip()
                         }
-                    },
-                placeholder = { Text("Message the agent…") },
-                maxLines = 8,
-                leadingIcon = if (onUpload != null) {
-                    {
-                        // + opens the file picker directly. Paste image stays on Ctrl/Cmd+V,
-                        // right-click context menu, and Edit ▸ Paste image — not under +.
-                        IconButton(
-                            onClick = { stageFiles(pickFiles()) },
-                            modifier = Modifier.testTag("composer-attach"),
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Attach")
+                        attachments.forEach { att ->
+                            key(att.id) {
+                                ComposerChip(
+                                    att = att,
+                                    onRemove = { removeAttachment(att.id) },
+                                    onRetry = { launchUpload(att.id) },
+                                )
+                            }
                         }
                     }
-                } else {
-                    null
-                },
-                trailingIcon = {
+                }
+
+                BasicTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 28.dp, max = 160.dp)
+                        .testTag("composer-input")
+                        .onPreviewKeyEvent { e: KeyEvent ->
+                            if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
+                                // Consume ONLY when we actually send; a blank/sending/upload-blocked
+                                // draft falls through so the multiline field handles Enter itself.
+                                if (canSend) {
+                                    doSend()
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else if (
+                                handleComposerPasteKey(
+                                    key = e.key,
+                                    type = e.type,
+                                    ctrlPressed = e.isCtrlPressed,
+                                    metaPressed = e.isMetaPressed,
+                                    shiftPressed = e.isShiftPressed,
+                                    uploadBound = onUpload != null,
+                                    // Probe clipboard ONLY after the paste chord matches — not on
+                                    // every keystroke (cross-process selection can stall).
+                                    likelyHasImage = clipboardLikelyHasImage,
+                                    onPasteImage = { launchPasteImages() },
+                                )
+                            ) {
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    textStyle = TextStyle(
+                        color = cs.onSurface,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                    ),
+                    cursorBrush = SolidColor(cs.primary),
+                    maxLines = 8,
+                    interactionSource = inputInteraction,
+                    decorationBox = { inner ->
+                        Box(Modifier.fillMaxWidth()) {
+                            if (draft.isEmpty()) {
+                                Text(
+                                    text = "Message the agent, tag @files, or use /commands and /skills",
+                                    color = cs.onSurfaceVariant.copy(alpha = 0.72f),
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    maxLines = 2,
+                                )
+                            }
+                            inner()
+                        }
+                    },
+                )
+
+                // Bottom toolbar — mirrors the reference: + · model · mode on the left; mic · send
+                // on the right. Model/reasoning menus stay on the desktop DropdownMenu convention.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        if (onUpload != null) {
+                            // + opens the file picker. Paste image stays on Ctrl/Cmd+V, context
+                            // menu, and Edit ▸ Paste image — not under +.
+                            IconButton(
+                                onClick = { stageFiles(pickFiles()) },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("composer-attach"),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Add,
+                                    contentDescription = "Attach",
+                                    tint = cs.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                        if (showModelPill) {
+                            Box(Modifier.testTag("composer-model-picker")) {
+                                ComposerPill(
+                                    label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
+                                    testTag = "composer-model-pill",
+                                    onClick = { modelMenu = true },
+                                    leadingIcon = {
+                                        if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
+                                            AgentLogo(sessionAgent, size = 12.dp)
+                                        } else {
+                                            Icon(
+                                                Icons.Filled.AutoAwesome,
+                                                contentDescription = null,
+                                                tint = cs.onSurfaceVariant,
+                                                modifier = Modifier.size(13.dp),
+                                            )
+                                        }
+                                    },
+                                )
+                                DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                                    val selectedId = composerModelSelectedId(modelCurrent)
+                                    val opts = listOf(DEFAULT_MODEL_ID to "Default") +
+                                        (models?.models?.map { it.id to it.displayName } ?: emptyList())
+                                    opts.forEach { (id, label) ->
+                                        DropdownMenuItem(
+                                            text = { Text(label) },
+                                            trailingIcon = {
+                                                if (id == selectedId) {
+                                                    Icon(
+                                                        Icons.Filled.Check,
+                                                        null,
+                                                        Modifier.size(16.dp),
+                                                        tint = cs.primary,
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("composer-model-$id"),
+                                            onClick = {
+                                                modelMenu = false
+                                                onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (r != null && showReasoningPill) {
+                            val reasoning = r
+                            // Always low→high for menu + gauge (broker order is not trusted).
+                            val effortLevels = sortEffortLevelsLowToHigh(reasoning.levels)
+                            val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
+                                current = reasoning.current,
+                                levels = reasoning.levels,
+                            )
+                            Box(Modifier.testTag("composer-reasoning-picker")) {
+                                ComposerPill(
+                                    label = composerReasoningLabel(reasoning),
+                                    testTag = "composer-reasoning-pill",
+                                    onClick = { reasoningMenu = true },
+                                    leadingIcon = {
+                                        Speedometer(
+                                            levels = gaugeLevels,
+                                            value = gaugeValue,
+                                            tint = cs.onSurfaceVariant,
+                                            activeTint = cs.primary,
+                                            iconSize = 14.dp,
+                                            testTag = "composer-effort-gauge",
+                                        )
+                                    },
+                                )
+                                DropdownMenu(
+                                    expanded = reasoningMenu,
+                                    onDismissRequest = { reasoningMenu = false },
+                                ) {
+                                    effortLevels.forEach { level ->
+                                        DropdownMenuItem(
+                                            text = { Text(composerReasoningLevelLabel(level)) },
+                                            trailingIcon = {
+                                                if (level.id == reasoning.current) {
+                                                    Icon(
+                                                        Icons.Filled.Check,
+                                                        null,
+                                                        Modifier.size(16.dp),
+                                                        tint = cs.primary,
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("composer-reasoning-${level.id}"),
+                                            onClick = {
+                                                reasoningMenu = false
+                                                onPickReasoning(level.id)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (onTranscribeAudio != null) {
                             MicButton(
                                 recording = dictation.recording,
                                 transcribing = dictation.transcribing,
                                 micUnavailable = dictation.micUnavailable,
-                                onClick = { if (dictation.recording) dictation.stopMic() else dictation.startMic() },
+                                onClick = {
+                                    if (dictation.recording) dictation.stopMic() else dictation.startMic()
+                                },
                                 modifier = Modifier.testTag("composer-mic"),
                             )
                         }
                         if (agentWorking) {
-                            IconButton(onClick = onInterrupt, modifier = Modifier.testTag("composer-stop")) {
-                                Icon(Icons.Filled.Stop, contentDescription = "Stop")
+                            IconButton(
+                                onClick = onInterrupt,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("composer-stop"),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(cs.error),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Stop,
+                                        contentDescription = "Stop",
+                                        tint = cs.onError,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
                             }
                         } else {
                             IconButton(
                                 onClick = doSend,
                                 enabled = canSend,
-                                modifier = Modifier.testTag("composer-send"),
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("composer-send"),
                             ) {
-                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                                Box(
+                                    Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (canSend) cs.primary
+                                            else cs.surfaceContainerHighest,
+                                        ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = "Send",
+                                        tint = if (canSend) cs.onPrimary else cs.onSurfaceVariant.copy(alpha = 0.45f),
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
                             }
                         }
                     }
-                },
-            )
+                }
+            }
         }
         LaunchedEffect(dictation.errorMessage) {
             if (dictation.errorMessage != null) {
@@ -1182,6 +1317,20 @@ fun DesktopComposer(
         }
     }
 }
+
+/**
+ * Display label for the composer's effort pill. Always the short wire id (`low` / `medium` /
+ * `high` / `xhigh` / `max` / …) — never the long broker [ReasoningLevel.description] ("Greater
+ * reasoning depth", …). Pure so unit tests can lock the mapping without Compose.
+ */
+internal fun composerReasoningLabel(reasoning: ReasoningResponse): String {
+    val current = reasoning.current?.takeIf { it.isNotBlank() } ?: return "effort"
+    // Prefer catalog id when present (canonical casing); else the raw current value.
+    return reasoning.levels.firstOrNull { it.id == current }?.id ?: current
+}
+
+/** Short effort label for a single level — always [ReasoningLevel.id], never the long description. */
+internal fun composerReasoningLevelLabel(level: ReasoningLevel): String = level.id
 
 /** Indeterminate chip shown while clipboard raster encode runs (before a real upload chip exists). */
 @Composable
@@ -1270,34 +1419,39 @@ private fun ComposerChip(
     }
 }
 
-/** A compact rounded chip (label + chevron) that opens a [DropdownMenu] — the desktop model/reasoning
- *  pill. Mirrors the launcher's agent/model chips (surfaceContainer + outline + chevron) plus a
- *  hand hover cursor. Optional [agent] shows a text-height brand mark (launcher parity). */
+/** Compact text-style pill (optional leading icon + label + chevron) that opens a [DropdownMenu] —
+ *  the desktop model / mode chips inside the composer card. Borderless + muted ink so the pills
+ *  sit as chrome on the soft card rather than separate outlined chips (mock parity). */
 @Composable
 private fun ComposerPill(
     label: String,
     testTag: String,
     onClick: () -> Unit,
-    agent: String? = null,
+    leadingIcon: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .testTag(testTag)
-            .clip(RoundedCornerShape(20.dp))
-            .background(cs.surfaceContainer)
-            .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(Radii.pill))
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        if (agent != null && hasAgentLogo(agent)) {
-            // Match 11.sp label line height — same rule as the launcher agent pill.
-            AgentLogo(agent, size = 12.dp)
-        }
-        Text(label.take(20), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1)
-        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        leadingIcon?.invoke()
+        Text(
+            text = label.take(22),
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
+            modifier = Modifier.size(14.dp),
+        )
     }
 }

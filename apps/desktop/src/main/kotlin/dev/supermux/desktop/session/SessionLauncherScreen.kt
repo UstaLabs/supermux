@@ -129,6 +129,7 @@ import dev.supermux.net.RemoteRepo
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
+import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.OmniOption
@@ -831,15 +832,17 @@ fun SessionLauncherScreen(
 
                 if (reasoningVisible) {
                     Box(Modifier.testTag("launcher_effort_picker")) {
+                        // Short wire ids only (low / medium / high / …) — not long descriptions.
                         LauncherPill(
-                            label = reasoningLevel?.replaceFirstChar { it.uppercase() } ?: "Effort",
+                            label = reasoningLevel ?: "effort",
                             onClick = { if (!launcherRestoring) reasoningMenu = true },
                         )
                         DropdownMenu(expanded = reasoningMenu, onDismissRequest = { reasoningMenu = false }) {
-                            reasoningLevels.forEach { level ->
+                            // low → high regardless of broker array order
+                            sortEffortLevelsLowToHigh(reasoningLevels).forEach { level ->
                                 val selected = level.id == reasoningLevel
                                 DropdownMenuItem(
-                                    text = { Text(level.description ?: level.id) },
+                                    text = { Text(level.id) },
                                     trailingIcon = { if (selected) Icon(Icons.Filled.Check, null, Modifier.size(16.dp), tint = cs.primary) },
                                     modifier = Modifier.testTag("effort_${level.id}"),
                                     onClick = {
