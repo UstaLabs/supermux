@@ -6,7 +6,12 @@ import { openCodeDataDir } from "../agents/opencode/auth"
 
 // ── Types ──
 
-export interface UsageWindow { used: number; resetsAt: string | number | null }
+// `resetsAt` is the provider's raw value and its unit differs per provider:
+// ISO strings (claude/grok), unix seconds (codex), unix-ms strings (cursor).
+// `resetsAtIso` is the broker-normalized ISO timestamp — clients read it and
+// need no per-provider unit logic. Optional in the type only so old fixtures
+// still compile; every fetcher sets it.
+export interface UsageWindow { used: number; resetsAt: string | number | null; resetsAtIso?: string | null }
 
 export interface CodexUsageWindow extends UsageWindow {
   id: string
@@ -45,7 +50,9 @@ export interface CursorUsage {
   limitCents: number
   spendAvailable: boolean
   billingCycleStart: string
+  /** Raw unix-ms string from the Cursor API. Clients read billingCycleEndIso. */
   billingCycleEnd: string
+  billingCycleEndIso?: string | null
 }
 
 // opencode has no subscription quota — it tracks cumulative local token usage and
@@ -71,7 +78,9 @@ export interface GrokUsage {
   onDemandUsed: number
   prepaidBalance: number
   billingPeriodStart: string
+  /** Raw ISO string from the Grok API. Clients read billingPeriodEndIso. */
   billingPeriodEnd: string
+  billingPeriodEndIso?: string | null
 }
 
 export interface UsageResponse {
@@ -97,6 +106,24 @@ const GROK_BILLING_BASE =
   "https://cli-chat-proxy.grok.com/v1"
 
 const TIMEOUT_MS = 10_000
+
+// Normalize a reset timestamp to ISO for the DTO. Returns null when the input
+// does not parse — clients hide the reset line then, same as a missing value.
+function isoFromMs(ms: number): string | null {
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null
+}
+function isoFromIsoLike(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null
+  return isoFromMs(new Date(value).getTime())
+}
+function isoFromUnixSeconds(value: unknown): string | null {
+  if (value == null || value === "") return null
+  return isoFromMs(Number(value) * 1000)
+}
+function isoFromUnixMsString(value: unknown): string | null {
+  if (value == null || value === "") return null
+  return isoFromMs(Number(value))
+}
 
 // ── Claude ──
 
@@ -128,6 +155,7 @@ export async function fetchClaudeUsage(
   const mapWindow = (w: any): UsageWindow => ({
     used: w?.utilization ?? 0,
     resetsAt: w?.resets_at ?? null,
+    resetsAtIso: isoFromIsoLike(w?.resets_at),
   })
 
   // Anthropic moved per-model weekly caps into a `limits[]` array; the legacy
@@ -143,7 +171,7 @@ export async function fetchClaudeUsage(
         typeof l?.scope?.model?.display_name === "string" &&
         l.scope.model.display_name.toLowerCase() === displayName.toLowerCase(),
     )
-    return e ? { used: e.percent ?? 0, resetsAt: e.resets_at ?? null } : null
+    return e ? { used: e.percent ?? 0, resetsAt: e.resets_at ?? null, resetsAtIso: isoFromIsoLike(e.resets_at) } : null
   }
   const legacyWindow = (w: any): UsageWindow | null =>
     w && typeof w === "object" ? mapWindow(w) : null
@@ -217,12 +245,14 @@ export async function fetchCodexUsage(
     if (w == null || typeof w !== "object") return null
     const rawSeconds = w.limit_window_seconds == null ? NaN : Number(w.limit_window_seconds)
     const windowSeconds = Number.isFinite(rawSeconds) ? rawSeconds : null
+    const resetsAt = w?.reset_at ?? w?.resets_at ?? null
     return {
       id,
       label: windowLabel(windowSeconds, fallbackLabel),
       windowSeconds,
       used: w?.used_percent ?? 0,
-      resetsAt: w?.reset_at ?? w?.resets_at ?? null,
+      resetsAt,
+      resetsAtIso: isoFromUnixSeconds(resetsAt),
     }
   }
 
@@ -327,6 +357,7 @@ export async function fetchCursorUsage(
     spendAvailable: totalSpendCents != null && includedCents != null,
     billingCycleStart: data.billingCycleStart ?? "",
     billingCycleEnd: data.billingCycleEnd ?? "",
+    billingCycleEndIso: isoFromUnixMsString(data.billingCycleEnd),
   }
 }
 
@@ -508,6 +539,7 @@ export async function fetchGrokUsage(
     prepaidBalance,
     billingPeriodStart: cfg.billingPeriodStart ?? "",
     billingPeriodEnd: cfg.billingPeriodEnd ?? "",
+    billingPeriodEndIso: isoFromIsoLike(cfg.billingPeriodEnd),
   }
 }
 
