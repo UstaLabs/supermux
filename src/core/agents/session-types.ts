@@ -16,6 +16,17 @@ export type ResumeCtx = {
   persistAgentSessionId(sid: string): void
 }
 
+/** Input for the optional `commandContext` leaf: build the opaque per-kind
+ * slash-command discovery context (`ProviderCtx.agentContext`). The leaf and
+ * its provider share the context shape; the service passes it through blind. */
+export type CommandContextCtx = {
+  sessionName: string
+  /** The session's own live adapter, when the session is spawned. */
+  adapter?: unknown
+  /** Live same-kind adapters (launcher preview: the probe has no session of its own). */
+  kindAdapters?: () => unknown[]
+}
+
 /** The session-row slice a resume dialect reads (superset across kinds). */
 export type ResumeRow = {
   id: string

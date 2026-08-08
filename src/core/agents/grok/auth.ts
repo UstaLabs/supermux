@@ -2,6 +2,8 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, type Stats } from "fs"
 import { join } from "path"
 import type { AgentAuthResult } from "../auth-result"
 import { promoteCredential } from "../credential-file"
+import { resolveCommand } from "../../process/launcher"
+import type { LoginSpawnCommand } from "../login/spawn-command"
 
 /** Env for the grok child. HOME keeps config session-private while
  * GROK_AUTH_PATH keeps authentication canonical and shared. */
@@ -111,4 +113,12 @@ function credentialExpiry(path: string): number {
   } catch {
     return Number.NEGATIVE_INFINITY
   }
+}
+
+/** Device-login spawn descriptor. grok prints the device URL + code on plain
+ * stdout — no PTY needed, same as codex. */
+export function loginSpawnCommand(): LoginSpawnCommand {
+  const env = { ...process.env } as Record<string, string>
+  const cmd = resolveCommand(["grok"], env, process.platform) ?? "grok"
+  return { cmd, args: ["login", "--device-auth"], env }
 }

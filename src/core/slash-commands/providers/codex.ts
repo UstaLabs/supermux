@@ -1,5 +1,5 @@
 import { AgentKind } from "../../../shared/agents"
-import { agentCommand, type AgentCommandProvider, type ProviderCtx, type SlashCommand } from "../types"
+import { agentCommand, type AgentCommandProvider, type CodexRpc, type ProviderCtx, type SlashCommand } from "../types"
 
 interface CodexSkill { name: string; description?: string; enabled?: boolean }
 interface CodexSkillsList { data?: { skills?: CodexSkill[] }[] }
@@ -22,9 +22,11 @@ export function mapCodexSkills(res: CodexSkillsList): SlashCommand[] {
 export class CodexCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.Codex
   async list(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    if (!ctx.codexClient) return []
+    // agentContext is codex's commandContext leaf output: the live app-server client.
+    const client = ctx.agentContext as CodexRpc | undefined
+    if (!client) return []
     try {
-      const res = await ctx.codexClient.request<CodexSkillsList>("skills/list", {})
+      const res = await client.request<CodexSkillsList>("skills/list", {})
       return mapCodexSkills(res)
     } catch {
       return []

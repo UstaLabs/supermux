@@ -62,3 +62,9 @@ export async function resolveOpenCodeAuth(opts: {
   const mode = exists(authPath) ? "shared_auth" : hasProviderKey ? "provider_key" : "none"
   return { mode, env: {}, dataDir, authPath, authed: mode !== "none" }
 }
+
+/** opencode has no CLI device-login flow the broker can drive; auth goes
+ * through the provider OAuth/API-key ops (auth-ops.ts). null = unsupported. */
+export function loginSpawnCommand(): null {
+  return null
+}

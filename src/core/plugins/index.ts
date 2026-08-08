@@ -1,5 +1,6 @@
 import { loadPluginsForSpawn, loadPluginsRegistry, savePluginsRegistry } from "./registry"
 import { makeLogger } from "../../shared/log"
+import { AgentKind } from "../../shared/agents"
 import { ClaudePluginAdapter } from "./adapters/claude"
 
 const pluginLog = makeLogger("plugins/index")
@@ -58,6 +59,22 @@ export function cursorSpawnArgs(opts?: SpawnArgsOpts): SpawnArgs {
 
 export function codexSpawnArgs(opts?: SpawnArgsOpts): SpawnArgs {
   return spawnArgsFor(codexAdapter, opts)
+}
+
+/** Per-kind spawn flags for slash-command discovery probes.
+ *  opencode gets plugins via opencode.json (configEntries), not flags;
+ *  grok has no command provider, so no flags are ever consumed. */
+const pluginSpawnArgsByKind: Record<AgentKind, (opts?: SpawnArgsOpts) => string[]> = {
+  [AgentKind.Claude]: (opts) => claudeSpawnArgs(opts).args,
+  [AgentKind.Codex]: (opts) => codexSpawnArgs(opts).args,
+  [AgentKind.Cursor]: (opts) => cursorSpawnArgs(opts).args,
+  [AgentKind.OpenCode]: () => [],
+  [AgentKind.Grok]: () => [],
+}
+
+export function pluginSpawnArgsForKind(kind: AgentKind, opts?: SpawnArgsOpts): string[] {
+  // Defensive `?.`: preview kinds arrive from web requests as casts.
+  return pluginSpawnArgsByKind[kind]?.(opts) ?? []
 }
 
 /**

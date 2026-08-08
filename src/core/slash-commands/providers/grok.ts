@@ -56,14 +56,16 @@ export function scanGrokSkillsFromDisk(skillsDirs: string[]): SlashCommand[] {
 
 // Grok skills are text-insert only — the user submits `/name ` as a normal
 // prompt and grok injects the SKILL.md server-side. The provider prefers the
-// adapter's live ACP list (fed in via ctx.grokCommands; refreshed on every
-// available_commands_update); with no live adapter (launcher preview) it
-// falls back to a read-only disk scan of the plugin skills dirs.
+// adapter's live ACP list (fed in via the grok commandContext leaf; refreshed
+// on every available_commands_update); with no live adapter (launcher preview)
+// it falls back to a read-only disk scan of the plugin skills dirs.
 export class GrokCommandProvider implements AgentCommandProvider {
   readonly kind = AgentKind.Grok
 
   async list(ctx: ProviderCtx): Promise<SlashCommand[]> {
-    if (ctx.grokCommands?.length) return mapGrokCommands(ctx.grokCommands)
-    return scanGrokSkillsFromDisk(ctx.grokSkillsDirs ?? [])
+    // agentContext is grok's commandContext leaf output.
+    const gctx = ctx.agentContext as import("../../agents/grok/session").GrokCommandContext | undefined
+    if (gctx?.commands?.length) return mapGrokCommands(gctx.commands)
+    return scanGrokSkillsFromDisk(gctx?.skillsDirs ?? [])
   }
 }

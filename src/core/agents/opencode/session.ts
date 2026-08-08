@@ -2,7 +2,8 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange } from "../session-types"
+import type { OpenCodeCommandClient } from "../../slash-commands/types"
 import { resolveOpenCodeAuth } from "./auth"
 import { writeOpenCodeConfig } from "./config-writer"
 import { writeOpenCodePreamble } from "./preamble-writer"
@@ -15,11 +16,27 @@ import { randomUUID } from "crypto"
 import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 
+/** Slash-command discovery context for the opencode provider. */
+export type OpenCodeCommandContext = {
+  /** Live `opencode serve` client (session discovery only; a preview scans disk). */
+  client?: OpenCodeCommandClient
+  /** Enabled plugin roots for the disk-scan preview / client fallback. */
+  pluginDirs: string[]
+}
+
+export function commandContext(ctx: CommandContextCtx): OpenCodeCommandContext {
+  return {
+    client: (ctx.adapter as { commandClient?: OpenCodeCommandClient } | undefined)?.commandClient,
+    pluginDirs: opencodeConfigEntries({ sessionName: ctx.sessionName }).pluginPaths,
+  }
+}
+
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
-  const id = randomUUID()
-  deps.registry.reserveName(name)
+  // PA spawns keep the exact requested name (the row may already exist).
+  const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
+  const id = args.id ?? randomUUID()
+  if (!args.pa) deps.registry.reserveName(name)
   try {
     const sessionHome = join(STATE_DIR, "agents", "opencode", name)
     mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
@@ -60,16 +77,33 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     // Register BEFORE adapter.start() so the persistSessionId callback can find
     // the row (same ordering codex requires).
-    deps.registry.register({
-      id,
-      name,
-      workdir: args.workdir,
-      pid: handle.pid,
-      agent: AgentKind.OpenCode,
-      agent_home: sessionHome,
-      base_commits: captureBaseCommits(args.workdir),
-      internal: args.internal,
-    } as any)
+    if (args.pa) {
+      if (!args.pa.skipRegister) {
+        deps.registry.registerPA({
+          id,
+          name,
+          agent: AgentKind.OpenCode,
+          workdir: args.workdir,
+          model: args.model,
+          reasoningLevel: args.reasoningLevel,
+          pid: handle.pid,
+          is_default: deps.registry.listPAs().length === 0,
+          agent_home: sessionHome,
+          base_commits: captureBaseCommits(args.workdir),
+        })
+      }
+    } else {
+      deps.registry.register({
+        id,
+        name,
+        workdir: args.workdir,
+        pid: handle.pid,
+        agent: AgentKind.OpenCode,
+        agent_home: sessionHome,
+        base_commits: captureBaseCommits(args.workdir),
+        internal: args.internal,
+      } as any)
+    }
 
     const adapter = new OpenCodeAdapter({
       sessionName: name,
@@ -85,7 +119,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
 
     deps.registerAdapter?.(name, adapter, handle)
 
-    return { name, session_id: id, model: args.model }
+    return { name, session_id: id, model: args.model, pid: handle.pid }
   } catch (err) {
     throw err
   }

@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process"
 import { existsSync } from "fs"
 import { join, win32 } from "path"
 import type { AgentAuthResult } from "../auth-result"
+import { claudeLoginSpawnCommand, type LoginSpawnCommand } from "../login/spawn-command"
 
 /** How claude proves it is logged in. `none` means no source answered. */
 export type ClaudeAuthMode =
@@ -113,4 +114,12 @@ export function claudeIsAuthed(opts: ClaudeAuthProbe): boolean {
  * environment and needs no per-session credential of its own. */
 export async function resolveClaudeAuth(opts: ClaudeAuthProbe): Promise<ClaudeAuthResult> {
   return { mode: claudeAuthMode(opts), env: {} }
+}
+
+/** Device/browser-login spawn descriptor. The PTY wrapper itself lives in
+ * login/spawn-command.ts (platform-split `script` mechanics predate this
+ * module); this leaf exposes it on claude's auth surface like every other
+ * kind's auth.ts does. */
+export function loginSpawnCommand(): LoginSpawnCommand {
+  return claudeLoginSpawnCommand()
 }

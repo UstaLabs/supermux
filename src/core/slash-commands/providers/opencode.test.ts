@@ -30,10 +30,12 @@ test("OpenCodeCommandProvider prefers live client over disk scan", async () => {
     sessionName: "s1",
     workdir: "/proj",
     pluginSpawnArgs: [],
-    opencodeClient: {
-      listCommands: async () => [{ name: "live-skill", source: "skill" }],
+    agentContext: {
+      client: {
+        listCommands: async () => [{ name: "live-skill", source: "skill" }],
+      },
+      pluginDirs: ["/plugins/mux-core"],
     },
-    opencodePluginDirs: ["/plugins/mux-core"],
   })
   expect(cmds.map((c) => c.name)).toEqual(["live-skill"])
 })
@@ -48,7 +50,7 @@ test("OpenCodeCommandProvider falls back to disk scan when no client", async () 
     sessionName: "preview:opencode",
     workdir: join(root, "workdir"),
     pluginSpawnArgs: [],
-    opencodePluginDirs: [plugin],
+    agentContext: { pluginDirs: [plugin] },
   })
   expect(cmds.map((c) => c.name)).toEqual(["brainstorming"])
   expect(cmds.every((c) => c.sigil === "/")).toBe(true)

@@ -57,20 +57,19 @@ test("onChange fires with the merged list after a refresh", async () => {
   expect(seen[0]).toContain("kill")
 })
 
-test("run and preview hand the grok fields through to the provider", async () => {
-  // Pins the ctx plumbing for grok: the live ACP command list rides in via
+test("run and preview hand the grok context through to the provider", async () => {
+  // Pins the ctx plumbing for grok: the opaque agentContext (live ACP command
+  // list + skills dirs, built by grok's commandContext leaf) rides in via
   // resolveSession; a launcher preview (no adapter yet) gets the skills dirs.
   const ctxs: any[] = []
   const grokProvider: AgentCommandProvider = { kind: "grok", async list(ctx) { ctxs.push(ctx); return [] } }
   const grokCommands = [{ name: "soul", _meta: { scope: "user", path: "/p/skills/soul/SKILL.md" } }]
   const reg = new CommandRegistry({
     providers: { grok: grokProvider },
-    resolveSession: () => ({ name: "g1", kind: "grok" as const, workdir: "/tmp", muted: false, pluginSpawnArgs: [], grokCommands, grokSkillsDirs: ["/p/skills"] }),
+    resolveSession: () => ({ name: "g1", kind: "grok" as const, workdir: "/tmp", muted: false, pluginSpawnArgs: [], agentContext: { commands: grokCommands, skillsDirs: ["/p/skills"] } }),
   })
   await reg.refresh("g1")
-  expect(ctxs[0].grokCommands).toEqual(grokCommands)
-  expect(ctxs[0].grokSkillsDirs).toEqual(["/p/skills"])
-  await reg.refreshPreview({ kind: "grok", workdir: "/tmp", pluginSpawnArgs: [], grokSkillsDirs: ["/p/skills"] })
-  expect(ctxs[1].grokCommands).toBeUndefined()
-  expect(ctxs[1].grokSkillsDirs).toEqual(["/p/skills"])
+  expect(ctxs[0].agentContext).toEqual({ commands: grokCommands, skillsDirs: ["/p/skills"] })
+  await reg.refreshPreview({ kind: "grok", workdir: "/tmp", pluginSpawnArgs: [], agentContext: { skillsDirs: ["/p/skills"] } })
+  expect(ctxs[1].agentContext).toEqual({ skillsDirs: ["/p/skills"] })
 })

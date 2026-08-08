@@ -67,16 +67,9 @@ export interface ProviderCtx {
   workdir: string
   /** Spawn flags that mirror the real session (e.g. --plugin-dir pairs) so the probe's list matches. */
   pluginSpawnArgs: string[]
-  /** Live codex app-server connection, when the session is codex. */
-  codexClient?: CodexRpc
-  /** Live opencode serve client, when the session is opencode. */
-  opencodeClient?: OpenCodeCommandClient
-  /** Enabled plugin roots for opencode disk-scan preview / client fallback. */
-  opencodePluginDirs?: string[]
-  /** Live ACP command list from the grok adapter, when the session is grok. */
-  grokCommands?: GrokAcpCommand[]
-  /** Enabled plugins' skills dirs for grok disk-scan preview / fallback. */
-  grokSkillsDirs?: string[]
+  /** Opaque per-kind discovery context, built by the agent module's
+   * `commandContext` leaf. Each provider casts its own kind's shape. */
+  agentContext?: unknown
 }
 
 export interface AgentCommandProvider {

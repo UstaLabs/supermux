@@ -47,7 +47,8 @@ import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, opencodeConfigEntries, ensureOpenCodePluginScopes, grokConfigEntries, ensureGrokPluginScopes } from "./core/plugins"
+import { pluginSpawnArgsForKind, codexPrepareGlobal, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
+import { agentModules } from "./core/agents/registry"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
@@ -59,6 +60,7 @@ import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
 import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
+import { isPersistentRuntimeSession } from "./core/session-manager/types"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -92,9 +94,9 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chm
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
-import { resolveCommand, spawnCommand } from "./core/process/launcher"
+import { spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary } from "./shared/preflight"
-import { detectAllAgents, detectAgent } from "./core/agents/detect"
+import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { sessionCapabilities } from "./core/agents/capabilities"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
@@ -105,17 +107,11 @@ import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
 import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
-import type { CodexSpawnHandle } from "./core/agents/codex/spawn"
-import { CodexAdapter } from "./core/agents/codex/adapter"
-import type { CursorAdapter } from "./core/agents/cursor/adapter"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
-import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "./core/agents/opencode/spawn"
-import { GrokAdapter } from "./core/agents/grok/adapter"
 import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
 import { DeviceStore } from "./channels/web/device-store"
@@ -151,7 +147,7 @@ import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-co
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
-import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
+import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
@@ -288,6 +284,14 @@ const appConfig = settings.getAppConfig(appConfigEnv)
 // ⇒ existing-install behavior unchanged.
 const appliedCreds = hydrateCredentialEnv(appConfig, process.env)
 if (appliedCreds.length) log.info("credentials_hydrated", { vars: appliedCreds })
+// Stored-credential oracle shared by agent-status detection and the
+// LoginManager: a key the user saved in supermux settings counts as logged in.
+// STORED SETTINGS ONLY — the darwin Keychain probe and the credential-file
+// probe live in `agents/claude/auth.ts`, which detectAgent's CRED_PROBE calls
+// for claude; folding the Keychain in here would probe it twice per detect
+// and mislabel the auth mode as "stored_credential".
+const agentHasCredential = (kind: AgentKind): boolean =>
+  hasStoredCredential(kind, settings.getAppConfig(appConfigEnv))
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
 // First-boot seed: curator config comes from env once, then the DB is the source
@@ -657,24 +661,24 @@ const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()
 
 const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessionId)
-const registerClaudeRuntime = (sessionId: string, adapter: ClaudeCodeAdapter) => sessionManager.registerClaudeRuntime(sessionId, adapter)
-const registerCodexRuntime = (sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle) => sessionManager.registerCodexRuntime(sessionId, name, adapter, handle)
-const registerCursorRuntime = (sessionId: string, adapter: CursorAdapter) => sessionManager.registerCursorRuntime(sessionId, adapter)
-const registerGrokRuntime = (sessionId: string, adapter: GrokAdapter) => sessionManager.registerGrokRuntime(sessionId, adapter)
-const registerOpenCodeRuntime = (sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle) => sessionManager.registerOpenCodeRuntime(sessionId, name, adapter, handle)
 
 // Slash-command discovery: per-session command list (control + agent commands
 // tapped from each CLI's native protocol). Broadcast to web on change.
-function opencodePluginDirs(sessionName: string): string[] {
-  return opencodeConfigEntries({ sessionName }).pluginPaths
-}
 
-function grokSkillsDirs(sessionName: string): string[] {
-  return grokConfigEntries({ sessionName }).skillsPaths
+/** Live adapters of one kind — preview commandContext leaves borrow one (a preview probe has no session of its own). */
+function adaptersOfKind(kind: AgentKind): unknown[] {
+  const out: unknown[] = []
+  for (const s of registry.list()) {
+    if (((s.agent ?? "claude") as AgentKind) !== kind) continue
+    const adapter = runtimes.get(s.id)?.adapter
+    if (adapter) out.push(adapter)
+  }
+  return out
 }
 
 const cursorCommandProvider = new CursorCommandProvider()
-const commandRegistry = new CommandRegistry({
+// Annotated to cut the top-level inference cycle (sessionManager → commandRegistry → runtimes → sessionManager).
+const commandRegistry: CommandRegistry = new CommandRegistry({
   providers: {
     claude: new ClaudeCommandProvider(),
     codex: new CodexCommandProvider(),
@@ -686,23 +690,13 @@ const commandRegistry = new CommandRegistry({
     const s = registry.resolveName(name)
     if (!s) return undefined
     const kind = ((s.agent ?? "claude") as AgentKind)
-    const pluginSpawnArgs =
-      kind === "codex" ? codexSpawnArgs({ sessionName: s.name }).args
-      : kind === "cursor" ? cursorSpawnArgs({ sessionName: s.name }).args
-      : kind === "opencode" || kind === "grok" ? []
-      : claudeSpawnArgs({ sessionName: s.name }).args
-    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient; availableCommands?: import("./core/slash-commands/types").GrokAcpCommand[] } | undefined
     return {
       name: s.name,
       kind,
       workdir: s.workdir,
       muted: !!s.mute,
-      pluginSpawnArgs,
-      codexClient: kind === "codex" ? adapter?.rpc : undefined,
-      opencodeClient: kind === "opencode" ? adapter?.commandClient : undefined,
-      opencodePluginDirs: kind === "opencode" ? opencodePluginDirs(s.name) : undefined,
-      grokCommands: kind === "grok" ? adapter?.availableCommands : undefined,
-      grokSkillsDirs: kind === "grok" ? grokSkillsDirs(s.name) : undefined,
+      pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: s.name }),
+      agentContext: agentModules[kind]?.commandContext?.({ sessionName: s.name, adapter: runtimes.get(s.id)?.adapter }),
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -715,30 +709,6 @@ const commandRegistry = new CommandRegistry({
     webChannel?.broadcastToAll({ type: "commands_changed", session: id, commands, resolved: true })
   },
 })
-
-function findCodexClient(): import("./core/slash-commands/types").CodexRpc | undefined {
-  for (const s of registry.list()) {
-    if (s.agent !== "codex") continue
-    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc } | undefined
-    if (adapter?.rpc) return adapter.rpc
-  }
-  return undefined
-}
-
-function pluginSpawnArgsForAgent(kind: import("./core/agents/types").AgentKind): string[] {
-  return kind === "codex" ? codexSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "cursor" ? cursorSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "opencode" || kind === "grok" ? []
-    : claudeSpawnArgs({ sessionName: "__preview__" }).args
-}
-
-function opencodePluginDirsForPreview(): string[] {
-  return opencodeConfigEntries({ sessionName: "__preview__" }).pluginPaths
-}
-
-function grokSkillsDirsForPreview(): string[] {
-  return grokConfigEntries({ sessionName: "__preview__" }).skillsPaths
-}
 
 const unregisterSession = (id: string) => sessionManager.unregister(id)
 
@@ -1073,31 +1043,24 @@ const wsDto = (id: string) => {
 const fsWatcher = new FsWatcher()
 
 function spawnLoginProc(kind: string) {
-  const h = homedir()
-  let cmd: string, args: string[]
-  let detached = false
-  const env = { ...process.env } as Record<string, string>
-  if (kind === "codex") { cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = join(h, ".codex") }
-  else if (kind === "cursor") { cmd = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
-  else if (kind === "claude") {
-    const spec = claudeLoginSpawnCommand()
-    ;({ cmd, args } = spec)
-    detached = spec.detached ?? false
-  }
-  // grok prints the device URL + code on plain stdout (no PTY needed, same as codex).
-  else if (kind === "grok") { cmd = resolveCommand(["grok"], env, process.platform) ?? "grok"; args = ["login", "--device-auth"] }
-  else { cmd = ""; args = [] } // unknown kind handled below
+  // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
+  // generic runner. null descriptor = the kind has no CLI device login.
+  const spec = loginSpawnCommands[kind as AgentKind]?.() ?? null
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}
-  if (!cmd) {
+  if (!spec) {
     queueMicrotask(() => { outCb(`no device login for ${kind}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
+  const { cmd, args } = spec
+  const detached = spec.detached ?? false
+  const env = spec.env ?? ({ ...process.env } as Record<string, string>)
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = (kind === "claude")
-      ? nodeSpawn(cmd, args, { env, detached })
-      : spawnCommand(cmd, args, { env, detached })
+    // The launcher spawner equals a plain spawn on POSIX and only wraps the
+    // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
+    // met inside the descriptor's own command line (claude wraps `script`).
+    child = spawnCommand(cmd, args, { env, detached })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
@@ -1343,10 +1306,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       await commandRegistry.refreshPreview({
         kind,
         workdir,
-        pluginSpawnArgs: pluginSpawnArgsForAgent(kind),
-        codexClient: kind === "codex" ? findCodexClient() : undefined,
-        opencodePluginDirs: kind === "opencode" ? opencodePluginDirsForPreview() : undefined,
-        grokSkillsDirs: kind === "grok" ? grokSkillsDirsForPreview() : undefined,
+        pluginSpawnArgs: pluginSpawnArgsForKind(kind, { sessionName: "__preview__" }),
+        agentContext: agentModules[kind]?.commandContext?.({ sessionName: "__preview__", kindAdapters: () => adaptersOfKind(kind) }),
       })
       return {
         commands: commandRegistry.getPreview(kind, workdir),
@@ -1795,7 +1756,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
-      if (!s || s.agent !== AgentKind.Claude) return undefined
+      if (!s || !isPersistentRuntimeSession(s)) return undefined
       // Heal-on-read: resolve and persist the window-id if not yet stored.
       // For sessions that already have tmux_window_id, runtimeTargetIdOf short-circuits with
       // no tmux call. Legacy/unhealed sessions resolve by name once, then persist,
@@ -1829,17 +1790,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return next
     },
     getAgentStatuses: () => {
-      const c = settings.getAppConfig(appConfigEnv)
-      // Stored settings credentials only. The darwin Keychain probe and the
-      // credential-file probe now live in `agents/claude/auth.ts`, which
-      // `detectAgent` calls for claude.
-      const hasCredential = (kind: AgentKind) =>
-        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey)
-        : kind === "codex" ? !!c.codexApiKey
-        : kind === "cursor" ? !!c.cursorApiKey
-        : false
       return detectAllAgents(
-        { hasBinary, fileExists: existsSync, hasCredential },
+        { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
         {
           home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
           appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
@@ -2029,7 +1981,12 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
     },
     fileExists: existsSync,
-    hasCredential: (kind) => kind === AgentKind.Claude && claudeCliIsAuthenticated(),
+    // Every kind answers with the stored-settings oracle, so a stored
+    // codex/cursor API key short-circuits the login flow the same way a CLI
+    // cred file does. Claude adds the darwin Keychain probe: `claude login`
+    // can finish without ever writing the credential file this manager polls.
+    hasCredential: (kind) =>
+      agentHasCredential(kind) || (kind === AgentKind.Claude && claudeCliIsAuthenticated()),
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })
@@ -2141,7 +2098,7 @@ const recentInboundIds = new RecentInboundIds()
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return deliverInboundCore({
     getAdapter: (id) => runtimes.get(id)?.adapter,
-    isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
+    isClaude: (id) => isPersistentRuntimeSession({ agent: registry.get(id)?.agent ?? AgentKind.Claude }),
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
     // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
@@ -2282,7 +2239,7 @@ async function spawnSession(args: {
   // while polling window liveness so an instant death fast-fails instead of
   // waiting out the full timeout.
   let registered = registry.get(r.session_id)
-  if ((args.agent ?? "claude") === "claude") {
+  if (isPersistentRuntimeSession({ agent })) {
     registered = await waitForRegisteredSession({
       id: r.session_id,
       name: r.name,

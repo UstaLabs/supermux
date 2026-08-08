@@ -12,7 +12,7 @@ import { home } from "../../shared/home"
 import { normalizeName } from "../../shared/slug"
 import { AgentKind } from "../../shared/agents"
 import { spawnPA } from "./spawn-helper"
-import type { Session } from "./types"
+import { isPersistentRuntimeSession, type Session } from "./types"
 import { makeLogger } from "../../shared/log"
 import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
@@ -93,11 +93,11 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     // Kill the prior window by id. A legacy PA with no persisted tmux_window_id
     // skips teardown; any orphan window is harmless (we address by id, never name)
     // and is reclaimed on the next reconcile cycle.
-    if (pa.agent === AgentKind.Claude && pa.tmux_window_id) {
+    if (isPersistentRuntimeSession(pa) && pa.tmux_window_id) {
       await sessionBackend.kill(pa.tmux_window_id).catch(() => {})
     }
 
-    if (pa.agent === AgentKind.Claude) {
+    if (isPersistentRuntimeSession(pa)) {
       const tmuxWindowName = normalizeName(pa.name)
       // tmux silently falls back to $HOME when -c points at a missing dir, so the
       // PA would run in /root instead of its workspace. Create it first.
@@ -190,7 +190,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     } else {
       // Supervise existing PAs: respawn any whose process is dead.
       for (const pa of pas) {
-        if (pa.agent === AgentKind.Claude) {
+        if (isPersistentRuntimeSession(pa)) {
           const targetId = await runtimeTargetId(pa)
           if (targetId && await sessionBackend.livePid(targetId) !== null) continue
         } else if (isProcessAlive(pa.pid)) continue
@@ -212,7 +212,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
     for (const s of opts.registry.list()) {
       if (isDraftSession(s)) continue
       if (s.status === "suspended") continue
-      if (s.agent !== "claude") continue
+      if (!isPersistentRuntimeSession(s)) continue
       const targetId = await runtimeTargetId(s)
       const alive = targetId ? await sessionBackend.livePid(targetId) !== null : isProcessAlive(s.pid)
       if (!alive) {
@@ -273,7 +273,8 @@ export async function reconcileOnStartup(deps: {
     // by resumeNonClaudeAdapters(), not dropped here. Cursor sessions
     // use pid=0 (no persistent process) and would survive isProcessAlive
     // by accident, but codex sessions use a real PID that's now dead.
-    if ((s as any).agent && (s as any).agent !== "claude") continue
+    // A falsy `agent` on a legacy row means claude (the only kind that predates the field).
+    if (!isPersistentRuntimeSession({ agent: ((s as any).agent || AgentKind.Claude) as AgentKind })) continue
     // The stored pid is dead, but a Claude pane survives in its OWN systemd scope
     // across a broker restart. After a restart the pid is unreliable (a dead
     // broker pid from a lazy-resume's `|| process.pid`, or pid=0 from a DB-only

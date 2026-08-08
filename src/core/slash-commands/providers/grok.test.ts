@@ -51,10 +51,10 @@ test("provider prefers the live ACP list and falls back to the disk scan", async
     mkdirSync(join(root, "disk-skill"), { recursive: true })
     writeFileSync(join(root, "disk-skill", "SKILL.md"), "---\nname: disk-skill\n---\n")
     const p = new GrokCommandProvider()
-    const base = { sessionName: "s", workdir: "/w", pluginSpawnArgs: [] as string[], grokSkillsDirs: [root] }
-    const live = await p.list({ ...base, grokCommands: LIVE_PUSH })
+    const base = { sessionName: "s", workdir: "/w", pluginSpawnArgs: [] as string[] }
+    const live = await p.list({ ...base, agentContext: { commands: LIVE_PUSH, skillsDirs: [root] } })
     expect(live.map((c) => c.name)).toEqual(["check-work", "probe-skill", "build-with-ai"])
-    const fallback = await p.list(base)
+    const fallback = await p.list({ ...base, agentContext: { skillsDirs: [root] } })
     expect(fallback.map((c) => c.name)).toEqual(["disk-skill"])
   } finally {
     rmSync(root, { recursive: true, force: true })
