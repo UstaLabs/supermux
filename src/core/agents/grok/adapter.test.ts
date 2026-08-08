@@ -422,3 +422,32 @@ test("resume() is a no-op when the child is already running", async () => {
   await adapter.resume()
   expect(writes).toEqual([])
 })
+
+test("captures availableCommands from the handshake and available_commands_update pushes", async () => {
+  // Live-verified (grok 0.2.101): initialize carries _meta.availableCommands and
+  // the session pushes available_commands_update with the skill-backed list.
+  const fr = fakeRunner()
+  const updates: any[] = []
+  const events: any[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  adapter.on("commands-update", (e) => updates.push(e))
+  for (const k of ["assistant-message", "tool-call"]) adapter.on(k, (e) => events.push(e))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1, _meta: { availableCommands: [{ name: "compact" }] } } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+  expect(adapter.availableCommands.map((c) => c.name)).toEqual(["compact"])
+
+  fr.feed({
+    jsonrpc: "2.0", method: "session/update",
+    params: { update: { sessionUpdate: "available_commands_update", availableCommands: [
+      { name: "compact" },
+      { name: "soul", description: "d", _meta: { scope: "user", path: "/p/skills/soul/SKILL.md" } },
+    ] } },
+  })
+  expect(updates.length).toBe(1)
+  expect(adapter.availableCommands.map((c) => c.name)).toEqual(["compact", "soul"])
+  // The push is ambient state, never a chat/tool event.
+  expect(events).toEqual([])
+})

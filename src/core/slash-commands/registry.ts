@@ -1,7 +1,7 @@
 import type { AgentKind } from "../agents/types"
 import { makeLogger } from "../../shared/log"
 import { controlCommands } from "./control"
-import type { AgentCommandProvider, CodexRpc, OpenCodeCommandClient, SlashCommand } from "./types"
+import type { AgentCommandProvider, CodexRpc, GrokAcpCommand, OpenCodeCommandClient, SlashCommand } from "./types"
 
 const log = makeLogger("slash/registry")
 
@@ -14,6 +14,8 @@ export interface RegistrySession {
   codexClient?: CodexRpc
   opencodeClient?: OpenCodeCommandClient
   opencodePluginDirs?: string[]
+  grokCommands?: GrokAcpCommand[]
+  grokSkillsDirs?: string[]
 }
 
 export interface CommandRegistryDeps {
@@ -31,6 +33,7 @@ export interface CommandPreviewRequest {
   codexClient?: CodexRpc
   opencodeClient?: OpenCodeCommandClient
   opencodePluginDirs?: string[]
+  grokSkillsDirs?: string[]
 }
 
 export type PreviewAgentCommandsCtx = CommandPreviewRequest
@@ -103,6 +106,8 @@ export class CommandRegistry {
           codexClient: session.codexClient,
           opencodeClient: session.opencodeClient,
           opencodePluginDirs: session.opencodePluginDirs,
+          grokCommands: session.grokCommands,
+          grokSkillsDirs: session.grokSkillsDirs,
         }).catch(() => [] as SlashCommand[])
       : []
     this.agentCache.set(name, cmds)
@@ -121,6 +126,7 @@ export class CommandRegistry {
           codexClient: req.codexClient,
           opencodeClient: req.opencodeClient,
           opencodePluginDirs: req.opencodePluginDirs,
+          grokSkillsDirs: req.grokSkillsDirs,
         }).catch(() => [] as SlashCommand[])
       : []
     this.previewCache.set(key, cmds)
