@@ -72,7 +72,7 @@ export interface PluginAdapter {
   spawnArgs(plugins: Plugin[], session: PluginSession): SpawnArgs
 }
 
-export const CLI_SCOPES: readonly CliScope[] = ["claude", "codex", "cursor", "opencode", "gemini"]
+export const CLI_SCOPES: readonly CliScope[] = ["claude", "codex", "cursor", "opencode", "grok", "gemini"]
 export const PLUGIN_SOURCE_TYPES: readonly PluginSourceType[] = ["local", "git", "git-subdir"]
 
 /**

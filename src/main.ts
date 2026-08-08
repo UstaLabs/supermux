@@ -47,9 +47,9 @@ import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes } from "./core/plugins"
+import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes, grokConfigEntries, ensureGrokPluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
-import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider } from "./core/slash-commands"
+import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
 import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
 import { preAcceptTrust, writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
@@ -671,6 +671,10 @@ function opencodePluginDirs(sessionName: string): string[] {
   return opencodeConfigEntries({ sessionName }).pluginPaths
 }
 
+function grokSkillsDirs(sessionName: string): string[] {
+  return grokConfigEntries({ sessionName }).skillsPaths
+}
+
 const cursorCommandProvider = new CursorCommandProvider()
 const commandRegistry = new CommandRegistry({
   providers: {
@@ -678,6 +682,7 @@ const commandRegistry = new CommandRegistry({
     codex: new CodexCommandProvider(),
     cursor: cursorCommandProvider,
     opencode: new OpenCodeCommandProvider(),
+    grok: new GrokCommandProvider(),
   },
   resolveSession: (name) => {
     const s = registry.resolveName(name)
@@ -686,9 +691,9 @@ const commandRegistry = new CommandRegistry({
     const pluginSpawnArgs =
       kind === "codex" ? codexSpawnArgs({ sessionName: s.name }).args
       : kind === "cursor" ? cursorSpawnArgs({ sessionName: s.name }).args
-      : kind === "opencode" ? []
+      : kind === "opencode" || kind === "grok" ? []
       : claudeSpawnArgs({ sessionName: s.name }).args
-    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient } | undefined
+    const adapter = runtimes.get(s.id)?.adapter as { rpc?: import("./core/slash-commands/types").CodexRpc; commandClient?: import("./core/slash-commands/types").OpenCodeCommandClient; availableCommands?: import("./core/slash-commands/types").GrokAcpCommand[] } | undefined
     return {
       name: s.name,
       kind,
@@ -698,6 +703,8 @@ const commandRegistry = new CommandRegistry({
       codexClient: kind === "codex" ? adapter?.rpc : undefined,
       opencodeClient: kind === "opencode" ? adapter?.commandClient : undefined,
       opencodePluginDirs: kind === "opencode" ? opencodePluginDirs(s.name) : undefined,
+      grokCommands: kind === "grok" ? adapter?.availableCommands : undefined,
+      grokSkillsDirs: kind === "grok" ? grokSkillsDirs(s.name) : undefined,
     }
   },
   // Key the broadcast by session *id* (UUID), not name: the snapshot frame and
@@ -723,12 +730,16 @@ function findCodexClient(): import("./core/slash-commands/types").CodexRpc | und
 function pluginSpawnArgsForAgent(kind: import("./core/agents/types").AgentKind): string[] {
   return kind === "codex" ? codexSpawnArgs({ sessionName: "__preview__" }).args
     : kind === "cursor" ? cursorSpawnArgs({ sessionName: "__preview__" }).args
-    : kind === "opencode" ? []
+    : kind === "opencode" || kind === "grok" ? []
     : claudeSpawnArgs({ sessionName: "__preview__" }).args
 }
 
 function opencodePluginDirsForPreview(): string[] {
   return opencodeConfigEntries({ sessionName: "__preview__" }).pluginPaths
+}
+
+function grokSkillsDirsForPreview(): string[] {
+  return grokConfigEntries({ sessionName: "__preview__" }).skillsPaths
 }
 
 const unregisterSession = (id: string) => sessionManager.unregister(id)
@@ -964,6 +975,16 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
+  })
+  // The agent pushed a fresh command/skill list (grok: ACP
+  // available_commands_update) — recompute this session's slash commands. The
+  // provider reads the adapter's cached list via resolveSession.
+  adapter.on("commands-update", () => {
+    const name = registry.get(sessionId)?.name
+    if (name) {
+      commandRegistry.invalidate(name)
+      void commandRegistry.refresh(name)
+    }
   })
   // The codex/cursor adapter is now wired (and, for codex, its app-server client
   // is reachable) — discover this session's slash commands.
@@ -1326,6 +1347,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         pluginSpawnArgs: pluginSpawnArgsForAgent(kind),
         codexClient: kind === "codex" ? findCodexClient() : undefined,
         opencodePluginDirs: kind === "opencode" ? opencodePluginDirsForPreview() : undefined,
+        grokSkillsDirs: kind === "grok" ? grokSkillsDirsForPreview() : undefined,
       })
       return {
         commands: commandRegistry.getPreview(kind, workdir),
@@ -2938,6 +2960,9 @@ if (!IS_TEST_BROKER) {
     }
     if (ensureOpenCodePluginScopes()) {
       log.info("opencode_plugin_scopes_synced")
+    }
+    if (ensureGrokPluginScopes()) {
+      log.info("grok_plugin_scopes_synced")
     }
   } catch (err: any) {
     log.warn("mux_core_soul_skill_sync_failed", { err: err?.message ?? String(err) })

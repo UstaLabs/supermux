@@ -7,6 +7,8 @@ import { CursorPluginAdapter } from "./adapters/cursor"
 import { CodexPluginAdapter } from "./adapters/codex"
 import { OpenCodePluginAdapter } from "./adapters/opencode"
 import type { OpenCodeConfigEntries } from "./adapters/opencode"
+import { GrokPluginAdapter } from "./adapters/grok"
+import type { GrokConfigEntries } from "./adapters/grok"
 import type { SpawnArgs, Plugin, CliScope } from "./types"
 
 export type { Plugin, PluginAdapter, PluginsRegistry, SpawnArgs, CliScope } from "./types"
@@ -16,11 +18,14 @@ export { CursorPluginAdapter } from "./adapters/cursor"
 export { CodexPluginAdapter, CODEX_MARKETPLACE_NAME, agentsMarketplacePath } from "./adapters/codex"
 export { OpenCodePluginAdapter } from "./adapters/opencode"
 export type { OpenCodeConfigEntries } from "./adapters/opencode"
+export { GrokPluginAdapter } from "./adapters/grok"
+export type { GrokConfigEntries } from "./adapters/grok"
 
 const claudeAdapter = new ClaudePluginAdapter()
 const cursorAdapter = new CursorPluginAdapter()
 const codexAdapter = new CodexPluginAdapter()
 const opencodeAdapter = new OpenCodePluginAdapter()
+const grokAdapter = new GrokPluginAdapter()
 
 interface SpawnArgsOpts {
   sessionName?: string
@@ -67,10 +72,27 @@ export function opencodeConfigEntries(opts?: SpawnArgsOpts): OpenCodeConfigEntri
 }
 
 /**
- * Add `opencode` to scopes for any enabled plugin that ships an opencode-
- * compatible tree. Idempotent; returns true when plugins.json was updated.
+ * Resolve skills paths for a grok session's private ~/.grok/config.toml from
+ * the on-disk registry. Never throws — a missing/invalid plugins.json yields an
+ * empty list so spawns are never broken.
  */
-export function ensureOpenCodePluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
+export function grokConfigEntries(opts?: SpawnArgsOpts): GrokConfigEntries {
+  const { plugins, error } = loadPluginsForSpawn({ file: opts?.file, pluginsDir: opts?.pluginsDir })
+  if (error) opts?.onError?.(error)
+  return grokAdapter.configEntries(plugins, { name: opts?.sessionName ?? "" })
+}
+
+/**
+ * Add `scope` to any enabled plugin the adapter reports compatible. Idempotent;
+ * returns true when plugins.json was updated. Shared engine for the per-CLI
+ * scope-migration helpers below (run at boot for registries written before the
+ * CLI's adapter existed).
+ */
+function ensurePluginScopes(
+  adapter: { isCompatible(plugin: Plugin): boolean },
+  scope: CliScope,
+  opts?: { file?: string; pluginsDir?: string },
+): boolean {
   const file = opts?.file
   const pluginsDir = opts?.pluginsDir
   let reg: ReturnType<typeof loadPluginsRegistry>
@@ -81,14 +103,30 @@ export function ensureOpenCodePluginScopes(opts?: { file?: string; pluginsDir?: 
   }
   let changed = false
   const plugins: Plugin[] = reg.plugins.map((p) => {
-    if (!p.enabled || p.scopes.includes("opencode")) return p
-    if (!opencodeAdapter.isCompatible(p)) return p
+    if (!p.enabled || p.scopes.includes(scope)) return p
+    if (!adapter.isCompatible(p)) return p
     changed = true
-    return { ...p, scopes: [...p.scopes, "opencode"] as CliScope[] }
+    return { ...p, scopes: [...p.scopes, scope] as CliScope[] }
   })
   if (!changed) return false
   savePluginsRegistry({ ...reg, plugins }, { file, pluginsDir })
   return true
+}
+
+/**
+ * Add `opencode` to scopes for any enabled plugin that ships an opencode-
+ * compatible tree. Idempotent; returns true when plugins.json was updated.
+ */
+export function ensureOpenCodePluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
+  return ensurePluginScopes(opencodeAdapter, "opencode", opts)
+}
+
+/**
+ * Add `grok` to scopes for any enabled plugin that ships skill trees grok can
+ * discover. Idempotent; returns true when plugins.json was updated.
+ */
+export function ensureGrokPluginScopes(opts?: { file?: string; pluginsDir?: string }): boolean {
+  return ensurePluginScopes(grokAdapter, "grok", opts)
 }
 
 /**

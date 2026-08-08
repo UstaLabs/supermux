@@ -29,7 +29,7 @@ import { GrokAdapter } from "../agents/grok/adapter"
 // back from this file, which is a benign cycle as long as neither side
 // dereferences the other at module-init time (functions + types only).
 import { agents } from "../agents/registry"
-import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries } from "../plugins"
+import { cursorSpawnArgs, codexSpawnArgs, codexPrepareSessionHome, opencodeConfigEntries, grokConfigEntries } from "../plugins"
 import { join } from "path"
 import { shimSpawnSpec } from "./shim-spawn"
 import { mkdirSync } from "fs"
@@ -363,6 +363,7 @@ export async function spawnPA(opts: {
       sessionName: name,
       sessionId: id,
       socketsDir: SOCKETS_DIR,
+      skillsPaths: grokConfigEntries({ sessionName: name }).skillsPaths,
     })
     writeGrokPreamble({ workdir, sessionName: name })
 

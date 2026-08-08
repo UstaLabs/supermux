@@ -13,6 +13,7 @@ import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
 import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import { grokConfigEntries } from "../../plugins"
 
 /** grok's worker is an in-process adapter driving a `grok agent stdio` child over
  * ACP. Unlike cursor (per-turn CLI) the child is persistent; unlike codex/opencode
@@ -39,6 +40,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     sessionName: name,
     sessionId: id,
     socketsDir: SOCKETS_DIR,
+    skillsPaths: grokConfigEntries({ sessionName: name }).skillsPaths,
   })
   writeGrokPreamble({ workdir: args.workdir, sessionName: name })
 
@@ -98,6 +100,7 @@ export async function resumeGrokSession(
     sessionName: session.name,
     sessionId: session.id,
     socketsDir: SOCKETS_DIR,
+    skillsPaths: grokConfigEntries({ sessionName: session.name }).skillsPaths,
   })
   writeGrokPreamble({ workdir: session.workdir, sessionName: session.name })
 

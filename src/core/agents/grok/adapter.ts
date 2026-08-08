@@ -60,6 +60,10 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private resolveAttachment?: (file_id: string) => Promise<string>
   private stallTimeoutMs: number
   availableModels: { modelId: string }[] = []
+  /** Latest ACP command list (built-ins + skills). Seeded from `initialize`
+   * `_meta.availableCommands`, then replaced by every `available_commands_update`
+   * push. The slash-command provider reads this live view. */
+  availableCommands: { name: string; description?: string; _meta?: { scope?: string; path?: string } }[] = []
 
   private queue: { text: string; chat_id?: string; attachmentFileId?: string; resolve: () => void; reject: (e: Error) => void }[] = []
   private draining = false
@@ -134,6 +138,10 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     })
     this.availableModels = init?._meta?.modelState?.availableModels ?? init?.modelState?.availableModels ?? []
+    // Seed the command list from the handshake so the first slash-command
+    // refresh (fired right after start()) already sees the built-ins + user
+    // skills; the per-session available_commands_update push replaces it.
+    if (Array.isArray(init?._meta?.availableCommands)) this.availableCommands = init._meta.availableCommands
     // No mcpServers here: grok ignores the param on session/new|load. mux-shim is
     // registered in the session-private ~/.grok/config.toml instead.
     //
@@ -291,6 +299,18 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   private onNotification(method: string, params: unknown): void {
     if (method !== "session/update") return
+    // available_commands_update carries the CURRENT skill/command list (grok
+    // pushes it after session/new AND during session/load replay), so handle it
+    // before the replay gate. It is ambient state, not turn progress — it does
+    // not disarm the stall watchdog and produces no chat events.
+    const upd = (params as { update?: { sessionUpdate?: string; availableCommands?: unknown } } | undefined)?.update
+    if (upd?.sessionUpdate === "available_commands_update") {
+      if (Array.isArray(upd.availableCommands)) {
+        this.availableCommands = upd.availableCommands
+        this.emit("commands-update", { kind: "commands-update" })
+      }
+      return
+    }
     // session/load replays history as session/update; supermux already has that
     // chat log. Swallow it so broker restart does not re-post old messages / tools.
     if (this.loadingSession) return
