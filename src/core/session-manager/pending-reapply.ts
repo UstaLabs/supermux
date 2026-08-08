@@ -1,8 +1,8 @@
 import type { AgentPhase } from "./agent-state-store"
 
-// A session owes a deferred respawn (reapplySessionAgentConfig) when its model/
-// effort changed mid-turn. The desired config is already persisted to the
-// registry; this only records that a respawn is owed, plus the pre-change values
+// A session owes a deferred apply (SessionManager.reapplyAgentConfig) when its
+// model/effort changed mid-turn. The desired config is already persisted to the
+// registry; this only records that an apply is owed, plus the pre-change values
 // captured at the FIRST deferral (for rollback if the deferred apply fails).
 export type PreChangeConfig = { oldModel?: string; oldReasoningLevel?: string }
 
