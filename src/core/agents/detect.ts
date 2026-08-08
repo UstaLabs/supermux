@@ -5,11 +5,15 @@
 // the existing checks in usage/index.ts (claude), codex/auth.ts, cursor/auth.ts.
 import { join, win32 } from "path"
 import { AGENT_KINDS, AgentKind } from "../../shared/agents"
+import { agentAuthCapabilities, type AgentAuthCapabilities } from "./capabilities"
 
 export interface AgentStatus {
   kind: AgentKind
   installed: boolean
   authed: boolean
+  /** Kind-derived behavior flags for login UIs — clients must not branch on
+   *  `kind` for behavior (see core/agents/capabilities.ts). */
+  capabilities: AgentAuthCapabilities
 }
 
 export interface DetectProbes {
@@ -70,7 +74,7 @@ export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: Detect
   // "Ready · free tier"; opencode spawning never fail-closes on auth, so this only
   // affects the status badge, not usability.
   const authed = installed && (probes.fileExists(authCredPath(kind, paths)) || (probes.hasCredential?.(kind) ?? false))
-  return { kind, installed, authed }
+  return { kind, installed, authed, capabilities: agentAuthCapabilities(kind) }
 }
 
 export function detectAllAgents(probes: DetectProbes, paths: DetectPaths): AgentStatus[] {
