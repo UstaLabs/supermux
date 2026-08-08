@@ -60,6 +60,7 @@ import { runInterrupt } from "./core/session-manager/interrupt"
 import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
 import { PendingReapply, shouldDeferReapply, changedSince } from "./core/session-manager/pending-reapply"
 import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
+import { isPersistentRuntimeSession } from "./core/session-manager/types"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -1762,7 +1763,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     getSessionWorkdir: (id) => registry.get(id)?.workdir,
     getSessionTmuxTarget: async (id) => {
       const s = registry.get(id)
-      if (!s || s.agent !== AgentKind.Claude) return undefined
+      if (!s || !isPersistentRuntimeSession(s)) return undefined
       // Heal-on-read: resolve and persist the window-id if not yet stored.
       // For sessions that already have tmux_window_id, runtimeTargetIdOf short-circuits with
       // no tmux call. Legacy/unhealed sessions resolve by name once, then persist,
@@ -2105,7 +2106,7 @@ const pendingReapply = new PendingReapply()
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return deliverInboundCore({
     getAdapter: (id) => runtimes.get(id)?.adapter,
-    isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
+    isClaude: (id) => isPersistentRuntimeSession({ agent: registry.get(id)?.agent ?? AgentKind.Claude }),
     sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
     seen: recentInboundIds,
     // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
@@ -2246,7 +2247,7 @@ async function spawnSession(args: {
   // while polling window liveness so an instant death fast-fails instead of
   // waiting out the full timeout.
   let registered = registry.get(r.session_id)
-  if ((args.agent ?? "claude") === "claude") {
+  if (isPersistentRuntimeSession({ agent })) {
     registered = await waitForRegisteredSession({
       id: r.session_id,
       name: r.name,
