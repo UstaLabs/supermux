@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test"
+import { test, expect, describe, afterAll, beforeEach, afterEach, mock } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -6,7 +6,43 @@ import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { createSupervisor } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
+import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+
+// Codex PA spawns go through the real spawnPA path; its collaborators are
+// swapped via bun module mocks (there are no injection seams). mock.module is
+// process-global: capture the real modules and restore them in afterAll.
+const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
+const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
+const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+
+mock.module("../src/core/agents/codex/auth", () => ({
+  ...realCodexAuth,
+  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
+}))
+mock.module("../src/core/agents/codex/spawn", () => ({
+  ...realCodexSpawn,
+  spawnCodexAppServer: () => ({
+    pid: 123,
+    client: { request: async () => ({}) } as any,
+    child: null as any,
+    kill: () => {},
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/codex/adapter", () => ({
+  ...realCodexAdapter,
+  CodexAdapter: class {
+    constructor(_opts: any) {}
+    async start() {}
+  },
+}))
+
+afterAll(() => {
+  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
+  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
+  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+})
 
 let tmpDir: string, db: ReturnType<typeof openDb>
 beforeEach(() => {
@@ -14,25 +50,26 @@ beforeEach(() => {
   db = openDb(join(tmpDir, "t.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
 })
-afterEach(() => { try { db.close() } catch {}; rmSync(tmpDir, { recursive: true, force: true }) })
+afterEach(() => {
+  setSessionBackendForTests()
+  try { db.close() } catch {}
+  rmSync(tmpDir, { recursive: true, force: true })
+})
 
 test("createSupervisor exposes ensurePersonalAssistants", () => {
   const registry = new Registry(db)
-  const sup = createSupervisor({ registry, bindSocket: async () => {}, spawnTmux: async () => {} })
+  const sup = createSupervisor({ registry, bindSocket: async () => {} })
   expect(typeof sup.ensurePersonalAssistants).toBe("function")
 })
 
 test("ensurePersonalAssistants keeps a fresh install at zero PAs", async () => {
   const registry = new Registry(db)
-  const spawns: any[] = []
   const sup = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async (o) => { spawns.push(o) },
     paWorkdir: "/tmp/amux-test-pa",
   })
   await sup.ensurePersonalAssistants()
-  expect(spawns.length).toBe(0)
   expect(registry.listPAs().length).toBe(0)
 })
 
@@ -41,19 +78,7 @@ test("bootstrapPA supports codex agent and stores it in registry", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: () => ({
-      start: async () => {},
-    } as any),
-    registerAdapter: () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
   })
 
   await supervisor.bootstrapPA("coder", { agent: AgentKind.Codex })
@@ -61,6 +86,25 @@ test("bootstrapPA supports codex agent and stores it in registry", async () => {
   const pa = registry.resolveName("coder")
   expect(pa?.agent).toBe("codex")
   expect(pa?.role).toBe("personal_assistant")
+})
+
+test("a sessionManager-equipped supervisor registers the adapter of a spawned non-Claude PA (half-filled-bag regression)", async () => {
+  const registry = new Registry(db)
+  const registered: Array<{ name: string }> = []
+  const supervisor = createSupervisor({
+    registry,
+    bindSocket: async () => {},
+    // Adapter registration must DERIVE from sessionManager.
+    sessionManager: {
+      registerSpawnedAdapter: (name: string) => { registered.push({ name }) },
+    },
+  })
+
+  await supervisor.bootstrapPA("coder-reg", { agent: AgentKind.Codex })
+  supervisor.stop()
+
+  expect(registered.length).toBe(1)
+  expect(registered[0]?.name).toBe("coder-reg")
 })
 
 test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
@@ -76,19 +120,7 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => ({ windowId: "w1" }),
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: () => ({
-      start: async () => {},
-    } as any),
-    registerAdapter: () => {},
+    sessionManager: { registerSpawnedAdapter: () => {} },
   })
   await expect(supervisor.ensurePersonalAssistants()).resolves.toBeUndefined()
   const pa = registry.get(paId)
@@ -98,13 +130,13 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
 
 test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
   const registry = new Registry(db)
+  setSessionBackendForTests({
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id: "w1", name: opts.name, pid: 123, alive: true }),
+    capture: async () => "Listening for channel messages",
+  } as unknown as SessionBackend)
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    sessionBackend: {
-      create: async (opts: Parameters<SessionBackend["create"]>[0]) => ({ id: "w1", name: opts.name, pid: 123, alive: true }),
-      capture: async () => "Listening for channel messages",
-    } as unknown as SessionBackend,
   })
 
   let captured: any
@@ -127,18 +159,16 @@ test("bootstrapPA forwards model and reasoningLevel to registry", async () => {
 test("bootstrapPA creates Claude through the session backend", async () => {
   const registry = new Registry(db)
   let createOpts: Parameters<SessionBackend["create"]>[0] | undefined
-  const sessionBackend = {
+  setSessionBackendForTests({
     create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
       createOpts = opts
       return { id: "opaque-target", name: opts.name, pid: 31337, alive: true }
     },
     capture: async () => "Listening for channel messages",
-  } as unknown as SessionBackend
+  } as unknown as SessionBackend)
   const supervisor = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => { throw new Error("must not spawn via tmux") },
-    sessionBackend,
   })
 
   await supervisor.bootstrapPA("native-pa", { agent: AgentKind.Claude })
@@ -155,7 +185,6 @@ test("reconcile invokes the internal-worker reaper each tick", async () => {
   const sup = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => {},
     reapInternalWorkers: async () => { reapCalls++ },
   })
   await sup.reconcile()
@@ -179,7 +208,6 @@ test("reconcile never suspends a draft (pid 0 reads as dead but the guard skips 
   const sup = createSupervisor({
     registry,
     bindSocket: async () => {},
-    spawnTmux: async () => {},
   })
   try {
     await sup.reconcile()

@@ -43,37 +43,40 @@ export type SupervisorOpts = {
   // Bind the unix socket for a session BEFORE claude spawns; otherwise the
   // shim hits ENOENT on connect and the session dies on arrival.
   bindSocket: (session_id: string) => Promise<void>
-  // Store the Claude Code session ID so resumed sessions can pass --resume.
-  onClaudeSessionId?: (brokerSessionId: string, claudeSessionId: string) => void
-  // Override for tests; defaults to the real tmux helper.
-  spawnTmux?: (opts: { session: string; window: string; workdir: string; command: string }) => Promise<{ windowId?: string } | void>
-  sessionBackend?: SessionBackend
   // PA workdir, resolved from the config store by the caller. When omitted
   // (e.g. tests), falls back to the historical default.
   paWorkdir?: string
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
-  // Non-Claude PA spawn dependencies (injected by main.ts; optional for tests).
-  onCodexSessionId?: (brokerSessionId: string, sessionId: string) => void
-  onCursorSessionId?: (name: string, sessionId: string) => void
-  onOpenCodeSessionId?: (name: string, sessionId: string) => void
-  registerAdapter?: Parameters<typeof spawnPA>[0]["registerAdapter"]
-  codexResolveAuth?: Parameters<typeof spawnPA>[0]["codexResolveAuth"]
-  codexSpawnAppServer?: Parameters<typeof spawnPA>[0]["codexSpawnAppServer"]
-  codexAdapterFactory?: Parameters<typeof spawnPA>[0]["codexAdapterFactory"]
-  cursorResolveAuth?: Parameters<typeof spawnPA>[0]["cursorResolveAuth"]
-  cursorSmokeAgent?: Parameters<typeof spawnPA>[0]["cursorSmokeAgent"]
-  cursorRunnerFactory?: Parameters<typeof spawnPA>[0]["cursorRunnerFactory"]
-  cursorAdapterFactory?: Parameters<typeof spawnPA>[0]["cursorAdapterFactory"]
-  opencodeSpawnServer?: Parameters<typeof spawnPA>[0]["opencodeSpawnServer"]
-  opencodeAdapterFactory?: Parameters<typeof spawnPA>[0]["opencodeAdapterFactory"]
+  /** The session component. When present, adapter registration and session-id
+   *  persistence for non-claude PA spawns DERIVE from it — the supervisor can
+   *  no longer silently drop adapters because a bag member was not passed
+   *  (the old half-filled-bag bug). */
+  sessionManager?: SessionManagerLike
   reapInternalWorkers?: () => Promise<void>
+}
+
+/** The slice of SessionManager the supervisor needs (type-only, avoids a
+ *  runtime import cycle: manager.ts imports isDraftSession from this file). */
+export type SessionManagerLike = {
+  registerSpawnedAdapter(name: string, adapter: unknown, handle?: unknown): void
 }
 
 export function createSupervisor(opts: SupervisorOpts): Supervisor {
   let stopped = false
   let timer: ReturnType<typeof setInterval> | null = null
-  const spawnTmux = opts.spawnTmux
-  const sessionBackend = opts.sessionBackend ?? getSessionBackend()
+  const sessionBackend = getSessionBackend()
+  // Derived non-claude PA spawn wiring: the session component provides the
+  // real behavior. Without it, spawnPA builds adapters and drops them (the
+  // pre-component bug this fixes).
+  const registerAdapter = opts.sessionManager
+    ? ((name: string, adapter: unknown, handle?: unknown) => opts.sessionManager!.registerSpawnedAdapter(name, adapter, handle)) as NonNullable<Parameters<typeof spawnPA>[0]["registerAdapter"]>
+    : undefined
+  const persistAgentSessionId = (brokerSessionId: string, sid: string) => {
+    if (opts.registry.get(brokerSessionId)) opts.registry.sessions.setAgentSessionId(brokerSessionId, sid)
+  }
+  const onCodexSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onCursorSessionId = opts.sessionManager ? persistAgentSessionId : undefined
+  const onOpenCodeSessionId = opts.sessionManager ? persistAgentSessionId : undefined
   // Prefer caller-supplied values (from config store); fall back to the built-in
   // default. The env var MUX_PA_WORKDIR is now read by the caller (main.ts via
   // SettingsStore.getAppConfig) and forwarded as opts.paWorkdir.
@@ -116,7 +119,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
       })
       const target = await sessionBackend.create({ group: TMUX_SESSION, name: tmuxWindowName, cwd: pa.workdir, ...spec, cols: 80, rows: 24 })
       opts.registry.sessions.setTmuxWindowId(pa.id, target.id)
-      if (!pa.agent_session_id) opts.onClaudeSessionId?.(pa.id, claudeSessionId)
+      if (!pa.agent_session_id) opts.registry.sessions.setAgentSessionId(pa.id, claudeSessionId)
       opts.registry.sessions.activate(pa.id, target.pid ?? process.pid)
       void sendChannelConsentEnter(target.id, { backend: sessionBackend })
     } else {
@@ -128,25 +131,13 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: pa.model,
         reasoningLevel: pa.reasoningLevel,
         bind: opts.bindSocket,
-        spawnTmux,
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
         id: pa.id,
-        onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
-        onCodexSessionId: opts.onCodexSessionId,
-        onCursorSessionId: opts.onCursorSessionId,
-        onOpenCodeSessionId: opts.onOpenCodeSessionId,
-        registerAdapter: opts.registerAdapter,
-        codexResolveAuth: opts.codexResolveAuth,
-        codexSpawnAppServer: opts.codexSpawnAppServer,
-        codexAdapterFactory: opts.codexAdapterFactory,
-        cursorResolveAuth: opts.cursorResolveAuth,
-        cursorSmokeAgent: opts.cursorSmokeAgent,
-        cursorRunnerFactory: opts.cursorRunnerFactory,
-        cursorAdapterFactory: opts.cursorAdapterFactory,
-        opencodeSpawnServer: opts.opencodeSpawnServer,
-        opencodeAdapterFactory: opts.opencodeAdapterFactory,
+        onCodexSessionId,
+        onCursorSessionId,
+        onOpenCodeSessionId,
+        registerAdapter,
       })
     }
   }
@@ -175,24 +166,12 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
         model: bootstrapOpts?.model,
         reasoningLevel: bootstrapOpts?.reasoningLevel,
         bind: opts.bindSocket,
-        spawnTmux,
-        sessionBackend,
         tmuxSession: TMUX_SESSION,
-        onClaudeSessionId: opts.onClaudeSessionId,
         resolveEffort: opts.resolveEffort,
-        onCodexSessionId: opts.onCodexSessionId,
-        onCursorSessionId: opts.onCursorSessionId,
-        onOpenCodeSessionId: opts.onOpenCodeSessionId,
-        registerAdapter: opts.registerAdapter,
-        codexResolveAuth: opts.codexResolveAuth,
-        codexSpawnAppServer: opts.codexSpawnAppServer,
-        codexAdapterFactory: opts.codexAdapterFactory,
-        cursorResolveAuth: opts.cursorResolveAuth,
-        cursorSmokeAgent: opts.cursorSmokeAgent,
-        cursorRunnerFactory: opts.cursorRunnerFactory,
-        cursorAdapterFactory: opts.cursorAdapterFactory,
-        opencodeSpawnServer: opts.opencodeSpawnServer,
-        opencodeAdapterFactory: opts.opencodeAdapterFactory,
+        onCodexSessionId,
+        onCursorSessionId,
+        onOpenCodeSessionId,
+        registerAdapter,
       })
     } catch (err) {
       opts.registry.unregister(id)

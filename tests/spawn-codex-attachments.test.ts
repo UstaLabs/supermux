@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -6,7 +6,61 @@ import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { spawnSession, type SpawnDeps } from "../src/core/session-manager/spawn-helper"
 
+// The codex collaborators are swapped via bun's module mocks (the production
+// spawn path has no injection seams). mock.module is process-global, so the
+// real modules are captured first and restored in afterAll — otherwise later
+// test files would see the fakes (same pattern as tests/spawn-opencode.test.ts).
+const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
+const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
+const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realPlugins = { ...(await import("../src/core/plugins")) }
+
 const codexAdapterOpts: any[] = []
+
+mock.module("../src/core/agents/codex/auth", () => ({
+  ...realCodexAuth,
+  resolveCodexAuth: async () => ({ mode: "oauth_copy", env: {} }),
+}))
+mock.module("../src/core/agents/codex/spawn", () => ({
+  ...realCodexSpawn,
+  spawnCodexAppServer: () => ({
+    pid: 123,
+    client: { request: async () => ({}), onNotification: () => {} },
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/codex/adapter", () => ({
+  ...realCodexAdapter,
+  CodexAdapter: class {
+    kind = "codex"
+    sessionName: string
+    workdir: string
+    constructor(opts: any) {
+      codexAdapterOpts.push(opts)
+      this.sessionName = opts.sessionName
+      this.workdir = opts.workdir
+    }
+    async start() {}
+    async resume() {}
+    async stop() {}
+    async send() {}
+    async interrupt() {}
+    on() {}
+    emit() {}
+  },
+}))
+mock.module("../src/core/plugins", () => ({
+  ...realPlugins,
+  codexPrepareSessionHome: async () => {},
+  codexSpawnArgs: () => ({ args: [], env: {} }),
+}))
+
+afterAll(() => {
+  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
+  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
+  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/plugins", () => realPlugins)
+})
 
 let tmpDir: string
 
@@ -23,31 +77,7 @@ function makeDeps(registry: Registry, extra?: Partial<SpawnDeps>): SpawnDeps {
   return {
     registry,
     bind: async () => {},
-    spawnTmux: async () => {},
     tmuxSession: "mux",
-    codexResolveAuth: async () => ({ mode: "oauth_copy", env: {} }),
-    codexPrepareSessionHome: async () => {},
-    codexSpawnArgs: () => ({ args: [], env: {} }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}), onNotification: () => {} },
-      onExit: () => {},
-    }) as any,
-    codexAdapterFactory: (opts) => {
-      codexAdapterOpts.push(opts)
-      return {
-        kind: "codex",
-        sessionName: opts.sessionName,
-        workdir: opts.workdir,
-        start: async () => {},
-        resume: async () => {},
-        stop: async () => {},
-        send: async () => {},
-        interrupt: async () => {},
-        on: () => {},
-        emit: () => {},
-      } as any
-    },
     ...extra,
   }
 }

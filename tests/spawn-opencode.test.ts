@@ -11,10 +11,12 @@ import { STATE_DIR } from "../src/shared/paths"
 // resolveOpenCodeAuth, tests/agents/windows-launch.test.ts imports
 // spawnOpenCodeServer) and both started failing in a full `bun test` while
 // passing standalone. So: capture the real modules first and restore them in
-// afterAll — same pattern as src/core/tunnels/cloudflared.test.ts.
-const realAuth = await import("../src/core/agents/opencode/auth")
-const realPreamble = await import("../src/core/agents/opencode/preamble-writer")
-const realSpawn = await import("../src/core/agents/opencode/spawn")
+// afterAll. The capture must SNAPSHOT the export values ({ ...namespace }) —
+// mock.module patches the namespace's live bindings in place, so restoring
+// from the bare namespace re-installs the mock.
+const realAuth = { ...(await import("../src/core/agents/opencode/auth")) }
+const realPreamble = { ...(await import("../src/core/agents/opencode/preamble-writer")) }
+const realSpawn = { ...(await import("../src/core/agents/opencode/spawn")) }
 
 let authed = true
 const boundIds: string[] = []
@@ -63,7 +65,6 @@ function deps(registry: any) {
   return {
     registry,
     bind: async (id: string) => { boundIds.push(id) },
-    spawnTmux: async () => {},
     tmuxSession: "mux",
     registerAdapter: () => {},
     onOpenCodeSessionId: () => {},

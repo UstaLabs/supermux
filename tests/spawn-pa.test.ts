@@ -1,11 +1,96 @@
-import { test, expect, beforeEach, afterEach } from "bun:test"
+import { test, expect, afterAll, beforeEach, afterEach, mock } from "bun:test"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { spawnPA } from "../src/core/session-manager/spawn-helper"
+import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+
+// Non-claude collaborators are swapped via bun module mocks (spawnPA has no
+// injection seams). mock.module is process-global: capture the real modules
+// first, restore them in afterAll so later test files see the real thing.
+const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
+const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
+const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
+const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
+const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
+const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter")) }
+const realOpenCodeSpawn = { ...(await import("../src/core/agents/opencode/spawn")) }
+const realOpenCodeAdapter = { ...(await import("../src/core/agents/opencode/adapter")) }
+
+mock.module("../src/core/agents/codex/auth", () => ({
+  ...realCodexAuth,
+  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
+}))
+mock.module("../src/core/agents/codex/spawn", () => ({
+  ...realCodexSpawn,
+  spawnCodexAppServer: () => ({
+    pid: 123,
+    client: { request: async () => ({}) } as any,
+    child: null as any,
+    kill: () => {},
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/codex/adapter", () => ({
+  ...realCodexAdapter,
+  CodexAdapter: class {
+    constructor(private opts: any) {}
+    async start() { await this.opts.persistThreadId("codex-thread-id") }
+  },
+}))
+mock.module("../src/core/agents/cursor/auth", () => ({
+  ...realCursorAuth,
+  resolveCursorAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
+}))
+mock.module("../src/core/agents/cursor/smoke", () => ({
+  ...realCursorSmoke,
+  smokeCursorAgent: async () => {},
+}))
+mock.module("../src/core/agents/cursor/runner", () => ({
+  ...realCursorRunner,
+  makeRealCursorRunner: () => async () => {},
+}))
+mock.module("../src/core/agents/cursor/adapter", () => ({
+  ...realCursorAdapter,
+  CursorAdapter: class {
+    constructor(private opts: any) {}
+    async start() { await this.opts.persistSessionId("cursor-session-id") }
+  },
+}))
+mock.module("../src/core/agents/opencode/spawn", () => ({
+  ...realOpenCodeSpawn,
+  spawnOpenCodeServer: async () => ({
+    pid: 123,
+    baseUrl: "http://localhost:1234",
+    client: {} as any,
+    child: null as any,
+    kill: () => {},
+    onExit: () => {},
+  }),
+}))
+mock.module("../src/core/agents/opencode/adapter", () => ({
+  ...realOpenCodeAdapter,
+  OpenCodeAdapter: class {
+    constructor(private opts: any) {}
+    async start() { await this.opts.persistSessionId("opencode-sid") }
+  },
+}))
+
+afterAll(() => {
+  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
+  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
+  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/agents/cursor/auth", () => realCursorAuth)
+  mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
+  mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)
+  mock.module("../src/core/agents/cursor/adapter", () => realCursorAdapter)
+  mock.module("../src/core/agents/opencode/spawn", () => realOpenCodeSpawn)
+  mock.module("../src/core/agents/opencode/adapter", () => realOpenCodeAdapter)
+})
 
 let tmpDir: string
 
@@ -16,7 +101,10 @@ function makeRegistry(): Registry {
 }
 
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-")) })
-afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
+afterEach(() => {
+  setSessionBackendForTests()
+  rmSync(tmpDir, { recursive: true, force: true })
+})
 
 function claudeBackend(id: string): SessionBackend {
   return {
@@ -27,13 +115,13 @@ function claudeBackend(id: string): SessionBackend {
 
 test("spawns a Claude PA and registers it as personal_assistant", async () => {
   const registry = makeRegistry()
+  setSessionBackendForTests(claudeBackend("w1"))
   const result = await spawnPA({
     registry,
     name: "assistant",
     agent: "claude" as const,
     workdir: join(tmpDir, "pa-workdir"),
     bind: async () => {},
-    sessionBackend: claudeBackend("w1"),
     tmuxSession: "mux",
   })
 
@@ -49,23 +137,23 @@ test("spawns a Claude PA and registers it as personal_assistant", async () => {
 test("second PA gets is_default false", async () => {
   const registry = makeRegistry()
 
+  setSessionBackendForTests(claudeBackend("w1"))
   await spawnPA({
     registry,
     name: "assistant",
     agent: "claude" as const,
     workdir: join(tmpDir, "pa-1"),
     bind: async () => {},
-    sessionBackend: claudeBackend("w1"),
     tmuxSession: "mux",
   })
 
+  setSessionBackendForTests(claudeBackend("w2"))
   const result = await spawnPA({
     registry,
     name: "helper",
     agent: "claude" as const,
     workdir: join(tmpDir, "pa-2"),
     bind: async () => {},
-    sessionBackend: claudeBackend("w2"),
     tmuxSession: "mux",
   })
 
@@ -87,21 +175,7 @@ test("spawns a Codex PA and registers it as personal_assistant", async () => {
     agent: "codex" as const,
     workdir: join(tmpDir, "codex-pa"),
     bind: async () => {},
-    spawnTmux: async () => ({}),
     tmuxSession: "mux",
-    codexResolveAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-    codexSpawnAppServer: () => ({
-      pid: 123,
-      client: { request: async () => ({}) } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    codexAdapterFactory: (opts) => ({
-      start: async () => {
-        await opts.persistThreadId("codex-thread-id")
-      },
-    } as any),
     registerAdapter: () => {},
     onCodexSessionId: (brokerSessionId, sessionId) => {
       receivedBrokerId = brokerSessionId
@@ -131,16 +205,7 @@ test("spawns a Cursor PA and registers it as personal_assistant", async () => {
     agent: "cursor" as const,
     workdir: join(tmpDir, "cursor-pa"),
     bind: async () => {},
-    spawnTmux: async () => ({}),
     tmuxSession: "mux",
-    cursorResolveAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
-    cursorSmokeAgent: async () => {},
-    cursorRunnerFactory: () => async () => {},
-    cursorAdapterFactory: (opts) => ({
-      start: async () => {
-        await opts.persistSessionId("cursor-session-id")
-      },
-    } as any),
     registerAdapter: () => {},
     onCursorSessionId: (name, sessionId) => {
       expect(name).toBe("cursor-pa")
@@ -168,29 +233,7 @@ test("spawns an OpenCode PA and registers it as personal_assistant", async () =>
     agent: "opencode" as const,
     workdir: join(tmpDir, "opencode-pa"),
     bind: async () => {},
-    spawnTmux: async () => ({}),
     tmuxSession: "mux",
-    opencodeSpawnServer: async () => ({
-      pid: 123,
-      baseUrl: "http://localhost:1234",
-      client: {
-        session: {
-          create: async () => ({ data: { id: "opencode-sid" } }),
-        },
-        event: {
-          subscribe: async () => ({ stream: [] as any }),
-        },
-        listCommands: async () => [],
-      } as any,
-      child: null as any,
-      kill: () => {},
-      onExit: () => {},
-    }),
-    opencodeAdapterFactory: (opts) => ({
-      start: async () => {
-        await opts.persistSessionId("opencode-sid")
-      },
-    } as any),
     registerAdapter: () => {},
     onOpenCodeSessionId: (name, sessionId) => {
       expect(name).toBe("opencode-pa")

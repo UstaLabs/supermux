@@ -203,7 +203,17 @@ export async function startSocketServer(opts: {
         }
         markAlive(session_id)
         if (m.kind === "register") {
-          const reply = await opts.handler.onRegister({ ...m, session_id })
+          let reply: { name: string; session_id: string }
+          try {
+            reply = await opts.handler.onRegister({ ...m, session_id })
+          } catch (err) {
+            // Refused registration (unknown session id — e.g. killed in the
+            // startup gap). Close the socket; the shim's reconnect loop backs
+            // off and the dead window is reclaimed by the supervisor.
+            log.warn("register_refused", { session_id, err: err instanceof Error ? err.message : String(err) })
+            socket.end()
+            return
+          }
           socket.write(encodeFrame({ kind: "registered", display_name: reply.name, session_id: reply.session_id }))
           // Liveness (lastPong + onStatusChange) is handled by markAlive above.
           if (m.channel_only) {

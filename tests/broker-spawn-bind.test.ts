@@ -5,6 +5,7 @@ import { join } from "path"
 import { openDb, runMigrations } from "../src/core/storage/db"
 import { Registry } from "../src/core/session-manager/registry"
 import { spawnSession } from "../src/core/session-manager/spawn-helper"
+import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
 
 let tmpDir: string
@@ -16,21 +17,28 @@ function makeRegistry(): Registry {
 }
 
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "agentmux-spawn-")) })
-afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }) })
+afterEach(() => {
+  setSessionBackendForTests()
+  rmSync(tmpDir, { recursive: true, force: true })
+})
+
+// All fakes answer capture with the "listening" marker so the post-spawn
+// consent poll (sendChannelConsentEnter) returns immediately.
+const LISTENING = "Listening for channel messages"
 
 test("spawnSession binds the socket before spawning tmux", async () => {
   const calls: string[] = []
   const registry = makeRegistry()
+  setSessionBackendForTests({
+    list: async () => [],
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => { calls.push("runtime"); return { id: "target", name: opts.name, pid: 1, alive: true } },
+    capture: async () => LISTENING,
+  } as unknown as SessionBackend)
   await spawnSession(
     {
       registry,
       bind: async (_id) => { calls.push("bind") },
-      sessionBackend: {
-        list: async () => [],
-        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { calls.push("runtime"); return { id: "target", name: opts.name, pid: 1, alive: true } },
-      } as unknown as SessionBackend,
       tmuxSession: "agentmux",
-      postSpawnReady: async () => {},
     },
     { workdir: "/tmp/foo" },
   )
@@ -41,20 +49,18 @@ test("spawnSession binds the socket before spawning tmux", async () => {
 test("Claude spawn sends structured argv and env to the session backend", async () => {
   const registry = makeRegistry()
   let created: Parameters<SessionBackend["create"]>[0] | undefined
-  const sessionBackend = {
+  setSessionBackendForTests({
     list: async () => [],
     create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
       created = opts
       return { id: "runtime-target-1", name: opts.name, pid: 4242, alive: true }
     },
-    capture: async () => "Listening for channel messages",
-  } as unknown as SessionBackend
+    capture: async () => LISTENING,
+  } as unknown as SessionBackend)
 
   const result = await spawnSession({
     registry,
     bind: async () => {},
-    spawnTmux: async () => { throw new Error("Claude must not use the POSIX spawn adapter") },
-    sessionBackend,
     tmuxSession: "mux",
   }, {
     workdir: String.raw`C:\Users\Ahmet Test\project`,
@@ -76,16 +82,16 @@ test("spawnSession resolves a unique name before tmux spawn (no race)", async ()
   registry.register({ name: "foo", workdir: "/x", tmux_target: "mux:foo", pid: 1 })
 
   let created: Parameters<SessionBackend["create"]>[0] | undefined
+  setSessionBackendForTests({
+    list: async () => [],
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => { created = opts; return { id: "target", name: opts.name, pid: 1, alive: true } },
+    capture: async () => LISTENING,
+  } as unknown as SessionBackend)
   const result = await spawnSession(
     {
       registry,
       bind: async () => {},
-      sessionBackend: {
-        list: async () => [],
-        create: async (opts: Parameters<SessionBackend["create"]>[0]) => { created = opts; return { id: "target", name: opts.name, pid: 1, alive: true } },
-      } as unknown as SessionBackend,
       tmuxSession: "agentmux",
-      postSpawnReady: async () => {},
     },
     { workdir: "/tmp/foo" },
   )
@@ -102,18 +108,18 @@ test("spawnSession resolves a unique name before tmux spawn (no race)", async ()
 test("two concurrent spawnSessions don't collide on the same name", async () => {
   const registry = makeRegistry()
   const seenWindows: string[] = []
+  setSessionBackendForTests({
+    list: async () => [],
+    create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
+      seenWindows.push(opts.name)
+      return { id: `target-${seenWindows.length}`, name: opts.name, pid: 1, alive: true }
+    },
+    capture: async () => LISTENING,
+  } as unknown as SessionBackend)
   const deps = {
     registry,
     bind: async () => {},
-    sessionBackend: {
-      list: async () => [],
-      create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
-        seenWindows.push(opts.name)
-        return { id: `target-${seenWindows.length}`, name: opts.name, pid: 1, alive: true }
-      },
-    } as unknown as SessionBackend,
     tmuxSession: "agentmux",
-    postSpawnReady: async () => {},
   }
   const [a, b] = await Promise.all([
     spawnSession(deps, { workdir: "/tmp/foo" }),
@@ -126,17 +132,17 @@ test("two concurrent spawnSessions don't collide on the same name", async () => 
 
 test("spawnSession releases the reservation if tmux spawn fails", async () => {
   const registry = makeRegistry()
+  setSessionBackendForTests({
+    list: async () => [],
+    create: async () => { throw new Error("runtime unavailable") },
+    capture: async () => LISTENING,
+  } as unknown as SessionBackend)
   await expect(
     spawnSession(
       {
         registry,
         bind: async () => {},
-        sessionBackend: {
-          list: async () => [],
-          create: async () => { throw new Error("runtime unavailable") },
-        } as unknown as SessionBackend,
         tmuxSession: "agentmux",
-        postSpawnReady: async () => {},
       },
       { workdir: "/tmp/foo", requestedName: "alpha" },
     ),
