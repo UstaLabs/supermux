@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from "vue"
 import { Check, Link, Key, X, Copy, Settings, ChevronDown } from "lucide-vue-next"
 import { api, type InstallJob } from "@/api/client"
+import { agentAuthCapabilitiesOf, type AgentAuthCapabilities, type AgentKind } from "@/lib/agent-capabilities"
 import AgentLogo from "@/components/AgentLogo.vue"
 import OpenCodeProviderAuth from "@/components/OpenCodeProviderAuth.vue"
 import { Button } from "@/components/ui/button"
@@ -21,9 +22,19 @@ const emit = defineEmits<{
 }>()
 
 interface AgentStatus {
-  kind: string
+  kind: AgentKind
   installed: boolean
   authed: boolean
+  /** Broker-derived behavior flags. Absent on an old broker — read them via
+   *  authCaps() below, which falls back to the old kind lists. */
+  capabilities?: Partial<AgentAuthCapabilities>
+}
+
+// Behavior flags for a row: broker capabilities first, kind-derived fallback
+// for old brokers (see lib/agent-capabilities). Kind itself stays only for
+// display (logo, name, help text) and opencode's provider-connect panel.
+function authCaps(s: AgentStatus): AgentAuthCapabilities {
+  return agentAuthCapabilitiesOf(s)
 }
 
 interface LoginState {
@@ -57,8 +68,8 @@ function toggleConfig(s: AgentStatus) {
 function statusLabel(s: AgentStatus): string {
   if (s.authed) return "Authenticated"
   if (!s.installed) return "Not installed"
-  // opencode's free `opencode/*` tier runs with no credentials — usable without auth.
-  if (s.kind === "opencode") return "Ready · free tier"
+  // e.g. opencode's free `opencode/*` tier runs with no credentials.
+  if (authCaps(s).usableWithoutAuth) return "Ready · free tier"
   return "Installed, not authenticated"
 }
 
@@ -74,15 +85,13 @@ const helpByKind: Record<string, string> = {
   cursor: "Paste your Cursor API key.",
 }
 
-// Kinds whose CLI exposes a device-code/browser login the broker can drive.
-const loginSupportedKinds = ["claude", "codex", "cursor", "grok"]
-
 async function refresh() {
   try {
     const result: AgentStatus[] = await api.getAgentStatuses()
     statuses.value = result
-    // opencode's free tier is usable without auth, so it also satisfies "can proceed".
-    emit("update:canProceed", result.some((s) => s.authed || (s.kind === "opencode" && s.installed)))
+    // An installed agent that runs without auth (opencode free tier) also
+    // satisfies "can proceed".
+    emit("update:canProceed", result.some((s) => s.authed || (authCaps(s).usableWithoutAuth && s.installed)))
   } catch (e: any) {
     toast.error(e?.message ?? "Failed to load agent statuses")
   } finally {
@@ -370,7 +379,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="isConfigOpen(s) && !loginStates[s.kind] && s.kind !== 'opencode' && s.kind !== 'grok'" class="px-4 pb-4 space-y-3">
+        <div v-if="isConfigOpen(s) && !loginStates[s.kind] && authCaps(s).acceptsPastedKey" class="px-4 pb-4 space-y-3">
           <div class="space-y-1.5">
             <div class="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
               <Key class="size-3" />
@@ -407,7 +416,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div v-if="s.installed && loginSupportedKinds.includes(s.kind)" class="border-t border-border pt-3">
+          <div v-if="s.installed && authCaps(s).supportsDeviceLogin" class="border-t border-border pt-3">
             <div class="flex items-center gap-1.5 text-xs text-muted-foreground font-medium mb-1.5">
               <Link class="size-3" />
               Authorize via link

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from "vue"
+import { computed, ref, watch } from "vue"
 import { DialogOverlay, DialogContent, DialogPortal, DialogRoot } from "reka-ui"
 import { useSessions } from "@/stores/sessions"
+import { capabilitiesOf } from "@/lib/agent-capabilities"
 import { Check } from "@lucide/vue"
 import { toast } from "vue-sonner"
 
@@ -9,6 +10,9 @@ const props = defineProps<{ sessionId: string; open: boolean }>()
 const emit = defineEmits<{ (e: "update:open", v: boolean): void }>()
 
 const sessions = useSessions()
+// Behavior comes from broker capability flags (kind fallback for old brokers);
+// `agent` below stays for display only (name + help text).
+const caps = computed(() => capabilitiesOf(sessions.list.find((s) => s.id === props.sessionId)))
 const levels = ref<{ id: string; description?: string }[]>([])
 const currentLevel = ref<string | undefined>()
 const agent = ref<string>("")
@@ -111,7 +115,7 @@ async function applyNow() {
           <div v-if="pendingLevel" class="flex items-center justify-between gap-3 px-3 py-2 mt-1 rounded-lg bg-accent/40">
             <span class="text-xs text-muted-foreground">Will apply after this turn</span>
             <button
-              v-if="agent !== 'claude'"
+              v-if="caps.supportsLiveConfigChange"
               class="text-xs font-medium px-2 py-1 rounded-md hover:bg-accent transition-colors"
               :disabled="switching !== null"
               @click="applyNow"

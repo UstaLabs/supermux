@@ -25,6 +25,7 @@ import {
   turnBoundaryMs,
 } from "@/lib/chat-detail"
 import { formatWorkdir } from "@/lib/format-workdir"
+import { capabilitiesOf } from "@/lib/agent-capabilities"
 import { toWorkdirRelativePath } from "@/lib/workdir-display"
 import { toast } from "vue-sonner"
 import AgentLogo from "@/components/AgentLogo.vue"
@@ -161,10 +162,12 @@ const activeTab = computed({
   get: () => panels.value.activeTab,
   set: (tab) => { panels.value.activeTab = tab },
 })
-const isClaude = computed(() => session.value?.agent === "claude")
+// Behavior flag from the broker (capabilitiesOf falls back to the old
+// kind-derived rule — agent === "claude" — when an old broker sends no flags).
+const hasAgentTerminal = computed(() => capabilitiesOf(session.value).hasAgentTerminal)
 const mainView = computed<"chat" | "terminal">({
-  get: () => (isClaude.value && !isArchived.value ? panels.value.mainView : "chat"),
-  set: (v) => { if (isClaude.value) panels.value.mainView = v },
+  get: () => (hasAgentTerminal.value && !isArchived.value ? panels.value.mainView : "chat"),
+  set: (v) => { if (hasAgentTerminal.value) panels.value.mainView = v },
 })
 type PendingOpenFile = { path: string; line?: number; endLine?: number }
 const editorOpenFile = ref<((path: string, line?: number, endLine?: number) => void) | null>(null)
@@ -758,7 +761,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
           :class="isDesktop ? '' : 'absolute z-20'"
         >
           <div
-            v-if="isClaude"
+            v-if="hasAgentTerminal"
             class="flex justify-center px-3 pt-2"
             :class="isDesktop ? 'bg-[var(--cmux-chat)]' : ''"
           >
@@ -805,7 +808,7 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
             />
           </div>
           <div
-            v-if="isClaude"
+            v-if="hasAgentTerminal"
             class="flex justify-center px-3 py-2 bg-[var(--cmux-chat)] border-t border-border"
             :style="{ paddingBottom: isDesktop ? 'calc(env(safe-area-inset-bottom, 0px) + 0.5rem)' : '0.5rem' }"
           >

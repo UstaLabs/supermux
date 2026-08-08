@@ -1,6 +1,7 @@
 import { defineStore } from "pinia"
 import { ref } from "vue"
 import { api } from "@/api/client"
+import type { AgentKind, SessionCapabilities } from "@/lib/agent-capabilities"
 
 export interface Session {
   id: string
@@ -8,7 +9,10 @@ export interface Session {
   workdir: string
   mute: boolean
   connected: boolean
-  agent?: string
+  agent?: AgentKind
+  /** Broker-derived behavior flags. Absent on an old broker — read them via
+   *  capabilitiesOf() (lib/agent-capabilities), which falls back to kind. */
+  capabilities?: Partial<SessionCapabilities>
   role?: "personal_assistant" | "worker"
   isDefault?: boolean
   model?: string
@@ -26,7 +30,7 @@ export interface ArchivedSession {
   id: string
   name: string
   workdir: string
-  agent: string
+  agent: AgentKind
   model?: string
   killed_at?: string
   repo_root?: string

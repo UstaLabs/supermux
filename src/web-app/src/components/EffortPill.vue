@@ -21,10 +21,12 @@ const currentLevel = computed(() =>
   sessions.list.find((s) => s.id === props.sessionId)?.reasoningLevel ?? fetchedLevel.value,
 )
 
+// No kind check here: the endpoint's `visible` flag is authoritative (the
+// broker sends visible:false for agents without a reasoning control, e.g.
+// cursor). `agent` stays in the watch source only to refetch on kind change.
 watch(() => [props.sessionId, agent.value] as const, async () => {
   visible.value = false
   fetchedLevel.value = undefined
-  if (agent.value === "cursor") return
   try {
     const res = await fetch(`/sessions/${encodeURIComponent(props.sessionId)}/reasoning-levels`, {})
     if (!res.ok) return
