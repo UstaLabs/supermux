@@ -1,8 +1,8 @@
 // The desktop Usage panel — a port of apps/android/.../settings/MoreScreens.kt's `UsageScreen` +
 // its provider cards (ClaudeUsageCard/CodexUsageCard/CursorUsageCard) + UsageWindowRow/
-// UsageFooterRow/UsageCard/formatReset/money/dollars/codexResetNote. Rendered as a floating
-// card popover over the workspace (not a full-pane Nav3 route) — File ▸ "Usage…", sidebar
-// footer, and the SessionDetail overflow ⋮ row all open the same [ShellUiState.openUsage].
+// UsageFooterRow/UsageCard/formatReset/money/dollars/codexResetNote. Hosted inside
+// [UsagePopover] (icon-anchored Popup above the sidebar footer Usage glyph — not a centered
+// modal). File ▸ "Usage…", footer, and session ⋮ all call [ShellUiState.openUsage].
 //
 // Desktop deltas from Android:
 //   - Consumes the TYPED `BrokerApi.usage()` (`UsageResponse`) instead of Android's `usageRaw()` +
@@ -440,7 +440,7 @@ fun GrokUsageCard(grok: GrokUsage?, error: String?) {
  * to [CodexUsageCard]; the caller is responsible for swapping in the refreshed codex usage on
  * `code == "reset"` (see AppShell's `usageData = usageData?.copy(codex = r.codex)`).
  *
- * Hosted inside AppShell's floating Surface card (popover), not as a full-pane route.
+ * Hosted inside [UsagePopover] (anchored to the footer Usage icon), not as a full-pane route.
  */
 @Composable
 fun UsageScreen(
