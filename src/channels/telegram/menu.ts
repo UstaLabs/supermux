@@ -1,13 +1,30 @@
 import { Registry } from "../../core/session-manager/registry"
+import { AGENT_KINDS, AgentKind, agentDisplayName, spawnCommandForAgent } from "../../shared/agents"
 
 export type MenuEntry = { command: string; description: string }
+
+// Telegram rejects the whole setMyCommands payload if one command name is
+// invalid, so every generated command must satisfy the Bot API format.
+const TELEGRAM_COMMAND_RE = /^[a-z0-9_]{1,32}$/
+
+// One spawn entry per agent kind, generated from AGENT_KINDS so a new kind
+// can never be forgotten here. Claude is the default agent and keeps the
+// bare /spawn command. All current kind names pass the format check; the
+// filter only protects the rest of the menu from a future invalid name.
+const SPAWN_ENTRIES: MenuEntry[] = AGENT_KINDS
+  .map((kind): MenuEntry => {
+    const command = spawnCommandForAgent(kind)
+    const description = kind === AgentKind.Claude
+      ? "Spawn a new session (workdir [as name])"
+      : `Spawn a ${agentDisplayName(kind)} session: /${command} <workdir>`
+    return { command, description }
+  })
+  .filter(e => TELEGRAM_COMMAND_RE.test(e.command))
 
 const BASE: MenuEntry[] = [
   { command: "sessions",          description: "List all sessions" },
   { command: "active",            description: "Show active session" },
-  { command: "spawn",             description: "Spawn a new session (workdir [as name])" },
-  { command: "spawn_codex",      description: "Spawn a Codex session: /spawn_codex <workdir>" },
-  { command: "spawn_cursor",     description: "Spawn a Cursor session: /spawn_cursor <workdir>" },
+  ...SPAWN_ENTRIES,
   { command: "kill",              description: "Kill a session (append 'yes' to confirm)" },
   { command: "rename",            description: "Rename a session: old new" },
   { command: "mute",              description: "Silence a session's notifications" },

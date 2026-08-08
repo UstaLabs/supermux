@@ -3,7 +3,7 @@ import { Registry } from "./session-manager/registry"
 import type { MessageStore } from "./session-manager/messages"
 import { fetchAllUsage } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
-import { AGENT_KINDS, AgentKind, isAgentKind } from "../shared/agents"
+import { AGENT_KINDS, AgentKind, isAgentKind, spawnCommandForAgent } from "../shared/agents"
 import { buildProxyPublicUrl } from "../channels/web/proxy"
 
 export type CommandCtx = {
@@ -30,15 +30,25 @@ export type CommandCtx = {
 export type SlashInput = { command: string; rest: string }
 export type SlashReply = { text: string; keyboard?: { text: string; callback_data: string }[][]; parse_mode?: string }
 
+// Spawn command → agent kind, generated from AGENT_KINDS so a new kind can
+// never be forgotten here. Claude is the default agent and keeps the bare
+// `spawn` command; every other kind gets a `spawn_<kind>` alias.
+const SPAWN_COMMAND_AGENTS: ReadonlyMap<string, AgentKind> = new Map(
+  AGENT_KINDS.map(kind => [spawnCommandForAgent(kind), kind]),
+)
+
 export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<SlashReply> {
+  const spawnAgent = SPAWN_COMMAND_AGENTS.get(input.command)
+  if (spawnAgent !== undefined) {
+    // Bare /spawn passes rest through untouched, so an explicit --agent flag
+    // keeps working. Each alias appends its own --agent — the same wire
+    // format the hard-coded cases used.
+    return cmdSpawn(spawnAgent === AgentKind.Claude ? input.rest : `${input.rest} --agent ${spawnAgent}`, ctx)
+  }
   switch (input.command) {
     case "sessions":          return cmdSessions(ctx)
     case "active":            return cmdActive(ctx)
     case "switch":            return cmdSwitch(input.rest, ctx)
-    case "spawn":             return cmdSpawn(input.rest, ctx)
-    case "spawn_codex":      return cmdSpawn(`${input.rest} --agent codex`,  ctx)
-    case "spawn_cursor":     return cmdSpawn(`${input.rest} --agent cursor`, ctx)
-    case "spawn_opencode":   return cmdSpawn(`${input.rest} --agent opencode`, ctx)
     case "stop":              return cmdStop(input.rest, ctx)
     case "kill":              return cmdKill(input.rest, ctx)
     case "rename":            return cmdRename(input.rest, ctx)
@@ -122,7 +132,7 @@ async function cmdSpawn(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   const asMatch = cleaned.match(/^(\S+)\s+as\s+(\S+)$/)
   const workdir = asMatch ? asMatch[1]! : cleaned.trim()
   const name = asMatch ? asMatch[2]!.trim().slice(0, 80) : undefined
-  if (!workdir) return { text: "usage: /spawn <workdir> [as <name>] [--agent claude|codex|cursor|opencode] [--model <model>] [--effort <level>]" }
+  if (!workdir) return { text: `usage: /spawn <workdir> [as <name>] [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--effort <level>]` }
   try {
     const result = await ctx.spawnSession(workdir, name, agent, model, reasoningLevel)
     await ctx.refreshMenu()
@@ -139,7 +149,7 @@ async function cmdSpawn(rest: string, ctx: CommandCtx): Promise<SlashReply> {
 async function cmdSpawnPA(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   if (!ctx.spawnPA) return { text: "spawnpa not available in this context" }
   let cleaned = rest.trim()
-  if (!cleaned) return { text: "usage: /spawnpa <name> [--agent claude|codex|cursor|opencode] [--model <model>] [--focus <text>]" }
+  if (!cleaned) return { text: `usage: /spawnpa <name> [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--focus <text>]` }
 
   let agent: AgentKind | undefined
   const agentMatch = cleaned.match(/--agent\s+(\S+)/)
@@ -167,7 +177,7 @@ async function cmdSpawnPA(rest: string, ctx: CommandCtx): Promise<SlashReply> {
   }
 
   const name = cleaned.trim()
-  if (!name) return { text: "usage: /spawnpa <name> [--agent claude|codex|cursor|opencode] [--model <model>] [--focus <text>]" }
+  if (!name) return { text: `usage: /spawnpa <name> [--agent ${AGENT_KINDS.join("|")}] [--model <model>] [--focus <text>]` }
 
   if (ctx.registry.resolveName(name)) {
     return { text: `name already in use: ${name}` }
