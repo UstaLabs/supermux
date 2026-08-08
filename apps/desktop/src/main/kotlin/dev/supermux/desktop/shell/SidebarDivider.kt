@@ -67,15 +67,15 @@ fun SidebarDivider(
         label = "sidebar_hairline_color",
     )
     val hairlineWidth by animateDpAsState(
-        targetValue = if (active) 2.dp else HAIRLINE,
+        targetValue = if (active) 2.dp else SplitSeamHairline,
         animationSpec = tween(120),
         label = "sidebar_hairline_width",
     )
 
-    // Overlay strip: only as wide as the drag hit area; hairline centered.
+    // Same overlay geometry as pane splitters ([SplitSeamOverlay] / [SplitSeamHitWidth]).
     Box(
         modifier
-            .width(DRAG_HIT_WIDTH)
+            .width(SplitSeamHitWidth)
             .fillMaxHeight()
             .zIndex(20f),
     ) {
@@ -115,13 +115,8 @@ fun SidebarDivider(
     }
 }
 
-/** Visible rule thickness (idle). */
-private val HAIRLINE = 1.dp
-/** Overlay strip width (drag + centers the hairline). */
-private val DRAG_HIT_WIDTH = 12.dp
-
-/** Half of [DRAG_HIT_WIDTH] — use when offsetting this overlay so its center sits on the seam. */
-val SidebarDividerCenterOffset: Dp = 6.dp
+/** Half of [SplitSeamHitWidth] — use when offsetting this overlay so its center sits on the seam. */
+val SidebarDividerCenterOffset: Dp = SplitSeamCenterOffset
 
 /** CSS `col-resize` equivalent (Compose common API has no resize icons — desktop uses AWT). */
 internal val ColResizeIcon: PointerIcon =

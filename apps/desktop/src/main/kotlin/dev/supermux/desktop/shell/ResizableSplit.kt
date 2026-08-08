@@ -1,6 +1,7 @@
 // Ported from apps/android/src/main/kotlin/dev/supermux/android/shell/ResizableSplit.kt —
-// keep in sync until a shared UI module exists. Desktop additions: col-/row-resize hover cursor
-// and primary hairline highlight on hover/drag (parity with SidebarDivider + web hover:bg-primary).
+// keep in sync until a shared UI module exists. Desktop: splitters match [SidebarDivider] —
+// panes abut with no layout gap; a 12dp overlay strip (1dp hairline + transparent drag hit)
+// sits on the seam and lights primary on hover/drag.
 package dev.supermux.desktop.shell
 
 import androidx.compose.animation.animateColorAsState
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -31,20 +33,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 
 enum class SplitAxis { Horizontal, Vertical }
 
 /**
  * Two slots separated by a drag-resizable divider. [fraction] is the share (0..1) given to the
- * FIRST slot; dragging the divider calls [onFractionChange] clamped to [range]. The divider is a
- * 1dp outlineVariant rule inside a 24dp hit target. Does NOT impose fillMaxSize/alpha on its slots.
+ * FIRST slot; dragging the divider calls [onFractionChange] clamped to [range].
  *
- * `Modifier.weight(...)` only resolves inside a `RowScope`/`ColumnScope` receiver (it's declared
- * as a member extension of those scopes, not a top-level function), so the Horizontal/Vertical
- * cases are inlined below rather than shared through a generic helper — the divider itself needs
- * no weight, so that part is still factored into one lambda.
+ * Same seam model as [SidebarDivider]: panes share the full area with **no layout gap**; the
+ * hairline + drag hit are an overlay centered on the fraction boundary (12dp hit, 1dp rule).
+ *
+ * `Modifier.weight(...)` only resolves inside a `RowScope`/`ColumnScope` receiver, so the
+ * Horizontal/Vertical cases are inlined rather than shared through a generic helper.
  */
 @Composable
 fun ResizableSplit(
@@ -61,72 +66,130 @@ fun ResizableSplit(
 ) {
     var totalPx by remember { mutableStateOf(0) }
     val horizontal = axis == SplitAxis.Horizontal
-    val handle = 24.dp
+    val density = LocalDensity.current
     // Read `fraction` fresh each frame: pointerInput isn't keyed on it, so the drag callback would
     // otherwise capture a stale value and the divider wouldn't accumulate/track the finger.
     val currentFraction by rememberUpdatedState(fraction)
 
-    val divider: @Composable () -> Unit = {
-        // Horizontal split = side-by-side panes → col-resize; vertical split → row-resize.
-        val resizeIcon = if (horizontal) ColResizeIcon else RowResizeIcon
-        val interaction = remember { MutableInteractionSource() }
-        val hovered by interaction.collectIsHoveredAsState()
-        var dragging by remember { mutableStateOf(false) }
-        val active = hovered || dragging
-        val cs = MaterialTheme.colorScheme
-        val lineColor by animateColorAsState(
-            targetValue = if (active) cs.primary.copy(alpha = 0.90f) else cs.outlineVariant,
-            animationSpec = tween(120),
-            label = "split_hairline_color",
-        )
-        val lineThickness by animateDpAsState(
-            targetValue = if (active) 2.dp else 1.dp,
-            animationSpec = tween(120),
-            label = "split_hairline_width",
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { totalPx = if (horizontal) it.width else it.height },
+    ) {
+        if (horizontal) {
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(if (second != null) fraction else 1f).fillMaxHeight()) { first() }
+                if (second != null) {
+                    Box(Modifier.weight(1f - fraction).fillMaxHeight()) { second() }
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(if (second != null) fraction else 1f).fillMaxWidth()) { first() }
+                if (second != null) {
+                    Box(Modifier.weight(1f - fraction).fillMaxWidth()) { second() }
+                }
+            }
+        }
+
+        if (second != null && totalPx > 0) {
+            val seamPx = totalPx * currentFraction
+            val seamDp = with(density) { seamPx.toDp() }
+            SplitSeamOverlay(
+                horizontal = horizontal,
+                onDragDeltaPx = { deltaPx ->
+                    if (totalPx <= 0) return@SplitSeamOverlay
+                    val delta = deltaPx / totalPx
+                    onFractionChange((currentFraction + delta).coerceIn(range.start, range.endInclusive))
+                },
+                modifier = if (horizontal) {
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .offset(x = seamDp - SplitSeamCenterOffset)
+                        .fillMaxHeight()
+                } else {
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .offset(y = seamDp - SplitSeamCenterOffset)
+                        .fillMaxWidth()
+                },
+                testTag = testTag,
+            )
+        }
+    }
+}
+
+/**
+ * Overlay seam identical to [SidebarDivider]: [SplitSeamHitWidth] strip, centered hairline,
+ * primary highlight on hover/drag. Does **not** consume layout space in a Row/Column of panes.
+ *
+ * @param horizontal true when panes are side-by-side (vertical hairline, col-resize).
+ * @param onDragDeltaPx drag delta in **pixels** along the split axis (x for horizontal, y for vertical).
+ */
+@Composable
+internal fun SplitSeamOverlay(
+    horizontal: Boolean,
+    onDragDeltaPx: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    testTag: String = "split_seam",
+) {
+    val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var dragging by remember { mutableStateOf(false) }
+    val active = hovered || dragging
+    val resizeIcon = if (horizontal) ColResizeIcon else RowResizeIcon
+
+    val hairlineColor by animateColorAsState(
+        targetValue = if (active) cs.primary.copy(alpha = 0.90f) else cs.onSurface.copy(alpha = 0.18f),
+        animationSpec = tween(120),
+        label = "split_hairline_color",
+    )
+    val hairlineWidth by animateDpAsState(
+        targetValue = if (active) 2.dp else SplitSeamHairline,
+        animationSpec = tween(120),
+        label = "split_hairline_width",
+    )
+
+    Box(
+        modifier
+            .then(
+                if (horizontal) Modifier.width(SplitSeamHitWidth).fillMaxHeight()
+                else Modifier.height(SplitSeamHitWidth).fillMaxWidth(),
+            )
+            .zIndex(20f),
+    ) {
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .then(
+                    if (horizontal) Modifier.width(hairlineWidth).fillMaxHeight()
+                    else Modifier.height(hairlineWidth).fillMaxWidth(),
+                )
+                .background(hairlineColor),
         )
         Box(
-            (if (horizontal) Modifier.fillMaxHeight().width(handle) else Modifier.fillMaxWidth().height(handle))
+            Modifier
+                .matchParentSize()
                 .hoverable(interaction)
                 .pointerHoverIcon(resizeIcon)
-                .pointerInput(totalPx, range) {
+                .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { dragging = true },
                         onDragEnd = { dragging = false },
                         onDragCancel = { dragging = false },
                     ) { _, drag ->
-                        if (totalPx <= 0) return@detectDragGestures
-                        val delta = (if (horizontal) drag.x else drag.y) / totalPx
-                        onFractionChange((currentFraction + delta).coerceIn(range.start, range.endInclusive))
+                        onDragDeltaPx(if (horizontal) drag.x else drag.y)
                     }
                 }
                 .testTag(testTag),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                (if (horizontal) {
-                    Modifier.fillMaxHeight().width(lineThickness)
-                } else {
-                    Modifier.fillMaxWidth().height(lineThickness)
-                }).background(lineColor),
-            )
-        }
-    }
-
-    if (horizontal) {
-        Row(Modifier.fillMaxSize().onSizeChanged { totalPx = it.width }) {
-            Box(Modifier.weight(if (second != null) fraction else 1f).fillMaxHeight()) { first() }
-            if (second != null) {
-                divider()
-                Box(Modifier.weight(1f - fraction).fillMaxHeight()) { second() }
-            }
-        }
-    } else {
-        Column(Modifier.fillMaxSize().onSizeChanged { totalPx = it.height }) {
-            Box(Modifier.weight(if (second != null) fraction else 1f).fillMaxWidth()) { first() }
-            if (second != null) {
-                divider()
-                Box(Modifier.weight(1f - fraction).fillMaxWidth()) { second() }
-            }
-        }
+        )
     }
 }
+
+/** Idle hairline thickness — same as [SidebarDivider]. */
+internal val SplitSeamHairline: Dp = 1.dp
+/** Overlay strip width (drag + centers the hairline) — same as sidebar [DRAG_HIT_WIDTH]. */
+internal val SplitSeamHitWidth: Dp = 12.dp
+/** Half of [SplitSeamHitWidth] — offset so the strip center sits on the seam. */
+internal val SplitSeamCenterOffset: Dp = 6.dp

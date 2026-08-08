@@ -35,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.chat.TimelineItem
+import dev.supermux.chat.mergeTimeline
 import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space

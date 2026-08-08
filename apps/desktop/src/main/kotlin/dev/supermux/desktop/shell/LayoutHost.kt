@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,6 +51,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -524,7 +526,7 @@ internal fun ViewTabStrip(
                             Modifier.clickable { onSelect(id) }
                         },
                     )
-                    // Square tabs; left/horizontal padding so the label + × read centered.
+                    // Square tabs; horizontal padding so the label + × read centered.
                     .background(bg)
                     .padding(start = 14.dp, end = 8.dp)
                     .alpha(if (dimmed) 0.35f else 1f)
@@ -662,7 +664,8 @@ private fun Modifier.tabDragGestures(
  * tagged `splitter-0` … `splitter-(n-2)`. A drag on splitter [i] moves weight
  * between children [i] and [i]+1 only; the total stays 1.
  *
- * Matches [ResizableSplit]'s 24dp handle and col-/row-resize cursor behaviour.
+ * Same seam model as [SidebarDivider] / [ResizableSplit]: panes abut (no layout
+ * gap); overlay hairlines sit on cumulative fraction boundaries.
  */
 @Composable
 fun ResizableSplitN(
@@ -691,36 +694,47 @@ fun ResizableSplitN(
     // this way; the callback needs the same guard, or a caller that closes over
     // tree state sends yesterday's tree.
     val currentOnSizesChange by rememberUpdatedState(onSizesChange)
-    val handle = 24.dp
+    val density = LocalDensity.current
 
-    @Composable
-    fun splitter(index: Int) {
-        val resizeIcon = if (horizontal) ColResizeIcon else RowResizeIcon
-        val interaction = remember { MutableInteractionSource() }
-        val hovered by interaction.collectIsHoveredAsState()
-        var dragging by remember { mutableStateOf(false) }
-        val active = hovered || dragging
-        val cs = MaterialTheme.colorScheme
-        val lineColor = if (active) cs.primary.copy(alpha = 0.90f) else cs.outlineVariant
-        val lineThickness = if (active) 2.dp else 1.dp
-        Box(
-            (if (horizontal) Modifier.fillMaxHeight().width(handle) else Modifier.fillMaxWidth().height(handle))
-                .hoverable(interaction)
-                .pointerHoverIcon(resizeIcon)
-                .pointerInput(totalPx, index) {
-                    detectDragGestures(
-                        onDragStart = { dragging = true },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false },
-                    ) { _, drag ->
-                        if (totalPx <= 0) return@detectDragGestures
-                        val delta = (if (horizontal) drag.x else drag.y) / totalPx
+    Box(
+        modifier
+            .fillMaxSize()
+            .onSizeChanged { totalPx = if (horizontal) it.width else it.height },
+    ) {
+        if (horizontal) {
+            Row(Modifier.fillMaxSize()) {
+                for (i in 0 until n) {
+                    val weight = sizes.getOrElse(i) { 1.0 / n }.toFloat().coerceAtLeast(0.001f)
+                    Box(Modifier.weight(weight).fillMaxHeight()) { child(i) }
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                for (i in 0 until n) {
+                    val weight = sizes.getOrElse(i) { 1.0 / n }.toFloat().coerceAtLeast(0.001f)
+                    Box(Modifier.weight(weight).fillMaxWidth()) { child(i) }
+                }
+            }
+        }
+
+        if (totalPx > 0) {
+            // Cumulative fraction of the first (i+1) panes → seam after index i.
+            var cum = 0.0
+            for (i in 0 until n - 1) {
+                cum += sizes.getOrElse(i) { 1.0 / n }
+                val seamPx = (totalPx * cum).toFloat()
+                val seamDp = with(density) { seamPx.toDp() }
+                val index = i
+                SplitSeamOverlay(
+                    horizontal = horizontal,
+                    onDragDeltaPx = { deltaPx ->
+                        if (totalPx <= 0) return@SplitSeamOverlay
+                        val delta = deltaPx / totalPx
                         val cur = currentSizes
-                        if (index < 0 || index + 1 >= cur.size) return@detectDragGestures
+                        if (index < 0 || index + 1 >= cur.size) return@SplitSeamOverlay
                         val a = cur[index]
                         val b = cur[index + 1]
                         val pair = a + b
-                        // Keep each side at least ~5% of the pair so a pane never collapses.
                         val minFrac = 0.05
                         val nextA = (a + delta).coerceIn(minFrac * pair, (1.0 - minFrac) * pair)
                         val nextB = pair - nextA
@@ -730,35 +744,20 @@ fun ResizableSplitN(
                                 it[index + 1] = nextB
                             },
                         )
-                    }
-                }
-                .testTag("splitter-$index"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                (if (horizontal) {
-                    Modifier.fillMaxHeight().width(lineThickness)
-                } else {
-                    Modifier.fillMaxWidth().height(lineThickness)
-                }).background(lineColor),
-            )
-        }
-    }
-
-    if (horizontal) {
-        Row(modifier.fillMaxSize().onSizeChanged { totalPx = it.width }) {
-            for (i in 0 until n) {
-                val weight = sizes.getOrElse(i) { 1.0 / n }.toFloat().coerceAtLeast(0.001f)
-                Box(Modifier.weight(weight).fillMaxHeight()) { child(i) }
-                if (i < n - 1) splitter(i)
-            }
-        }
-    } else {
-        Column(modifier.fillMaxSize().onSizeChanged { totalPx = it.height }) {
-            for (i in 0 until n) {
-                val weight = sizes.getOrElse(i) { 1.0 / n }.toFloat().coerceAtLeast(0.001f)
-                Box(Modifier.weight(weight).fillMaxWidth()) { child(i) }
-                if (i < n - 1) splitter(i)
+                    },
+                    modifier = if (horizontal) {
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .offset(x = seamDp - SplitSeamCenterOffset)
+                            .fillMaxHeight()
+                    } else {
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .offset(y = seamDp - SplitSeamCenterOffset)
+                            .fillMaxWidth()
+                    },
+                    testTag = "splitter-$index",
+                )
             }
         }
     }

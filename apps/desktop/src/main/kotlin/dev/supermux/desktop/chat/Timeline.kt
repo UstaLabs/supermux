@@ -1,26 +1,15 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/chat/Timeline.kt — keep in sync
-// until a shared UI module exists (spec 2026-07-09, Decision 1). The redesigned mono-gutter chat
-// stream: mergeTimeline + the TimelineItem/StreamRow/ToolCard/UserMessage/AssistantMessage +
-// FencedCodeBlock/MarkdownBody renderers, plus the inline-diff view.
+// Desktop chat stream renderers — aligned with Android's simple message list (no gutter/spine).
+// Pure fold lives in shared [dev.supermux.chat.mergeTimeline]; UI stays platform-specific for
+// icons, clipboard, TTS, attachments, and image load until a shared Compose UI module lands.
 //
 // Desktop adaptations vs the Android source:
-//  - Icons: Android renders bundled vector drawables (R.drawable.ic_check etc.); desktop has no
-//    bundled icon set, so this uses the equivalent glyphs from compose.materialIconsExtended.
-//  - Links: Android's LinkAnnotation.Url leans on the Android intent launcher; desktop opens the
-//    system browser via java.awt.Desktop.browse (guarded by isDesktopSupported + runCatching).
-//  - Attachments: chip with kind glyph + name + download; tap fetches via loadBytes, Save-as dialog,
-//    then opens with the OS handler. Inline image/video preview is still Android-only for now.
-//  - Text selection: Android gained long-press copyable messages; desktop's equivalent is mouse
-//    selection via SelectionContainer, mirrored at the same wrap points.
-//  - collectAsStateWithLifecycle → n/a (these are stateless renderers; no lifecycle collection).
+//  - Icons: materialIconsExtended instead of R.drawable.*
+//  - Links: openInBrowser / java.awt.Desktop (not Android intents)
+//  - Attachments: save-as + OS open (no inline video yet)
+//  - Selection: SelectionContainer for mouse copy
 package dev.supermux.desktop.chat
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
@@ -30,11 +19,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -42,12 +31,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -55,8 +46,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -99,6 +88,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.chat.TimelineItem
+import dev.supermux.chat.ToolStatus
 import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.Media
 import dev.supermux.desktop.theme.MonoFontFamily
@@ -108,9 +99,6 @@ import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
-import dev.supermux.ui.resolveBashParts
-import dev.supermux.ui.resolveEditParts
-import dev.supermux.ui.resolveEditParts
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
 import dev.supermux.ui.ColumnAlign
@@ -119,6 +107,8 @@ import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
 import dev.supermux.ui.parseInlineMarkdown
 import dev.supermux.ui.parseMarkdownBlocks
+import dev.supermux.ui.resolveBashParts
+import dev.supermux.ui.resolveEditParts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -138,75 +128,12 @@ import java.util.Locale
 import org.jetbrains.skia.Codec
 import org.jetbrains.skia.Data
 
-// ---------------------------------------------------------------------------
-// Data model
-// ---------------------------------------------------------------------------
-
-enum class ToolStatus { RUNNING, DONE, ERROR }
-
-sealed interface TimelineItem {
-    data class Msg(val entry: LogEntry) : TimelineItem
-    data class Tool(
-        val event: ActivityEvent,
-        val status: ToolStatus,
-        val output: String? = null,   // detail from the matching tool_result event (iOS folds as Output)
-        val resultBody: ActivityToolBody? = null,
-    ) : TimelineItem
-}
-
-/**
- * Merge messages and activity events, sorted ascending by ts (ISO-8601 → lexicographic).
- *
- * Tool-call activity is folded by `callId`: the broker emits a `tool` (phase=started)
- * event and later a separate `tool_result` (phase=completed|failed) event with the same
- * callId. We resolve a single status per call and render ONE [TimelineItem.Tool] row —
- * the result event is not shown on its own (otherwise completed tools look stuck running).
- * Non-tool activity (notably "thinking" → "Thought for Ns") is dropped here: thinking is
- * surfaced only as a live status indicator, never as a persistent history row (matches web).
- */
+// Shared fold — package re-export so `import dev.supermux.desktop.chat.mergeTimeline` still works.
 fun mergeTimeline(
     messages: List<LogEntry>,
     activity: List<ActivityEvent>,
-    /** When true (chat detail = low), omit tool cards; activity is still ingested by the caller. */
     hideTools: Boolean = false,
-): List<TimelineItem> {
-    // callId -> resolved final status + output detail from `tool_result` events
-    val resultStatus = HashMap<String, ToolStatus>()
-    val resultDetail = HashMap<String, String?>()
-    val resultBodies = HashMap<String, ActivityToolBody?>()
-    for (e in activity) {
-        val id = e.callId
-        if (e.kind == "tool_result" && id != null) {
-            resultStatus[id] = if (e.title == "error" || e.phase == "failed") ToolStatus.ERROR else ToolStatus.DONE
-            resultDetail[id] = e.detail
-            resultBodies[id] = e.body
-        }
-    }
-    val items = ArrayList<TimelineItem>(messages.size + activity.size)
-    messages.forEach { items.add(TimelineItem.Msg(it)) }
-    if (!hideTools) {
-        for (e in activity) {
-            when (e.kind) {
-                "tool" -> {
-                    val status = e.callId?.let { resultStatus[it] } ?: ToolStatus.RUNNING
-                    val output = e.callId?.let { resultDetail[it] }
-                    val resultBody = e.callId?.let { resultBodies[it] }
-                    items.add(TimelineItem.Tool(e, status, output, resultBody))
-                }
-                "tool_result" -> { /* folded into the matching tool row above */ }
-                // "thinking" (and any other non-tool kind) is intentionally dropped — thinking
-                // shows as a live indicator, not a persistent "Thought for Ns" history row.
-                else -> { /* dropped */ }
-            }
-        }
-    }
-    return items.sortedBy { item ->
-        when (item) {
-            is TimelineItem.Msg -> item.entry.ts
-            is TimelineItem.Tool -> item.event.ts
-        }
-    }
-}
+): List<TimelineItem> = dev.supermux.chat.mergeTimeline(messages, activity, hideTools)
 
 // ---------------------------------------------------------------------------
 // Markdown helpers
@@ -948,41 +875,43 @@ private fun MarkdownImageLinkLine(
 }
 
 /**
- * Calm Premium — inbound (user) message.
- * Left-aligned bubble with a mono "you" label and a tightened leading corner so it reads as the
- * human's turn on the thread. Card background @90%, 1px border, bodyMedium text.
+ * Inbound (user) message — right-aligned chat bubble, capped at ~75% width.
+ * Android parity: short text hugs content; long text wraps inside the cap. No gutter, no label.
  */
 @Composable
 fun UserMessage(text: String) {
     val cs = MaterialTheme.colorScheme
+    // Tail sits on the bottom-end (right) so it reads as a sent bubble.
     val bubbleShape = RoundedCornerShape(
-        topStart = 4.dp,
+        topStart = Radii.md,
         topEnd = Radii.md,
         bottomStart = Radii.md,
-        bottomEnd = Radii.md,
+        bottomEnd = 4.dp,
     )
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(bubbleShape)
-            .background(cs.surfaceContainer.copy(alpha = 0.9f))
-            .border(1.dp, cs.outlineVariant, bubbleShape)
-            .padding(horizontal = Space.md, vertical = Space.sm),
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
     ) {
-        Text(
-            text = "you",
-            color = cs.primary,
-            fontFamily = MonoFontFamily,
-            fontSize = 10.sp,
-            letterSpacing = 1.2.sp,
-            modifier = Modifier.padding(bottom = 2.dp),
-        )
-        SelectionContainer {
-            Text(
-                text = mdAnnotated(text),
-                color = cs.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+        Box(
+            modifier = Modifier.fillMaxWidth(0.75f),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Column(
+                Modifier
+                    .wrapContentWidth()
+                    .clip(bubbleShape)
+                    .background(cs.surfaceContainer.copy(alpha = 0.92f))
+                    .border(1.dp, cs.outlineVariant, bubbleShape)
+                    .padding(horizontal = Space.md, vertical = Space.sm),
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = mdAnnotated(text),
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
         }
     }
 }
@@ -1382,80 +1311,11 @@ private fun ioBlock(label: String, text: String, error: Boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Session-log stream layout — a mono gutter (time + status node, threaded by a
-// hairline spine) beside each entry. Consecutive spine rows join into one thread.
+// Chat timeline layout — clean message stream (Android parity: no gutter dots / spine).
+// User: right bubble · Agent: full-width prose + time/copy meta · Tools: plain rows.
 // ---------------------------------------------------------------------------
 
-/** Status marker drawn in a stream row's gutter. */
-enum class StreamNode { NONE, RUNNING, DONE, ERROR, USER }
-
-private val gutterFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
-
-/** ISO-8601 ts → local `HH:mm` for the gutter (null if unparseable). */
-private fun gutterTime(ts: String?): String? =
-    ts?.let { runCatching { Instant.parse(it).atZone(ZoneId.systemDefault()).format(gutterFmt) }.getOrNull() }
-
-@Composable
-private fun NodeDot(node: StreamNode, modifier: Modifier) {
-    val cs = MaterialTheme.colorScheme
-    when (node) {
-        StreamNode.NONE -> Box(modifier.size(7.dp))
-        StreamNode.USER -> Text("▸", color = cs.primary, fontFamily = MonoFontFamily, fontSize = 11.sp, modifier = modifier)
-        StreamNode.DONE -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.primary))
-        StreamNode.ERROR -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.error))
-        StreamNode.RUNNING -> Box(modifier.size(7.dp).clip(CircleShape).background(cs.surface).border(1.5.dp, cs.primary, CircleShape))
-    }
-}
-
-/** A softly breathing dot — the live pulse of a running/thinking agent. Respects the theme accent. */
-@Composable
-fun BreathingDot(color: Color, modifier: Modifier = Modifier, size: Dp = 7.dp) {
-    val transition = rememberInfiniteTransition(label = "breathe")
-    val alpha by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.32f,
-        animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
-        label = "alpha",
-    )
-    Box(modifier.size(size).clip(CircleShape).background(color.copy(alpha = alpha)))
-}
-
-/**
- * One entry in the session log: a 44dp mono gutter (time + status [node]) beside [content],
- * with a hairline [spine] drawn full-height via drawBehind so consecutive spine rows join into
- * one continuous thread. drawBehind (not IntrinsicSize) keeps it safe with scroll content.
- */
-@Composable
-fun StreamRow(node: StreamNode, spine: Boolean, time: String?, content: @Composable () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    val lineColor = cs.outlineVariant
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .drawBehind {
-                if (spine) {
-                    val x = 33.dp.toPx()
-                    drawLine(lineColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5.dp.toPx())
-                }
-            },
-    ) {
-        Box(Modifier.width(44.dp)) {
-            if (time != null) {
-                Text(
-                    text = time,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 10.sp,
-                    color = if (node == StreamNode.USER) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.align(Alignment.TopStart).padding(start = 2.dp, top = 12.dp),
-                )
-            }
-            NodeDot(node, Modifier.align(Alignment.TopEnd).padding(end = 6.dp, top = 11.dp))
-        }
-        Box(Modifier.weight(1f).padding(top = 7.dp, bottom = 7.dp)) { content() }
-    }
-}
-
-/** Dispatches a single TimelineItem to a gutter-threaded stream row. */
+/** Dispatches a single TimelineItem into the chat stream. */
 @Composable
 fun TimelineItemRow(
     item: TimelineItem,
@@ -1469,28 +1329,38 @@ fun TimelineItemRow(
             val atts = item.entry.attachments
             val isUser = item.entry.direction == "inbound"
             if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
-                StreamRow(
-                    node = if (isUser) StreamNode.USER else StreamNode.DONE,
-                    spine = !isUser,
-                    time = if (isUser) gutterTime(item.entry.ts) else null,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = Space.sm),
+                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 ) {
-                    Column {
-                        if (!text.isNullOrBlank()) {
-                            if (isUser) UserMessage(text) else AssistantMessage(text, onOpenFile, ts = item.entry.ts)
+                    if (!text.isNullOrBlank()) {
+                        if (isUser) {
+                            UserMessage(text)
+                        } else {
+                            AssistantMessage(text, onOpenFile = onOpenFile, ts = item.entry.ts)
                         }
-                        if (!atts.isNullOrEmpty()) AttachmentList(atts, alignEnd = false, loadBytes = loadBytes)
+                    }
+                    if (!atts.isNullOrEmpty()) {
+                        AttachmentList(atts, alignEnd = isUser, loadBytes = loadBytes)
                     }
                 }
             }
         }
         is TimelineItem.Tool -> {
-            val node = when (item.status) {
-                ToolStatus.RUNNING -> StreamNode.RUNNING
-                ToolStatus.ERROR -> StreamNode.ERROR
-                ToolStatus.DONE -> StreamNode.DONE
-            }
-            StreamRow(node = node, spine = true, time = gutterTime(item.event.ts)) {
-                ToolCard(item.event, item.status, item.output, item.resultBody, highDetail = highDetail)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Space.xs),
+            ) {
+                ToolCard(
+                    event = item.event,
+                    status = item.status,
+                    output = item.output,
+                    resultBody = item.resultBody,
+                    highDetail = highDetail,
+                )
             }
         }
     }
