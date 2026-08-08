@@ -10,6 +10,7 @@ package dev.supermux.desktop.shell
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.supermux.desktop.ui.DropdownMenu
+import dev.supermux.desktop.ui.ModalOpen
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
@@ -172,6 +174,12 @@ class ShellUiState {
     var launcherDraftId by mutableStateOf<String?>(null)
 
     /**
+     * Whether the Usage floating card is open. Not a [DesktopRoute] — Usage is a lightweight
+     * popover over the workspace, not a full-pane Nav3 push (settings/archived stay routes).
+     */
+    var usageOpen by mutableStateOf(false)
+
+    /**
      * Nav3 back stack — sole source of truth for full-pane destinations.
      * Always starts with [DesktopRoute.Home]; overlays are pushed with [navigate].
      */
@@ -180,12 +188,11 @@ class ShellUiState {
     /** Top of [backStack] (never null — Home is always present). */
     val currentRoute: DesktopRoute get() = backStack.lastOrNull() ?: DesktopRoute.Home
 
-    /** True when launcher is open or any route is above Home (gates workspace shortcuts). */
-    val overlayOpen: Boolean get() = launcherOpen || backStack.size > 1
+    /** True when launcher, usage popover, or any full-pane route is up (gates workspace shortcuts). */
+    val overlayOpen: Boolean get() = launcherOpen || usageOpen || backStack.size > 1
 
     // Read-only views of the stack (for load effects / assertions). Open via [navigate] / open*.
     val archivedOpen: Boolean get() = currentRoute is DesktopRoute.Archived
-    val usageOpen: Boolean get() = currentRoute is DesktopRoute.Usage
     val settingsOpen: Boolean get() = currentRoute is DesktopRoute.Settings
     val appUpdateOpen: Boolean get() = currentRoute is DesktopRoute.AppUpdate
     val lspSettingsOpen: Boolean
@@ -207,14 +214,18 @@ class ShellUiState {
     private var lastSettingsSection by mutableStateOf(SettingsSection.Agents)
 
     /**
-     * Push [route]. [DesktopRoute.Home] clears overlays; other routes replace any open overlay
-     * (`[Home, route]`) and close the detail-pane launcher.
+     * Push [route]. [DesktopRoute.Home] clears full-pane overlays; other routes replace any open
+     * full-pane (`[Home, route]`), and close the detail-pane launcher + usage popover.
      */
     fun navigate(route: DesktopRoute) {
         when (route) {
-            is DesktopRoute.Home -> popToHome()
+            is DesktopRoute.Home -> {
+                usageOpen = false
+                popToHome()
+            }
             else -> {
                 launcherOpen = false
+                usageOpen = false
                 popToHome()
                 if (route is DesktopRoute.Settings) lastSettingsSection = route.section
                 backStack.add(route)
@@ -233,11 +244,12 @@ class ShellUiState {
         while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
 
-    /** Detail-pane new-session UI; also clears full-pane routes. */
+    /** Detail-pane new-session UI; also clears full-pane routes + usage popover. */
     fun openLauncher(draftId: String? = null) {
         launcherDraftId = draftId
         launcherOpen = true
-        navigate(DesktopRoute.Home)
+        usageOpen = false
+        popToHome()
     }
 
     fun selectSession(id: String) {
@@ -246,9 +258,18 @@ class ShellUiState {
         launcherDraftId = null
     }
 
-    // Menu / chrome conveniences → navigate
+    // Menu / chrome conveniences → navigate / popover
     fun openArchived() = navigate(DesktopRoute.Archived)
-    fun openUsage() = navigate(DesktopRoute.Usage)
+    /** Floating usage card; closes launcher + full-pane routes (mutual exclusion). */
+    fun openUsage() {
+        launcherOpen = false
+        launcherDraftId = null
+        popToHome()
+        usageOpen = true
+    }
+    fun closeUsage() {
+        usageOpen = false
+    }
     fun openSettings(section: SettingsSection = SettingsSection.Agents) =
         navigate(DesktopRoute.Settings(section))
     fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
@@ -613,8 +634,8 @@ fun AppShell(
             }
             var usageData by remember { mutableStateOf<UsageResponse?>(null) }
             var usageLoading by remember { mutableStateOf(false) }
-            LaunchedEffect(ui.currentRoute, activeHostId) {
-                if (ui.currentRoute is DesktopRoute.Usage) {
+            LaunchedEffect(ui.usageOpen, activeHostId) {
+                if (ui.usageOpen) {
                     usageLoading = true
                     usageData = hostApp.usage()
                     usageLoading = false
@@ -1225,44 +1246,6 @@ fun AppShell(
                         }
                     }
 
-                    entry<DesktopRoute.Usage>(
-                        metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
-                    ) {
-                        val usageFocus = remember { FocusRequester() }
-                        LaunchedEffect(Unit) { runCatching { usageFocus.requestFocus() } }
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .testTag("usage_overlay")
-                                .focusRequester(usageFocus)
-                                .focusable()
-                                .onPreviewKeyEvent { e ->
-                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                        ui.goBack()
-                                        true
-                                    } else false
-                                },
-                        ) {
-                            Column(Modifier.fillMaxSize()) {
-                                HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
-                                Box(Modifier.weight(1f)) {
-                                    UsageScreen(
-                                        usage = usageData,
-                                        loading = usageLoading,
-                                        onBack = { ui.goBack() },
-                                        onRedeem = {
-                                            val r = hostApp.redeemCodexReset()
-                                            if (r?.code == "reset" && r.codex != null) {
-                                                usageData = usageData?.copy(codex = r.codex)
-                                            }
-                                            r
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     entry<DesktopRoute.AppUpdate>(
                         metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                     ) {
@@ -1286,6 +1269,70 @@ fun AppShell(
                     }
                 },
             )
+
+            // ── Usage: floating card popover (not a full-pane Nav3 route) ──
+            // File ▸ Usage… / sidebar footer / session ⋮ → ui.openUsage(). Compact card over the
+            // workspace so glancing at rate limits doesn't take the whole window. ModalOpen hides
+            // JediTerm/KCEF while it's up (Compose cannot paint over heavyweight AWT children).
+            if (ui.usageOpen) {
+                ModalOpen()
+                val usageFocus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { runCatching { usageFocus.requestFocus() } }
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .zIndex(20f)
+                        .testTag("usage_overlay")
+                        .focusRequester(usageFocus)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                ui.closeUsage()
+                                true
+                            } else false
+                        },
+                ) {
+                    // Scrim: click outside the card to dismiss.
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.40f))
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                            ) { ui.closeUsage() },
+                    )
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp)
+                            .width(420.dp)
+                            .height(560.dp),
+                        shape = MaterialTheme.shapes.large,
+                        tonalElevation = 6.dp,
+                        shadowElevation = 12.dp,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                            Box(Modifier.weight(1f)) {
+                                UsageScreen(
+                                    usage = usageData,
+                                    loading = usageLoading,
+                                    onBack = { ui.closeUsage() },
+                                    onRedeem = {
+                                        val r = hostApp.redeemCodexReset()
+                                        if (r?.code == "reset" && r.codex != null) {
+                                            usageData = usageData?.copy(codex = r.codex)
+                                        }
+                                        r
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // ── Add host: a FULL-PANE overlay above the workspace (multi-host, spec §3.4/§5) ──
             // Opened by the fleet chip row's `+`. Wired to the fleet's claim seams; a successful

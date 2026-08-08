@@ -36,7 +36,7 @@ dependencies {
     // Native LazyList reorder (elevates, auto-scrolls, animates neighbors) — same library Android uses.
     // Custom detectDragGestures step-math was jumpy on desktop trackpads; Calvin is production-proven.
     implementation(libs.reorderable)
-    // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub, Usage,
+    // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub,
     // Archived, AppUpdate). Workspace shell stays outside the stack so chat/editor/term keep state.
     implementation(libs.jetbrains.navigation3.ui)
 

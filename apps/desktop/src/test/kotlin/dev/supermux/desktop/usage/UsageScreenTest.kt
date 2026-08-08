@@ -16,7 +16,6 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
-import dev.supermux.desktop.shell.DesktopRoute
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
@@ -422,7 +421,7 @@ class UsageScreenTest {
     }
 
     @Test fun overlay_opens_from_ui_usage_open_and_loads_the_usage_data() = runComposeUiTest {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
+        val ui = ShellUiState().apply { openUsage() }
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -439,7 +438,7 @@ class UsageScreenTest {
     }
 
     @Test fun escape_closes_the_usage_overlay() = runComposeUiTest {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
+        val ui = ShellUiState().apply { openUsage() }
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -454,7 +453,7 @@ class UsageScreenTest {
     }
 
     @Test fun workspace_shortcuts_are_gated_off_while_the_usage_overlay_is_up() = runComposeUiTest {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) } // sidebarCollapsed defaults false
+        val ui = ShellUiState().apply { openUsage() } // sidebarCollapsed defaults false
         val app = appForUsage()
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -468,11 +467,11 @@ class UsageScreenTest {
         }
         waitForIdle()
         assertFalse(ui.layout.sidebarCollapsed) // NOT toggled — the chord never reached the layout
-        assertTrue(ui.usageOpen)                // ...and the overlay stayed up
+        assertTrue(ui.usageOpen)                // ...and the popover stayed up
     }
 
     @Test fun a_successful_redeem_updates_the_codex_card_in_place() = runComposeUiTest {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
+        val ui = ShellUiState().apply { openUsage() }
         val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
