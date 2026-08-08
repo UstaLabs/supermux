@@ -11,14 +11,14 @@ package dev.supermux.desktop.shell
  * - Overlay routes — full-pane layers rendered via [FullPaneOverlaySceneStrategy] on top of Home
  *   so chat/editor/terminal composition under Home is not disposed.
  *
- * The New-Session launcher is intentionally *not* a route: it is a detail-pane swap that must
- * leave the sidebar mounted (see [ShellUiState.launcherOpen]).
+ * The New-Session launcher and Usage panel are intentionally *not* routes: launcher is a
+ * detail-pane swap (see [ShellUiState.launcherOpen]); Usage is a floating card popover
+ * (see [ShellUiState.usageOpen]).
  */
 sealed interface DesktopRoute {
     data object Home : DesktopRoute
 
     data class Settings(val section: SettingsSection = SettingsSection.Agents) : DesktopRoute
     data object Archived : DesktopRoute
-    data object Usage : DesktopRoute
     data object AppUpdate : DesktopRoute
 }

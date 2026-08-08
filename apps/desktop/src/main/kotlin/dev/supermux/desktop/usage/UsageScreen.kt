@@ -1,8 +1,8 @@
 // The desktop Usage panel — a port of apps/android/.../settings/MoreScreens.kt's `UsageScreen` +
 // its provider cards (ClaudeUsageCard/CodexUsageCard/CursorUsageCard) + UsageWindowRow/
-// UsageFooterRow/UsageCard/formatReset/money/dollars/codexResetNote. A full-pane overlay (the
-// third one, mirroring the launcher + archived overlays — see AppShell), reached from a
-// File ▸ "Usage…" menu item + the SessionDetail overflow ⋮ row (M4f).
+// UsageFooterRow/UsageCard/formatReset/money/dollars/codexResetNote. Rendered as a floating
+// card popover over the workspace (not a full-pane Nav3 route) — File ▸ "Usage…", sidebar
+// footer, and the SessionDetail overflow ⋮ row all open the same [ShellUiState.openUsage].
 //
 // Desktop deltas from Android:
 //   - Consumes the TYPED `BrokerApi.usage()` (`UsageResponse`) instead of Android's `usageRaw()` +
@@ -20,12 +20,10 @@
 //     rules restrict changes to `apps/desktop/src` (no build.gradle.kts edits to add a dependency).
 //     So [formatResetIso]/[formatResetEpochSeconds] inject a `java.time.Instant now` instead —
 //     same determinism property the plan asked for, just the type actually on the classpath.
-//   - TopAppBar → the overlay's own back row (Icon + "Usage" title); nav route → overlay Box.
-//   - Redeem: `onRedeem` updates the codex card in place at the AppShell level (the overlay
+//   - TopAppBar → card header ("Usage" + close). Full-pane route → centered Surface card in AppShell.
+//   - Redeem: `onRedeem` updates the codex card in place at the AppShell level (the popover
 //     owns `usageData` and replaces `.codex` with the refreshed value on `code == "reset"`) rather
 //     than Android's `onRefresh` re-fetching the whole usage payload.
-//   - No opencode card — Android's UsageScreen doesn't render one either (not in the parity
-//     surface); `usage.opencode` exists in the typed model but is intentionally unused here.
 package dev.supermux.desktop.usage
 
 import androidx.compose.foundation.background
@@ -35,18 +33,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import dev.supermux.desktop.ui.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -437,12 +433,14 @@ fun GrokUsageCard(grok: GrokUsage?, error: String?) {
 // ─── UsageScreen ────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The Usage overlay: a back row + title, then either a spinner (still loading), "Unable to load
- * usage data." (resolved to null), or the three provider cards fed from [usage]. [loading] and
+ * Usage card body: title row + close, then either a spinner (still loading), "Unable to load
+ * usage data." (resolved to null), or the provider cards fed from [usage]. [loading] and
  * [usage] are both owned by the caller (AppShell fetches `app.usage()` once per open) — this
- * screen renders whatever point-in-time snapshot it's given. [onRedeem] is threaded straight to
- * [CodexUsageCard]; the caller is responsible for swapping in the refreshed codex usage on
+ * composable renders whatever point-in-time snapshot it's given. [onRedeem] is threaded straight
+ * to [CodexUsageCard]; the caller is responsible for swapping in the refreshed codex usage on
  * `code == "reset"` (see AppShell's `usageData = usageData?.copy(codex = r.codex)`).
+ *
+ * Hosted inside AppShell's floating Surface card (popover), not as a full-pane route.
  */
 @Composable
 fun UsageScreen(
@@ -455,24 +453,29 @@ fun UsageScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .background(cs.surfaceContainerHigh)
             .testTag("usage_screen"),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.md),
+            Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.sm, bottom = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                "Usage",
+                color = cs.onSurface,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
                 Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = cs.onSurface,
+                    Icons.Filled.Close,
+                    contentDescription = "Close",
+                    tint = cs.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
                 )
             }
-            Spacer(Modifier.width(Space.sm))
-            Text("Usage", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
+        HorizontalDivider(color = cs.outlineVariant)
         Box(Modifier.fillMaxSize()) {
             when {
                 loading && usage == null -> {
@@ -485,7 +488,7 @@ fun UsageScreen(
                     Text(
                         "Unable to load usage data.",
                         color = cs.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier.align(Alignment.Center).padding(Space.lg),
                     )
                 }
                 else -> {
@@ -494,7 +497,7 @@ fun UsageScreen(
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                             .padding(Space.lg),
-                        verticalArrangement = Arrangement.spacedBy(Space.lg),
+                        verticalArrangement = Arrangement.spacedBy(Space.md),
                     ) {
                         ClaudeUsageCard(usage?.claude, usage?.errors?.get("claude"))
                         CodexUsageCard(usage?.codex, usage?.errors?.get("codex"), onRedeem = onRedeem)

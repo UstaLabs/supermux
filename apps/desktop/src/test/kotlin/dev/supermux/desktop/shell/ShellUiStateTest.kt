@@ -65,7 +65,7 @@ class WorkspaceUiStateTest {
         assertTrue(ui.overlayOpen)
     }
 
-    // ── Usage overlay (M4f Task 2) — the same "at most one overlay" invariant, three-way now ────────
+    // ── Usage popover (floating card) — exclusive with launcher + full-pane routes ────────
 
     @Test fun openUsageClosesTheLauncherAndArchivedOverlays() {
         val ui = ShellUiState().apply { launcherOpen = true }
@@ -79,10 +79,11 @@ class WorkspaceUiStateTest {
         ui2.openUsage()
         assertTrue(ui2.usageOpen)
         assertFalse(ui2.archivedOpen)
+        assertEquals(listOf(DesktopRoute.Home), ui2.backStack.toList())
     }
 
     @Test fun openLauncherClosesTheUsageOverlay() {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
+        val ui = ShellUiState().apply { openUsage() }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.usageOpen)
@@ -90,7 +91,7 @@ class WorkspaceUiStateTest {
     }
 
     @Test fun openArchivedClosesTheUsageOverlay() {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Usage) }
+        val ui = ShellUiState().apply { openUsage() }
         ui.openArchived()
         assertTrue(ui.archivedOpen)
         assertFalse(ui.usageOpen)
@@ -101,7 +102,7 @@ class WorkspaceUiStateTest {
         val ui = ShellUiState().apply {
             launcherOpen = true
             navigate(DesktopRoute.Archived)
-            navigate(DesktopRoute.Usage)
+            openUsage()
             openLspSettings()
         }
         ui.openPersonalAssistants()
@@ -117,7 +118,7 @@ class WorkspaceUiStateTest {
 
     @Test fun openSettingsClosesEveryOtherOverlayAndSelectsAgents() {
         val ui = ShellUiState().apply {
-            navigate(DesktopRoute.Usage)
+            openUsage()
             openLspSettings()
         }
         ui.openSettings(SettingsSection.Agents)
@@ -159,20 +160,33 @@ class WorkspaceUiStateTest {
 
     @Test fun goBackPopsToHome() {
         val ui = ShellUiState()
-        ui.navigate(DesktopRoute.Usage)
+        ui.navigate(DesktopRoute.Archived)
         assertTrue(ui.goBack())
         assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
         assertFalse(ui.goBack()) // already at Home
-        assertFalse(ui.usageOpen)
+        assertFalse(ui.archivedOpen)
     }
 
     @Test fun navigateIsExclusiveSingleOverlay() {
         val ui = ShellUiState()
         ui.navigate(DesktopRoute.Archived)
-        ui.navigate(DesktopRoute.Usage)
-        // Exclusive policy: stack is [Home, Usage], not [Home, Archived, Usage]
-        assertEquals(listOf(DesktopRoute.Home, DesktopRoute.Usage), ui.backStack.toList())
+        ui.navigate(DesktopRoute.Settings(SettingsSection.Agents))
+        // Exclusive policy: stack is [Home, Settings], not [Home, Archived, Settings]
+        assertEquals(
+            listOf(DesktopRoute.Home, DesktopRoute.Settings(SettingsSection.Agents)),
+            ui.backStack.toList(),
+        )
         assertFalse(ui.archivedOpen)
+        assertTrue(ui.settingsOpen)
+    }
+
+    @Test fun usageIsNotOnTheNavStack() {
+        val ui = ShellUiState()
+        ui.openUsage()
         assertTrue(ui.usageOpen)
+        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        ui.closeUsage()
+        assertFalse(ui.usageOpen)
+        assertFalse(ui.overlayOpen)
     }
 }

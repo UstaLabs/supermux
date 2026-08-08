@@ -134,7 +134,7 @@ import java.io.File
 //                                  start, loading real app.appConfig() + fetchGlossary() (GET
 //                                  /settings/config, /config/voice-glossary, read-only). Never
 //                                  mutates engines or glossary. Off by default.                  [main]
-//   SM_USAGE=1                    — open the Usage overlay (File ▸ "Usage…"'s SAME ui.openUsage())
+//   SM_USAGE=1                    — open the Usage card popover (File ▸ "Usage…"'s SAME ui.openUsage())
 //                                  on start, loading the real app.usage() (GET /usage, read-only)
 //                                  (M4f). Read-only — never calls redeemCodexReset() (that burns a
 //                                  real banked Codex reset; the redeem path stays UI-test-covered
@@ -1260,7 +1260,7 @@ fun main() {
                             // timing consistent/predictable alongside the others when combined).
                             delay(3_000)
                             ui.openUsage()
-                            println("[usage] opened the Usage overlay")
+                            println("[usage] opened the Usage card popover")
                         }
                     }
 
