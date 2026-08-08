@@ -2,7 +2,7 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow } from "../session-types"
+import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigChange } from "../session-types"
 import { resolveCodexAuth } from "./auth"
 import { writeCodexConfig } from "./config-writer"
 import { writeCodexPreamble } from "./preamble-writer"
@@ -118,4 +118,46 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
   })
   await adapter.resume()
   return { adapter, handle }
+}
+
+/** Dialect half of a model/effort change: codex has no live setter, so this is
+ * a FULL respawn of the app-server with the new flags (same flag set as
+ * resume, minus the preamble rewrite). The SessionManager kills the old
+ * runtime first and swaps in the returned one (state half), so callers never
+ * hold a half-dead adapter. Reads the DESIRED config off the session row —
+ * the component already persisted it. */
+export async function applyConfig(
+  ctx: ApplyConfigCtx,
+  session: ResumeRow,
+  name: string,
+  _change: ApplyConfigChange,
+): Promise<{ ok: true; runtime: { adapter: CodexAdapter; handle: CodexSpawnHandle } }> {
+  const auth = await resolveCodexAuth({
+    apiKey: process.env.OPENAI_API_KEY,
+    userCodexHome: join(home(), ".codex"),
+    sessionCodexHome: session.agent_home,
+  })
+  await codexPrepareSessionHome(session.agent_home)
+  const handle = spawnCodexAppServer({
+    codexHome: session.agent_home,
+    workdir: session.workdir,
+    authEnv: auth.env,
+    model: session.model,
+    reasoningLevel: ctx.sessionEffort(session),
+    pluginConfigArgs: codexSpawnArgs({ sessionName: name }).args,
+  })
+  const adapter = new CodexAdapter({
+    sessionName: name,
+    workdir: session.workdir,
+    client: handle.client,
+    persistThreadId: async () => {},
+    initialThreadId: session.agent_session_id,
+    resolveAttachment: ctx.resolveAttachment,
+  })
+  if (session.agent_session_id) {
+    await adapter.resume()
+  } else {
+    await adapter.start()
+  }
+  return { ok: true, runtime: { adapter, handle } }
 }

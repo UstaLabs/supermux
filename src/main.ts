@@ -47,7 +47,7 @@ import { runStt, VOICE_STT_ENGINE } from "./core/transcription/stt"
 import { buildVoicePayload } from "./core/transcription/voice-context"
 import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cleanup"
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
-import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, codexPrepareSessionHome, opencodeConfigEntries, ensureOpenCodePluginScopes, grokConfigEntries, ensureGrokPluginScopes } from "./core/plugins"
+import { cursorSpawnArgs, codexSpawnArgs, claudeSpawnArgs, codexPrepareGlobal, opencodeConfigEntries, ensureOpenCodePluginScopes, grokConfigEntries, ensureGrokPluginScopes } from "./core/plugins"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
@@ -58,7 +58,6 @@ import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
 import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
-import { PendingReapply, shouldDeferReapply, changedSince } from "./core/session-manager/pending-reapply"
 import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -103,11 +102,9 @@ import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
 import { ClaudeCodeAdapter } from "./core/agents/claude/index"
-import { applyClaudeLiveSwitch } from "./core/agents/claude/live-switch"
 import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
-import { resolveCodexAuth } from "./core/agents/codex/auth"
-import { spawnCodexAppServer, type CodexSpawnHandle } from "./core/agents/codex/spawn"
+import type { CodexSpawnHandle } from "./core/agents/codex/spawn"
 import { CodexAdapter } from "./core/agents/codex/adapter"
 import type { CursorAdapter } from "./core/agents/cursor/adapter"
 import { ModelCache } from "./core/models/cache"
@@ -118,7 +115,7 @@ import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpe
 import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "./core/agents/opencode/spawn"
 import { GrokAdapter } from "./core/agents/grok/adapter"
-import { resolveSessionEffort, clampSessionReasoningLevel } from "./core/models/session-agent-settings"
+import { resolveSessionEffort } from "./core/models/session-agent-settings"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
 import { DeviceStore } from "./channels/web/device-store"
 import { TerminalManager } from "./core/terminal/manager"
@@ -607,7 +604,6 @@ const sessionManager = new SessionManager(registry, {
     stopClaudeTailer,
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
     recentInbound: { clear: (id) => recentInboundIds.clear(id) },
-    pendingReapply: { clear: (id) => pendingReapply.clear(id) },
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
   },
   displays: {
@@ -622,6 +618,7 @@ const sessionManager = new SessionManager(registry, {
     remove: (name) => commandRegistry.remove(name),
     refresh: (name) => commandRegistry.refresh(name),
   },
+  config: { lookupModels },
   register: {
     interruptClaudePane,
     notifyAgentError,
@@ -2136,7 +2133,6 @@ const server = await startSocketServer({
 })
 
 const recentInboundIds = new RecentInboundIds()
-const pendingReapply = new PendingReapply()
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return deliverInboundCore({
     getAdapter: (id) => runtimes.get(id)?.adapter,
@@ -2342,184 +2338,16 @@ async function spawnSession(args: {
   return r
 }
 
-async function reapplySessionAgentConfig(sessionId: string, changed?: { model: boolean; effort: boolean }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const session = registry.get(sessionId)
-  if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-
-  const effort = sessionEffort(session)
-
-  if (session.agent === "claude") {
-    // Live switch: type /model and/or /effort into the running TUI — never a
-    // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
-    // callers roll the registry back. `changed` narrows to what the user
-    // actually touched so a model-only switch doesn't re-type /effort.
-    const wid = await runtimeTargetIdOf(session)
-    if (!wid) return { ok: false, error: "session window not found" }
-    const result = await applyClaudeLiveSwitch(wid, {
-      model: changed?.model === false ? undefined : session.model,
-      effort: changed?.effort === false ? undefined : effort,
-    }, { backend: sessionBackend })
-    if (!result.ok) return result
-    webChannel?.broadcastToAll({
-      type: "session_state",
-      session: session.id,
-      model: session.model,
-      reasoningLevel: effort,
-    })
-    return { ok: true }
-  }
-
-  if (session.agent === "codex") {
-    try {
-      const runtime = runtimes.get(session.id)
-      if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
-      deleteRuntime(session.id)
-
-      const sessionHome = session.agent_home
-      if (!sessionHome) return { ok: false, error: "codex session missing agent_home" }
-
-      const auth = await resolveCodexAuth({
-        apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: join(home(), ".codex"),
-        sessionCodexHome: sessionHome,
-      })
-      await codexPrepareSessionHome(sessionHome)
-      const handle = spawnCodexAppServer({
-        codexHome: sessionHome,
-        workdir: session.workdir,
-        authEnv: auth.env,
-        model: session.model,
-        reasoningLevel: effort,
-        pluginConfigArgs: codexSpawnArgs({ sessionName: session.name }).args,
-      })
-      const newAdapter = new CodexAdapter({
-        sessionName: session.name,
-        workdir: session.workdir,
-        client: handle.client,
-        persistThreadId: async () => {},
-        initialThreadId: session.agent_session_id,
-        resolveAttachment: resolveAttachmentPath,
-      })
-      if (session.agent_session_id) {
-        await newAdapter.resume()
-      } else {
-        await newAdapter.start()
-      }
-      registerCodexRuntime(session.id, session.name, newAdapter, handle)
-      wireAdapterEvents(newAdapter, session.id)
-
-      webChannel?.broadcastToAll({
-        type: "session_state",
-        session: session.id,
-        model: session.model,
-        reasoningLevel: effort,
-      })
-      return { ok: true }
-    } catch (err: any) {
-      return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
-    }
-  }
-
-  if (session.agent === AgentKind.Grok) {
-    try {
-      const runtime = runtimes.get(session.id)
-      if (runtime?.kind !== AgentKind.Grok) return { ok: false, error: "grok session has no live adapter" }
-      // Model applies live over ACP (session/set_model); effort is a spawn flag
-      // with no ACP setter, so setEffort() relaunches the stdio child and reloads
-      // the same grok session id — history is preserved across the respawn.
-      if (changed?.model !== false && session.model) runtime.adapter.model = session.model
-      if (changed?.effort !== false) await runtime.adapter.setEffort(effort)
-      webChannel?.broadcastToAll({
-        type: "session_state",
-        session: session.id,
-        model: session.model,
-        reasoningLevel: effort,
-      })
-      return { ok: true }
-    } catch (err: any) {
-      return { ok: false, error: `agent config apply failed: ${err?.message ?? String(err)}` }
-    }
-  }
-
-  return { ok: false, error: `agent does not support reasoning level: ${session.agent}` }
+// Model/effort switching lives in SessionManager.applyConfig (the last
+// agent-kind ladder moved into the component; per-kind dialects live in
+// src/core/agents/<kind>/session.ts). These aliases keep the REST/WS/slash
+// call sites' contracts byte-identical.
+function switchSessionModel(sessionId: string, newModel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+  return sessionManager.applyConfig(sessionId, { model: newModel, applyNow: opts?.applyNow })
 }
 
-// Apply a model/effort change now if the session is idle (or applyNow), else
-// record a deferred respawn to run when the turn ends. The registry was already
-// updated by the caller; `olds` are restored only if a (now or deferred) apply fails.
-async function applyOrDeferReapply(
-  sessionId: string,
-  olds: { oldModel?: string; oldReasoningLevel?: string },
-  applyNow: boolean,
-): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  const phase = agentStateStore.get(sessionId).phase
-  if (shouldDeferReapply(phase, applyNow)) {
-    pendingReapply.mark(sessionId, olds)
-    return { ok: true, status: "queued" }
-  }
-  const current = registry.get(sessionId)
-  const result = await reapplySessionAgentConfig(sessionId, current ? changedSince(olds, current) : undefined)
-  if (!result.ok) {
-    registry.setModel(sessionId, olds.oldModel)
-    registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-    return result
-  }
-  return { ok: true, status: "applied" }
-}
-
-async function switchSessionModel(sessionId: string, newModel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  const session = registry.get(sessionId)
-  if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-
-  const oldModel = session.model
-  const oldReasoningLevel = session.reasoningLevel
-  registry.setModel(sessionId, newModel)
-  if (session.reasoningLevel) {
-    const clamped = clampSessionReasoningLevel({ ...session, model: newModel }, newModel, lookupModels)
-    if (clamped !== session.reasoningLevel) {
-      registry.setReasoningLevel(sessionId, clamped)
-    }
-  }
-
-  // cursor, opencode and grok read their adapter's `model` field fresh on each
-  // turn (opencode re-parses it in send() via parseModel(); grok folds it into
-  // each session/prompt), so a model switch is a live in-process field update —
-  // no process/serve restart, no config reapply.
-  if (session.agent === "cursor" || session.agent === "opencode" || session.agent === AgentKind.Grok) {
-    const adapter = runtimes.get(session.id)?.adapter as any
-    if (adapter && "model" in adapter) {
-      adapter.model = newModel
-    }
-    webChannel?.broadcastToAll({ type: "session_state", session: session.id, model: newModel })
-    return { ok: true, status: "applied" }
-  }
-
-  // Claude switches are typed into the TUI, which is only safe on an idle
-  // composer — force queue-until-idle (user decision: never type mid-turn).
-  const applyNow = session.agent === "claude" ? false : opts?.applyNow ?? false
-  return applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, applyNow)
-}
-
-async function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
-  const session = registry.get(sessionId)
-  if (!session) return { ok: false, error: `no such session: ${sessionId}` }
-
-  if (session.agent === "cursor") {
-    return { ok: false, error: "cursor sessions use model selection for reasoning depth" }
-  }
-
-  const models = lookupModels(session.agent)
-  const levels = supportedReasoningLevels(session.agent, models, session.model)
-  if (!levels.some((l) => l.id === newLevel)) {
-    return { ok: false, error: `unsupported reasoning level: ${newLevel}` }
-  }
-
-  const oldReasoningLevel = session.reasoningLevel
-  registry.setReasoningLevel(sessionId, newLevel)
-
-  // Same queue-until-idle rule as switchSessionModel for claude (typed /effort).
-  const applyNow = session.agent === "claude" ? false : opts?.applyNow ?? false
-  return applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, applyNow)
+function switchSessionReasoningLevel(sessionId: string, newLevel: string, opts?: { applyNow?: boolean }): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+  return sessionManager.applyConfig(sessionId, { effort: newLevel, applyNow: opts?.applyNow })
 }
 
 // Wire telegram inbound through routing
@@ -2750,19 +2578,9 @@ bgTaskStore.on("change", (sessionId: string) => {
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   webChannel?.broadcastToAll(toAgentStateFrame(sessionId, state, bgTaskStore.openCount(sessionId)))
-  if (state.phase === "idle" && pendingReapply.has(sessionId)) {
-    const olds = pendingReapply.take(sessionId)!
-    const drainSession = registry.get(sessionId)
-    void reapplySessionAgentConfig(sessionId, drainSession ? changedSince(olds, drainSession) : undefined).then((r) => {
-      if (!r.ok) {
-        registry.setModel(sessionId, olds.oldModel)
-        registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-        const s = registry.get(sessionId)
-        webChannel?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: sessionEffort(s ?? ({} as any)) })
-        void notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
-      }
-    }).catch((err) => log.warn("drain_reapply_failed", { sessionId, err: String(err) }))
-  }
+  // Deferred model/effort applies drain on the idle transition (the queue and
+  // the rollback-on-failure live in the SessionManager). Fire and forget.
+  void sessionManager.drainPendingReapply(sessionId, state.phase)
 })
 agentStateStore.on("change", (sessionId: string, state) => {
   if (state.phase === "idle") gitStatusService.scheduleRecompute(sessionId)

@@ -2,7 +2,7 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow } from "../session-types"
+import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import { writeGrokPreamble } from "./preamble-writer"
 import { writeGrokConfig } from "./config-writer"
 import { resolveGrokAuth } from "./auth"
@@ -118,6 +118,24 @@ export async function resumeGrokSession(
   if (session.agent_session_id) await adapter.resume()
   else await adapter.start()
   return { adapter }
+}
+
+/** Dialect half of a model/effort change on the LIVE adapter. Model applies
+ * live over ACP (session/set_model — the adapter's model setter sends it);
+ * effort is a spawn flag with no ACP setter, so setEffort() relaunches the
+ * stdio child and reloads the same grok session id — history is preserved
+ * across the respawn. `changed` narrows to what the user actually touched. */
+export async function applyConfig(
+  ctx: ApplyConfigCtx,
+  _session: ApplyConfigRow,
+  _name: string,
+  change: ApplyConfigChange,
+): Promise<ApplyConfigResult> {
+  const adapter = ctx.adapter
+  if (!(adapter instanceof GrokAdapter)) return { ok: false, error: "grok session has no live adapter" }
+  if (change.changed?.model !== false && change.model) adapter.model = change.model
+  if (change.changed?.effort !== false) await adapter.setEffort(change.effort)
+  return { ok: true }
 }
 
 /** Dialect half of resume; the SessionManager registers + wires the result. */

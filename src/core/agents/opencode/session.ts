@@ -2,7 +2,7 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ResumeCtx, ResumeRow } from "../session-types"
+import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange } from "../session-types"
 import { resolveOpenCodeAuth } from "./auth"
 import { writeOpenCodeConfig } from "./config-writer"
 import { writeOpenCodePreamble } from "./preamble-writer"
@@ -148,4 +148,20 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
     },
     { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
   )
+}
+
+/** Dialect half of a model change: opencode re-parses the adapter's `model`
+ * field in send() (parseModel) on every turn, so a switch is a live
+ * in-process field update — no serve restart, no config reapply. (opencode
+ * exposes no reasoning levels; there is no effort half.) */
+export async function applyConfig(
+  ctx: ApplyConfigCtx,
+  _session: ApplyConfigRow,
+  _name: string,
+  change: ApplyConfigChange,
+): Promise<{ ok: true }> {
+  if (ctx.adapter instanceof OpenCodeAdapter && change.changed?.model !== false && change.model) {
+    ctx.adapter.model = change.model
+  }
+  return { ok: true }
 }

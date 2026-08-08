@@ -3,7 +3,7 @@ import { shimSpawnSpec } from "../../session-manager/shim-spawn"
 import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import { smokeCursorAgent } from "./smoke"
-import type { ResumeCtx, ResumeRow } from "../session-types"
+import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange } from "../session-types"
 import { resolveCursorAuth } from "./auth"
 import type { CursorAuthResult } from "./auth"
 import { writeCursorMcpConfig } from "./mcp-writer"
@@ -106,4 +106,20 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
     resolveAttachment: ctx.resolveAttachment,
   })
   return { adapter }
+}
+
+/** Dialect half of a model change: cursor spawns a fresh `cursor-agent` per
+ * turn and reads the adapter's `model` field on each one, so a switch is a
+ * live in-process field update — no process restart, no config reapply.
+ * (Reasoning depth is part of model selection; there is no effort half.) */
+export async function applyConfig(
+  ctx: ApplyConfigCtx,
+  _session: ApplyConfigRow,
+  _name: string,
+  change: ApplyConfigChange,
+): Promise<{ ok: true }> {
+  if (ctx.adapter instanceof CursorAdapter && change.changed?.model !== false && change.model) {
+    ctx.adapter.model = change.model
+  }
+  return { ok: true }
 }
