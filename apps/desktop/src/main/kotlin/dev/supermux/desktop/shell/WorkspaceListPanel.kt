@@ -387,14 +387,18 @@ fun WorkspaceListPanel(
                     }
                 }
                 if (rest.isNotEmpty()) {
-                    item(key = "flat:h:in_progress") {
-                        Text(
-                            "IN PROGRESS",
-                            color = cs.onSurfaceVariant,
-                            fontFamily = MonoFontFamily,
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(horizontal = Space.md, vertical = 6.dp),
-                        )
+                    // Section chrome only when PAs are also listed — otherwise a lone
+                    // "IN PROGRESS" header over the whole flat list is noise.
+                    if (pas.isNotEmpty()) {
+                        item(key = "flat:h:in_progress") {
+                            Text(
+                                "IN PROGRESS",
+                                color = cs.onSurfaceVariant,
+                                fontFamily = MonoFontFamily,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = Space.md, vertical = 6.dp),
+                            )
+                        }
                     }
                     items(rest, key = { "f:${it.id}" }) { w ->
                         WorkspaceListEntry(

@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -371,6 +372,55 @@ class WorkspaceListPanelTest {
             )
         }
         onNodeWithText("suspended").assertIsDisplayed()
+    }
+
+    @Test
+    fun flatMode_hidesInProgressHeaderWhenNoPersonalAgents() = runComposeUiTest {
+        setContent {
+            WorkspaceListPanel(
+                workspaces = listOf(ws("w1", "task-a", "/home/u/projects/app")),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+            )
+        }
+        // Default is group-by-project; switch to flat so section headers apply.
+        onNodeWithContentDescription("Flat list").performClick()
+        onNodeWithText("task-a").assertIsDisplayed()
+        onNodeWithText("IN PROGRESS").assertDoesNotExist()
+        onNodeWithText("PERSONAL ASSISTANTS").assertDoesNotExist()
+    }
+
+    @Test
+    fun flatMode_showsInProgressHeaderWhenPersonalAgentsExist() = runComposeUiTest {
+        setContent {
+            WorkspaceListPanel(
+                workspaces = listOf(
+                    ws(
+                        "pa1", "My PA", "/home/u",
+                        views = listOf(chatView("v1", "s-pa", "pa1")),
+                    ).copy(primarySessionId = "s-pa"),
+                    ws("w1", "task-a", "/home/u/projects/app"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                sessions = listOf(
+                    SessionInfo(
+                        id = "s-pa",
+                        name = "My PA",
+                        workdir = "/home/u",
+                        agent = "claude",
+                        role = "personal_assistant",
+                    ),
+                ),
+            )
+        }
+        onNodeWithContentDescription("Flat list").performClick()
+        onNodeWithText("PERSONAL ASSISTANTS").assertIsDisplayed()
+        onNodeWithText("IN PROGRESS").assertIsDisplayed()
+        onNodeWithText("My PA").assertIsDisplayed()
+        onNodeWithText("task-a").assertIsDisplayed()
     }
 
     /**
