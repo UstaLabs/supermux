@@ -107,17 +107,13 @@ import { applyClaudeLiveSwitch } from "./core/agents/claude/live-switch"
 import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
 import { resolveCodexAuth } from "./core/agents/codex/auth"
-import { spawnCodexAppServer, type CodexSpawnHandle } from "./core/agents/codex/spawn"
+import { spawnCodexAppServer } from "./core/agents/codex/spawn"
 import { CodexAdapter } from "./core/agents/codex/adapter"
-import type { CursorAdapter } from "./core/agents/cursor/adapter"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
 import { discoverGrokModels } from "./core/agents/grok/model-discovery"
 import { refreshModelCache, type ModelDiscoverers } from "./core/models/refresh"
 import { listOpenCodeProviders, setOpenCodeApiKey, startOpenCodeOAuth, finishOpenCodeOAuth } from "./core/agents/opencode/auth-ops"
-import { OpenCodeAdapter } from "./core/agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "./core/agents/opencode/spawn"
-import { GrokAdapter } from "./core/agents/grok/adapter"
 import { resolveSessionEffort, clampSessionReasoningLevel } from "./core/models/session-agent-settings"
 import { supportedReasoningLevels, shouldShowReasoningControl } from "./core/models/reasoning-levels"
 import { DeviceStore } from "./channels/web/device-store"
@@ -659,11 +655,6 @@ const runtimes = sessionManager.runtimes
 const soulSetupQueued = new Set<string>()
 
 const deleteRuntime = (sessionId: string) => sessionManager.deleteRuntime(sessionId)
-const registerClaudeRuntime = (sessionId: string, adapter: ClaudeCodeAdapter) => sessionManager.registerClaudeRuntime(sessionId, adapter)
-const registerCodexRuntime = (sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle) => sessionManager.registerCodexRuntime(sessionId, name, adapter, handle)
-const registerCursorRuntime = (sessionId: string, adapter: CursorAdapter) => sessionManager.registerCursorRuntime(sessionId, adapter)
-const registerGrokRuntime = (sessionId: string, adapter: GrokAdapter) => sessionManager.registerGrokRuntime(sessionId, adapter)
-const registerOpenCodeRuntime = (sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle) => sessionManager.registerOpenCodeRuntime(sessionId, name, adapter, handle)
 
 // Slash-command discovery: per-session command list (control + agent commands
 // tapped from each CLI's native protocol). Broadcast to web on change.
@@ -2379,7 +2370,7 @@ async function reapplySessionAgentConfig(sessionId: string, changed?: { model: b
       } else {
         await newAdapter.start()
       }
-      registerCodexRuntime(session.id, session.name, newAdapter, handle)
+      sessionManager.registerCodexRuntime(session.id, session.name, newAdapter, handle)
       wireAdapterEvents(newAdapter, session.id)
 
       webChannel?.broadcastToAll({
