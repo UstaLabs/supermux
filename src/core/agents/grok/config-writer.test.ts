@@ -73,25 +73,25 @@ test("writeGrokConfig is idempotent (resume rewrites cleanly)", () => {
   expect(b).toBe(a)
 })
 
-test("resolveGrokAuth keeps private config but points auth at the canonical credential", () => {
+test("resolveGrokAuth keeps private config but points auth at the canonical credential", async () => {
   const userGrokDir = home()
   const sessionHome = home()
   writeFileSync(join(userGrokDir, "auth.json"), '{"token":"abc"}')
 
-  const res = resolveGrokAuth({ userGrokDir, sessionHome })
+  const res = await resolveGrokAuth({ userGrokDir, sessionHome })
   expect(res.mode).toBe("cached_token")
   expect(res.env.HOME).toBe(sessionHome)
   expect(res.env.GROK_AUTH_PATH).toBe(join(userGrokDir, "auth.json"))
   expect(existsSync(join(sessionHome, ".grok", "auth.json"))).toBe(false)
 })
 
-test("an atomic Grok refresh stays visible to sibling sessions", () => {
+test("an atomic Grok refresh stays visible to sibling sessions", async () => {
   const userGrokDir = home()
   const firstHome = home()
   const secondHome = home()
   writeFileSync(join(userGrokDir, "auth.json"), '{"token":"initial"}')
-  const first = resolveGrokAuth({ userGrokDir, sessionHome: firstHome })
-  const second = resolveGrokAuth({ userGrokDir, sessionHome: secondHome })
+  const first = await resolveGrokAuth({ userGrokDir, sessionHome: firstHome })
+  const second = await resolveGrokAuth({ userGrokDir, sessionHome: secondHome })
 
   const replacement = join(userGrokDir, "auth.next")
   writeFileSync(replacement, '{"token":"rotated"}')
@@ -101,7 +101,7 @@ test("an atomic Grok refresh stays visible to sibling sessions", () => {
   expect(readFileSync(second.env.GROK_AUTH_PATH!, "utf8")).toBe('{"token":"rotated"}')
 })
 
-test("resolveGrokAuth promotes a newer private refresh before replacing the old copy", () => {
+test("resolveGrokAuth promotes a newer private refresh before replacing the old copy", async () => {
   const userGrokDir = home()
   const sessionHome = home()
   const sessionGrokDir = join(sessionHome, ".grok")
@@ -109,7 +109,7 @@ test("resolveGrokAuth promotes a newer private refresh before replacing the old 
   writeFileSync(join(userGrokDir, "auth.json"), auth("2026-07-26T15:41:47Z", "stale"))
   writeFileSync(join(sessionGrokDir, "auth.json"), auth("2026-07-26T18:33:13Z", "refreshed"))
 
-  const res = resolveGrokAuth({ userGrokDir, sessionHome })
+  const res = await resolveGrokAuth({ userGrokDir, sessionHome })
 
   expect(res.mode).toBe("cached_token")
   expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe(
@@ -118,7 +118,7 @@ test("resolveGrokAuth promotes a newer private refresh before replacing the old 
   expect(res.env.GROK_AUTH_PATH).toBe(join(userGrokDir, "auth.json"))
 })
 
-test("resolveGrokAuth never lets a stale private copy overwrite newer canonical auth", () => {
+test("resolveGrokAuth never lets a stale private copy overwrite newer canonical auth", async () => {
   const userGrokDir = home()
   const sessionHome = home()
   const sessionGrokDir = join(sessionHome, ".grok")
@@ -126,14 +126,14 @@ test("resolveGrokAuth never lets a stale private copy overwrite newer canonical 
   writeFileSync(join(userGrokDir, "auth.json"), auth("2026-07-26T18:33:13Z", "canonical"))
   writeFileSync(join(sessionGrokDir, "auth.json"), auth("2026-07-26T15:41:47Z", "stale"))
 
-  resolveGrokAuth({ userGrokDir, sessionHome })
+  await resolveGrokAuth({ userGrokDir, sessionHome })
 
   expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe(
     auth("2026-07-26T18:33:13Z", "canonical"),
   )
 })
 
-test("resolveGrokAuth recovers a private credential when the canonical file is missing", () => {
+test("resolveGrokAuth recovers a private credential when the canonical file is missing", async () => {
   const userGrokDir = home()
   const sessionHome = home()
   const sessionGrokDir = join(sessionHome, ".grok")
@@ -141,27 +141,27 @@ test("resolveGrokAuth recovers a private credential when the canonical file is m
   const credential = auth("2026-07-26T18:33:13Z", "only-copy")
   writeFileSync(join(sessionGrokDir, "auth.json"), credential)
 
-  const res = resolveGrokAuth({ userGrokDir, sessionHome })
+  const res = await resolveGrokAuth({ userGrokDir, sessionHome })
 
   expect(res.mode).toBe("cached_token")
   expect(readFileSync(join(userGrokDir, "auth.json"), "utf8")).toBe(credential)
   expect(res.env.GROK_AUTH_PATH).toBe(join(userGrokDir, "auth.json"))
 })
 
-test("resolveGrokAuth does not fail-closed when the user has never logged in", () => {
+test("resolveGrokAuth does not fail-closed when the user has never logged in", async () => {
   const sessionHome = home()
   const userGrokDir = join(tmpdir(), "definitely-missing-grok-dir")
-  const res = resolveGrokAuth({ userGrokDir, sessionHome })
+  const res = await resolveGrokAuth({ userGrokDir, sessionHome })
   expect(res.mode).toBe("none")
   expect(res.env.HOME).toBe(sessionHome)
   expect(res.env.GROK_AUTH_PATH).toBe(join(userGrokDir, "auth.json"))
   expect(existsSync(join(sessionHome, ".grok"))).toBe(true)
 })
 
-test("resolveGrokAuth redirects USERPROFILE as well as HOME on Windows", () => {
+test("resolveGrokAuth redirects USERPROFILE as well as HOME on Windows", async () => {
   const sessionHome = home()
   const userGrokDir = join(tmpdir(), "missing-grok")
-  const res = resolveGrokAuth({ userGrokDir, sessionHome, platform: "win32" })
+  const res = await resolveGrokAuth({ userGrokDir, sessionHome, platform: "win32" })
   expect(res.env).toEqual({
     HOME: sessionHome,
     GROK_AUTH_PATH: join(userGrokDir, "auth.json"),

@@ -32,7 +32,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     // credentials, so a session is usable even before `opencode auth login`. We
     // still resolve auth for the env; missing creds only limits which models work
     // (opencode surfaces that at prompt time), it doesn't block the session.
-    const auth = resolveOpenCodeAuth({ home: HOME })
+    const auth = await resolveOpenCodeAuth({ home: HOME })
 
     // Identity/reply/naming preamble, included via the config's `instructions`
     // so it never gets written into the user's workdir.
@@ -122,7 +122,7 @@ export async function resumeOpenCodeSession(
     skillsPaths,
   })
 
-  const auth = resolveOpenCodeAuth({ home: HOME })
+  const auth = await resolveOpenCodeAuth({ home: HOME })
   const handle = await spawnOpenCodeServer({ workdir: session.workdir, configHome, authEnv: auth.env })
 
   const adapter = new OpenCodeAdapter({

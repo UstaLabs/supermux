@@ -32,7 +32,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   const sessionHome = join(STATE_DIR, "agents", "grok", name)
   mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
 
-  const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
+  const auth = await resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
   writeGrokConfig({
     sessionHome,
     ...shimSpawnSpec(),
@@ -91,7 +91,7 @@ export async function resumeGrokSession(
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: GrokAdapter }> {
   const sessionHome = session.agent_home
-  const auth = resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
+  const auth = await resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
   writeGrokConfig({
     sessionHome,
     ...shimSpawnSpec(),

@@ -1,25 +1,15 @@
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  type Stats,
-} from "fs"
-import { randomUUID } from "crypto"
-import { dirname, join } from "path"
+import { existsSync, lstatSync, mkdirSync, readFileSync, type Stats } from "fs"
+import { join } from "path"
+import type { AgentAuthResult } from "../auth-result"
+import { promoteCredential } from "../credential-file"
 
-export type GrokAuthResult = {
-  mode: "cached_token" | "none"
-  /** Env for the grok child. HOME keeps config session-private while
-   * GROK_AUTH_PATH keeps authentication canonical and shared. */
-  env: Record<string, string>
-}
+/** Env for the grok child. HOME keeps config session-private while
+ * GROK_AUTH_PATH keeps authentication canonical and shared. */
+export type GrokAuthResult = AgentAuthResult<"cached_token" | "none">
 
-/** grok resolves its config (~/.grok/config.toml) from HOME and its credential
+/** Grok credential resolution — PRIVATE to the grok module.
+ *
+ * grok resolves its config (~/.grok/config.toml) from HOME and its credential
  * from GROK_AUTH_PATH when set. It also auto-imports Claude Code's config from
  * ~/.claude.json (skills, plugins, MCP servers) by default. That import is the
  * problem: it pulls the user's global `mux-shim` AND `mux-channel` into every grok
@@ -42,10 +32,10 @@ export type GrokAuthResult = {
  * This matters during migration: a private Grok process may already have rotated
  * the refresh token while the user's original credential stayed stale.
  *
- * NOT fail-closed: a session with no credential still spawns; grok reports the auth
+ * FAILS OPEN: a session with no credential still spawns; grok reports the auth
  * error on the first turn, which is the right place to surface it.
  */
-export function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string; platform?: NodeJS.Platform }): GrokAuthResult {
+export async function resolveGrokAuth(opts: { userGrokDir: string; sessionHome: string; platform?: NodeJS.Platform }): Promise<GrokAuthResult> {
   const sessionGrokDir = join(opts.sessionHome, ".grok")
   mkdirSync(sessionGrokDir, { recursive: true, mode: 0o700 })
 
@@ -101,6 +91,10 @@ function lstatSafe(path: string): Stats | undefined {
   }
 }
 
+/** grok's credential dialect: a map of issuer entries, each with `expires_at`.
+ * Grok keeps this comparison and its own control flow instead of the shared
+ * `promoteIfNewer` driver, because grok promotes a legacy private copy even
+ * when the canonical file is missing. Codex and cursor must not do that. */
 function credentialExpiry(path: string): number {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8"))
@@ -116,17 +110,5 @@ function credentialExpiry(path: string): number {
     return latest
   } catch {
     return Number.NEGATIVE_INFINITY
-  }
-}
-
-function promoteCredential(from: string, canonical: string): void {
-  mkdirSync(dirname(canonical), { recursive: true, mode: 0o700 })
-  const temp = `${canonical}.mux-${process.pid}-${randomUUID()}.tmp`
-  try {
-    copyFileSync(from, temp)
-    chmodSync(temp, 0o600)
-    renameSync(temp, canonical)
-  } finally {
-    rmSync(temp, { force: true })
   }
 }

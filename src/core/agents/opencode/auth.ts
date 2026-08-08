@@ -1,11 +1,19 @@
+/** OpenCode credential resolution — PRIVATE to the opencode module.
+ *
+ * Transport: NONE. Only the config dir is isolated; `XDG_DATA_HOME` keeps the
+ * user's value, so opencode reads the one shared `auth.json` that
+ * `opencode auth login` wrote. There is no copy, therefore no refresh drift and
+ * nothing to promote.
+ *
+ * FAILS OPEN: opencode ships a free `opencode/*` tier that runs with no
+ * credential, so the resolver reports `authed` and never throws. The caller uses
+ * `authed` for the status badge only.
+ */
 import { existsSync } from "fs"
 import { join, win32 } from "path"
+import type { AgentAuthResult } from "../auth-result"
 
-export type OpenCodeAuthResult = {
-  /** Extra env for the `opencode serve` child. Empty by default: we deliberately
-   * leave XDG_DATA_HOME at the user's value so opencode uses the credentials it
-   * wrote via `opencode auth login` (shared, multi-provider). */
-  env: Record<string, string>
+export type OpenCodeAuthResult = AgentAuthResult<"shared_auth" | "provider_key" | "none"> & {
   dataDir: string
   authPath: string
   authed: boolean
@@ -35,21 +43,22 @@ const PROVIDER_KEY_ENV = [
 ]
 
 /** Resolve opencode's credential location and whether it looks authenticated.
- * Pure + dependency-injected (fileExists/env) so it unit-tests without I/O. */
-export function resolveOpenCodeAuth(opts: {
+ * Pure + dependency-injected (fileExists/env) so it unit-tests without I/O.
+ * `env` is empty on purpose: the child inherits the broker's XDG_DATA_HOME. */
+export async function resolveOpenCodeAuth(opts: {
   home: string
   xdgDataHome?: string
   env?: Record<string, string | undefined>
   fileExists?: (p: string) => boolean
   platform?: NodeJS.Platform
   localAppData?: string
-}): OpenCodeAuthResult {
+}): Promise<OpenCodeAuthResult> {
   const exists = opts.fileExists ?? ((p: string) => existsSync(p))
   const env = opts.env ?? process.env
   const dataDir = openCodeDataDir(opts)
   const authPath = (opts.platform ?? process.platform) === "win32"
     ? win32.join(dataDir, "auth.json") : join(dataDir, "auth.json")
   const hasProviderKey = PROVIDER_KEY_ENV.some((k) => !!env[k])
-  const authed = exists(authPath) || hasProviderKey
-  return { env: {}, dataDir, authPath, authed }
+  const mode = exists(authPath) ? "shared_auth" : hasProviderKey ? "provider_key" : "none"
+  return { mode, env: {}, dataDir, authPath, authed: mode !== "none" }
 }
