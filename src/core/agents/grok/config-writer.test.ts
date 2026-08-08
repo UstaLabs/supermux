@@ -65,6 +65,27 @@ test("writeGrokConfig escapes paths that would break the TOML", () => {
   expect(toml).toContain('MUX_DISPLAY_NAME = "quote\\"name"')
 })
 
+test("writeGrokConfig declares [skills] paths for the plugin skills dirs", () => {
+  const sessionHome = home()
+  const toml = readFileSync(writeGrokConfig({
+    sessionHome,
+    shimCommand: "bun",
+    shimArgs: ["run", "/s.ts"],
+    sessionName: "n",
+    sessionId: "i",
+    socketsDir: "/d",
+    skillsPaths: ["/plugins/mux-core/skills", '/plugins/we"ird/skills'],
+  }), "utf8")
+  expect(toml).toContain('[skills]\npaths = ["/plugins/mux-core/skills", "/plugins/we\\"ird/skills"]')
+})
+
+test("writeGrokConfig omits the [skills] block when no paths are given", () => {
+  const sessionHome = home()
+  const base = { sessionHome, shimCommand: "bun", shimArgs: ["run", "/s.ts"], sessionName: "n", sessionId: "i", socketsDir: "/d" }
+  expect(readFileSync(writeGrokConfig(base), "utf8")).not.toContain("[skills]")
+  expect(readFileSync(writeGrokConfig({ ...base, skillsPaths: [] }), "utf8")).not.toContain("[skills]")
+})
+
 test("writeGrokConfig is idempotent (resume rewrites cleanly)", () => {
   const sessionHome = home()
   const args = { sessionHome, shimCommand: "bun", shimArgs: ["run", "/s.ts"], sessionName: "n", sessionId: "i", socketsDir: "/d" }
