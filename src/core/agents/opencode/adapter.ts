@@ -106,7 +106,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private sessionId?: string
   private persistSessionId: (id: string) => Promise<void>
   private initialSessionId?: string
-  private model?: string
+  private _model?: string
   private resolveAttachment?: (file_id: string) => Promise<string>
   private stallTimeoutMs: number
   /** Set during an in-flight turn; the event loop calls it on first activity to
@@ -132,10 +132,15 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.client = opts.client
     this.persistSessionId = opts.persistSessionId
     this.initialSessionId = opts.initialSessionId
-    this.model = opts.model
+    this._model = opts.model
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
   }
+
+  /** Live model switch: send() re-parses this on each turn (parseModel), so a
+   * field update applies from the next turn — no serve restart. */
+  set model(m: string | undefined) { this._model = m }
+  get model(): string | undefined { return this._model }
 
   async start(): Promise<void> {
     const res = await this.client.session.create({

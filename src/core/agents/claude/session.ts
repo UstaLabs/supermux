@@ -5,6 +5,8 @@ import { sendChannelConsentEnter } from "../../session-manager/post-spawn-keys"
 import { getSessionBackend } from "../../runtime"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
+import type { ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
+import { applyClaudeLiveSwitch } from "./live-switch"
 import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
 
@@ -61,4 +63,24 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     throw err
   }
   return { name, session_id: id, model: args.model }
+}
+
+/** Dialect half of a model/effort change: type /model and/or /effort into the
+ * running TUI (applyClaudeLiveSwitch) — never a kill+respawn (user decision
+ * 2026-07-10). Failure is an explicit error; the SessionManager rolls the
+ * registry back. `changed` narrows to what the user actually touched so a
+ * model-only switch doesn't re-type /effort. The component resolves the
+ * window id and guarantees idleness (the pending-reapply queue drains on the
+ * idle transition). */
+export async function applyConfig(
+  ctx: ApplyConfigCtx,
+  _session: ApplyConfigRow,
+  _name: string,
+  change: ApplyConfigChange,
+): Promise<ApplyConfigResult> {
+  if (!ctx.windowId) return { ok: false, error: "session window not found" }
+  return applyClaudeLiveSwitch(ctx.windowId, {
+    model: change.changed?.model === false ? undefined : change.model,
+    effort: change.changed?.effort === false ? undefined : change.effort,
+  }, { backend: ctx.backend })
 }
