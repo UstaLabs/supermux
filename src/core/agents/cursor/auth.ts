@@ -1,22 +1,43 @@
+/** Cursor credential resolution — PRIVATE to the cursor module.
+ *
+ * cursor-agent reads auth from TWO locations (found via strace):
+ *   ~/.cursor/cli-config.json         — settings + user identity (via HOME)
+ *   ~/.config/cursor/auth.json        — OAuth token (via XDG_CONFIG_HOME)
+ * Plus optional state:
+ *   ~/.cursor/agent-cli-state.json    — CLI state
+ * We copy all three into the per-session HOME so each session's env is
+ * self-contained. Everything else in ~/.cursor (plugins, extensions,
+ * skills, projects) is irrelevant for headless operation and previously
+ * caused EACCES / cpSync-overlap bugs.
+ *
+ * Transport: a COPY, like codex. cursor-agent gives no documented way to point
+ * the child at a canonical credential, so the copy stays and the drift it
+ * causes is healed on every spawn and every resume by `promoteIfNewer`. Only
+ * `auth.json` is promoted: `cli-config.json` and `agent-cli-state.json` hold
+ * identity and CLI state, not a credential, and they must not travel back.
+ *
+ * Freshness signal: `accessToken` is a JWT and its `exp` claim moves forward on
+ * every refresh (verified against a real `~/.config/cursor/auth.json`).
+ *
+ * FAILS CLOSED: with no API key and no credential the function throws, because
+ * the spawn would otherwise write a config for an agent that answers nothing.
+ * An absent canonical file does NOT resurrect the session copy.
+ */
 import { existsSync, mkdirSync, copyFileSync, chmodSync } from "fs"
 import { posix, win32 } from "path"
 import { home } from "../../../shared/home"
 import { ensureSharedCursorRuntime } from "../shared-runtime"
+import type { AgentAuthResult } from "../auth-result"
+import { jwtExpiryMs, promoteIfNewer, readCredentialJson } from "../credential-file"
 
-export type CursorAuthResult =
-  | { mode: "api_key"; env: { CURSOR_API_KEY: string } }
-  | { mode: "oauth_copy"; env: Record<string, string> }
+export type CursorAuthResult = AgentAuthResult<"api_key" | "oauth_copy">
 
-// cursor-agent reads auth from TWO locations (found via strace):
-//   ~/.cursor/cli-config.json         — settings + user identity (via HOME)
-//   ~/.config/cursor/auth.json        — OAuth token (via XDG_CONFIG_HOME)
-// Plus optional state:
-//   ~/.cursor/agent-cli-state.json    — CLI state
-// We copy all three into the per-session HOME so each session's env is
-// self-contained. Everything else in ~/.cursor (plugins, extensions,
-// skills, projects) is irrelevant for headless operation and previously
-// caused EACCES / cpSync-overlap bugs.
 const CURSOR_DIR_FILES = ["cli-config.json", "agent-cli-state.json"]
+
+/** Expiry claim of a cursor credential file, in milliseconds since the epoch. */
+export function cursorCredentialFreshness(path: string): number {
+  return jwtExpiryMs(readCredentialJson(path)?.accessToken)
+}
 
 export async function resolveCursorAuth(opts: {
   apiKey?: string
@@ -52,6 +73,19 @@ export async function resolveCursorAuth(opts: {
   const xdgAuthSrc = pathJoin(configBase, "cursor", "auth.json")
   const configSrc = pathJoin(opts.userCursorDir, "cli-config.json")
 
+  const sessionConfigBase = platform === "win32"
+    ? pathJoin(opts.sessionHome, "AppData", "Roaming")
+    : pathJoin(opts.sessionHome, ".config")
+  const sessionAuth = pathJoin(sessionConfigBase, "cursor", "auth.json")
+
+  // Heal first, throw or copy second. A token this session refreshed goes back
+  // to the user's file before the copy below overwrites it.
+  promoteIfNewer({
+    sessionCopy: sessionAuth,
+    canonical: xdgAuthSrc,
+    freshness: cursorCredentialFreshness,
+  })
+
   if (!existsSync(xdgAuthSrc) && !existsSync(configSrc)) {
     throw new Error(
       `Cursor auth not found at ${xdgAuthSrc} and CURSOR_API_KEY is unset. ` +
@@ -74,14 +108,10 @@ export async function resolveCursorAuth(opts: {
 
   // Copy ~/.config/cursor/auth.json → sessionHome/.config/cursor/auth.json
   if (existsSync(xdgAuthSrc)) {
-    const sessionConfigBase = platform === "win32"
-      ? pathJoin(opts.sessionHome, "AppData", "Roaming")
-      : pathJoin(opts.sessionHome, ".config")
     const destAuthDir = pathJoin(sessionConfigBase, "cursor")
     mkdirSync(destAuthDir, { recursive: true, mode: 0o700 })
-    const destAuth = pathJoin(destAuthDir, "auth.json")
-    copyFileSync(xdgAuthSrc, destAuth)
-    chmodSync(destAuth, 0o600)
+    copyFileSync(xdgAuthSrc, sessionAuth)
+    chmodSync(sessionAuth, 0o600)
   }
 
   return { mode: "oauth_copy", env: isolatedEnv }
