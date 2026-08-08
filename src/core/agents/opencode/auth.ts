@@ -53,3 +53,9 @@ export function resolveOpenCodeAuth(opts: {
   const authed = exists(authPath) || hasProviderKey
   return { env: {}, dataDir, authPath, authed }
 }
+
+/** opencode has no CLI device-login flow the broker can drive; auth goes
+ * through the provider OAuth/API-key ops (auth-ops.ts). null = unsupported. */
+export function loginSpawnCommand(): null {
+  return null
+}

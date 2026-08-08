@@ -95,9 +95,9 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, chm
 import { randomBytes, randomUUID } from "crypto"
 import { spawn as nodeSpawn, execFileSync } from "child_process"
 import { makeLogger } from "./shared/log"
-import { resolveCommand, spawnCommand } from "./core/process/launcher"
+import { spawnCommand } from "./core/process/launcher"
 import { checkPreflight, hasBinary } from "./shared/preflight"
-import { detectAllAgents, detectAgent } from "./core/agents/detect"
+import { detectAllAgents, detectAgent, hasStoredCredential } from "./core/agents/detect"
 import { createInstallManager } from "./core/agents/install"
 import { withAgentBinDirs } from "./core/agents/bin-dirs"
 import { homedir, hostname } from "os"
@@ -151,7 +151,7 @@ import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-co
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
-import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
+import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude-auth-status"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
@@ -288,6 +288,12 @@ const appConfig = settings.getAppConfig(appConfigEnv)
 // ⇒ existing-install behavior unchanged.
 const appliedCreds = hydrateCredentialEnv(appConfig, process.env)
 if (appliedCreds.length) log.info("credentials_hydrated", { vars: appliedCreds })
+// Credential oracle shared by agent-status detection and the LoginManager:
+// a stored key in the broker's own config counts as logged in, and claude's
+// CLI can hold a macOS-keychain credential no file probe sees.
+const agentHasCredential = (kind: AgentKind): boolean =>
+  hasStoredCredential(kind, settings.getAppConfig(appConfigEnv)) ||
+  (kind === AgentKind.Claude && claudeCliIsAuthenticated())
 const TG_TOKEN = appConfig.telegramBotToken || undefined
 const hasTelegram = !!TG_TOKEN
 // First-boot seed: curator config comes from env once, then the DB is the source
@@ -1028,31 +1034,24 @@ const wsDto = (id: string) => {
 const fsWatcher = new FsWatcher()
 
 function spawnLoginProc(kind: string) {
-  const h = homedir()
-  let cmd: string, args: string[]
-  let detached = false
-  const env = { ...process.env } as Record<string, string>
-  if (kind === "codex") { cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"; args = ["login", "--device-auth"]; env.CODEX_HOME = join(h, ".codex") }
-  else if (kind === "cursor") { cmd = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"; args = ["login"]; env.NO_OPEN_BROWSER = "1" }
-  else if (kind === "claude") {
-    const spec = claudeLoginSpawnCommand()
-    ;({ cmd, args } = spec)
-    detached = spec.detached ?? false
-  }
-  // grok prints the device URL + code on plain stdout (no PTY needed, same as codex).
-  else if (kind === "grok") { cmd = resolveCommand(["grok"], env, process.platform) ?? "grok"; args = ["login", "--device-auth"] }
-  else { cmd = ""; args = [] } // unknown kind handled below
+  // Per-kind command lines live in each agents/<kind>/auth.ts; this stays a
+  // generic runner. null descriptor = the kind has no CLI device login.
+  const spec = loginSpawnCommands[kind as AgentKind]?.() ?? null
   let outCb: (c: string) => void = () => {}
   let exitCb: (code: number | null) => void = () => {}
-  if (!cmd) {
+  if (!spec) {
     queueMicrotask(() => { outCb(`no device login for ${kind}`); exitCb(127) })
     return { onStdout: (cb: (c: string) => void) => { outCb = cb }, onExit: (cb: (code: number | null) => void) => { exitCb = cb }, kill: () => {}, write: () => {} }
   }
+  const { cmd, args } = spec
+  const detached = spec.detached ?? false
+  const env = spec.env ?? ({ ...process.env } as Record<string, string>)
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = (kind === "claude")
-      ? nodeSpawn(cmd, args, { env, detached })
-      : spawnCommand(cmd, args, { env, detached })
+    // The launcher spawner equals a plain spawn on POSIX and only wraps the
+    // Windows shim formats (.cmd/.ps1) — safe for every kind. PTY needs are
+    // met inside the descriptor's own command line (claude wraps `script`).
+    child = spawnCommand(cmd, args, { env, detached })
   } catch (err: any) {
     // Missing binary (ENOENT) etc — report failure instead of crashing the broker.
     log.warn("login_spawn_failed", { kind, cmd, err: err?.message ?? String(err) })
@@ -1778,14 +1777,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return next
     },
     getAgentStatuses: () => {
-      const c = settings.getAppConfig(appConfigEnv)
-      const hasCredential = (kind: AgentKind) =>
-        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey) || claudeCliIsAuthenticated()
-        : kind === "codex" ? !!c.codexApiKey
-        : kind === "cursor" ? !!c.cursorApiKey
-        : false
       return detectAllAgents(
-        { hasBinary, fileExists: existsSync, hasCredential },
+        { hasBinary, fileExists: existsSync, hasCredential: agentHasCredential },
         {
           home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
           appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
@@ -1974,7 +1967,9 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
     },
     fileExists: existsSync,
-    hasCredential: (kind) => kind === AgentKind.Claude && claudeCliIsAuthenticated(),
+    // Was claude-only. Now every kind answers, so a stored codex/cursor API
+    // key short-circuits the login flow the same way a CLI cred file does.
+    hasCredential: agentHasCredential,
     spawnLogin: spawnLoginProc,
     onChange: (kind, st) => {
       webChannel?.broadcastToAll({ type: "agent_login_state", kind, state: st })

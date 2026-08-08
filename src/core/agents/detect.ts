@@ -61,6 +61,30 @@ export function authCredPath(kind: AgentKind, paths: DetectPaths): string {
   }
 }
 
+/** The app-config slice that can carry stored (non-CLI-file) credentials. */
+export interface StoredCredentialConfig {
+  claudeOauthToken?: string
+  anthropicApiKey?: string
+  codexApiKey?: string
+  cursorApiKey?: string
+}
+
+/** Stored-credential probe beside authCredPath: a key in the broker's own
+ * config store also counts as "logged in" — the CLI cred file is not the only
+ * truth. opencode/grok have no stored-key config field (yet), so they answer
+ * false and rely on the cred-file probe alone. */
+const STORED_CREDENTIALS: Record<AgentKind, (c: StoredCredentialConfig) => boolean> = {
+  [AgentKind.Claude]: (c) => !!(c.claudeOauthToken || c.anthropicApiKey),
+  [AgentKind.Codex]: (c) => !!c.codexApiKey,
+  [AgentKind.Cursor]: (c) => !!c.cursorApiKey,
+  [AgentKind.OpenCode]: () => false,
+  [AgentKind.Grok]: () => false,
+}
+
+export function hasStoredCredential(kind: AgentKind, config: StoredCredentialConfig): boolean {
+  return STORED_CREDENTIALS[kind]?.(config) ?? false
+}
+
 export function detectAgent(kind: AgentKind, probes: DetectProbes, paths: DetectPaths): AgentStatus {
   const installed = BINARIES[kind].some(probes.hasBinary)
   // `authed` means a real credential is present: the CLI's auth file exists (or a

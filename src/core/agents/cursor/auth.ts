@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, copyFileSync, chmodSync } from "fs"
 import { posix, win32 } from "path"
 import { home } from "../../../shared/home"
 import { ensureSharedCursorRuntime } from "../shared-runtime"
+import { resolveCommand } from "../../process/launcher"
+import type { LoginSpawnCommand } from "../login/spawn-command"
 
 export type CursorAuthResult =
   | { mode: "api_key"; env: { CURSOR_API_KEY: string } }
@@ -85,4 +87,13 @@ export async function resolveCursorAuth(opts: {
   }
 
   return { mode: "oauth_copy", env: isolatedEnv }
+}
+
+/** Device-login spawn descriptor. cursor-agent prints the login URL on
+ * stdout; NO_OPEN_BROWSER stops it from opening one on the broker host. */
+export function loginSpawnCommand(): LoginSpawnCommand {
+  const env = { ...process.env } as Record<string, string>
+  const cmd = resolveCommand(["cursor-agent", "agent"], env, process.platform) ?? "cursor-agent"
+  env.NO_OPEN_BROWSER = "1"
+  return { cmd, args: ["login"], env }
 }

@@ -1,5 +1,8 @@
 import { existsSync, copyFileSync, mkdirSync, chmodSync } from "fs"
 import { join } from "path"
+import { homedir } from "os"
+import { resolveCommand } from "../../process/launcher"
+import type { LoginSpawnCommand } from "../login/spawn-command"
 
 export type CodexAuthResult =
   | { mode: "api_key"; env: { OPENAI_API_KEY: string } }
@@ -28,4 +31,13 @@ export async function resolveCodexAuth(opts: {
     `Codex auth not found at ${userAuth} and OPENAI_API_KEY is unset. ` +
     `Run \`codex login\` first.`
   )
+}
+
+/** Device-login spawn descriptor. `codex login --device-auth` prints the
+ * device URL + code on plain stdout — no PTY needed. */
+export function loginSpawnCommand(): LoginSpawnCommand {
+  const env = { ...process.env } as Record<string, string>
+  const cmd = resolveCommand(["codex"], env, process.platform) ?? "codex"
+  env.CODEX_HOME = join(homedir(), ".codex")
+  return { cmd, args: ["login", "--device-auth"], env }
 }
