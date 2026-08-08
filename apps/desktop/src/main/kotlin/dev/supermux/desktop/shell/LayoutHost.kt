@@ -481,117 +481,131 @@ internal fun ViewTabStrip(
     onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
-    Row(
+    // Distinguishes this strip's macOS drag-region registrations (groupId can be "" on
+    // back-compat call sites, and groups can recompose across workspaces).
+    val chromeKey = remember { java.util.UUID.randomUUID().toString() }
+    Box(
         modifier
             .fillMaxWidth()
             .height(32.dp)
             .background(cs.surfaceContainerLow)
-            .horizontalScroll(rememberScrollState())
-            // No strip padding — tabs flush to the strip edges (square chrome).
             .onGloballyPositioned { coords ->
                 if (groupId.isNotEmpty()) {
                     dragState?.registerStrip(groupId, coords.boundsInRoot())
                 }
             }
+            // macOS: the strip's EMPTY TAIL is a native window-drag handle (browser-tab-bar
+            // behavior); the tabs+"+" row below punches itself out of the region, so dragging a
+            // tab never moves the window. No-op off macOS/JBR (see MacWindowChrome.kt).
+            .macTitleBarDragRegion("strip-$chromeKey")
             .testTag("view-tab-strip"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        for (id in viewIds) {
-            val selected = id == activeViewId
-            val bg = if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
-            val fg = if (selected) cs.primary else cs.onSurfaceVariant
-            val dimmed = dragState?.isDragging == true && dragState.draggingViewId == id
-            Row(
-                Modifier
-                    // Min width keeps the geometric centre on the label so
-                    // performClick("view-tab-x") selects instead of hitting ×.
-                    .defaultMinSize(minWidth = 56.dp)
-                    .fillMaxHeight()
-                    .onGloballyPositioned { coords ->
-                        if (groupId.isNotEmpty()) {
-                            dragState?.registerTab(groupId, id, coords.boundsInRoot())
-                        }
-                    }
-                    .then(
-                        if (dragState != null && groupId.isNotEmpty()) {
-                            Modifier.tabDragGestures(
-                                viewId = id,
-                                groupId = groupId,
-                                dragState = dragState,
-                                onSelect = onSelect,
-                                onDrop = onDrop,
-                            )
-                        } else {
-                            Modifier.clickable { onSelect(id) }
-                        },
-                    )
-                    // Square tabs; horizontal padding so the label + × read centered.
-                    .background(bg)
-                    .padding(start = 14.dp, end = 8.dp)
-                    .alpha(if (dimmed) 0.35f else 1f)
-                    .testTag("view-tab-$id"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = titleFor(id),
-                    color = fg,
-                    fontFamily = MonoFontFamily,
-                    fontSize = 11.sp,
-                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                )
-                Box(
+        Row(
+            Modifier
+                .fillMaxHeight()
+                .horizontalScroll(rememberScrollState())
+                // No strip padding — tabs flush to the strip edges (square chrome). The row wraps
+                // its content, so its bounds are exactly the tabs+"+" extent (the hole).
+                .macTitleBarNoDragRegion("strip-tabs-$chromeKey"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+        ) {
+            for (id in viewIds) {
+                val selected = id == activeViewId
+                val bg = if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
+                val fg = if (selected) cs.primary else cs.onSurfaceVariant
+                val dimmed = dragState?.isDragging == true && dragState.draggingViewId == id
+                Row(
                     Modifier
-                        .size(16.dp)
-                        .clickable { onClose(id) }
-                        .alpha(if (selected) 0.85f else 0.5f)
-                        .testTag("tab-close-$id"),
-                    contentAlignment = Alignment.Center,
+                        // Min width keeps the geometric centre on the label so
+                        // performClick("view-tab-x") selects instead of hitting ×.
+                        .defaultMinSize(minWidth = 56.dp)
+                        .fillMaxHeight()
+                        .onGloballyPositioned { coords ->
+                            if (groupId.isNotEmpty()) {
+                                dragState?.registerTab(groupId, id, coords.boundsInRoot())
+                            }
+                        }
+                        .then(
+                            if (dragState != null && groupId.isNotEmpty()) {
+                                Modifier.tabDragGestures(
+                                    viewId = id,
+                                    groupId = groupId,
+                                    dragState = dragState,
+                                    onSelect = onSelect,
+                                    onDrop = onDrop,
+                                )
+                            } else {
+                                Modifier.clickable { onSelect(id) }
+                            },
+                        )
+                        // Square tabs; horizontal padding so the label + × read centered.
+                        .background(bg)
+                        .padding(start = 14.dp, end = 8.dp)
+                        .alpha(if (dimmed) 0.35f else 1f)
+                        .testTag("view-tab-$id"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = "Close view",
-                        tint = fg,
-                        modifier = Modifier.size(12.dp),
+                    Text(
+                        text = titleFor(id),
+                        color = fg,
+                        fontFamily = MonoFontFamily,
+                        fontSize = 11.sp,
+                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                     )
+                    Box(
+                        Modifier
+                            .size(16.dp)
+                            .clickable { onClose(id) }
+                            .alpha(if (selected) 0.85f else 0.5f)
+                            .testTag("tab-close-$id"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Close view",
+                            tint = fg,
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
                 }
             }
-        }
 
-        // "+" lives HERE, at the end of the tabs — not on the sidebar row. Adding
-        // a view is a thing you do to the group you are looking at, so the
-        // affordance belongs where the tabs are.
-        if (onAddView != null) {
-            var pickerOpen by remember { mutableStateOf(false) }
-            Box(Modifier.fillMaxHeight()) {
-                Box(
-                    Modifier
-                        .fillMaxHeight()
-                        .width(36.dp)
-                        .clickable { pickerOpen = true }
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .testTag("tab-add-view"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Filled.Add,
-                        contentDescription = "Add a view",
-                        tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-                DropdownMenu(
-                    expanded = pickerOpen,
-                    onDismissRequest = { pickerOpen = false },
-                    modifier = Modifier.testTag("tab-add-view-menu"),
-                ) {
-                    // One step only: pick a kind → always a tab in this pane.
-                    // Split panes via drag-to-edge, not a second menu.
-                    KindMenuItems(onPick = { kind ->
-                        pickerOpen = false
-                        onAddView(kind, NewViewPlacement.HERE)
-                    })
+            // "+" lives HERE, at the end of the tabs — not on the sidebar row. Adding
+            // a view is a thing you do to the group you are looking at, so the
+            // affordance belongs where the tabs are.
+            if (onAddView != null) {
+                var pickerOpen by remember { mutableStateOf(false) }
+                Box(Modifier.fillMaxHeight()) {
+                    Box(
+                        Modifier
+                            .fillMaxHeight()
+                            .width(36.dp)
+                            .clickable { pickerOpen = true }
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .testTag("tab-add-view"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "Add a view",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = pickerOpen,
+                        onDismissRequest = { pickerOpen = false },
+                        modifier = Modifier.testTag("tab-add-view-menu"),
+                    ) {
+                        // One step only: pick a kind → always a tab in this pane.
+                        // Split panes via drag-to-edge, not a second menu.
+                        KindMenuItems(onPick = { kind ->
+                            pickerOpen = false
+                            onAddView(kind, NewViewPlacement.HERE)
+                        })
+                    }
                 }
             }
         }

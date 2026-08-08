@@ -29,6 +29,8 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
     implementation(libs.jediterm.ui)
+    // macOS chrome: JBR custom-title-bar API (MacWindowChrome.kt). Safe no-op facade on non-JBR JVMs.
+    implementation(libs.jbr.api)
     implementation(libs.kcef) // M3 editor: embedded Chromium (JCEF) hosting the shared cm6 bundle (jogamp repo above)
     implementation(libs.zxing.core) // Plan 3 Task 3: pure-Java QR encoder for the first-run host wizard's pairing QR
     // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub, Usage,
