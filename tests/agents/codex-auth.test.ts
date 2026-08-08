@@ -47,13 +47,7 @@ describe("resolveCodexAuth", () => {
     expect(readFileSync(join(sessionHome, "auth.json"), "utf8")).toBe('{"token":"x"}')
   })
 
-  // --- normalized contract ---
-
-  test("the resolver is async", () => {
-    const pending = resolveCodexAuth({ apiKey: "sk-test", userCodexHome: userHome, sessionCodexHome: sessionHome })
-    expect(pending).toBeInstanceOf(Promise)
-    return pending
-  })
+  // --- failure policy (see tests/agents/auth-contract.test.ts) ---
 
   test("FAILS CLOSED: throws a clear error when no auth is available", async () => {
     await expect(

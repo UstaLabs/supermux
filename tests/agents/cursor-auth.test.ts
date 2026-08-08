@@ -67,13 +67,7 @@ describe("resolveCursorAuth", () => {
     expect(readFileSync(sessionAuth, "utf8")).toBe('{"accessToken":"tok"}')
   })
 
-  // --- normalized contract ---
-
-  test("the resolver is async", () => {
-    const pending = resolveCursorAuth({ apiKey: "key_xx", userCursorDir: userCursor, userConfigDir: userConfig, sessionHome })
-    expect(pending).toBeInstanceOf(Promise)
-    return pending
-  })
+  // --- failure policy (see tests/agents/auth-contract.test.ts) ---
 
   test("FAILS CLOSED: throws when no auth is available", async () => {
     await expect(

@@ -154,7 +154,7 @@ import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
 import { LoginManager } from "./core/agents/login/manager"
 import { claudeLoginSpawnCommand } from "./core/agents/login/spawn-command"
-import { claudeCliIsAuthenticated } from "./core/agents/claude-auth-status"
+import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
 import { createWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
@@ -1806,8 +1806,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
     getAgentStatuses: () => {
       const c = settings.getAppConfig(appConfigEnv)
+      // Stored settings credentials only. The darwin Keychain probe and the
+      // credential-file probe now live in `agents/claude/auth.ts`, which
+      // `detectAgent` calls for claude.
       const hasCredential = (kind: AgentKind) =>
-        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey) || claudeCliIsAuthenticated()
+        kind === "claude" ? !!(c.claudeOauthToken || c.anthropicApiKey)
         : kind === "codex" ? !!c.codexApiKey
         : kind === "cursor" ? !!c.cursorApiKey
         : false
@@ -1816,6 +1819,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         {
           home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, xdgDataHome: process.env.XDG_DATA_HOME,
           appData: process.env.APPDATA, localAppData: process.env.LOCALAPPDATA, platform: process.platform,
+          env: process.env,
         },
       )
     },
