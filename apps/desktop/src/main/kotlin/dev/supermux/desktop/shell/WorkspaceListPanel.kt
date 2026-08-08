@@ -173,6 +173,10 @@ fun WorkspaceListPanel(
     onUsage: () -> Unit = {},
     onSettings: () -> Unit = {},
     onDevices: () -> Unit = {},
+    /** When true, the Usage icon hosts an anchored [UsagePopover] (not a centered modal). */
+    usageOpen: Boolean = false,
+    onUsageDismiss: () -> Unit = {},
+    usageContent: (@Composable () -> Unit)? = null,
     /**
      * Shared tab-drag state from the layout host. When non-null, each workspace
      * row registers as a drop target for cross-workspace view moves.
@@ -630,6 +634,9 @@ fun WorkspaceListPanel(
             onUsage = onUsage,
             onDevices = onDevices,
             onSettings = onSettings,
+            usageOpen = usageOpen,
+            onUsageDismiss = onUsageDismiss,
+            usageContent = usageContent,
         )
     }
 
@@ -1065,6 +1072,9 @@ private fun WorkspaceSidebarFooter(
     onUsage: () -> Unit,
     onDevices: () -> Unit,
     onSettings: () -> Unit,
+    usageOpen: Boolean = false,
+    onUsageDismiss: () -> Unit = {},
+    usageContent: (@Composable () -> Unit)? = null,
 ) {
     val darkNow = appearance != AppearanceMode.LIGHT
     val themeIcon = if (darkNow) Icons.Filled.LightMode else Icons.Filled.DarkMode
@@ -1080,7 +1090,16 @@ private fun WorkspaceSidebarFooter(
             horizontalArrangement = Arrangement.End,
         ) {
             WorkspaceFooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
-            WorkspaceFooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
+            Box {
+                WorkspaceFooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
+                if (usageContent != null) {
+                    dev.supermux.desktop.usage.UsagePopover(
+                        expanded = usageOpen,
+                        onDismissRequest = onUsageDismiss,
+                        content = usageContent,
+                    )
+                }
+            }
             WorkspaceFooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
             WorkspaceFooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
         }

@@ -435,6 +435,10 @@ fun SessionListPanel(
     onUsage: () -> Unit = {},
     onSettings: () -> Unit = {},
     onDevices: () -> Unit = {},
+    /** When true, the Usage icon hosts an anchored [UsagePopover] (not a centered modal). */
+    usageOpen: Boolean = false,
+    onUsageDismiss: () -> Unit = {},
+    usageContent: (@Composable () -> Unit)? = null,
     /** Current app appearance — footer theme button shows the opposite affordance. */
     appearance: AppearanceMode = AppearanceMode.DARK,
     onToggleTheme: () -> Unit = {},
@@ -747,6 +751,9 @@ fun SessionListPanel(
             onUsage = onUsage,
             onDevices = onDevices,
             onSettings = onSettings,
+            usageOpen = usageOpen,
+            onUsageDismiss = onUsageDismiss,
+            usageContent = usageContent,
         )
     }
 
@@ -897,6 +904,7 @@ private fun SidebarDividerLine(modifier: Modifier = Modifier) {
 /**
  * Sticky bottom bar: theme / usage / devices / settings icons.
  * New-session lives in the header card — not duplicated here.
+ * Usage opens an icon-anchored [UsagePopover] (not a centered modal).
  */
 @Composable
 private fun SidebarFooter(
@@ -905,6 +913,9 @@ private fun SidebarFooter(
     onUsage: () -> Unit,
     onDevices: () -> Unit,
     onSettings: () -> Unit,
+    usageOpen: Boolean = false,
+    onUsageDismiss: () -> Unit = {},
+    usageContent: (@Composable () -> Unit)? = null,
 ) {
     // Icon shows what you'll switch TO: sun when dark (go light), moon when light (go dark).
     val darkNow = appearance != AppearanceMode.LIGHT
@@ -921,7 +932,16 @@ private fun SidebarFooter(
             horizontalArrangement = Arrangement.End,
         ) {
             FooterIcon(themeIcon, themeLabel, "sidebar_footer_theme", onToggleTheme)
-            FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
+            Box {
+                FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
+                if (usageContent != null) {
+                    dev.supermux.desktop.usage.UsagePopover(
+                        expanded = usageOpen,
+                        onDismissRequest = onUsageDismiss,
+                        content = usageContent,
+                    )
+                }
+            }
             FooterIcon(Icons.Filled.Devices, "Devices", "sidebar_footer_devices", onDevices)
             FooterIcon(Icons.Filled.Settings, "Settings", "sidebar_footer_settings", onSettings)
         }

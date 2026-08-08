@@ -10,7 +10,6 @@ package dev.supermux.desktop.shell
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,7 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.supermux.desktop.ui.DropdownMenu
-import dev.supermux.desktop.ui.ModalOpen
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
@@ -92,6 +90,7 @@ import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.usage.UsagePopover
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.UsageResponse
@@ -260,8 +259,15 @@ class ShellUiState {
 
     // Menu / chrome conveniences → navigate / popover
     fun openArchived() = navigate(DesktopRoute.Archived)
-    /** Floating usage card; closes launcher + full-pane routes (mutual exclusion). */
+    /**
+     * Icon-anchored Usage popover. Toggle when already open; otherwise open (closes
+     * launcher + full-pane routes for mutual exclusion).
+     */
     fun openUsage() {
+        if (usageOpen) {
+            usageOpen = false
+            return
+        }
         launcherOpen = false
         launcherDraftId = null
         popToHome()
@@ -644,6 +650,24 @@ fun AppShell(
                     usageLoading = false
                 }
             }
+            // Body shared by the footer-anchored popover and the collapsed-rail fallback.
+            val usagePopoverBody: @Composable () -> Unit = {
+                Column(Modifier.fillMaxWidth()) {
+                    HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                    UsageScreen(
+                        usage = usageData,
+                        loading = usageLoading,
+                        onBack = { ui.closeUsage() },
+                        onRedeem = {
+                            val r = hostApp.redeemCodexReset()
+                            if (r?.code == "reset" && r.codex != null) {
+                                usageData = usageData?.copy(codex = r.codex)
+                            }
+                            r
+                        },
+                    )
+                }
+            }
 
             // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honor it.
             var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -754,6 +778,9 @@ fun AppShell(
                             onUsage = { ui.openUsage() },
                             onSettings = { ui.openSettings() },
                             onDevices = { ui.openSettings(SettingsSection.Devices) },
+                            usageOpen = ui.usageOpen,
+                            onUsageDismiss = { ui.closeUsage() },
+                            usageContent = usagePopoverBody,
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
                             tabDragState = tabDragState,
@@ -789,6 +816,9 @@ fun AppShell(
                             onUsage = { ui.openUsage() },
                             onSettings = { ui.openSettings() },
                             onDevices = { ui.openSettings(SettingsSection.Devices) },
+                            usageOpen = ui.usageOpen,
+                            onUsageDismiss = { ui.closeUsage() },
+                            usageContent = usagePopoverBody,
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
                             modifier = Modifier
@@ -1277,66 +1307,19 @@ fun AppShell(
                 },
             )
 
-            // ── Usage: floating card popover (not a full-pane Nav3 route) ──
-            // File ▸ Usage… / sidebar footer / session ⋮ → ui.openUsage(). Compact card over the
-            // workspace so glancing at rate limits doesn't take the whole window. ModalOpen hides
-            // JediTerm/KCEF while it's up (Compose cannot paint over heavyweight AWT children).
-            if (ui.usageOpen) {
-                ModalOpen()
-                val usageFocus = remember { FocusRequester() }
-                LaunchedEffect(Unit) { runCatching { usageFocus.requestFocus() } }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .zIndex(20f)
-                        .testTag("usage_overlay")
-                        .focusRequester(usageFocus)
-                        .focusable()
-                        .onPreviewKeyEvent { e ->
-                            if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
-                                ui.closeUsage()
-                                true
-                            } else false
-                        },
-                ) {
-                    // Scrim: click outside the card to dismiss.
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.40f))
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() },
-                            ) { ui.closeUsage() },
-                    )
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(24.dp)
-                            .width(420.dp)
-                            .height(560.dp),
-                        shape = MaterialTheme.shapes.large,
-                        tonalElevation = 6.dp,
-                        shadowElevation = 12.dp,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    ) {
-                        Column(Modifier.fillMaxSize()) {
-                            HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
-                            Box(Modifier.weight(1f)) {
-                                UsageScreen(
-                                    usage = usageData,
-                                    loading = usageLoading,
-                                    onBack = { ui.closeUsage() },
-                                    onRedeem = {
-                                        val r = hostApp.redeemCodexReset()
-                                        if (r?.code == "reset" && r.codex != null) {
-                                            usageData = usageData?.copy(codex = r.codex)
-                                        }
-                                        r
-                                    },
-                                )
-                            }
-                        }
+            // ── Usage fallback when the sidebar is collapsed (no footer Usage icon to anchor) ──
+            // Expanded sidebar: UsagePopover is composed next to sidebar_footer_usage.
+            // Collapsed rail / File menu while collapsed: bottom-start of the window.
+            if (ui.usageOpen && layout.sidebarCollapsed) {
+                Box(Modifier.fillMaxSize().zIndex(20f)) {
+                    // Zero-size anchor at bottom-start of the shell so the position provider
+                    // still places the card above that corner.
+                    Box(Modifier.align(Alignment.BottomStart).size(1.dp)) {
+                        UsagePopover(
+                            expanded = true,
+                            onDismissRequest = { ui.closeUsage() },
+                            content = usagePopoverBody,
+                        )
                     }
                 }
             }
