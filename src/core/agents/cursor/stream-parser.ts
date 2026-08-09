@@ -2,7 +2,7 @@ export type CursorStreamEvent =
   | { kind: "init"; session_id: string; cwd?: string; model?: string }
   | { kind: "assistant-message"; text: string }
   | { kind: "tool-call"; phase: "started" | "completed"; call_id: string; tool: string; detail?: unknown }
-  | { kind: "result"; is_error: boolean }
+  | { kind: "result"; is_error: boolean; text?: string }
 
 export function parseCursorStream(line: string): CursorStreamEvent[] {
   const t = line.trim()
@@ -36,7 +36,10 @@ export function parseCursorStream(line: string): CursorStreamEvent[] {
     return [{ kind: "tool-call", phase, call_id: String(msg.call_id ?? ""), tool, detail: msg }]
   }
   if (msg.type === "result") {
-    return [{ kind: "result", is_error: !!msg.is_error }]
+    // On failure cursor-agent carries its own error text in `result`
+    // (auth rejected, rate limit, model unavailable). Preserve it so the
+    // adapter can surface the agent's message verbatim.
+    return [{ kind: "result", is_error: !!msg.is_error, text: typeof msg.result === "string" ? msg.result : undefined }]
   }
   // Other event kinds (user echo, partial deltas, etc.) are intentionally
   // ignored — the adapter cares only about init/assistant/tool/result.

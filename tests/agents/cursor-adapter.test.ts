@@ -2,12 +2,12 @@ import { describe, test, expect } from "bun:test"
 import { CursorAdapter } from "../../src/core/agents/cursor/adapter"
 
 function mockRunner() {
-  const runs: { args: string[]; emit: (line: string) => void; finish: () => void }[] = []
-  const runner = async (args: string[], onLine: (line: string) => void, onExit: (code: number | null) => void) => {
+  const runs: { args: string[]; emit: (line: string) => void; finish: (code?: number | null, stderrTail?: string) => void }[] = []
+  const runner = async (args: string[], onLine: (line: string) => void, onExit: (code: number | null, stderrTail?: string) => void) => {
     const handle = {
       args,
       emit: (line: string) => onLine(line),
-      finish: () => onExit(0),
+      finish: (code: number | null = 0, stderrTail?: string) => onExit(code, stderrTail),
     }
     runs.push(handle)
     // do not auto-finish; test drives finish
@@ -176,5 +176,73 @@ describe("CursorAdapter", () => {
       persistSessionId: async () => {}, initialSessionId: "id",
     })
     await a.interrupt()  // no active run — should not throw
+  })
+
+  test("result with is_error surfaces the agent's error text as an error event", async () => {
+    const { runner, runs } = mockRunner()
+    const a = new CursorAdapter({
+      sessionName: "s-err", workdir: "/w", runner,
+      persistSessionId: async () => {}, initialSessionId: "id",
+    })
+    const errors: string[] = []
+    const replies: string[] = []
+    a.on("error", (ev: any) => errors.push(ev.error.message))
+    a.on("assistant-message", (ev: any) => replies.push(ev.text))
+    const sendP = a.send("hi")
+    await new Promise(r => setImmediate(r))
+    runs[0]!.emit(JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "Not logged in. Run cursor-agent login." }))
+    runs[0]!.finish()
+    await sendP
+    expect(errors).toEqual(["Not logged in. Run cursor-agent login."])
+    expect(replies).toEqual([])
+  })
+
+  test("nonzero exit without a stream error emits an error with the stderr tail", async () => {
+    const { runner, runs } = mockRunner()
+    const a = new CursorAdapter({
+      sessionName: "s-crash", workdir: "/w", runner,
+      persistSessionId: async () => {}, initialSessionId: "id",
+    })
+    const errors: string[] = []
+    a.on("error", (ev: any) => errors.push(ev.error.message))
+    const sendP = a.send("hi")
+    await new Promise(r => setImmediate(r))
+    runs[0]!.emit(JSON.stringify({ type: "assistant", message: { content: [{ text: "partial" }] } }))
+    runs[0]!.finish(1, "segfault in tokenizer")
+    await sendP
+    expect(errors).toEqual(["cursor-agent exited (code 1): segfault in tokenizer"])
+  })
+
+  test("is_error and nonzero exit together emit only one error", async () => {
+    const { runner, runs } = mockRunner()
+    const a = new CursorAdapter({
+      sessionName: "s-once", workdir: "/w", runner,
+      persistSessionId: async () => {}, initialSessionId: "id",
+    })
+    const errors: string[] = []
+    a.on("error", (ev: any) => errors.push(ev.error.message))
+    const sendP = a.send("hi")
+    await new Promise(r => setImmediate(r))
+    runs[0]!.emit(JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "rate limited" }))
+    runs[0]!.finish(1)
+    await sendP
+    expect(errors).toEqual(["rate limited"])
+  })
+
+  test("user interrupt does not emit an error", async () => {
+    const { runner, runs } = mockRunner()
+    const a = new CursorAdapter({
+      sessionName: "s-int", workdir: "/w", runner,
+      persistSessionId: async () => {}, initialSessionId: "id",
+    })
+    const errors: string[] = []
+    a.on("error", (ev: any) => errors.push(ev.error.message))
+    const sendP = a.send("hi")
+    await new Promise(r => setImmediate(r))
+    runs[0]!.emit(JSON.stringify({ type: "assistant", message: { content: [{ text: "partial" }] } }))
+    await a.interrupt()
+    runs[0]!.finish(null)  // SIGTERM → exit code null
+    await sendP
+    expect(errors).toEqual([])
   })
 })
