@@ -790,7 +790,14 @@ async function onAssistantMessage(
   let dispatchedCount = 0
   let lastError: string | undefined
   for (const { channelName, chat_id } of targets) {
-    const ch = channels[channelName]!
+    // A chat can name a channel this broker does not run (a telegram id held by
+    // a session after the token was removed, say). Say so; do not throw.
+    const ch = channels[channelName]
+    if (!ch) {
+      lastError = `no ${channelName} channel is configured`
+      log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
+      continue
+    }
     const initial: OutboundAction = {
       op: "reply", chat_id, text: ev.text,
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
