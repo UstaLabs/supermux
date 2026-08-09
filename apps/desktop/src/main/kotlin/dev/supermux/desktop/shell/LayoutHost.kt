@@ -1,6 +1,9 @@
 package dev.supermux.desktop.shell
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -21,8 +24,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -30,10 +32,13 @@ import dev.supermux.desktop.ui.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -43,22 +48,31 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.zIndex
 import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.desktop.theme.Motion
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.moveViewToGroup
@@ -68,6 +82,7 @@ import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.setSplitSizes
 import dev.supermux.workspace.splitGroup
 import java.util.UUID
+import kotlin.math.roundToInt
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -87,10 +102,9 @@ import java.util.UUID
  * optimisation: JediTerm and KCEF are heavyweight AWT SwingPanel children, and
  * one live KCEF per background tab would exhaust memory.
  *
- * While a tab drag is active, each group's body is **swapped** for a Compose
- * drop-zone surface (see [DropZoneSurface]) so edge highlights are visible over
- * panes that would otherwise hold a SwingPanel. Overlaying Compose on top of
- * JediTerm/KCEF paints nothing.
+ * While a tab drag targets a pane body, content stays mounted and a translucent
+ * [DropZoneOverlay] is shown in a [Popup] above SwingPanel (JediTerm / KCEF).
+ * Compose siblings cannot paint over heavyweight children — Popup can.
  */
 @Composable
 fun LayoutHost(
@@ -180,11 +194,10 @@ fun LayoutHost(
                 is TabDropTarget.MoveToGroup ->
                     moveViewToGroup(tree, target.viewId, target.toGroupId, target.index) ?: tree
                 is TabDropTarget.Split -> {
-                    // splitGroup only acts when the view already lives in the target
-                    // group and the group has ≥2 views. Cross-group edge drops first
-                    // move the view into the target, then split — but only if the
-                    // target already has another view to stay put; a single-view
-                    // group cannot be split by its only (incoming) tab.
+                    // splitGroup requires the view to already live in the target group
+                    // with ≥2 tabs. Cross-group edge drops move the tab in first — that
+                    // turns a 1-tab neighbour into 2, then splits cleanly. Same-group
+                    // sole-tab edge drops no-op inside splitGroup (UI hides those edges).
                     val owner = groupIdOf(tree, target.viewId)
                     val withView = if (owner == target.groupId) {
                         tree
@@ -205,18 +218,82 @@ fun LayoutHost(
         }
     }
 
-    LayoutHostNode(
-        layout = layout,
-        path = emptyList(),
-        applyEdit = { applyEdit(it) },
-        dragState = drag,
-        onDrop = { applyDrop(it) },
-        modifier = modifier,
-        titleFor = titleFor,
-        onCloseView = onCloseView,
-        onAddView = onAddView,
-        content = content,
-    )
+    // Root box owns the floating drag ghost (session-list style). Ghost coords are
+    // root-space; subtract this box's origin so the chip tracks the pointer.
+    var hostRoot by remember { mutableStateOf(Offset.Zero) }
+    Box(
+        modifier
+            .onGloballyPositioned { hostRoot = it.positionInRoot() },
+    ) {
+        LayoutHostNode(
+            layout = layout,
+            path = emptyList(),
+            applyEdit = { applyEdit(it) },
+            dragState = drag,
+            onDrop = { applyDrop(it) },
+            modifier = Modifier.fillMaxSize(),
+            titleFor = titleFor,
+            onCloseView = onCloseView,
+            onAddView = onAddView,
+            content = content,
+        )
+        val g = drag.ghost
+        if (drag.isDragging && g != null && g.visible) {
+            TabDragGhostChip(
+                label = g.label,
+                widthPx = g.width,
+                heightPx = g.height,
+                modifier = Modifier
+                    .zIndex(20f)
+                    .offset {
+                        IntOffset(
+                            (g.x - hostRoot.x).toInt(),
+                            (g.y - hostRoot.y).toInt(),
+                        )
+                    }
+                    .testTag("tab-drag-ghost"),
+            )
+        }
+    }
+}
+
+/** Floating tab chip that follows the pointer during a drag. */
+@Composable
+private fun TabDragGhostChip(
+    label: String,
+    widthPx: Float,
+    heightPx: Float,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier
+            .width(with(density) { widthPx.toDp() })
+            .height(with(density) { heightPx.toDp().coerceAtLeast(28.dp) }),
+        shape = RoundedCornerShape(6.dp),
+        tonalElevation = 6.dp,
+        shadowElevation = 10.dp,
+        border = BorderStroke(1.dp, cs.primary.copy(alpha = 0.45f)),
+        color = cs.surfaceContainerHigh,
+    ) {
+        Row(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = label,
+                color = cs.primary,
+                fontFamily = MonoFontFamily,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
+    }
 }
 
 /**
@@ -315,27 +392,45 @@ private fun GroupHost(
         DisposableEffect(group.id) {
             onDispose { dragState.unregisterGroup(group.id) }
         }
-        // While a drag is active, SWAP the heavyweight body for a Compose
-        // drop-zone surface. Overlaying zones above SwingPanel is invisible.
+        // Content always stays mounted. Drop preview is a translucent Popup so
+        // it paints *above* SwingPanel (Compose siblings cannot).
+        var paneSize by remember { mutableStateOf(IntSize.Zero) }
         Box(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .onGloballyPositioned { coords ->
                     dragState.registerPane(group.id, coords.boundsInRoot())
-                },
+                }
+                .onSizeChanged { paneSize = it },
         ) {
-            if (dragState.isDragging) {
-                // A pane holding ONE view cannot be split — splitGroup would leave an
-                // empty group — so it shows no edge zones at all. Offering a target
-                // that silently does nothing is the worst possible feedback; use
-                // "+ > Split right/down" to get a second pane from a single view.
-                DropZoneSurface(
-                    activeZone = dragState.zoneOver(group.id),
-                    edgesEnabled = group.viewIds.size >= 2,
-                )
-            } else {
-                content(active)
+            content(active)
+            val hoverThis = dragState.hoverPaneId == group.id
+            if (hoverThis && paneSize.width > 0 && paneSize.height > 0) {
+                val foreignDrag = dragState.originGroupId != null &&
+                    dragState.originGroupId != group.id
+                val density = LocalDensity.current
+                Popup(
+                    alignment = Alignment.TopStart,
+                    offset = IntOffset.Zero,
+                    properties = PopupProperties(
+                        focusable = false,
+                        dismissOnBackPress = false,
+                        dismissOnClickOutside = false,
+                        clippingEnabled = false,
+                    ),
+                ) {
+                    Box(
+                        Modifier
+                            .width(with(density) { paneSize.width.toDp() })
+                            .height(with(density) { paneSize.height.toDp() }),
+                    ) {
+                        DropZoneOverlay(
+                            activeZone = dragState.zoneOver(group.id),
+                            edgesEnabled = foreignDrag || group.viewIds.size >= 2,
+                        )
+                    }
+                }
             }
         }
     }
@@ -481,9 +576,32 @@ internal fun ViewTabStrip(
     onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
+    val density = LocalDensity.current
     // Distinguishes this strip's macOS drag-region registrations (groupId can be "" on
     // back-compat call sites, and groups can recompose across workspaces).
     val chromeKey = remember { java.util.UUID.randomUUID().toString() }
+    // Live shuffle while dragging (origin strip); otherwise committed order.
+    val displayIds = dragState?.displayOrder(groupId, viewIds) ?: viewIds
+    val showInsertCaret = dragState?.isDragging == true &&
+        dragState.hoverStripGroupId == groupId &&
+        dragState.draggingViewId !in viewIds
+    val insertAt = dragState?.hoverInsertIndex ?: 0
+    // Measured tab widths (px) so each tab can animate to a true pixel target —
+    // they transform through each other on reorder instead of list-reflow.
+    val tabWidthsPx = remember { mutableStateMapOf<String, Float>() }
+    val minTabPx = with(density) { 56.dp.toPx() }
+    fun widthOf(id: String) = tabWidthsPx[id]?.coerceAtLeast(minTabPx) ?: minTabPx
+    fun targetXForIndex(index: Int): Float {
+        var x = 0f
+        for (i in 0 until index.coerceAtLeast(0)) {
+            val id = displayIds.getOrNull(i) ?: break
+            x += widthOf(id)
+        }
+        return x
+    }
+    val stripContentWidthPx = displayIds.sumOf { widthOf(it).toDouble() }.toFloat() +
+        if (onAddView != null) with(density) { 36.dp.toPx() } else 0f
+
     Box(
         modifier
             .fillMaxWidth()
@@ -500,84 +618,145 @@ internal fun ViewTabStrip(
             .macTitleBarDragRegion("strip-$chromeKey")
             .testTag("view-tab-strip"),
     ) {
-        Row(
+        // Absolute-positioned tabs: each id keeps composition identity and slides
+        // (graphicsLayer translation) to its live-order slot — "transforms into"
+        // the place the neighbour vacated.
+        Box(
             Modifier
                 .fillMaxHeight()
-                .horizontalScroll(rememberScrollState())
-                // No strip padding — tabs flush to the strip edges (square chrome). The row wraps
-                // its content, so its bounds are exactly the tabs+"+" extent (the hole).
+                .width(with(density) { stripContentWidthPx.toDp().coerceAtLeast(1.dp) })
                 .macTitleBarNoDragRegion("strip-tabs-$chromeKey"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            for (id in viewIds) {
-                val selected = id == activeViewId
-                val bg = if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
-                val fg = if (selected) cs.primary else cs.onSurfaceVariant
-                val dimmed = dragState?.isDragging == true && dragState.draggingViewId == id
-                Row(
-                    Modifier
-                        // Min width keeps the geometric centre on the label so
-                        // performClick("view-tab-x") selects instead of hitting ×.
-                        .defaultMinSize(minWidth = 56.dp)
-                        .fillMaxHeight()
-                        .onGloballyPositioned { coords ->
-                            if (groupId.isNotEmpty()) {
-                                dragState?.registerTab(groupId, id, coords.boundsInRoot())
-                            }
+            // Compose in a stable order (committed viewIds) so keys never reshuffle
+            // under the active pointerInput; visual order is purely animated X.
+            val stableIds = viewIds.ifEmpty { displayIds }
+            fun targetXForOrder(order: List<String>, index: Int): Float {
+                var x = 0f
+                for (i in 0 until index.coerceAtLeast(0)) {
+                    val tid = order.getOrNull(i) ?: break
+                    x += widthOf(tid)
+                }
+                return x
+            }
+            for (id in stableIds) {
+                key(id) {
+                    val isDragged = dragState?.isDragging == true && dragState.draggingViewId == id
+                    // Pin the dragged tab at its press-time slot so its coordinate
+                    // system never rides the morph animation (that caused the
+                    // reorder loop). Neighbours animate to live-order positions;
+                    // the ghost is the moving visual.
+                    val targetX = if (isDragged) {
+                        val pin = viewIds.indexOf(id).let {
+                            if (it >= 0) it else dragState?.dragOriginIndex ?: 0
                         }
-                        .then(
-                            if (dragState != null && groupId.isNotEmpty()) {
-                                Modifier.tabDragGestures(
-                                    viewId = id,
-                                    groupId = groupId,
-                                    dragState = dragState,
-                                    onSelect = onSelect,
-                                    onDrop = onDrop,
-                                )
-                            } else {
-                                Modifier.clickable { onSelect(id) }
-                            },
-                        )
-                        // Square tabs; horizontal padding so the label + × read centered.
-                        .background(bg)
-                        .padding(start = 14.dp, end = 8.dp)
-                        .alpha(if (dimmed) 0.35f else 1f)
-                        .testTag("view-tab-$id"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = titleFor(id),
-                        color = fg,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 11.sp,
-                        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                        targetXForOrder(viewIds, pin)
+                    } else {
+                        val live = displayIds.indexOf(id).let { if (it < 0) 0 else it }
+                        targetXForOrder(displayIds, live)
+                    }
+                    val animatedX by animateFloatAsState(
+                        targetValue = targetX,
+                        animationSpec = Motion.spatial(),
+                        label = "tab-morph-x-$id",
                     )
-                    Box(
+                    val selected = id == activeViewId
+                    val bg = if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
+                    val fg = if (selected) cs.primary else cs.onSurfaceVariant
+                    val z = if (isDragged) 0f else 1f
+                    Row(
                         Modifier
-                            .size(16.dp)
-                            .clickable { onClose(id) }
-                            .alpha(if (selected) 0.85f else 0.5f)
-                            .testTag("tab-close-$id"),
-                        contentAlignment = Alignment.Center,
+                            .zIndex(z)
+                            .graphicsLayer { translationX = animatedX }
+                            // Min width keeps the geometric centre on the label so
+                            // performClick("view-tab-x") selects instead of hitting ×.
+                            .defaultMinSize(minWidth = 56.dp)
+                            .fillMaxHeight()
+                            .onSizeChanged { tabWidthsPx[id] = it.width.toFloat() }
+                            .onGloballyPositioned { coords ->
+                                if (groupId.isNotEmpty()) {
+                                    dragState?.registerTab(groupId, id, coords.boundsInRoot())
+                                }
+                            }
+                            .then(
+                                if (dragState != null && groupId.isNotEmpty()) {
+                                    Modifier.tabDragGestures(
+                                        viewId = id,
+                                        groupId = groupId,
+                                        stripOrderProvider = { viewIds },
+                                        labelProvider = { titleFor(id) },
+                                        dragState = dragState,
+                                        onSelect = onSelect,
+                                        onDrop = onDrop,
+                                    )
+                                } else {
+                                    Modifier.clickable { onSelect(id) }
+                                },
+                            )
+                            .background(bg)
+                            .padding(start = 14.dp, end = 8.dp)
+                            // Fully hide the source slot — ghost is the moving tab.
+                            // Keeping a dimmed chip that also translated was feeding
+                            // pointer local-coords and looping the live order.
+                            .alpha(if (isDragged) 0f else 1f)
+                            .testTag("view-tab-$id"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "Close view",
-                            tint = fg,
-                            modifier = Modifier.size(12.dp),
+                        Text(
+                            text = titleFor(id),
+                            color = fg,
+                            fontFamily = MonoFontFamily,
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                         )
+                        Box(
+                            Modifier
+                                .size(16.dp)
+                                .clickable { onClose(id) }
+                                .alpha(if (selected) 0.85f else 0.5f)
+                                .testTag("tab-close-$id"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "Close view",
+                                tint = fg,
+                                modifier = Modifier.size(12.dp),
+                            )
+                        }
                     }
                 }
             }
 
-            // "+" lives HERE, at the end of the tabs — not on the sidebar row. Adding
-            // a view is a thing you do to the group you are looking at, so the
-            // affordance belongs where the tabs are.
+            if (showInsertCaret) {
+                val caretX = targetXForIndex(insertAt.coerceIn(0, displayIds.size))
+                val animatedCaretX by animateFloatAsState(
+                    targetValue = caretX,
+                    animationSpec = Motion.spatial(),
+                    label = "tab-insert-caret-x",
+                )
+                TabInsertCaret(
+                    Modifier
+                        .zIndex(3f)
+                        .graphicsLayer { translationX = animatedCaretX },
+                )
+            }
+
             if (onAddView != null) {
+                val addTargetX = targetXForIndex(displayIds.size)
+                val animatedAddX by animateFloatAsState(
+                    targetValue = addTargetX,
+                    animationSpec = Motion.spatial(),
+                    label = "tab-add-x",
+                )
                 var pickerOpen by remember { mutableStateOf(false) }
-                Box(Modifier.fillMaxHeight()) {
+                Box(
+                    Modifier
+                        .zIndex(0.5f)
+                        .graphicsLayer { translationX = animatedAddX }
+                        .fillMaxHeight()
+                        .width(36.dp),
+                ) {
                     Box(
                         Modifier
                             .fillMaxHeight()
@@ -599,8 +778,6 @@ internal fun ViewTabStrip(
                         onDismissRequest = { pickerOpen = false },
                         modifier = Modifier.testTag("tab-add-view-menu"),
                     ) {
-                        // One step only: pick a kind → always a tab in this pane.
-                        // Split panes via drag-to-edge, not a second menu.
                         KindMenuItems(onPick = { kind ->
                             pickerOpen = false
                             onAddView(kind, NewViewPlacement.HERE)
@@ -612,6 +789,19 @@ internal fun ViewTabStrip(
     }
 }
 
+@Composable
+private fun TabInsertCaret(modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        modifier
+            .padding(horizontal = 1.dp)
+            .width(2.dp)
+            .fillMaxHeight(0.7f)
+            .background(cs.primary, RoundedCornerShape(1.dp))
+            .testTag("tab-insert-caret"),
+    )
+}
+
 /**
  * Press-to-drag on a tab, matching [dev.supermux.desktop.session.SessionDragReorderState]:
  * mouse-friendly grab after a small move, click when movement stays under the
@@ -621,6 +811,8 @@ internal fun ViewTabStrip(
 private fun Modifier.tabDragGestures(
     viewId: String,
     groupId: String,
+    stripOrderProvider: () -> List<String>,
+    labelProvider: () -> String,
     dragState: TabDragState,
     onSelect: (String) -> Unit,
     onDrop: (TabDropTarget) -> Unit,
@@ -632,6 +824,8 @@ private fun Modifier.tabDragGestures(
             true
         }
     }
+    // Keys: only viewId + groupId. stripOrder/label are read at press so a live
+    // reorder recompose does not cancel this coroutine and freeze the drag.
     .pointerInput(viewId, groupId) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -642,8 +836,19 @@ private fun Modifier.tabDragGestures(
             } else {
                 Offset(downLocal.x, downLocal.y)
             }
-            dragState.begin(viewId, groupId, startRoot)
+            dragState.begin(
+                viewId = viewId,
+                groupId = groupId,
+                rootPos = startRoot,
+                stripOrder = stripOrderProvider(),
+                label = labelProvider(),
+                bounds = boundsAtDown,
+            )
             var passed = false
+            // Accumulate pointer deltas into root space. Do NOT recompute from
+            // local position on a translating tab — that re-fed the live order
+            // and looped the strip.
+            var pointerRoot = startRoot
 
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Main)
@@ -659,7 +864,7 @@ private fun Modifier.tabDragGestures(
                     break
                 }
                 if (change.pressed) {
-                    val pointerRoot = startRoot + (change.position - downLocal)
+                    pointerRoot += change.positionChange()
                     dragState.updatePointer(pointerRoot, startRoot, TAB_DRAG_THRESHOLD_PX)
                     if (dragState.pastThreshold) {
                         passed = true
