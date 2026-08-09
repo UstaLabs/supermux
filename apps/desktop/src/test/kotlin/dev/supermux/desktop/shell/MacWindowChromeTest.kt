@@ -88,6 +88,7 @@ class MacWindowChromeTest {
                         titleFor = { "t" },
                         onSelect = {},
                         onClose = {},
+                        chrome = DesktopStripChrome,
                     )
                 }
             }
@@ -96,5 +97,27 @@ class MacWindowChromeTest {
         // The strip tail (far right, no tab content) drags; the tab area does not.
         assertTrue(regions.allowsNativeDrag(Offset(390f, 10f)), "empty strip tail must drag")
         assertFalse(regions.allowsNativeDrag(Offset(10f, 10f)), "tab content must stay client")
+    }
+
+    @Test
+    fun theViewTabStripRegistersNothingWithoutChrome() = runComposeUiTest {
+        val regions = MacChromeRegions()
+        setContent {
+            CompositionLocalProvider(LocalMacWindowChrome provides regions) {
+                Box(Modifier.size(400.dp, 32.dp)) {
+                    ViewTabStrip(
+                        viewIds = listOf("v1"),
+                        activeViewId = "v1",
+                        titleFor = { "t" },
+                        onSelect = {},
+                        onClose = {},
+                        // no chrome argument — the omission is what this test is about
+                    )
+                }
+            }
+        }
+        waitForIdle()
+        assertFalse(regions.allowsNativeDrag(Offset(390f, 10f)), "no chrome: tail must not drag")
+        assertFalse(regions.allowsNativeDrag(Offset(10f, 10f)), "no chrome: tabs stay client")
     }
 }

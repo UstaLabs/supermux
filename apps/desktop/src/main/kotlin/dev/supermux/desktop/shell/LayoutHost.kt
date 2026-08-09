@@ -143,6 +143,8 @@ fun LayoutHost(
      * Null ignores workspace drops.
      */
     onMoveToWorkspace: ((viewId: String, toWorkspaceId: String) -> Unit)? = null,
+    /** Per-strip platform window chrome (drag regions, etc.); defaults to none. */
+    chrome: PaneStripChrome = PaneStripChrome.None,
     content: @Composable (viewId: String) -> Unit,
 ) {
     val ownedDrag = remember { TabDragState() }
@@ -235,6 +237,7 @@ fun LayoutHost(
             titleFor = titleFor,
             onCloseView = onCloseView,
             onAddView = onAddView,
+            chrome = chrome,
             content = content,
         )
         val g = drag.ghost
@@ -338,14 +341,15 @@ private fun LayoutHostNode(
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
     onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
+    chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
     when (layout) {
         is LayoutNode.Group -> GroupHost(
-            layout, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, content,
+            layout, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, chrome, content,
         )
         is LayoutNode.Split -> SplitHost(
-            layout, path, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, content,
+            layout, path, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, chrome, content,
         )
     }
 }
@@ -360,6 +364,7 @@ private fun GroupHost(
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
     onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
+    chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
     if (group.viewIds.isEmpty()) {
@@ -384,6 +389,7 @@ private fun GroupHost(
             dragState = dragState,
             onDrop = onDrop,
             onAddView = onAddView?.let { add -> { kind, place -> add(group.id, kind, place) } },
+            chrome = chrome,
         )
         // A group that leaves composition (workspace switch, session switch, a split
         // collapsing) must take its registered bounds with it. Otherwise resolveDrop
@@ -447,6 +453,7 @@ private fun SplitHost(
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
     onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
+    chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
     // Reuse the existing ResizableSplit drag chrome rather than writing new
@@ -473,6 +480,7 @@ private fun SplitHost(
             titleFor = titleFor,
             onCloseView = onCloseView,
             onAddView = onAddView,
+            chrome = chrome,
             content = content,
             modifier = Modifier,
         )
@@ -546,6 +554,7 @@ fun ViewTabStrip(
      * button entirely (tests and any caller that cannot create views).
      */
     onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
+    chrome: PaneStripChrome = PaneStripChrome.None,
 ) {
     // Back-compat for call sites that do not participate in drag (previews, older tests).
     ViewTabStrip(
@@ -559,6 +568,7 @@ fun ViewTabStrip(
         onDrop = {},
         modifier = modifier,
         onAddView = onAddView,
+        chrome = chrome,
     )
 }
 
@@ -572,12 +582,13 @@ internal fun ViewTabStrip(
     onClose: (String) -> Unit,
     dragState: TabDragState?,
     onDrop: (TabDropTarget) -> Unit,
+    chrome: PaneStripChrome,
     modifier: Modifier = Modifier,
     onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
-    // Distinguishes this strip's macOS drag-region registrations (groupId can be "" on
+    // Unique, stable key for this strip's PaneStripChrome registrations (groupId can be "" on
     // back-compat call sites, and groups can recompose across workspaces).
     val chromeKey = remember { java.util.UUID.randomUUID().toString() }
     // Live shuffle while dragging (origin strip); otherwise committed order.
@@ -612,10 +623,10 @@ internal fun ViewTabStrip(
                     dragState?.registerStrip(groupId, coords.boundsInRoot())
                 }
             }
-            // macOS: the strip's EMPTY TAIL is a native window-drag handle (browser-tab-bar
-            // behavior); the tabs+"+" row below punches itself out of the region, so dragging a
-            // tab never moves the window. No-op off macOS/JBR (see MacWindowChrome.kt).
-            .macTitleBarDragRegion("strip-$chromeKey")
+            // Strip-level platform chrome (e.g. macOS native window-drag on the empty tail); the
+            // tabs+"+" row below carries its own chrome.tabs(...) call so it is excluded from
+            // this surface. A no-op unless the caller opts in — see PaneStripChrome.kt.
+            .then(chrome.strip("strip-$chromeKey"))
             .testTag("view-tab-strip"),
     ) {
         // Absolute-positioned tabs: each id keeps composition identity and slides
@@ -625,7 +636,7 @@ internal fun ViewTabStrip(
             Modifier
                 .fillMaxHeight()
                 .width(with(density) { stripContentWidthPx.toDp().coerceAtLeast(1.dp) })
-                .macTitleBarNoDragRegion("strip-tabs-$chromeKey"),
+                .then(chrome.tabs("strip-tabs-$chromeKey")),
         ) {
             // Compose in a stable order (committed viewIds) so keys never reshuffle
             // under the active pointerInput; visual order is purely animated X.

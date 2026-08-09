@@ -1017,6 +1017,7 @@ fun AppShell(
                                         }
                                     },
                                     modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
+                                    chrome = DesktopStripChrome,
                                 ) { viewId ->
                                     val v = viewsById[viewId]
                                     if (v != null && v.kind == "chat" && v.chatSessionId() == null) {
