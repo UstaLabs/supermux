@@ -33,11 +33,12 @@ export function makeRealCursorRunner(opts: {
       // normal settle path (onExit + resolve) — a clean turn-end, not an error.
       const onAbort = () => { try { child.kill("SIGTERM") } catch { /* already gone */ } }
       let settled = false
+      let stderrTail = ""
       const settle = (code: number | null) => {
         if (settled) return
         settled = true
         signal?.removeEventListener("abort", onAbort)
-        onExit(code)
+        onExit(code, stderrTail.trim() || undefined)
         resolve()
       }
       if (signal) {
@@ -56,7 +57,10 @@ export function makeRealCursorRunner(opts: {
       // Consume stderr so the child doesn't deadlock when the pipe buffer
       // fills. Log at debug since cursor-agent uses stderr for routine output.
       child.stderr!.on("data", (chunk: Buffer) => {
-        log.debug("stderr", { text: chunk.toString("utf8").slice(0, 200) })
+        const text = chunk.toString("utf8")
+        log.debug("stderr", { text: text.slice(0, 200) })
+        // Keep the tail so a crash exit can report cursor-agent's own words.
+        stderrTail = (stderrTail + text).slice(-500)
       })
 
       child.on("exit", (code) => {
@@ -68,6 +72,7 @@ export function makeRealCursorRunner(opts: {
       // session.
       child.on("error", (err) => {
         log.warn("spawn_error", { err: String(err) })
+        stderrTail = stderrTail || String(err)
         settle(null)
       })
     })

@@ -8,7 +8,7 @@ const log = makeLogger("agents/cursor/adapter")
 export type CursorRunner = (
   args: string[],
   onLine: (line: string) => void,
-  onExit: (code: number | null) => void,
+  onExit: (code: number | null, stderrTail?: string) => void,
   /** Aborts the in-flight turn (the real runner SIGTERMs the cursor-agent child). */
   signal?: AbortSignal,
 ) => Promise<void>
@@ -135,6 +135,7 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
     let turnStarted = false
     const abort = new AbortController()
     this.activeAbort = abort
+    this.turnErrorEmitted = false
     try {
       await this.runner(
         args,
@@ -142,7 +143,16 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
           if (!turnStarted) { turnStarted = true; this.emit("turn-start", { kind: "turn-start" }) }
           this.dispatchLine(line)
         },
-        (_code) => {
+        (code, stderrTail) => {
+          // A crash exit (nonzero code, or killed without a user interrupt) is
+          // cursor-agent's own failure signal — surface it unless the stream
+          // already reported the error via result.is_error.
+          const crashed = !abort.signal.aborted && (code === null ? !turnStarted : code !== 0)
+          if (crashed && !this.turnErrorEmitted) {
+            this.turnErrorEmitted = true
+            const reason = stderrTail ? `: ${stderrTail}` : ""
+            this.emit("error", { kind: "error", error: new Error(`cursor-agent exited (${code === null ? "no exit code" : `code ${code}`})${reason}`) })
+          }
           this.flushAssistant()
           this.emit("turn-complete", { kind: "turn-complete" })
           exitResolve()
@@ -161,6 +171,9 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
   // reply floods the chat with duplicates. Buffer the latest snapshot and
   // emit ONCE when the turn completes (result event / process exit).
   private pendingAssistantText: string | undefined
+  // One error per turn: result.is_error and a nonzero exit usually arrive
+  // together; the first wins.
+  private turnErrorEmitted = false
 
   private dispatchLine(line: string): void {
     for (const ev of parseCursorStream(line)) {
@@ -174,6 +187,17 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
       } else if (ev.kind === "tool-call") {
         this.emit("tool-call", { kind: "tool-call", tool: ev.tool, phase: ev.phase, call_id: ev.call_id, detail: ev.detail })
       } else if (ev.kind === "result") {
+        // cursor-agent reports turn failure (auth rejected, rate limit, model
+        // unavailable) via result.is_error, carrying its error text in the
+        // result body. Surface it; without this the failed turn is
+        // indistinguishable from a successful empty one.
+        if (ev.is_error && !this.turnErrorEmitted) {
+          this.turnErrorEmitted = true
+          // On failure the buffered assistant snapshot (if any) duplicates the
+          // error text — the error event is the reply, so drop the buffer.
+          if (this.pendingAssistantText === ev.text) this.pendingAssistantText = undefined
+          this.emit("error", { kind: "error", error: new Error(ev.text || "cursor-agent reported an error") })
+        }
         this.flushAssistant()
       }
     }
