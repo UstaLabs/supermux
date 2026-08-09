@@ -20,6 +20,8 @@ export interface MessageEntry {
   edited_at?: string
   reactions?: Array<{ emoji: string; ts: string }>
   attachments?: AttachmentRef[]
+  /** Agent-returned error delivered as a chat message; rendered with an error icon/style. */
+  error?: boolean
 }
 
 export const useMessages = defineStore("messages", () => {

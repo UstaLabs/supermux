@@ -24,6 +24,9 @@ export interface Message {
   edited_at?: string
   attachments?: AttachmentRef[]
   reactions?: Array<{ emoji: string; ts: string }>
+  /** True when this outbound entry is an agent-returned error, so clients can
+   *  render it distinctly (icon/style) without the text being decorated. */
+  error?: boolean
 }
 
 type AppendL  = (sessionId: string, entry: Message) => void
@@ -52,8 +55,8 @@ export class MessageStore {
 
   append(sessionId: string, entry: Message): void {
     this.db.prepare(`
-      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions)
-      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO messages (id, session, session_id, ts, direction, channel, chat_id, message_id, op, text, edited_at, attachments, reactions, error)
+      VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.id,
       sessionId,
@@ -67,6 +70,7 @@ export class MessageStore {
       entry.edited_at ?? null,
       entry.attachments ? JSON.stringify(entry.attachments) : null,
       entry.reactions ? JSON.stringify(entry.reactions) : null,
+      entry.error ? 1 : 0,
     )
     // Bump ref_count for each attachment so the hourly GC sweep doesn't reap a
     // file that's still referenced by this row. fileStore is optional (tests
@@ -181,5 +185,6 @@ function rowToMessage(row: any): Message {
     edited_at: row.edited_at ?? undefined,
     attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
     reactions: row.reactions ? JSON.parse(row.reactions) : undefined,
+    error: row.error ? true : undefined,
   }
 }
