@@ -67,7 +67,14 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   private queue: { text: string; chat_id?: string; attachmentFileId?: string; resolve: () => void; reject: (e: Error) => void }[] = []
   private draining = false
-  private activeChatId?: string
+  /** Chat this session last spoke on. Sticky on purpose: a turn grok started by
+   * itself has no inbound message to take a chat_id from, and an undefined one
+   * falls back to the fan-out that reaches nobody once the chat's active session
+   * moved on — the text was dispatched, then dropped. */
+  private lastChatId?: string
+  /** Latch for "a turn is open", set by whichever side sees the boundary first —
+   * runOne when we prompt, the stream when grok prompts itself. Keeps turn-start /
+   * turn-complete at exactly one each per turn. */
   private turnActive = false
   /** True while ACP `session/load` is replaying prior conversation as
    * `session/update` notifications. Supermux already owns chat history, so
@@ -214,7 +221,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       while (this.queue.length) {
         const next = this.queue.shift()!
         try {
-          this.activeChatId = next.chat_id
+          if (next.chat_id) this.lastChatId = next.chat_id
           const text = await this.withAttachment(next.text, next.attachmentFileId)
           await this.runOne(text)
           next.resolve()
@@ -222,7 +229,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
           // runOne emits `error` for turn failures and does not rethrow them.
           // Remaining throws (e.g. session not initialized) still reject send().
           next.reject(err instanceof Error ? err : new Error(String(err)))
-        } finally { this.activeChatId = undefined }
+        }
       }
     } finally { this.draining = false }
   }
@@ -282,23 +289,30 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     } finally {
       disarm()
       this.onTurnActivity = undefined
-      this.turnActive = false
+      // Safety net for a turn that never reported turn_completed (JSON-RPC error,
+      // child exit, stall). flushAssistant is a no-op on an empty buffer, and the
+      // latch keeps Stop from double-firing when the stream already closed the turn.
       this.flushAssistant()
-      this.emit("turn-complete", { kind: "turn-complete" })
+      if (this.turnActive) { this.turnActive = false; this.emit("turn-complete", { kind: "turn-complete" }) }
     }
   }
 
   // grok streams `agent_message_chunk` as token-level DELTAS ("gro", "k", "-", "live"),
   // not cumulative snapshots. Emitting each chunk as its own assistant-message would
   // push one chat message per token. Accumulate deltas, then flush at natural speech
-  // boundaries: (1) a new tool_call (commentary before tools) and (2) turn end.
+  // boundaries: (1) a new tool_call (commentary before tools) and (2) the stream's
+  // own `turn_completed` — which fires for turns grok starts by itself too.
   // Live-verified (grok 0.2.101): multi-step turns interleave
   //   agent_message_chunk* → tool_call → … → agent_message_chunk* → end_turn
   // ACP's optional messageId on chunks is NOT emitted by grok today.
   private pendingAssistantText = ""
 
   private onNotification(method: string, params: unknown): void {
-    if (method !== "session/update") return
+    // Turn boundaries ride grok's vendor notification, not plain session/update.
+    // Live traffic spells it `_x.ai/session_notification`; grok's own on-disk log
+    // (and session/load replay) spells the same frame `_x.ai/session/update`, so
+    // accept both rather than depend on one spelling.
+    if (method !== "session/update" && method !== "_x.ai/session_notification" && method !== "_x.ai/session/update") return
     // available_commands_update carries the CURRENT skill/command list (grok
     // pushes it after session/new AND during session/load replay), so handle it
     // before the replay gate. It is ambient state, not turn progress — it does
@@ -317,6 +331,20 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
     // Any session/update counts as turn activity for the stall watchdog
     // (thoughts, tool calls, message chunks).
     this.onTurnActivity?.()
+    // THE STREAM OWNS THE TURN. grok also starts turns we never prompted (it
+    // injects its own user message when a background task it launched finishes),
+    // so the session/prompt request lifetime cannot be the turn boundary. Both
+    // kinds of turn open with user_message_chunk and close with turn_completed,
+    // and `turnActive` latches whichever side saw the boundary first.
+    if (upd?.sessionUpdate === "user_message_chunk") {
+      if (!this.turnActive) { this.turnActive = true; this.emit("turn-start", { kind: "turn-start" }) }
+      return
+    }
+    if (upd?.sessionUpdate === "turn_completed") {
+      this.flushAssistant()
+      if (this.turnActive) { this.turnActive = false; this.emit("turn-complete", { kind: "turn-complete" }) }
+      return
+    }
     for (const ev of parseGrokUpdate(params)) {
       if (ev.kind === "assistant-message") {
         this.pendingAssistantText += ev.text
@@ -334,7 +362,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private flushAssistant(): void {
     const text = this.pendingAssistantText.trim()
     this.pendingAssistantText = ""
-    if (text) this.emit("assistant-message", { kind: "assistant-message", text, chat_id: this.activeChatId })
+    if (text) this.emit("assistant-message", { kind: "assistant-message", text, chat_id: this.lastChatId })
   }
 
   private async onServerRequest(method: string, params: unknown): Promise<unknown> {

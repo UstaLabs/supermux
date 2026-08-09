@@ -123,6 +123,44 @@ test("flushes the partial answer when a turn is interrupted", async () => {
   expect(msgs.map((m) => m.text)).toEqual(["1 2 3"])
 })
 
+test("flushes a turn grok starts by itself at its own turn_completed", async () => {
+  // Live-verified: when a background task grok launched finishes, grok injects its
+  // own user message and runs a whole turn with no session/prompt from us. The
+  // request lifetime therefore cannot own the turn boundary — the stream does.
+  // Without this, that turn's text sat in the buffer and left glued to the FRONT
+  // of the next turn's first flush (or was dropped entirely).
+  const fr = fakeRunner()
+  const msgs: any[] = []
+  const turns: string[] = []
+  const adapter = new GrokAdapter({ sessionName: "s1", workdir: "/w", runner: fr.runner, persistSessionId: async () => {} })
+  adapter.on("assistant-message", (e) => msgs.push(e))
+  for (const k of ["turn-start", "turn-complete"]) adapter.on(k, (e) => turns.push(e.kind))
+
+  const started = adapter.start()
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } })
+  await tick(); fr.feed({ jsonrpc: "2.0", id: 2, result: { sessionId: "sess-1" } })
+  await started
+
+  const sent = adapter.send("hi", { chat_id: "web" } as any)
+  await tick()
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "hi" } } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer." } } } })
+  fr.feed({ jsonrpc: "2.0", method: "_x.ai/session_notification", params: { update: { sessionUpdate: "turn_completed", prompt_id: "p1", stop_reason: "end_turn" } } })
+  fr.feed({ jsonrpc: "2.0", id: 3, result: { stopReason: "EndTurn" } })
+  await sent
+
+  // Now supermux is idle. Grok runs a turn on its own.
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "<system-reminder>\nBackground task \"t1\" completed (exit 0).\n</system-reminder>" } } } })
+  fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "That background task finished." } } } })
+  fr.feed({ jsonrpc: "2.0", method: "_x.ai/session_notification", params: { update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-t1", stop_reason: "end_turn" } } })
+
+  // Delivered on its own, in its own message, to the chat we last talked on.
+  expect(msgs.map((m) => m.text)).toEqual(["Answer.", "That background task finished."])
+  expect(msgs.map((m) => m.chat_id)).toEqual(["web", "web"])
+  // One start + one complete per turn — no double-fire from the request path.
+  expect(turns).toEqual(["turn-start", "turn-complete", "turn-start", "turn-complete"])
+})
+
 test("start() passes model + effort as spawn flags, not as session/prompt params", async () => {
   // Regression guard: grok ignores a `model` param on session/prompt, and has no
   // session/set_reasoning_effort. Both must ride the spawn flags or the model and
