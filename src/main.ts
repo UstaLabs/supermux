@@ -825,6 +825,16 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   agentStateStore.applyEvent(sessionId, "Stop")
   // in-app toast for any open PWA
   webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
+  // Deliver the error into the chat transcript, same fan-out as an assistant
+  // reply, so the failure is visible in the conversation history on every
+  // channel (not just as an ephemeral toast). onAssistantMessage also fires
+  // the push hook, so when this succeeds the legacy push below is skipped.
+  try {
+    await onAssistantMessage(sessionId, { text: `⚠️ ${errorType}: ${errorMessage}` })
+    return
+  } catch (err) {
+    log.warn("agent_error_reply_failed", { session: sessionName, err: String(err) })
+  }
   // push to the session's most-recent web chat (so it lands even if the PWA is closed)
   try {
     const entries = messageLog.get(sessionId)
