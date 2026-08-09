@@ -58,8 +58,7 @@ import { waitForRegisteredSession } from "./core/session-manager/spawn-registrat
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
-import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
-import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
+import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { isPersistentRuntimeSession } from "./core/session-manager/types"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
@@ -508,14 +507,13 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   })) return
 
   soulSetupQueued.add(session.id)
+  // Through the ONE funnel (was: an inline adapter-or-socket branch that fell
+  // back to the claude shim socket for ANY kind — a non-claude PA's invocation
+  // queued there and expired). A not-ready adapter throws so the catch below
+  // clears the queued flag and the next register attempt retries.
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
-    const current = registry.get(id)
-    const adapter = current ? runtimes.get(current.id)?.adapter : undefined
-    if (adapter) {
-      await adapter.send(text, meta)
-    } else {
-      await server.sendInbound(id, { content: text, meta })
-    }
+    const r = await sessionManager.deliver(id, text, meta)
+    if (!r.ok) throw new Error(`soul-setup delivery not ready: ${r.reason}`)
   }
 
   try {
@@ -598,7 +596,17 @@ const channels: Record<string, Channel> = {
 const sessionManager = new SessionManager(registry, {
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
+  // Component-internal: the claude shim leg of SessionManager.deliver. Every
+  // other sender in this file goes through deliverInbound → sessionManager.deliver.
   socket: { sendInbound: (session_id, payload) => server.sendInbound(session_id, payload) },
+  inbound: {
+    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
+    // clients clear their local "Sending…" bubble even when the turn-start
+    // UserPromptSubmit hook is dropped (fire-and-forget curl) and the turn emits
+    // no other state change. Mutates nothing — it just re-emits the same frame
+    // the change-listener would send (keeps delivery a pure reflector).
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
+  },
   backend: {
     runtimeTargetIdOf,
     kill: (targetId) => sessionBackend.kill(targetId),
@@ -608,7 +616,7 @@ const sessionManager = new SessionManager(registry, {
     fsWatcher: { killSession: (name) => fsWatcher.killSession(name) },
     stopClaudeTailer,
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
-    recentInbound: { clear: (id) => recentInboundIds.clear(id) },
+
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
   },
   displays: {
@@ -2094,19 +2102,12 @@ const server = await startSocketServer({
   },
 })
 
-const recentInboundIds = new RecentInboundIds()
+// Thin alias over THE inbound funnel (SessionManager.deliver): adapter.send for
+// codex/cursor/opencode/grok, the shim socket for claude, message_id dedupe,
+// and the "Sending…" reconcile broadcast. Kept as a local function so the many
+// existing call sites read unchanged.
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
-  return deliverInboundCore({
-    getAdapter: (id) => runtimes.get(id)?.adapter,
-    isClaude: (id) => isPersistentRuntimeSession({ agent: registry.get(id)?.agent ?? AgentKind.Claude }),
-    sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
-    seen: recentInboundIds,
-    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
-    // their local "Sending…" bubble even when the turn-start UserPromptSubmit hook is dropped
-    // (fire-and-forget curl) and the turn emits no other state change. Mutates nothing — it just
-    // re-emits the same frame the change-listener would send (keeps delivery a pure reflector).
-    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
-  }, sessionId, text, meta)
+  return sessionManager.deliver(sessionId, text, meta)
 }
 
 async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered: number; reason?: string }> {
@@ -2650,13 +2651,12 @@ if (webChannel) {
     }
     handleWebInbound(inbound, {
       messageLog,
-      sendInbound: (sid, payload) => server.sendInbound(sid, payload),
       hasSession: (id) => !!registry.get(id),
       replyNoSuchSession: async (chat_id, sessionId) => {
         log.warn("web_inbound_no_session", { chat_id, sessionId })
         await webChannel!.send({ op: "reply", chat_id, text: `no such session: ${sessionId}` })
       },
-      adapterSend: async (sid, text, meta) => {
+      deliver: async (sid, text, meta) => {
         const sessionEntry = registry.get(sid)
         const sessionId = sessionEntry?.id ?? sid
         log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
@@ -2690,7 +2690,11 @@ agentRpc = createAgentRpc({
   newRequestId: () => randomUUID(),
   now: () => Date.now(),
   buildPrompt: buildRpcPrompt,
-  isAlive: (sessionId) => !!registry.get(sessionId)?.connected,
+  // Kind-aware worker liveness (was: a claude-shaped `connected` poll — a
+  // codex/cursor worker would look dead and be respawned on every call):
+  // claude workers are alive while a shim reports CONNECTED, adapter-driven
+  // workers while their adapter is registered.
+  isAlive: (sessionId) => sessionManager.isDeliverable(sessionId),
   killWorker: async (sessionId) => { await killSession(sessionId); unregisterSession(sessionId) },
   deliver: async (sessionId, text) => { await deliverInbound(sessionId, text, {}) },
   spawnWorker: async ({ key, agent, model }) => {
@@ -2821,19 +2825,27 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
         return { name: r.name }
       },
       waitReady: async (name) => {
-        // Wait for the session to report CONNECTED (a shim attached), not just
-        // registered — delivering before the channel shim is up loses the frame.
-        // ~30s budget (claude cold start + shim connect).
+        // Kind-aware readiness (was: a claude-shaped `connected` poll — a codex
+        // curator never attaches a channel shim, so the old wait burned the full
+        // budget and delivery then queued into inbound_undeliverable): claude is
+        // ready when its shim reports CONNECTED; adapter-driven kinds when their
+        // adapter lands in the runtime map. ~30s budget (cold start + connect).
         for (let i = 0; i < 600; i++) {
           const s = registry.get(name) ?? registry.resolveName(name)
-          if (s?.connected) return s.id
+          if (s && sessionManager.isDeliverable(s.id)) return s.id
           await new Promise((res) => setTimeout(res, 50))
         }
         const s = registry.get(name) ?? registry.resolveName(name)
         return s?.id // fall back to whatever we have; deliver-retry is the backstop
       },
       sendInbound: async (sid, content, cid) => {
-        await server.sendInbound(sid, { content, meta: { chat_id: cid } } as any)
+        // Through the ONE funnel (adapter for codex/cursor/…, shim socket for
+        // claude). Deliberately NO message_id in meta: run.ts re-sends on a
+        // quiet agent and the funnel's dedupe would swallow that retry. A
+        // not-ready result is logged, not thrown — the deliverUntilActive
+        // retry/backstop in core/curator/run.ts owns recovery.
+        const r = await sessionManager.deliver(sid, content, { chat_id: cid })
+        if (!r.ok) log.warn("curator_deliver_not_ready", { sid, reason: r.reason })
       },
       isIdle: (sid) => (agentStateStore.get(sid)?.phase ?? "idle") === "idle",
       getActive: (cid) => registry.getActive(cid),

@@ -1,4 +1,7 @@
 import { RuntimeRegistry, type SessionRuntime } from "./runtime"
+import { deliverInbound, type InboundDeliveryResult } from "./inbound-delivery"
+import { RecentInboundIds } from "./recent-inbound-ids"
+import { isPersistentRuntimeSession } from "./types"
 import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
 import { ClaudeCodeAdapter } from "../agents/claude"
@@ -69,9 +72,18 @@ export type SessionManagerPorts = {
   getWebChannel: () => { broadcastToAll(frame: object): void } | undefined
   /** `let agentRpc` in main.ts is assigned after construction — deref lazily, never capture. */
   getAgentRpc: () => { settle(requestId: string, data: unknown): void; fail(requestId: string, error: string): void }
-  /** The socket server is constructed WITH these handlers, so it is late-bound too. */
+  /** The socket server is constructed WITH these handlers, so it is late-bound too.
+   *  sendInbound is the claude shim transport — component-internal. Every other
+   *  sender goes through SessionManager.deliver, the one kind-aware door. */
   socket: {
     sendInbound(session_id: string, payload: { content: string; meta: Record<string, string> }): Promise<void>
+  }
+  /** Collaborators of the deliver() funnel. */
+  inbound: {
+    /** Fired after a successful hand-off (incl. an idempotent re-send) so the
+     *  broker can re-broadcast the session's CURRENT agent_state — clears the
+     *  client's "Sending…" bubble even if the turn-start hook is dropped. */
+    onDelivered?: (sessionId: string) => void
   }
   /** Claude's persistent-terminal runtime (tmux window addressing). */
   backend: {
@@ -85,7 +97,7 @@ export type SessionManagerPorts = {
     fsWatcher: Pick<FsWatcher, "killSession">
     stopClaudeTailer(sessionUuid: string): void
     releaseDraftAttachments(payload: { attachments?: Array<{ file_id?: string }> } | null | undefined): void
-    recentInbound: { clear(sessionId: string): void }
+
     /** gitStatusService.sync over the current visible-session set. */
     syncGitStatus(): void
   }
@@ -161,6 +173,8 @@ export class SessionManager {
   readonly runtimes = new RuntimeRegistry()
   /** Sessions owing a deferred model/effort apply (marked mid-turn, drained on idle). */
   private readonly pendingReapply = new PendingReapply()
+  /** Dedupe window for inbound message_ids — owned here so deliver() is idempotent. */
+  readonly recentInbound = new RecentInboundIds()
   private readonly ports: SessionManagerPorts
 
   constructor(registry: Registry, ports: SessionManagerPorts) {
@@ -170,6 +184,52 @@ export class SessionManager {
 
   adapterFor(sessionId: string): AgentAdapter | undefined {
     return this.runtimes.get(sessionId)?.adapter
+  }
+
+  /**
+   * THE one inbound door. Routes a user turn to the session's agent by KIND:
+   * adapter.send() for adapter-driven agents (codex/cursor/opencode/grok), the
+   * claude shim socket otherwise. Every broker-side sender (channels, curator,
+   * soul-setup, agent-rpc, reviews) must call this — never the raw socket
+   * sendInbound, which is claude-only transport and silently queues-then-drops
+   * frames for every other kind.
+   */
+  deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+    return deliverInbound({
+      getAdapter: (id) => this.runtimes.get(id)?.adapter,
+      isClaude: (id) => {
+        const s = this.registry.get(id)
+        // No row → preserve the historical claude default (`agent ?? "claude"`).
+        return s ? isPersistentRuntimeSession(s) : true
+      },
+      sendInboundSocket: (id, payload) => this.ports.socket.sendInbound(id, payload),
+      seen: this.recentInbound,
+      onDelivered: (id) => this.ports.inbound.onDelivered?.(id),
+    }, sessionId, text, meta)
+  }
+
+  /**
+   * Kind-aware "can a turn land right now": a persistent-runtime (claude)
+   * session is deliverable once a shim reports CONNECTED; adapter-driven kinds
+   * once their adapter is registered. Readiness waits must use this — polling
+   * `connected` alone is claude-shaped and never comes true for e.g. a codex
+   * session that has no channel shim.
+   */
+  isDeliverable(sessionId: string): boolean {
+    const s = this.registry.get(sessionId)
+    if (!s) return false
+    return isPersistentRuntimeSession(s) ? !!s.connected : !!this.adapterFor(sessionId)
+  }
+
+  /** Poll isDeliverable until it turns true or timeoutMs elapses. */
+  async waitDeliverable(sessionId: string, timeoutMs: number, pollMs = 100): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (this.isDeliverable(sessionId)) return true
+      await new Promise<void>(r => setTimeout(r, pollMs))
+    }
+    log.warn("wait_deliverable_timeout", { sessionId, timeoutMs })
+    return false
   }
 
   registerRuntime(sessionId: string, runtime: SessionRuntime): void {
@@ -257,7 +317,7 @@ export class SessionManager {
     this.deleteRuntime(s.id)
     this.ports.cleanup.stopClaudeTailer(s.id)   // also clears the session's background tasks
     this.ports.agentState.clear(s.id)
-    this.ports.cleanup.recentInbound.clear(s.id)
+    this.recentInbound.clear(s.id)
     this.pendingReapply.clear(s.id)
     // Do NOT delete agent_home — needed for resume
 
@@ -897,6 +957,8 @@ export class SessionManager {
   // resume; opencode/grok have suspended arms; the cursor arm passes pluginArgs
   // from every source (boot silently dropped them before).
 
+  // Genuinely claude-only: called from the claude resume arms, where the shim
+  // connect IS the readiness signal. Kind-agnostic waits use waitDeliverable.
   private async waitForConnected(sessionId: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {

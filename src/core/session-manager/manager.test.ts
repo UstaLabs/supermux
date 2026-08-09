@@ -32,13 +32,13 @@ function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     getWebChannel: () => (seams.frames ? { broadcastToAll: (frame: object) => { seams.frames!.push(frame) } } : undefined),
     getAgentRpc: () => ({ settle: () => {}, fail: () => {} }),
     socket: { sendInbound: async () => {} },
+    inbound: {},
     backend: { runtimeTargetIdOf: async () => null, kill: async () => {} },
     cleanup: {
       terminals: { killAllForSession: async () => {} },
       fsWatcher: { killSession: () => {} },
       stopClaudeTailer: () => {},
       releaseDraftAttachments: () => {},
-      recentInbound: { clear: () => {} },
       syncGitStatus: () => {},
     },
     displays: {
@@ -305,5 +305,101 @@ describe("SessionManager applyConfig", () => {
     const r = await m.applyConfig("g2", { effort: "high" })
     expect(r).toEqual({ ok: false, error: "grok session has no live adapter" })
     expect(m.registry.get("g2")?.reasoningLevel).toBe("low")
+  })
+})
+
+// ── deliver(): the one kind-aware inbound door ───────────────────────────────
+
+function managerForDeliver(): {
+  m: SessionManager
+  socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }>
+  delivered: string[]
+} {
+  const db = openDb(":memory:")
+  runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+  const socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }> = []
+  const delivered: string[] = []
+  const ports = fakePorts(db)
+  ports.socket = { sendInbound: async (id, payload) => { socketSends.push({ id, payload }) } }
+  ports.inbound = { onDelivered: (id) => delivered.push(id) }
+  return { m: new SessionManager(new Registry(db), ports), socketSends, delivered }
+}
+
+function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CodexAdapter {
+  return { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CodexAdapter
+}
+
+describe("SessionManager.deliver", () => {
+  test("codex session with a registered adapter gets adapter.send — never the claude socket", async () => {
+    const { m, socketSends, delivered } = managerForDeliver()
+    const s = m.registry.register({ name: "cx", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const sent: Array<{ text: string; meta: any }> = []
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter(sent), handle: {} as CodexSpawnHandle })
+    const r = await m.deliver(s.id, "hello", { chat_id: "web" })
+    expect(r.ok).toBe(true)
+    expect(sent).toEqual([{ text: "hello", meta: { chat_id: "web" } }])
+    expect(socketSends.length).toBe(0)
+    expect(delivered).toEqual([s.id])
+  })
+
+  test("claude session without an adapter falls back to the shim socket", async () => {
+    const { m, socketSends } = managerForDeliver()
+    const s = m.registry.register({ name: "cl", workdir: "/tmp", pid: 0, agent: "claude", connected: false })
+    const r = await m.deliver(s.id, "hi", { chat_id: "web" })
+    expect(r.ok).toBe(true)
+    expect(socketSends).toEqual([{ id: s.id, payload: { content: "hi", meta: { chat_id: "web" } } }])
+  })
+
+  test("codex session without an adapter reports adapter_not_ready — no silent socket queue", async () => {
+    const { m, socketSends } = managerForDeliver()
+    const s = m.registry.register({ name: "cx2", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const r = await m.deliver(s.id, "hi", {})
+    expect(r).toEqual({ ok: false, reason: "adapter_not_ready" })
+    expect(socketSends.length).toBe(0)
+  })
+
+  test("duplicate message_id is deduped but still reconciles the sender", async () => {
+    const { m, delivered } = managerForDeliver()
+    const s = m.registry.register({ name: "cx3", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    const sent: Array<{ text: string; meta: any }> = []
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter(sent), handle: {} as CodexSpawnHandle })
+    const meta = { chat_id: "web", message_id: "m1" }
+    await m.deliver(s.id, "once", meta)
+    const again = await m.deliver(s.id, "once", meta)
+    expect(sent.length).toBe(1)
+    expect(again).toEqual({ ok: true, deduped: true })
+    expect(delivered).toEqual([s.id, s.id])
+  })
+})
+
+describe("SessionManager.isDeliverable / waitDeliverable", () => {
+  test("claude readiness is the connected flag", () => {
+    const { m } = managerForDeliver()
+    const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: false })
+    expect(m.isDeliverable(s.id)).toBe(false)
+    m.registry.sessions.setConnectionStatus(s.id, true)
+    expect(m.isDeliverable(s.id)).toBe(true)
+  })
+
+  test("codex readiness is adapter presence, NOT connected", () => {
+    const { m } = managerForDeliver()
+    const s = m.registry.register({ name: "cx4", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    expect(m.isDeliverable(s.id)).toBe(false)
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter([]), handle: {} as CodexSpawnHandle })
+    expect(m.isDeliverable(s.id)).toBe(true)
+  })
+
+  test("waitDeliverable resolves once the adapter registers mid-wait", async () => {
+    const { m } = managerForDeliver()
+    const s = m.registry.register({ name: "cx5", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    setTimeout(() => {
+      m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter([]), handle: {} as CodexSpawnHandle })
+    }, 20)
+    expect(await m.waitDeliverable(s.id, 1_000, 5)).toBe(true)
+  })
+
+  test("unknown session id is never deliverable", () => {
+    const { m } = managerForDeliver()
+    expect(m.isDeliverable("nope")).toBe(false)
   })
 })
