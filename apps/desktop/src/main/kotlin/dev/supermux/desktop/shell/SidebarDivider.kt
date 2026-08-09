@@ -27,14 +27,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import java.awt.Cursor
+import dev.supermux.ui.panes.ColResizeIcon
+import dev.supermux.ui.panes.SplitSeamCenterOffset
+import dev.supermux.ui.panes.SplitSeamHairline
+import dev.supermux.ui.panes.SplitSeamHitWidth
+import dev.supermux.ui.panes.SplitSeamOverlay
 
 /**
  * Overlay on the sidebar↔detail seam: 1dp hairline + drag hit strip (resize only).
@@ -117,11 +120,3 @@ fun SidebarDivider(
 
 /** Half of [SplitSeamHitWidth] — use when offsetting this overlay so its center sits on the seam. */
 val SidebarDividerCenterOffset: Dp = SplitSeamCenterOffset
-
-/** CSS `col-resize` equivalent (Compose common API has no resize icons — desktop uses AWT). */
-internal val ColResizeIcon: PointerIcon =
-    PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR))
-
-/** CSS `row-resize` equivalent for horizontal (top/bottom) splits. */
-internal val RowResizeIcon: PointerIcon =
-    PointerIcon(Cursor.getPredefinedCursor(Cursor.N_RESIZE_CURSOR))

@@ -23,6 +23,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.supermux.ui.panes.PaneHost
 
 /**
  * A local layout edit is an OFFSET from the broker's tree, not a replacement for
@@ -44,7 +45,7 @@ import kotlin.test.assertTrue
  * seen: by the time the flag cleared, that frame was gone and no other was
  * coming. The client then PATCHed its pre-delete tree back over the broker's, so
  * a deleted view was persisted again and drawn as a tab titled "view" — the
- * [LayoutHost] fallback for a view id with no record behind it.
+ * [PaneHost] fallback for a view id with no record behind it.
  *
  * The stand-in broker below behaves like the real one: it stores what it is
  * sent, and a change made on the server side (a delete, another device) is
@@ -107,8 +108,8 @@ class LayoutRebaseTest {
 
     @Test
     fun aTabClickedInTheUiRebasesToo() = runComposeUiTest {
-        // End to end, through the real LayoutHost, because the sync layer only
-        // rebases what reaches it AS A FUNCTION. Wiring LayoutHost's tree-shaped
+        // End to end, through the real PaneHost, because the sync layer only
+        // rebases what reaches it AS A FUNCTION. Wiring PaneHost's tree-shaped
         // callback to `edit { thatTree }` type-checks, passes every test that
         // drives WorkspaceLayoutState directly, and silently defeats the whole
         // mechanism: a constant function ignores the server frame it is replayed
@@ -133,7 +134,7 @@ class LayoutRebaseTest {
                 },
             )
             h.sync = sync
-            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
+            PaneHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 

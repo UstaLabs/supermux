@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.panes
 
 import androidx.compose.runtime.Immutable
 

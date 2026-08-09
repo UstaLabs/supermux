@@ -1,6 +1,7 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.ui.Modifier
+import dev.supermux.ui.panes.PaneStripChrome
 
 /**
  * The real desktop chrome: registers the macOS title-bar drag regions.

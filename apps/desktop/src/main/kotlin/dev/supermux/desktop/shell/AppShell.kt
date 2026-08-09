@@ -99,6 +99,8 @@ import dev.supermux.session.inferHomeDir
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.flow.MutableStateFlow
+import dev.supermux.ui.panes.PaneDragController
+import dev.supermux.ui.panes.PaneHost
 
 /**
  * macOS title-bar sidebar collapse control — next to the traffic lights, **only while the
@@ -423,7 +425,7 @@ fun AppShell(
     val workspaces by app.workspaces.collectAsState()
     // Shared across the sidebar and the layout host so a tab can drop onto a
     // workspace row (cross-workspace move).
-    val tabDragState = remember { TabDragState() }
+    val tabDragState = remember { PaneDragController() }
     var archivedForList by remember { mutableStateOf<List<dev.supermux.net.ArchivedDto>>(emptyList()) }
     LaunchedEffect(sessions, ui.selectedId) {
         // Refresh settled fold when the live list changes (settle/resume/snapshot).
@@ -827,7 +829,7 @@ fun AppShell(
                     val id = ui.selectedId
                     val session = id?.let { sel -> sessions.firstOrNull { it.id == sel } }
                         // Close-view candidate (Task 7 wires the confirm dialog). Set by
-                        // LayoutHost onCloseView; never ends work by itself.
+                        // PaneHost onCloseView; never ends work by itself.
                         var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
     // The new-session composer, usable in TWO places: as the full-pane launcher
     // and inside a workspace tab (a chat view that has no session yet). Extracted
@@ -976,7 +978,7 @@ fun AppShell(
                                 // bound registered for it is stale. Belt-and-braces alongside
                                 // GroupHost's per-group onDispose.
                                 LaunchedEffect(current.id) { tabDragState.forgetAllBounds() }
-                                LayoutHost(
+                                PaneHost(
                                     layout = localLayout,
                                     titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
                                     onCloseView = { closeCandidate = viewsById[it] },

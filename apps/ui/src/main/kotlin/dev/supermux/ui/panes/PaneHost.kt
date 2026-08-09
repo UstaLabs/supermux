@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.panes
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
@@ -7,10 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,7 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
-import dev.supermux.desktop.theme.Motion
+import dev.supermux.ui.theme.Motion
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.moveViewToGroup
@@ -72,7 +68,6 @@ import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.setSplitSizes
 import dev.supermux.workspace.splitGroup
 import java.util.UUID
-import kotlin.math.roundToInt
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -93,11 +88,11 @@ import kotlin.math.roundToInt
  * one live KCEF per background tab would exhaust memory.
  *
  * While a tab drag targets a pane body, content stays mounted and a translucent
- * [DropZoneOverlay] is shown in a [Popup] above SwingPanel (JediTerm / KCEF).
+ * [PaneDropOverlay] is shown in a [Popup] above SwingPanel (JediTerm / KCEF).
  * Compose siblings cannot paint over heavyweight children — Popup can.
  */
 @Composable
-fun LayoutHost(
+fun PaneHost(
     layout: LayoutNode,
     /**
      * The resulting tree, for callers that just hold a tree (tests, previews).
@@ -141,9 +136,9 @@ fun LayoutHost(
     labelFont: FontFamily = FontFamily.Monospace,
     /**
      * Shared drag state so the sidebar can register workspace-row drop targets.
-     * When null, [LayoutHost] owns a private instance (standalone / tests).
+     * When null, [PaneHost] owns a private instance (standalone / tests).
      */
-    dragState: TabDragState? = null,
+    dragState: PaneDragController? = null,
     /**
      * Cross-workspace drop (sidebar row). Spec §9.4 — session workdir is unchanged.
      * Null ignores workspace drops.
@@ -153,7 +148,7 @@ fun LayoutHost(
     chrome: PaneStripChrome = PaneStripChrome.None,
     content: @Composable (viewId: String) -> Unit,
 ) {
-    val ownedDrag = remember { TabDragState() }
+    val ownedDrag = remember { PaneDragController() }
     val drag = dragState ?: ownedDrag
     val layoutState = rememberUpdatedState(layout)
     val onLayoutChangeState = rememberUpdatedState(onLayoutChange)
@@ -184,9 +179,9 @@ fun LayoutHost(
         if (next != tree) onLayoutChangeState.value(next)
     }
 
-    fun applyDrop(target: TabDropTarget) {
+    fun applyDrop(target: PaneDropTarget) {
         when (target) {
-            is TabDropTarget.MoveToWorkspace -> {
+            is PaneDropTarget.MoveToWorkspace -> {
                 onMoveToWorkspaceState.value?.invoke(target.viewId, target.toWorkspaceId)
                 return
             }
@@ -197,11 +192,11 @@ fun LayoutHost(
         val newGroupId = UUID.randomUUID().toString()
         applyEdit { tree ->
             when (target) {
-                is TabDropTarget.Reorder ->
+                is PaneDropTarget.Reorder ->
                     reorderWithinGroup(tree, target.groupId, target.viewId, target.index)
-                is TabDropTarget.MoveToGroup ->
+                is PaneDropTarget.MoveToGroup ->
                     moveViewToGroup(tree, target.viewId, target.toGroupId, target.index) ?: tree
-                is TabDropTarget.Split -> {
+                is PaneDropTarget.Split -> {
                     // splitGroup requires the view to already live in the target group
                     // with ≥2 tabs. Cross-group edge drops move the tab in first — that
                     // turns a 1-tab neighbour into 2, then splits cleanly. Same-group
@@ -221,7 +216,7 @@ fun LayoutHost(
                     )
                     if (target.newFirst) reverseNewSplit(split, target.groupId) else split
                 }
-                is TabDropTarget.MoveToWorkspace -> tree // handled above
+                is PaneDropTarget.MoveToWorkspace -> tree // handled above
             }
         }
     }
@@ -233,7 +228,7 @@ fun LayoutHost(
         modifier
             .onGloballyPositioned { hostRoot = it.positionInRoot() },
     ) {
-        LayoutHostNode(
+        PaneHostNode(
             layout = layout,
             path = emptyList(),
             applyEdit = { applyEdit(it) },
@@ -251,7 +246,7 @@ fun LayoutHost(
         )
         val g = drag.ghost
         if (drag.isDragging && g != null && g.visible) {
-            TabDragGhostChip(
+            PaneDragGhostChip(
                 label = g.label,
                 labelFont = labelFont,
                 widthPx = g.width,
@@ -272,7 +267,7 @@ fun LayoutHost(
 
 /** Floating tab chip that follows the pointer during a drag. */
 @Composable
-private fun TabDragGhostChip(
+private fun PaneDragGhostChip(
     label: String,
     labelFont: FontFamily,
     widthPx: Float,
@@ -342,12 +337,12 @@ private fun reverseNewSplit(node: LayoutNode, originalGroupId: String): LayoutNo
  * indefinitely — the worst a stale path does is miss.
  */
 @Composable
-private fun LayoutHostNode(
+private fun PaneHostNode(
     layout: LayoutNode,
     path: List<Int>,
     applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
-    dragState: TabDragState,
-    onDrop: (TabDropTarget) -> Unit,
+    dragState: PaneDragController,
+    onDrop: (PaneDropTarget) -> Unit,
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
@@ -374,8 +369,8 @@ private fun LayoutHostNode(
 private fun GroupHost(
     group: LayoutNode.Group,
     applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
-    dragState: TabDragState,
-    onDrop: (TabDropTarget) -> Unit,
+    dragState: PaneDragController,
+    onDrop: (PaneDropTarget) -> Unit,
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
@@ -396,7 +391,7 @@ private fun GroupHost(
     }
     val active = group.activeViewId ?: group.viewIds.first()
     Column(modifier.fillMaxSize()) {
-        ViewTabStrip(
+        PaneTabStrip(
             groupId = group.id,
             viewIds = group.viewIds,
             activeViewId = active,
@@ -452,7 +447,7 @@ private fun GroupHost(
                             .width(with(density) { paneSize.width.toDp() })
                             .height(with(density) { paneSize.height.toDp() }),
                     ) {
-                        DropZoneOverlay(
+                        PaneDropOverlay(
                             activeZone = dragState.zoneOver(group.id),
                             edgesEnabled = foreignDrag || group.viewIds.size >= 2,
                         )
@@ -468,8 +463,8 @@ private fun SplitHost(
     split: LayoutNode.Split,
     path: List<Int>,
     applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
-    dragState: TabDragState,
-    onDrop: (TabDropTarget) -> Unit,
+    dragState: PaneDragController,
+    onDrop: (PaneDropTarget) -> Unit,
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
@@ -483,11 +478,11 @@ private fun SplitHost(
     // Reuse the existing ResizableSplit drag chrome rather than writing new
     // splitter hit-testing: it already handles the handle and the pointer
     // cursor, and it is the widget the rest of the app drags.
-    ResizableSplitN(
+    PaneSplit(
         direction = split.direction,
         sizes = split.sizes,
         // Address this split by path and let the root apply it. Writing back
-        // `split.copy(sizes = ...)` was the bug Ahmet hit: ResizableSplitN keys
+        // `split.copy(sizes = ...)` was the bug Ahmet hit: PaneSplit keys
         // its drag handler on `pointerInput(totalPx, index)`, so the handler kept
         // whichever `split` was current when it was last built, and every resize
         // restored that node's children — reviving a closed view or dropping a
@@ -495,7 +490,7 @@ private fun SplitHost(
         onSizesChange = { next -> applyEdit { setSplitSizes(it, path, next) } },
         modifier = modifier,
     ) { index ->
-        LayoutHostNode(
+        PaneHostNode(
             layout = split.children[index],
             path = path + index,
             applyEdit = applyEdit,
@@ -515,7 +510,7 @@ private fun SplitHost(
 }
 
 @Composable
-fun ViewTabStrip(
+fun PaneTabStrip(
     viewIds: List<String>,
     activeViewId: String,
     titleFor: (String) -> String,
@@ -531,7 +526,7 @@ fun ViewTabStrip(
     labelFont: FontFamily = FontFamily.Monospace,
 ) {
     // Back-compat for call sites that do not participate in drag (previews, older tests).
-    ViewTabStrip(
+    PaneTabStrip(
         groupId = "",
         viewIds = viewIds,
         activeViewId = activeViewId,
@@ -551,8 +546,12 @@ fun ViewTabStrip(
  *
  * Tabs support press-and-drag reorder (and cross-strip / edge-split via the
  * shared [dragState]). A plain click still selects — movement below
- * [TAB_DRAG_THRESHOLD_PX] is treated as a click, not a drag. No animation on the
+ * [PANE_DRAG_THRESHOLD_PX] is treated as a click, not a drag. No animation on the
  * strip itself — it changes many times a day.
+ *
+ * Public rather than internal: this is the full-control entry point into a strip, and it is what
+ * a caller assembling its own strip uses — the editor's file tabs will, once they have their own
+ * tree. `PaneHost` is the convenience wrapper over a whole layout.
  *
  * There is no close callback here. This layer draws no chip of its own: it owns
  * each tab's position, size, gestures, and `view-tab-<id>` tag, and [tabSlot]
@@ -560,14 +559,14 @@ fun ViewTabStrip(
  * content wants (see DefaultTabChip).
  */
 @Composable
-internal fun ViewTabStrip(
+fun PaneTabStrip(
     groupId: String,
     viewIds: List<String>,
     activeViewId: String,
     titleFor: (String) -> String,
     onSelect: (String) -> Unit,
-    dragState: TabDragState?,
-    onDrop: (TabDropTarget) -> Unit,
+    dragState: PaneDragController?,
+    onDrop: (PaneDropTarget) -> Unit,
     chrome: PaneStripChrome,
     tabSlot: @Composable (itemId: String, state: TabSlotState) -> Unit,
     modifier: Modifier = Modifier,
@@ -759,7 +758,7 @@ private fun TabInsertCaret(modifier: Modifier = Modifier) {
 /**
  * Press-to-drag on a tab, matching the session-list drag reorder:
  * mouse-friendly grab after a small move, click when movement stays under the
- * threshold. Drop resolution is delegated to [TabDragState] so cross-strip and
+ * threshold. Drop resolution is delegated to [PaneDragController] so cross-strip and
  * edge targets share one pointer.
  */
 private fun Modifier.tabDragGestures(
@@ -767,9 +766,9 @@ private fun Modifier.tabDragGestures(
     groupId: String,
     stripOrderProvider: () -> List<String>,
     labelProvider: () -> String,
-    dragState: TabDragState,
+    dragState: PaneDragController,
     onSelect: (String) -> Unit,
-    onDrop: (TabDropTarget) -> Unit,
+    onDrop: (PaneDropTarget) -> Unit,
 ): Modifier = this
     // performClick() uses the semantics onClick action, not a real pointer stream.
     .semantics {
@@ -819,7 +818,7 @@ private fun Modifier.tabDragGestures(
                 }
                 if (change.pressed) {
                     pointerRoot += change.positionChange()
-                    dragState.updatePointer(pointerRoot, startRoot, TAB_DRAG_THRESHOLD_PX)
+                    dragState.updatePointer(pointerRoot, startRoot, PANE_DRAG_THRESHOLD_PX)
                     if (dragState.pastThreshold) {
                         passed = true
                         change.consume()
@@ -841,7 +840,7 @@ private fun Modifier.tabDragGestures(
  * gap); overlay hairlines sit on cumulative fraction boundaries.
  */
 @Composable
-fun ResizableSplitN(
+fun PaneSplit(
     direction: String,
     sizes: List<Double>,
     onSizesChange: (List<Double>) -> Unit,

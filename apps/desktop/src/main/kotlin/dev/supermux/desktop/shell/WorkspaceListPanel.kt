@@ -114,6 +114,7 @@ import dev.supermux.workspace.isMultiAgent
 import dev.supermux.workspace.workspaceActivity
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import dev.supermux.ui.panes.PaneDragController
 
 /**
  * Workspace sidebar (spec §13.6). Same chrome as [dev.supermux.desktop.session.SessionListPanel]
@@ -174,7 +175,7 @@ fun WorkspaceListPanel(
      * Shared tab-drag state from the layout host. When non-null, each workspace
      * row registers as a drop target for cross-workspace view moves.
      */
-    tabDragState: TabDragState? = null,
+    tabDragState: PaneDragController? = null,
     /** Current app appearance — footer theme button shows the opposite affordance. */
     appearance: AppearanceMode = AppearanceMode.DARK,
     onToggleTheme: () -> Unit = {},
@@ -745,7 +746,7 @@ private fun WorkspaceListEntry(
     onRename: () -> Unit,
     onKill: () -> Unit,
     onToggleMute: () -> Unit,
-    tabDragState: TabDragState? = null,
+    tabDragState: PaneDragController? = null,
 ) {
     val activity = workspaceActivity(w, agentState)
     val primarySid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
@@ -838,7 +839,7 @@ fun WorkspaceRow(
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
     /** When set, this row is a drop target for a tab dragged out of the layout. */
-    tabDragState: TabDragState? = null,
+    tabDragState: PaneDragController? = null,
 ) {
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme

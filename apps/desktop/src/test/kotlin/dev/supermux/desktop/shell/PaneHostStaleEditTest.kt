@@ -17,15 +17,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.supermux.ui.panes.PaneHost
+import dev.supermux.ui.panes.PaneSplit
 
 /**
- * Invariants of [LayoutHost]'s editing model: an edit names WHAT to change — a
+ * Invariants of [PaneHost]'s editing model: an edit names WHAT to change — a
  * group id, a split path — and is applied to the tree as it is now.
  *
  * Honesty about what these are: they are guards, not a reproduction. They were
  * written for a theory that turned out to be wrong. Ahmet reported that resizing
  * revived a closed view and dropped a new one, and the first explanation was
- * that [ResizableSplitN] holds its drag handler in `pointerInput(totalPx, index)`
+ * that [PaneSplit] holds its drag handler in `pointerInput(totalPx, index)`
  * and so kept a stale `onSizesChange`. A probe disproved that: recompose with a
  * new callback, drag, and the handler receives the NEW one. These tests passed
  * before the change as well as after, which is exactly why they are not
@@ -39,7 +41,7 @@ import kotlin.test.assertTrue
  * frame, and nothing else asserts it.
  */
 @OptIn(ExperimentalTestApi::class)
-class LayoutHostStaleEditTest {
+class PaneHostStaleEditTest {
 
     private fun twoPanes(): LayoutNode = LayoutNode.Split(
         "row", listOf(0.5, 0.5),
@@ -54,7 +56,7 @@ class LayoutHostStaleEditTest {
         var tree: LayoutNode by mutableStateOf(twoPanes())
 
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
         }
         waitForIdle()
         // Build the splitter's drag handler against the two-pane tree.
@@ -77,7 +79,7 @@ class LayoutHostStaleEditTest {
         var tree: LayoutNode by mutableStateOf(twoPanes())
 
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
         }
         waitForIdle()
         onNodeWithTag("splitter-0").assertExists()
@@ -102,7 +104,7 @@ class LayoutHostStaleEditTest {
         var tree: LayoutNode by mutableStateOf(twoPanes())
 
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
         }
         waitForIdle()
 
@@ -121,7 +123,7 @@ class LayoutHostStaleEditTest {
         var tree: LayoutNode by mutableStateOf(twoPanes())
 
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }) { Text("body-$it") }
         }
         waitForIdle()
 

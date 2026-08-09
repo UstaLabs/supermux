@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.panes
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -22,7 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.Motion
+import dev.supermux.ui.theme.Motion
 import kotlin.math.roundToInt
 
 /**
@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
  * centre — transforming into the next target rather than cross-fading widgets.
  */
 @Composable
-fun DropZoneOverlay(
+fun PaneDropOverlay(
     activeZone: DropZone?,
     modifier: Modifier = Modifier,
     edgesEnabled: Boolean = true,
@@ -130,11 +130,3 @@ fun DropZoneOverlay(
         }
     }
 }
-
-/** Back-compat alias — old call sites / tests name. */
-@Composable
-fun DropZoneSurface(
-    activeZone: DropZone?,
-    modifier: Modifier = Modifier,
-    edgesEnabled: Boolean = true,
-) = DropZoneOverlay(activeZone, modifier, edgesEnabled)

@@ -20,6 +20,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import dev.supermux.ui.panes.PaneHost
 
 /**
  * The workspace layout round trip: local edit → debounced PATCH → the broker's
@@ -37,7 +38,7 @@ import kotlin.test.assertEquals
  * holding a stale tree that the next `workspace_changed` slams back over the
  * entire layout, including the panes the user never clicked in.
  *
- * These tests mount a real [LayoutHost] over a Split with TWO Group children and
+ * These tests mount a real [PaneHost] over a Split with TWO Group children and
  * drive it through the same [rememberWorkspaceLayout] → `edit` → PATCH chain
  * AppShell uses, against a stand-in broker that behaves like a real one: a
  * request that has left the machine is applied whether or not this client is
@@ -81,7 +82,7 @@ class WorkspaceLayoutSyncTest {
                 },
             )
             tree = sync.tree
-            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
+            PaneHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 
@@ -119,7 +120,7 @@ class WorkspaceLayoutSyncTest {
                 },
             )
             tree = sync.tree
-            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
+            PaneHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 
@@ -153,7 +154,7 @@ class WorkspaceLayoutSyncTest {
                 push = { next -> withContext(NonCancellable) { server = next.toDto() } },
             )
             tree = sync.tree
-            LayoutHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
+            PaneHost(layout = sync.tree, onEdit = { edit -> sync.edit(edit) }) { Text("body-$it") }
         }
         waitForIdle()
 

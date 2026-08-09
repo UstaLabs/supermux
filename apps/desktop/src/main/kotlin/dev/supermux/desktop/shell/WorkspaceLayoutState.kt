@@ -14,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import dev.supermux.ui.panes.PaneHost
 
 /** A splitter drag fires on every pointer move; one PATCH per move would flood every peer. */
 internal const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
@@ -34,7 +35,7 @@ internal const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
  * delete the broker made during the ~300ms debounce was simply never seen: by
  * the time the flag cleared, that frame was gone and no other was coming. The
  * client then PATCHed its pre-delete tree back over the broker's, resurrecting a
- * closed view — which draws as a tab titled "view", the LayoutHost fallback for
+ * closed view — which draws as a tab titled "view", the PaneHost fallback for
  * a view id with no record behind it.
  *
  * So the unconfirmed edit is kept as a FUNCTION, and a frame that lands mid-edit
@@ -50,7 +51,7 @@ internal const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
  * place, and splitGroup requires the view to still be in the source group.
  */
 internal class WorkspaceLayoutState(initial: LayoutNode) {
-    /** What LayoutHost renders and what the next PATCH will send. */
+    /** What PaneHost renders and what the next PATCH will send. */
     var tree by mutableStateOf(initial)
         private set
 

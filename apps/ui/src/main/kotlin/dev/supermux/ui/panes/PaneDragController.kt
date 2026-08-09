@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.panes
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -11,7 +11,7 @@ import dev.supermux.session.moveId
 /**
  * Shared drag state for tab reorder / cross-strip move / edge-split.
  *
- * Hoisted to [LayoutHost] so every strip and pane can see the active drag.
+ * Hoisted to [PaneHost] so every strip and pane can see the active drag.
  * Drop-zone highlights live on a **swapped** Compose surface (not an overlay
  * above SwingPanel) — see [GroupHost] and the Phase 5 plan.
  *
@@ -20,7 +20,7 @@ import dev.supermux.session.moveId
  * - [liveOrder] reshuffles the origin strip while the pointer stays on it
  * - foreign strips show an insert caret via [hoverStripGroupId]/[hoverInsertIndex]
  */
-class TabDragState {
+class PaneDragController {
     var draggingViewId by mutableStateOf<String?>(null)
         private set
     var originGroupId by mutableStateOf<String?>(null)
@@ -36,7 +36,7 @@ class TabDragState {
         private set
 
     /** Floating chip that tracks the pointer (null when idle or below threshold). */
-    var ghost by mutableStateOf<TabDragGhost?>(null)
+    var ghost by mutableStateOf<PaneDragGhost?>(null)
         private set
 
     /**
@@ -189,7 +189,7 @@ class TabDragState {
                 (rootPos.y - bounds.top).coerceIn(0f, bounds.height.coerceAtLeast(1f)),
             )
             // Provisional size/position; [visible] stays false until past threshold.
-            ghost = TabDragGhost(
+            ghost = PaneDragGhost(
                 label = label,
                 width = bounds.width.coerceAtLeast(56f),
                 height = bounds.height.coerceAtLeast(24f),
@@ -199,7 +199,7 @@ class TabDragState {
             )
         } else {
             grabOffset = Offset(40f, 12f)
-            ghost = TabDragGhost(
+            ghost = PaneDragGhost(
                 label = label,
                 width = 88f,
                 height = 28f,
@@ -225,9 +225,9 @@ class TabDragState {
         val nextY = rootPos.y - grabOffset.y
         val g = ghost
         // Only write ghost state when it actually changes — every-frame copies
-        // recomposed the whole LayoutHost and fought the pointer stream.
+        // recomposed the whole PaneHost and fought the pointer stream.
         if (g == null) {
-            ghost = TabDragGhost(
+            ghost = PaneDragGhost(
                 label = ghostLabel,
                 width = 88f,
                 height = 28f,
@@ -292,7 +292,7 @@ class TabDragState {
      * gesture was a click (never passed threshold) or nothing useful is under
      * the pointer.
      */
-    fun resolveDrop(): TabDropTarget? {
+    fun resolveDrop(): PaneDropTarget? {
         if (!pastThreshold) return null
         val viewId = draggingViewId ?: return null
         val origin = originGroupId ?: return null
@@ -302,7 +302,7 @@ class TabDragState {
         workspaceBounds.entries
             .firstOrNull { (_, r) -> r.contains(p) }
             ?.let { (wsId, _) ->
-                return TabDropTarget.MoveToWorkspace(viewId, wsId)
+                return PaneDropTarget.MoveToWorkspace(viewId, wsId)
             }
 
         // Prefer strip hits: reorder within a strip or move onto another strip.
@@ -310,9 +310,9 @@ class TabDragState {
         // into the pane must fall through to edge zones (bottom-edge split).
         stripUnderPointer(p)?.let { groupId ->
             return if (groupId == origin) {
-                TabDropTarget.Reorder(groupId, viewId, sameStripRestIndex(p.x))
+                PaneDropTarget.Reorder(groupId, viewId, sameStripRestIndex(p.x))
             } else {
-                TabDropTarget.MoveToGroup(viewId, groupId, insertIndexInStrip(groupId, p.x))
+                PaneDropTarget.MoveToGroup(viewId, groupId, insertIndexInStrip(groupId, p.x))
             }
         }
 
@@ -329,19 +329,19 @@ class TabDragState {
             val (groupId, pane) = paneHit
             val zone = zoneFor(pane, p)
             return when (zone) {
-                DropZone.Centre -> TabDropTarget.MoveToGroup(viewId, groupId, index = Int.MAX_VALUE)
-                DropZone.Left -> TabDropTarget.Split(groupId, viewId, direction = "row", newFirst = true)
-                DropZone.Right -> TabDropTarget.Split(groupId, viewId, direction = "row", newFirst = false)
-                DropZone.Top -> TabDropTarget.Split(groupId, viewId, direction = "column", newFirst = true)
-                DropZone.Bottom -> TabDropTarget.Split(groupId, viewId, direction = "column", newFirst = false)
+                DropZone.Centre -> PaneDropTarget.MoveToGroup(viewId, groupId, index = Int.MAX_VALUE)
+                DropZone.Left -> PaneDropTarget.Split(groupId, viewId, direction = "row", newFirst = true)
+                DropZone.Right -> PaneDropTarget.Split(groupId, viewId, direction = "row", newFirst = false)
+                DropZone.Top -> PaneDropTarget.Split(groupId, viewId, direction = "column", newFirst = true)
+                DropZone.Bottom -> PaneDropTarget.Split(groupId, viewId, direction = "column", newFirst = false)
             }
         }
 
         // Fall back: same-strip offset reorder.
-        return TabDropTarget.Reorder(origin, viewId, sameStripRestIndex(p.x))
+        return PaneDropTarget.Reorder(origin, viewId, sameStripRestIndex(p.x))
     }
 
-    fun finish(): TabDropTarget? {
+    fun finish(): PaneDropTarget? {
         val target = resolveDrop()
         cancel()
         return target
@@ -364,7 +364,7 @@ class TabDragState {
      * the boundary was the "tabs loop while I swipe" bug.
      *
      * A 120px drag on a ≥100px slot still crosses 0.7 and lands one step
-     * (LayoutHostDragTest).
+     * (PaneHostDragTest).
      */
     private fun sameStripRestIndex(pointerX: Float): Int {
         if (originOrder.isEmpty()) return 0
@@ -500,7 +500,7 @@ class TabDragState {
 }
 
 /** Floating tab chip drawn above the layout while a drag is past threshold. */
-data class TabDragGhost(
+data class PaneDragGhost(
     val label: String,
     val width: Float,
     val height: Float,
@@ -511,17 +511,17 @@ data class TabDragGhost(
 
 enum class DropZone { Left, Right, Top, Bottom, Centre }
 
-sealed class TabDropTarget {
-    data class Reorder(val groupId: String, val viewId: String, val index: Int) : TabDropTarget()
-    data class MoveToGroup(val viewId: String, val toGroupId: String, val index: Int) : TabDropTarget()
+sealed class PaneDropTarget {
+    data class Reorder(val groupId: String, val viewId: String, val index: Int) : PaneDropTarget()
+    data class MoveToGroup(val viewId: String, val toGroupId: String, val index: Int) : PaneDropTarget()
     data class Split(
         val groupId: String,
         val viewId: String,
         val direction: String,
         val newFirst: Boolean,
-    ) : TabDropTarget()
-    data class MoveToWorkspace(val viewId: String, val toWorkspaceId: String) : TabDropTarget()
+    ) : PaneDropTarget()
+    data class MoveToWorkspace(val viewId: String, val toWorkspaceId: String) : PaneDropTarget()
 }
 
 /** Click-vs-drag threshold in px. Below this, release is a plain tab select. */
-const val TAB_DRAG_THRESHOLD_PX = 8f
+const val PANE_DRAG_THRESHOLD_PX = 8f

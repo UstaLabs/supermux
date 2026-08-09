@@ -13,14 +13,18 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import dev.supermux.ui.panes.PaneHost
+import dev.supermux.ui.panes.PaneStripChrome
+import dev.supermux.ui.panes.PaneTabStrip
+import dev.supermux.ui.panes.TabSlotState
 
 @OptIn(ExperimentalTestApi::class)
-class LayoutHostTest {
+class PaneHostTest {
 
     @Test
     fun aSingleGroupRendersItsActiveViewOnly() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1", "v2"), "v1"),
                 onLayoutChange = {},
             ) { viewId -> Text("body-$viewId") }
@@ -32,7 +36,7 @@ class LayoutHostTest {
     @Test
     fun aGroupRendersOneTabPerView() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1", "v2"), "v1"),
                 titleFor = { "tab-$it" },
                 onLayoutChange = {},
@@ -46,7 +50,7 @@ class LayoutHostTest {
     fun clickingATabReportsTheNewActiveViewThroughOnLayoutChange() = runComposeUiTest {
         var next: LayoutNode? = null
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1", "v2"), "v1"),
                 titleFor = { "tab-$it" },
                 onLayoutChange = { next = it },
@@ -59,7 +63,7 @@ class LayoutHostTest {
     @Test
     fun aRowSplitRendersBothChildren() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
                     LayoutNode.Group("g1", listOf("v1"), "v1"),
                     LayoutNode.Group("g2", listOf("v2"), "v2"),
@@ -74,7 +78,7 @@ class LayoutHostTest {
     @Test
     fun aNestedSplitRendersEveryLeaf() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
                     LayoutNode.Group("g1", listOf("v1"), "v1"),
                     LayoutNode.Split("column", listOf(0.5, 0.5), listOf(
@@ -93,7 +97,7 @@ class LayoutHostTest {
     @Test
     fun aSplitterExistsBetweenEveryPairOfChildren() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Split("row", listOf(0.33, 0.33, 0.34), listOf(
                     LayoutNode.Group("g1", listOf("v1"), "v1"),
                     LayoutNode.Group("g2", listOf("v2"), "v2"),
@@ -109,12 +113,12 @@ class LayoutHostTest {
 
     @Test
     fun closingATabReportsTheViewIdRatherThanEditingTheTree() = runComposeUiTest {
-        // A close ENDS work (spec 9.3). LayoutHost must not silently drop the view
+        // A close ENDS work (spec 9.3). PaneHost must not silently drop the view
         // from the tree — the caller confirms, calls the broker, and the frame
         // comes back. Only report.
         var closed: String? = null
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1", "v2"), "v1"),
                 titleFor = { "tab-$it" },
                 onLayoutChange = {},
@@ -128,7 +132,7 @@ class LayoutHostTest {
     @Test
     fun anEmptyGroupRendersThePlaceholderRatherThanCrashing() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", emptyList(), null),
                 onLayoutChange = {},
                 emptyGroupSlot = { WorkspaceEmptyHint() },
@@ -149,7 +153,7 @@ class LayoutHostTest {
     @Test
     fun theTabStripCarriesAnAddButton() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
                 onLayoutChange = {},
                 addSlot = { WorkspaceAddButton { _, _ -> } },
@@ -161,7 +165,7 @@ class LayoutHostTest {
     @Test
     fun theAddButtonIsHiddenWhenTheCallerCannotCreateViews() = runComposeUiTest {
         setContent {
-            LayoutHost(layout = LayoutNode.Group("g1", listOf("v1"), "v1"), onLayoutChange = {}) { Text("body") }
+            PaneHost(layout = LayoutNode.Group("g1", listOf("v1"), "v1"), onLayoutChange = {}) { Text("body") }
         }
         onNodeWithTag("tab-add-view").assertDoesNotExist()
     }
@@ -169,7 +173,7 @@ class LayoutHostTest {
     @Test
     fun clickingAddOpensAPopoverOfViewKinds() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
                 onLayoutChange = {},
                 addSlot = { WorkspaceAddButton { _, _ -> } },
@@ -186,7 +190,7 @@ class LayoutHostTest {
     fun pickingAKindReportsItWithTheGroupItWasClickedIn() = runComposeUiTest {
         var got: Triple<String, NewViewKind, NewViewPlacement>? = null
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Split("row", listOf(0.5, 0.5), listOf(
                     LayoutNode.Group("left", listOf("v1"), "v1"),
                     LayoutNode.Group("right", listOf("v2"), "v2"),
@@ -206,7 +210,7 @@ class LayoutHostTest {
     fun pickingAKindAlwaysLandsInThisPane() = runComposeUiTest {
         var got: Triple<String, NewViewKind, NewViewPlacement>? = null
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("only", listOf("v1"), "v1"),
                 onLayoutChange = {},
                 addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
@@ -223,7 +227,7 @@ class LayoutHostTest {
     @Test
     fun tabSlot_drawsTheCallerSuppliedChip() = runComposeUiTest {
         setContent {
-            ViewTabStrip(
+            PaneTabStrip(
                 groupId = "g1",
                 viewIds = listOf("v1", "v2"),
                 activeViewId = "v1",
@@ -237,7 +241,7 @@ class LayoutHostTest {
                 },
             )
         }
-        // dragState = null takes the plain Modifier.clickable fallback (see ViewTabStrip),
+        // dragState = null takes the plain Modifier.clickable fallback (see PaneTabStrip),
         // which merges descendant semantics for accessibility — so the slot's own testTag and
         // text are only visible in the unmerged tree, not the strip's merged view-tab-v1 node.
         onNodeWithTag("custom-tab-v1", useUnmergedTree = true).assertExists()

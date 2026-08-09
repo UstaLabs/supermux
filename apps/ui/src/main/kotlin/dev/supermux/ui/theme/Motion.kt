@@ -1,5 +1,7 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/theme/Motion.kt — keep in sync until a shared UI module exists (spec 2026-07-09, Decision 1).
-package dev.supermux.desktop.theme
+// The shared UI module the desktop and Android copies of this file were both waiting for
+// (spec 2026-07-09, Decision 1). apps/android/.../theme/Motion.kt is still a copy — delete it and
+// depend on this one when :ui grows an Android target.
+package dev.supermux.ui.theme
 
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring

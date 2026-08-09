@@ -38,11 +38,12 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
+import dev.supermux.ui.panes.PaneHost
 
 /**
  * Draw one view's body.
  *
- * Only the ACTIVE view of each group reaches here — LayoutHost composes nothing
+ * Only the ACTIVE view of each group reaches here — PaneHost composes nothing
  * else. That is load-bearing, not an optimization: the terminal and the editor
  * are heavyweight AWT SwingPanel children, and one live KCEF per background tab
  * would exhaust memory. Do not compose an inactive tab.
@@ -191,7 +192,7 @@ private fun AgentTerminalForSession(
 /**
  * Workspace-scoped terminal — a plain shell in the workspace work directory.
  * Attaches with `?workspace=<id>` (spec §7.3). Same JediTerm rules as SessionDetail:
- * only composed when the tab is active (LayoutHost guarantees that), input is
+ * only composed when the tab is active (PaneHost guarantees that), input is
  * marshaled off non-EDT threads by TerminalClient, and nothing Compose paints
  * can appear above the heavyweight Swing child.
  */

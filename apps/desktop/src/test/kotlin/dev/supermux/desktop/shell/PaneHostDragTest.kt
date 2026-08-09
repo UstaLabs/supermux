@@ -13,15 +13,17 @@ import androidx.compose.ui.geometry.Offset
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import dev.supermux.ui.panes.PaneDragController
+import dev.supermux.ui.panes.PaneHost
 
 @OptIn(ExperimentalTestApi::class)
-class LayoutHostDragTest {
+class PaneHostDragTest {
 
     @Test
     fun draggingATabToTheRightReordersIt() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b", "c"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-a").performTouchInput {
             down(center); moveBy(androidx.compose.ui.geometry.Offset(120f, 0f)); up()
@@ -33,7 +35,7 @@ class LayoutHostDragTest {
     fun reorderingDoesNotChangeWhichTabIsActive() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b", "c"), "c")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-a").performTouchInput {
             down(center); moveBy(androidx.compose.ui.geometry.Offset(120f, 0f)); up()
@@ -46,7 +48,7 @@ class LayoutHostDragTest {
         // The drag gesture must not swallow the plain click that switches tabs.
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-b").performClick()
         assertEquals("b", (tree as LayoutNode.Group).activeViewId)
@@ -59,7 +61,7 @@ class LayoutHostDragTest {
             LayoutNode.Group("g2", listOf("c"), "c"),
         ))
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         // Drag tab "a" from the left strip onto the right strip.
         onNodeWithTag("view-tab-a").performTouchInput {
@@ -74,7 +76,7 @@ class LayoutHostDragTest {
     fun droppingATabOnTheRightEdgeSplitsTheGroupIntoARow() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-b").performTouchInput {
             down(center); moveTo(androidx.compose.ui.geometry.Offset(1180f, 400f)); up()
@@ -89,7 +91,7 @@ class LayoutHostDragTest {
     fun droppingOnTheBottomEdgeSplitsIntoAColumn() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-b").performTouchInput {
             down(center); moveTo(androidx.compose.ui.geometry.Offset(600f, 780f)); up()
@@ -103,7 +105,7 @@ class LayoutHostDragTest {
         // refuses; the UI must not pretend it worked.
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
+            PaneHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-a").performTouchInput {
             down(center); moveTo(androidx.compose.ui.geometry.Offset(1180f, 400f)); up()
@@ -114,7 +116,7 @@ class LayoutHostDragTest {
     @Test
     fun dropZonesAppearOnlyWhileDragging() = runComposeUiTest {
         setContent {
-            LayoutHost(
+            PaneHost(
                 layout = LayoutNode.Group("g1", listOf("a", "b"), "a"),
                 onLayoutChange = {}, addSlot = {},
             ) { Text("body") }
@@ -122,9 +124,9 @@ class LayoutHostDragTest {
         onNodeWithTag("drop-zone-right").assertDoesNotExist()
     }
 
-    // ── Regression: a shared TabDragState must not carry stale bounds ────────
+    // ── Regression: a shared PaneDragController must not carry stale bounds ────────
     //
-    // AppShell hoists ONE TabDragState for the app's lifetime and hands it to
+    // AppShell hoists ONE PaneDragController for the app's lifetime and hands it to
     // whichever workspace is on screen. Nothing ever unregistered a group's
     // bounds, so after visiting a second workspace the maps still held panes and
     // strips from the first. resolveDrop hit-tests every registered rect, a stale
@@ -141,20 +143,20 @@ class LayoutHostDragTest {
 
     @Test
     fun aDragStillWorksAfterSwitchingWorkspacesWithASharedDragState() = runComposeUiTest {
-        val shared = TabDragState()
+        val shared = PaneDragController()
         var workspace by mutableStateOf("a")
         var treeB: LayoutNode = LayoutNode.Group("gb", listOf("x", "y", "z"), "x")
 
         setContent {
             if (workspace == "a") {
-                LayoutHost(
+                PaneHost(
                     layout = LayoutNode.Group("ga", listOf("p", "q"), "p"),
                     onLayoutChange = {},
                     dragState = shared,
                     addSlot = {},
                 ) { Text("body-a") }
             } else {
-                LayoutHost(
+                PaneHost(
                     layout = treeB,
                     onLayoutChange = { treeB = it },
                     dragState = shared,

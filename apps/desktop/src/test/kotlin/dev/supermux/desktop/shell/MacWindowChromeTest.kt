@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.supermux.ui.panes.PaneTabStrip
 
 @OptIn(ExperimentalTestApi::class)
 class MacWindowChromeTest {
@@ -82,7 +83,7 @@ class MacWindowChromeTest {
         setContent {
             CompositionLocalProvider(LocalMacWindowChrome provides regions) {
                 Box(Modifier.size(400.dp, 32.dp)) {
-                    ViewTabStrip(
+                    PaneTabStrip(
                         viewIds = listOf("v1"),
                         activeViewId = "v1",
                         titleFor = { "t" },
@@ -105,7 +106,7 @@ class MacWindowChromeTest {
         setContent {
             CompositionLocalProvider(LocalMacWindowChrome provides regions) {
                 Box(Modifier.size(400.dp, 32.dp)) {
-                    ViewTabStrip(
+                    PaneTabStrip(
                         viewIds = listOf("v1"),
                         activeViewId = "v1",
                         titleFor = { "t" },
