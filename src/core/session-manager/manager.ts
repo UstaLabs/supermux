@@ -30,7 +30,7 @@ import { claudeTranscriptPath } from "../agents/claude/transcript-path"
 import { isDraftSession } from "./supervisor"
 import { isWorktreeReclaimable } from "../worktree/gc"
 import { removeWorktree } from "../worktree/manager"
-import { transformOutbound } from "../routing"
+import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
 import { renderTranscript } from "../search/transcript-render"
@@ -124,11 +124,12 @@ export type SessionManagerPorts = {
   /** Outbound delivery (shim reply/react/edit ops). */
   outbound: {
     /** Send text (and any files) to the user. It takes no destination — the
-     *  broker resolves that from the chat the session last heard from. */
+     *  broker resolves that from the chat the session last heard from. It
+     *  reports what happened; it does not throw for a delivery failure. */
     onAssistantMessage(
       sessionId: string,
       ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[] },
-    ): Promise<void>
+    ): Promise<{ ok: true; delivered: number } | { ok: false; error: string }>
     getChannel(name: string): Channel | undefined
     /** Boot-time constant: telegram token/getFile when telegram is configured. */
     telegramApi: DownloadableApi | undefined
@@ -144,7 +145,7 @@ export type SessionManagerPorts = {
   }
   stores: {
     fileStore: FileStore
-    messageLog: Pick<MessageStore, "get" | "update" | "addReaction">
+    messageLog: Pick<MessageStore, "get" | "update" | "addReaction" | "findByChannelMessageId">
     searchStore: Pick<SearchStore, "searchKnowledge" | "searchSessions">
     db: Db
   }
@@ -410,12 +411,12 @@ export class SessionManager {
   async handleOutbound(msg: OutboundFrame & { session_id: string }): Promise<OpResult> {
     const fromSession = msg.session_id
     // fromSession is now UUID; adapters are keyed by UUID
-    // Resolve channel from chat_id, falling back to telegram for legacy
-    // (pre-namespacing) values held by long-lived shim sessions across
-    // a broker upgrade.
+    // Channel resolution lives in ONE place (core/routing/address). The local
+    // copy this replaced turned the bare value `web` into `telegram:web`, so a
+    // web session's react/edit_message was dispatched to Telegram.
     function resolveChannel(rawChatId: string): { channelName: string; chat_id: string } {
-      if (!rawChatId.includes(":")) return { channelName: "telegram", chat_id: `telegram:${rawChatId}` }
-      return { channelName: rawChatId.split(":", 1)[0]!, chat_id: rawChatId }
+      const a = parseAddress(rawChatId)
+      return a ? { channelName: a.channel, chat_id: a.chatId } : { channelName: "", chat_id: rawChatId }
     }
     try {
       const op = msg.op
@@ -441,13 +442,14 @@ export class SessionManager {
         // still send the argument; ignoring it is safe, because that value is
         // the inbound chat_id, which is exactly what the router returns.
         try {
-          await this.ports.outbound.onAssistantMessage(fromSession, {
+          const r = await this.ports.outbound.onAssistantMessage(fromSession, {
             text: stringArg(op.args, "text"),
             reply_to: optionalStringArg(op.args, "reply_to"),
             files,
             format: optionalFormatArg(op.args, "format"),
             keyboard: optionalStringArrayArg(op.args, "keyboard"),
           })
+          if (!r.ok) return { ok: false, error: r.error }
           return { ok: true, value: { message_id: undefined } }
         } catch (err) {
           return { ok: false, error: String(err instanceof Error ? err.message : err) }
@@ -459,28 +461,45 @@ export class SessionManager {
         const { channelName, chat_id } = resolveChannel(rawChatId)
         const ch = this.ports.outbound.getChannel(channelName)
         if (!ch) return { ok: false, error: `unknown channel for chat_id ${chat_id}` }
+        // Ask the channel BEFORE the wire. A channel that cannot react must say
+        // so here — the agent used to be told `ok` for a reaction that never
+        // happened anywhere.
+        if (!ch.capabilities.supportsReactions) {
+          return { ok: false, error: `the ${channelName} channel does not support reactions` }
+        }
         const initial: OutboundAction = { op: "react", chat_id, message_id: messageId, emoji }
         const action = await transformOutbound(initial, fromSession, ch.capabilities, this.ports.stores.fileStore, this.registry)
         if (action.op !== "react") return { ok: false, error: "transformOutbound dropped react" }
         const res = await ch.send(action)
-        if (res.ok) {
-          this.ports.stores.messageLog.addReaction(fromSession, `out:${chat_id}:${messageId}`, emoji, new Date().toISOString())
-        }
-        return res.ok ? { ok: true, value: res.value } : { ok: false, error: res.error }
+        if (!res.ok) return { ok: false, error: res.error }
+        // The store reports whether the row was found. Report a miss instead of
+        // discarding it: the entry id is derived from the channel's message id,
+        // so a mismatch means the reaction is on the wire but not in the log.
+        // Find the row by the id the CHANNEL gave it. The old code guessed the
+        // entry id as `out:<chat>:<channel id>`, which stopped being true once
+        // the entry is minted before the send.
+        const row = this.ports.stores.messageLog.findByChannelMessageId(fromSession, chat_id, messageId)
+        const stored = row ? this.ports.stores.messageLog.addReaction(fromSession, row.id, emoji, new Date().toISOString()) : false
+        if (!stored) log.warn("react_not_recorded", { session: fromSession, chat_id, message_id: messageId })
+        return { ok: true, value: res.value }
       } else if (op.name === "edit_message") {
         const rawChatId = stringArg(op.args, "chat_id")
         const messageId = stringArg(op.args, "message_id")
         const { channelName, chat_id } = resolveChannel(rawChatId)
         const ch = this.ports.outbound.getChannel(channelName)
         if (!ch) return { ok: false, error: `unknown channel for chat_id ${chat_id}` }
+        if (!ch.capabilities.supportsEdit) {
+          return { ok: false, error: `the ${channelName} channel does not support message edits` }
+        }
         const initial: OutboundAction = { op: "edit_message", chat_id, message_id: messageId, text: stringArg(op.args, "text"), format: optionalFormatArg(op.args, "format") }
         const action = await transformOutbound(initial, fromSession, ch.capabilities, this.ports.stores.fileStore, this.registry)
         if (action.op !== "edit_message") return { ok: false, error: "transformOutbound dropped edit_message" }
         const res = await ch.send(action)
-        if (res.ok) {
-          this.ports.stores.messageLog.update(fromSession, `out:${chat_id}:${messageId}`, { text: action.text, edited_at: new Date().toISOString() })
-        }
-        return res.ok ? { ok: true, value: res.value } : { ok: false, error: res.error }
+        if (!res.ok) return { ok: false, error: res.error }
+        const row = this.ports.stores.messageLog.findByChannelMessageId(fromSession, chat_id, messageId)
+        const stored = row ? this.ports.stores.messageLog.update(fromSession, row.id, { text: action.text, edited_at: new Date().toISOString() }) : false
+        if (!stored) log.warn("edit_not_recorded", { session: fromSession, chat_id, message_id: messageId })
+        return { ok: true, value: res.value }
       } else if (op.name === "download_attachment") {
         try {
           const fileId = stringArg(op.args, "file_id")

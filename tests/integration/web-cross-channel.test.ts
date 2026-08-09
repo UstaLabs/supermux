@@ -114,3 +114,57 @@ test("web send → onSendFromWeb fires → log entry surfaces", async () => {
   expect(entries.some((e) => e.text === "from web" && e.direction === "inbound" && e.channel === "web")).toBe(true)
   ws.close()
 })
+
+// ── The web channel is a TRANSPORT (step 3) ─────────────────────────────────
+// WebChannel.send() used to invent a message id and write to no socket; the
+// message reached the screen only because a listener on the message log
+// broadcast it. These tests pin the new contract: send() writes the frame.
+
+test("send() delivers exactly one message_append to a connected client", async () => {
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const s = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers: { Cookie: `cmux_token=${token}` } })
+    s.onopen = () => resolve(s); s.onerror = reject
+    setTimeout(() => reject(new Error("timeout")), 2000)
+  })
+  ws.send(JSON.stringify({ type: "subscribe" }))
+  await new Promise((r) => setTimeout(r, 50))
+  const received: any[] = []
+  ws.onmessage = (e) => received.push(JSON.parse(String(e.data)))
+
+  const entry = {
+    id: "out:web:uuid-1", ts: new Date().toISOString(), direction: "outbound" as const,
+    channel: "web", chat_id: "web", op: "reply", text: "hello from the agent",
+  }
+  const res = await web.send({ op: "reply", chat_id: "web", text: entry.text }, { sessionId: anaSessionId, entry })
+  await new Promise((r) => setTimeout(r, 100))
+
+  expect(res.ok).toBe(true)
+  const appends = received.filter((f) => f.type === "message_append" && f.entry?.text === entry.text)
+  expect(appends.length).toBe(1)                 // not zero, and not two
+  expect(appends[0]!.session).toBe(anaSessionId) // Bug I1: the frame must name its session
+  ws.close()
+})
+
+// The agent is not bound to a present client. The message is already in the
+// transcript before send() runs, so nobody listening is still a success.
+test("send() with no connected client succeeds", async () => {
+  const entry = {
+    id: "out:web:uuid-2", ts: new Date().toISOString(), direction: "outbound" as const,
+    channel: "web", chat_id: "web", op: "reply", text: "nobody is looking",
+  }
+  const res = await web.send({ op: "reply", chat_id: "web", text: entry.text }, { sessionId: anaSessionId, entry })
+  expect(res.ok).toBe(true)
+  expect((res as any).value.clients).toBe(0)
+})
+
+// Bug I1 guard: a frame with no session lands in the client's bySession[undefined].
+test("send() refuses a message with no entry", async () => {
+  const res = await web.send({ op: "reply", chat_id: "web", text: "unaddressed" })
+  expect(res.ok).toBe(false)
+})
+
+test("send() refuses an op the web channel cannot do", async () => {
+  const res = await web.send({ op: "react", chat_id: "web", message_id: "1", emoji: "👍" })
+  expect(res.ok).toBe(false)
+  expect((res as any).error).toContain("does not support")
+})

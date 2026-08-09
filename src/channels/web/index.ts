@@ -1,4 +1,4 @@
-import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundResult } from "../channel"
+import type { Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundContext, OutboundResult } from "../channel"
 import { DeviceStore } from "./device-store"
 import { watchRowExtras } from "./watch-session-row"
 import { serveStatic } from "./static-serve"
@@ -559,18 +559,28 @@ export class WebChannel implements Channel {
     this.server?.stop(true)
   }
 
-  async send(action: OutboundAction): Promise<OutboundResult> {
-    if (action.op !== "reply") return { ok: true, value: { dropped: true, reason: "v1 only delivers reply on web" } }
+  async send(action: OutboundAction, ctx?: OutboundContext): Promise<OutboundResult> {
+    // A channel must not report success for work it did not do. react and
+    // edit_message have no web representation, so they fail here and the agent
+    // learns it. (The broker also refuses them earlier, on capabilities.)
+    if (action.op !== "reply") return { ok: false, error: `the web channel does not support ${action.op}` }
     if (action.chat_id !== "web" && !action.chat_id.startsWith("web:")) return { ok: false, error: `unexpected chat_id for web channel: ${action.chat_id}` }
-    // We return a message_id but DO NOT emit a message_append frame from here.
-    // Bug I1: previously this method broadcast a frame with no `session` field,
-    // and the web-app dispatcher pushed the entry into bySession[undefined].
-    // The authoritative broadcast happens via main.ts's messageLog.on("append")
-    // listener, which has the session name in hand. Letting that listener be
-    // the single source of message_append frames removes the orphan entry AND
-    // the duplicate the client otherwise saw.
-    const messageId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    return { ok: true, value: { message_id: messageId } }
+
+    // THIS is the web transport. Telegram makes an HTTPS call here; we write a
+    // WebSocket frame.
+    //
+    // Bug I1 (do not undo): a frame without the `session` field lands in the
+    // client's bySession[undefined]. That is why the entry and its session id
+    // arrive in `ctx` — the broker stores the row BEFORE this call, so the
+    // frame is always addressed. Refuse to send an unaddressed frame.
+    if (!ctx) return { ok: false, error: "web send needs the stored entry (no OutboundContext)" }
+
+    this.broadcastToAll({ type: "message_append", session: ctx.sessionId, entry: ctx.entry })
+
+    // No open socket is NOT a failure. The message is already in the transcript,
+    // and the client reads it when it connects. The agent keeps running; it is
+    // not bound to a present client.
+    return { ok: true, value: { message_id: ctx.entry.id, clients: this.wsConnections.size } }
   }
 
   broadcastToAll(frame: object): void {

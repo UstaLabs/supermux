@@ -7,7 +7,8 @@ import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
 import { handleWebInbound } from "./channels/web/inbound-handler"
 import type { Channel, InboundMessage, OutboundAction } from "./channels/channel"
-import { classifyInbound, transformOutbound, ReplyTargets, lastInboundChatId } from "./core/routing"
+import { classifyInbound, transformOutbound, ReplyTargets, lastInboundChatId, parseAddress, isWebChat, WEB_CHAT_ID } from "./core/routing"
+const WEB_CHANNEL = "web"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { WorkspaceService } from "./core/workspace/service"
@@ -744,11 +745,17 @@ async function resolveAttachmentPath(file_id: string): Promise<string> {
   return r.path
 }
 
+/** What happened to one outbound message. Every producer gets this same answer,
+ *  whatever agent it came from — Claude used to learn about a failure while the
+ *  stream agents' replies were dropped into a log file. */
+export type DispatchResult = { ok: true; delivered: number } | { ok: false; error: string }
+
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean },
-): Promise<void> {
-  agentStateStore.applyEvent(sessionId, "Stop")
+  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean; system?: boolean },
+): Promise<DispatchResult> {
+  // A broker notice ("Resuming session…") is not the agent finishing a turn.
+  if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
   const sessionName = sessionEntry?.name ?? sessionId
 
@@ -758,31 +765,39 @@ async function onAssistantMessage(
   const workdir = sessionEntry?.workdir ?? process.cwd()
   const resolvedFiles = ev.files?.map((fp) => resolve(workdir, fp))
 
-  // The destination is the broker's call, never the agent's: the chat this
-  // session last heard from. The active-session fan-out below is the last
-  // resort, for a session that has never received a turn (spawned by another
-  // agent, say). It is a Telegram concept — web sessions are never "active" —
-  // so it reaches nobody for a web-only session.
+  // The destination is the broker's call, never the agent's:
+  //   1. the chat this session last heard from;
+  //   2. else the chats where this session is active (a Telegram concept);
+  //   3. else web — every session has its own chat there, so a session that has
+  //      never received a turn (one agent spawned by another) is still visible.
+  // Without (3) such a reply had no target at all and was dropped in silence.
   const destination = resolveReplyTarget(sessionId)
   const targets: { channelName: string; chat_id: string }[] = []
-  if (destination) {
-    // "web" is the single logical web channel (no colon). A colon-prefixed id
-    // names its channel directly. A bare legacy id is a telegram chat.
-    const channelName = destination === "web" ? "web" : destination.includes(":") ? destination.split(":", 1)[0]! : "telegram"
-    const chat_id = destination === "web" || destination.includes(":") ? destination : `telegram:${destination}`
-    targets.push({ channelName, chat_id })
+  const addressed = parseAddress(destination)
+  if (addressed) {
+    targets.push({ channelName: addressed.channel, chat_id: addressed.chatId })
   } else {
-    for (const [chat_id, state] of registry.chats.allChats()) {
+    for (const [rawChatId, state] of registry.chats.allChats()) {
       if (state.active_session_id !== sessionId) continue
-      const channelName = chat_id.split(":", 1)[0]!
-      if (!channels[channelName]) continue
-      targets.push({ channelName, chat_id })
+      const a = parseAddress(rawChatId)
+      if (!a || !channels[a.channel]) continue
+      targets.push({ channelName: a.channel, chat_id: a.chatId })
+    }
+    if (targets.length === 0 && channels[WEB_CHANNEL]) {
+      targets.push({ channelName: WEB_CHANNEL, chat_id: WEB_CHAT_ID })
     }
   }
   let dispatchedCount = 0
   let lastError: string | undefined
   for (const { channelName, chat_id } of targets) {
-    const ch = channels[channelName]!
+    // A chat can name a channel this broker does not run (a telegram id held by
+    // a session after the token was removed, say). Say so; do not throw.
+    const ch = channels[channelName]
+    if (!ch) {
+      lastError = `no ${channelName} channel is configured`
+      log.warn("dispatch_unknown_channel", { sessionName, chat_id, channel: channelName })
+      continue
+    }
     const initial: OutboundAction = {
       op: "reply", chat_id, text: ev.text,
       reply_to: ev.reply_to, files: resolvedFiles, format: ev.format, keyboard: ev.keyboard,
@@ -790,7 +805,32 @@ async function onAssistantMessage(
     try {
       const action = await transformOutbound(initial, sessionId, ch.capabilities, fileStore, registry)
       if (action.op !== "reply") continue
-      const res = await ch.send(action)
+
+      // Store BEFORE the send. Two reasons:
+      //   1. The transcript is the durable record. A channel that fails must
+      //      not take the message with it — the user can still read it.
+      //   2. The web channel's wire format IS this row, and its frame must
+      //      carry the session id (Bug I1). Minting the entry here is what
+      //      makes the frame addressable.
+      // The entry id is our own; the channel's id lands in `message_id` after
+      // the send. It used to be built FROM the channel id, which is why the
+      // order could not be this way before.
+      const entry = {
+        id: `out:${chat_id}:${randomUUID()}`,
+        ts: new Date().toISOString(),
+        direction: "outbound" as const,
+        channel: channelName,
+        chat_id,
+        op: "reply" as const,
+        text: action.text,
+        error: ev.error,
+        attachments: action.attachments?.map((a) => ({
+          file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
+        })),
+      }
+      messageLog.append(sessionId, entry)
+
+      const res = await ch.send(action, { sessionId, entry })
       if (!res.ok) {
         log.warn("dispatch_reply_failed", { sessionName, chat_id, err: res.error })
         lastError = res.error ?? "channel send failed"
@@ -812,26 +852,32 @@ async function onAssistantMessage(
       // path looks this up via registry.get() (id-only), and names change via /rename.
       // Storing the name made every reply-to silently miss → fell through to the
       // active session (masked on Telegram when replying to the already-active one).
-      if (mid) replyOwner.set(`${chat_id}:${mid}`, sessionId)
-      messageLog.append(sessionId, {
-        id: mid ? `out:${chat_id}:${mid}` : `out:${chat_id}:ts:${Date.now()}`,
-        ts: new Date().toISOString(),
-        direction: "outbound", channel: channelName, chat_id,
-        message_id: mid ? String(mid) : undefined,
-        op: "reply", text: action.text,
-        error: ev.error,
-        attachments: action.attachments?.map((a) => ({
-          file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
-        })),
-      })
+      if (mid) {
+        replyOwner.set(`${chat_id}:${mid}`, sessionId)
+        // The channel's own id, recorded on the row we already stored. react and
+        // edit_message address a message by it.
+        messageLog.setChannelMessageId(sessionId, entry.id, String(mid))
+      }
     } catch (err: any) {
       log.warn("dispatch_reply_threw", { sessionName, chat_id, err: String(err) })
       lastError = String(err)
     }
   }
-  if (dispatchedCount === 0) {
-    throw new Error(lastError ?? "no dispatch targets succeeded")
-  }
+  if (dispatchedCount === 0) return { ok: false, error: lastError ?? "no dispatch targets" }
+  return { ok: true, delivered: dispatchedCount }
+}
+
+/**
+ * The broker's own sentence about a session — "Resuming session…", "Failed to
+ * start…". It goes out the same way a reply does, so it reaches the user on
+ * whatever channel the session is talking on.
+ *
+ * These used to call webChannel.send() directly, which delivered nothing on web
+ * while reporting success. Telegram showed them; the PWA showed silence.
+ */
+async function notifySession(sessionId: string, text: string): Promise<void> {
+  const r = await onAssistantMessage(sessionId, { text, system: true })
+  if (!r.ok) log.warn("broker_notice_undelivered", { session: sessionId, err: r.error, text })
 }
 
 async function notifyAgentError(sessionId: string, sessionName: string, errorType: string, errorMessage: string): Promise<void> {
@@ -856,10 +902,13 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   // push to the session's most-recent web chat (so it lands even if the PWA is closed)
   try {
     const entries = messageLog.get(sessionId)
+    // Both web spellings count: the current bare `web` and the legacy
+    // `web:<device>`. Matching only `web:` made this whole branch dead code,
+    // because every modern web row is written as the bare `web`.
     let lastWeb: string | undefined
     for (let i = entries.length - 1; i >= 0; i--) {
       const c = entries[i]?.chat_id
-      if (typeof c === "string" && c.startsWith("web:")) { lastWeb = c; break }
+      if (isWebChat(c)) { lastWeb = c; break }
     }
     if (lastWeb && !registry.get(sessionId)?.mute) {
       await pushSender.sendToChat(lastWeb, { session: sessionName, text: `⚠️ ${errorType}: ${errorMessage}`.slice(0, 180), ts: new Date().toISOString() })
@@ -962,7 +1011,13 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
 // activity timeline + live status. (Claude uses its own transcript/hook path.)
 function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
   adapter.on("assistant-message", (ev: any) => {
-    onAssistantMessage(sessionId, ev).catch((err) => log.warn("dispatch_assistant_failed", { err: String(err) }))
+    // Same answer as the Claude path gets through the shim. A failure here used
+    // to be a log line only: the reply was discarded and the user saw the turn
+    // end with nothing. The message itself is stored before the send now, so a
+    // channel failure still leaves the text in the transcript.
+    void onAssistantMessage(sessionId, ev)
+      .then((r) => { if (!r.ok) log.warn("dispatch_assistant_failed", { session: sessionId, err: r.error }) })
+      .catch((err) => log.warn("dispatch_assistant_threw", { session: sessionId, err: String(err) }))
   })
   adapter.on("tool-call", (ev: any) => {
     const now = Date.now()
@@ -2120,8 +2175,9 @@ const server = await startSocketServer({
     if (!chat_id) return
     const name = registry.get(session_id)?.name ?? session_id
     const text = `⚠️ Couldn't deliver your message to "${name}" — it didn't come up (it may have crashed). Please try again.`
-    if (chat_id.startsWith("telegram")) void telegram?.send({ op: "reply", chat_id, text })
-    else void webChannel?.send({ op: "reply", chat_id, text })
+    // Through the same path as a reply, so it lands on whatever channel the
+    // session is talking on — and is recorded in the transcript.
+    void notifySession(session_id, text)
   },
   handler: {
     onRegister: (m) => sessionManager.handleRegister(m),
@@ -2552,10 +2608,18 @@ ch.on("inbound", async (msg: InboundMessage) => {
 if (telegram) wireInbound(telegram)
 if (whatsapp) wireInbound(whatsapp)
 
-// Fan log activity to web subscribers — listeners receive sessionId (UUID),
-// look up session name for display
+// The PWA mirrors a session's WHOLE conversation, including the half that
+// happens on Telegram or WhatsApp. That mirror is this listener.
+//
+// It is no longer the web TRANSPORT: an outbound web row was already broadcast
+// by WebChannel.send(), so re-broadcasting it here would show it twice. Every
+// other row — inbound from any channel, outbound to telegram/whatsapp — is
+// mirrored so the PWA shows the full conversation.
 messageLog.on("append", (sessionId, entry) => {
-  webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  const deliveredByWebChannel = entry.direction === "outbound" && entry.channel === "web"
+  if (!deliveredByWebChannel) {
+    webChannel?.broadcastToAll({ type: "message_append", session: sessionId, entry })
+  }
   // If a device is actively viewing this session, the new message is already
   // read — advance read status so the unread badge stays clear on every device.
   if (viewingTracker.isAnyExactViewing(sessionId)) advanceRead(sessionId)
@@ -2601,10 +2665,10 @@ if (webChannel) {
     // uses getById.
     const targetSession = msg.target_session_id ? registry.get(msg.target_session_id) : undefined
     if (targetSession?.status === "suspended") {
-      webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Resuming session "${targetSession.name}"...` })
+      await notifySession(targetSession.id, `Resuming session "${targetSession.name}"...`)
       const resumed = await resumeSuspendedSession(targetSession)
       if (!resumed) {
-        webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to resume session "${targetSession.name}".` })
+        await notifySession(targetSession.id, `Failed to resume session "${targetSession.name}".`)
         return
       }
     }
@@ -2672,7 +2736,9 @@ if (webChannel) {
             draft_payload: draftSnapshot.draft_payload,
           },
         })
-        webChannel!.send({ op: "reply", chat_id: msg.chat_id, text: `Failed to start session "${draftSnapshot.name}".` })
+        // The draft row was restored just above, so the session exists again and
+        // the notice has a home.
+        await notifySession(draftSnapshot.id, `Failed to start session "${draftSnapshot.name}".`)
         return
       }
       inbound = { ...msg, target_session_id: started.id }
@@ -2680,9 +2746,12 @@ if (webChannel) {
     handleWebInbound(inbound, {
       messageLog,
       hasSession: (id) => !!registry.get(id),
+      // The app sent to a session the broker does not have — it was killed or
+      // archived while that client was away. There is no session to hang a
+      // message on, so this stays a log line. The app is what must not send
+      // into a session it no longer has.
       replyNoSuchSession: async (chat_id, sessionId) => {
         log.warn("web_inbound_no_session", { chat_id, sessionId })
-        await webChannel!.send({ op: "reply", chat_id, text: `no such session: ${sessionId}` })
       },
       deliver: async (sid, text, meta) => {
         const sessionEntry = registry.get(sid)
