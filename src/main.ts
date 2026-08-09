@@ -505,14 +505,13 @@ async function maybeAutoSendSoulSetup(sessionId: string): Promise<void> {
   })) return
 
   soulSetupQueued.add(session.id)
+  // Through the ONE funnel (was: an inline adapter-or-socket branch that fell
+  // back to the claude shim socket for ANY kind — a non-claude PA's invocation
+  // queued there and expired). A not-ready adapter throws so the catch below
+  // clears the queued flag and the next register attempt retries.
   const deliver = async (id: string, text: string, meta: Record<string, string>) => {
-    const current = registry.get(id)
-    const adapter = current ? runtimes.get(current.id)?.adapter : undefined
-    if (adapter) {
-      await adapter.send(text, meta)
-    } else {
-      await server.sendInbound(id, { content: text, meta })
-    }
+    const r = await sessionManager.deliver(id, text, meta)
+    if (!r.ok) throw new Error(`soul-setup delivery not ready: ${r.reason}`)
   }
 
   try {
@@ -2843,13 +2842,12 @@ if (webChannel) {
     }
     handleWebInbound(inbound, {
       messageLog,
-      sendInbound: (sid, payload) => server.sendInbound(sid, payload),
       hasSession: (id) => !!registry.get(id),
       replyNoSuchSession: async (chat_id, sessionId) => {
         log.warn("web_inbound_no_session", { chat_id, sessionId })
         await webChannel!.send({ op: "reply", chat_id, text: `no such session: ${sessionId}` })
       },
-      adapterSend: async (sid, text, meta) => {
+      deliver: async (sid, text, meta) => {
         const sessionEntry = registry.get(sid)
         const sessionId = sessionEntry?.id ?? sid
         log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
