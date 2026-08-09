@@ -3,12 +3,14 @@ import type { AgentKind as SharedAgentKind } from "../../shared/agents"
 
 export { AgentKind } from "../../shared/agents"
 
+// An adapter says WHAT to send, never WHERE. The destination is the broker's:
+// core/routing/reply-target resolves it from the chat the session last heard
+// from. Do not add a chat_id here.
 export type AssistantMessageEvent = {
   kind: "assistant-message"
   text: string
   // Channel-specific extras — only the Claude path supplies these via the
   // shim's reply() arguments. Codex/Cursor stream-derived events omit them.
-  chat_id?: string
   reply_to?: string
   files?: string[]
   format?: "text" | "markdownv2"

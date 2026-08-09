@@ -7,7 +7,7 @@ import { EMBEDDED_STATIC } from "./channels/web/static-manifest.generated"
 import { requireAtLeastOneChannel } from "./shared/channels"
 import { handleWebInbound } from "./channels/web/inbound-handler"
 import type { Channel, InboundMessage, OutboundAction } from "./channels/channel"
-import { classifyInbound, transformOutbound } from "./core/routing"
+import { classifyInbound, transformOutbound, ReplyTargets, lastInboundChatId } from "./core/routing"
 import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { WorkspaceService } from "./core/workspace/service"
@@ -561,6 +561,14 @@ const runtimeTargetIdOf = (s: { id: string; name: string; tmux_window_id?: strin
     persist: (id, wid) => registry.sessions.setTmuxWindowId(id, wid),
   })
 const replyOwner = new Map<string, string>()              // key: `${chat_id}:${message_id}`
+// Where each session's replies go. Written by THE inbound funnel, read by every
+// outbound path — the agent never names a destination itself.
+const replyTargets = new ReplyTargets()
+
+/** The chat a session's reply goes to: the one it last heard from. */
+function resolveReplyTarget(sessionId: string): string | undefined {
+  return replyTargets.get(sessionId) ?? lastInboundChatId(messageLog.get(sessionId))
+}
 // agent-rpc registry. Assigned once below, after spawnSession/killSession/
 // deliverInbound (its deps) are all defined; declared here so it's in scope for
 // the orchestration dispatch (rpc_resolve / rpc_reject) further up.
@@ -606,6 +614,7 @@ const sessionManager = new SessionManager(registry, {
     // no other state change. Mutates nothing — it just re-emits the same frame
     // the change-listener would send (keeps delivery a pure reflector).
     onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
+    onTarget: (id, chat_id) => replyTargets.note(id, chat_id),
   },
   backend: {
     runtimeTargetIdOf,
@@ -718,7 +727,7 @@ const commandRegistry: CommandRegistry = new CommandRegistry({
   },
 })
 
-const unregisterSession = (id: string) => sessionManager.unregister(id)
+const unregisterSession = (id: string) => { replyTargets.forget(id); return sessionManager.unregister(id) }
 
 // Resolve an inbound attachment file_id to a local path, for codex/cursor
 // sessions. Claude gets attachments via the download_attachment MCP tool; the
@@ -737,7 +746,7 @@ async function resolveAttachmentPath(file_id: string): Promise<string> {
 
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; chat_id?: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean },
+  ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean },
 ): Promise<void> {
   agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
@@ -749,14 +758,18 @@ async function onAssistantMessage(
   const workdir = sessionEntry?.workdir ?? process.cwd()
   const resolvedFiles = ev.files?.map((fp) => resolve(workdir, fp))
 
-  // If chat_id is explicit (shim reply path), dispatch to that single chat.
-  // Otherwise (stream-derived), fan out to all chats where this session is active.
+  // The destination is the broker's call, never the agent's: the chat this
+  // session last heard from. The active-session fan-out below is the last
+  // resort, for a session that has never received a turn (spawned by another
+  // agent, say). It is a Telegram concept — web sessions are never "active" —
+  // so it reaches nobody for a web-only session.
+  const destination = resolveReplyTarget(sessionId)
   const targets: { channelName: string; chat_id: string }[] = []
-  if (ev.chat_id) {
+  if (destination) {
     // "web" is the single logical web channel (no colon). A colon-prefixed id
     // names its channel directly. A bare legacy id is a telegram chat.
-    const channelName = ev.chat_id === "web" ? "web" : ev.chat_id.includes(":") ? ev.chat_id.split(":", 1)[0]! : "telegram"
-    const chat_id = ev.chat_id === "web" || ev.chat_id.includes(":") ? ev.chat_id : `telegram:${ev.chat_id}`
+    const channelName = destination === "web" ? "web" : destination.includes(":") ? destination.split(":", 1)[0]! : "telegram"
+    const chat_id = destination === "web" || destination.includes(":") ? destination : `telegram:${destination}`
     targets.push({ channelName, chat_id })
   } else {
     for (const [chat_id, state] of registry.chats.allChats()) {
@@ -833,18 +846,9 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   // onAssistantMessage also fires the push hook, so when this succeeds the
   // legacy push below is skipped.
   try {
-    // Route to the chat the user last spoke from. The no-chat_id fan-out in
-    // onAssistantMessage only reaches chats where this session is the ACTIVE
-    // one (a Telegram concept); web sessions log inbound under the logical
-    // "web" chat and are never "active", so without an explicit chat_id the
-    // fan-out finds no targets.
-    let lastChat: string | undefined
-    const entries = messageLog.get(sessionId)
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const e = entries[i]
-      if (e?.direction === "inbound" && typeof e.chat_id === "string") { lastChat = e.chat_id; break }
-    }
-    await onAssistantMessage(sessionId, { text: `${errorType}: ${errorMessage}`, error: true, chat_id: lastChat })
+    // Same destination as a normal reply: the chat the user last spoke from.
+    // onAssistantMessage resolves it, so pass no chat_id.
+    await onAssistantMessage(sessionId, { text: `${errorType}: ${errorMessage}`, error: true })
     return
   } catch (err) {
     log.warn("agent_error_reply_failed", { session: sessionName, err: String(err) })

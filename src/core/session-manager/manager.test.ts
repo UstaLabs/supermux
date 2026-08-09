@@ -314,15 +314,20 @@ function managerForDeliver(): {
   m: SessionManager
   socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }>
   delivered: string[]
+  targets: Array<{ id: string; chat_id?: string }>
 } {
   const db = openDb(":memory:")
   runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
   const socketSends: Array<{ id: string; payload: { content: string; meta: Record<string, string> } }> = []
   const delivered: string[] = []
+  const targets: Array<{ id: string; chat_id?: string }> = []
   const ports = fakePorts(db)
   ports.socket = { sendInbound: async (id, payload) => { socketSends.push({ id, payload }) } }
-  ports.inbound = { onDelivered: (id) => delivered.push(id) }
-  return { m: new SessionManager(new Registry(db), ports), socketSends, delivered }
+  ports.inbound = {
+    onDelivered: (id) => delivered.push(id),
+    onTarget: (id, chat_id) => targets.push({ id, chat_id }),
+  }
+  return { m: new SessionManager(new Registry(db), ports), socketSends, delivered, targets }
 }
 
 function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CodexAdapter {
@@ -369,6 +374,53 @@ describe("SessionManager.deliver", () => {
     expect(sent.length).toBe(1)
     expect(again).toEqual({ ok: true, deduped: true })
     expect(delivered).toEqual([s.id, s.id])
+  })
+
+  // The reply destination is recorded here — the one door every inbound turn
+  // passes through — so no agent has to carry a chat_id of its own.
+  test("reports the chat each inbound turn arrived on", async () => {
+    const { m, targets } = managerForDeliver()
+    const s = m.registry.register({ name: "cx4", workdir: "/tmp", pid: 0, agent: "codex", connected: false })
+    m.registerRuntime(s.id, { kind: "codex", adapter: mockSendAdapter([]), handle: {} as CodexSpawnHandle })
+    await m.deliver(s.id, "from web", { chat_id: "web" })
+    await m.deliver(s.id, "system turn", {})
+    expect(targets).toEqual([{ id: s.id, chat_id: "web" }, { id: s.id, chat_id: undefined }])
+  })
+})
+
+describe("SessionManager.handleOutbound reply", () => {
+  test("ignores an agent-supplied chat_id — the broker owns the destination", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const seen: Array<{ id: string; ev: any }> = []
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      onAssistantMessage: async (id, ev) => { seen.push({ id, ev }) },
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
+    // A session on an older shim still sends chat_id; it must not reach the dispatcher.
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { chat_id: "telegram:999", text: "hi" } } } as any)
+    expect(r.ok).toBe(true)
+    expect(seen.length).toBe(1)
+    expect(seen[0]!.ev.chat_id).toBeUndefined()
+    expect(seen[0]!.ev.text).toBe("hi")
+  })
+
+  test("a reply with no chat_id is accepted", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const seen: any[] = []
+    const ports = fakePorts(db)
+    ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev) } }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { text: "no destination" } } } as any)
+    expect(r.ok).toBe(true)
+    expect(seen).toEqual([{ text: "no destination", reply_to: undefined, files: undefined, format: undefined, keyboard: undefined }])
   })
 })
 

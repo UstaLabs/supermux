@@ -95,7 +95,8 @@ test("send() brackets the turn and emits assistant text from returned parts", as
   expect(kinds[kinds.length - 1]).toBe("turn-complete")
   const msgs = events.filter((e) => e.kind === "assistant-message") as Extract<AgentEvent, { kind: "assistant-message" }>[]
   expect(msgs.map((m) => m.text)).toEqual(["first", "second"])
-  expect(msgs.every((m) => m.chat_id === "web")).toBe(true)
+  // The adapter says WHAT to send, never WHERE — the broker owns the destination.
+  expect(msgs.every((m) => !("chat_id" in m))).toBe(true)
   expect(promptCalls[0]!.id).toBe("sess_1")
 })
 
@@ -304,7 +305,7 @@ test("send() serializes overlapping turns: one prompt() in flight, each turn kee
   expect(msgs.map((m) => m.text)).toEqual(["reply:A", "reply:B"]) // no clobber, in order
 })
 
-test("send() keeps each queued turn's chat_id (no cross-turn chat_id race)", async () => {
+test("send() carries no destination — the broker routes the reply", async () => {
   const g = makeGatedClient()
   const adapter = new OpenCodeAdapter({
     sessionName: "d", workdir: "/x", client: g.client, persistSessionId: async () => {},
@@ -313,14 +314,14 @@ test("send() keeps each queued turn's chat_id (no cross-turn chat_id race)", asy
   const events = collect(adapter)
 
   const p1 = adapter.send("A", { chat_id: "chatA" })
-  const p2 = adapter.send("B", { chat_id: "chatB" })
+  const p2 = adapter.send("B", { chat_id: "chatB" })   // meta still carries it; the adapter must ignore it
   await tick()
   g.release(0); await p1; await tick()
   g.release(1); await p2
 
   const msgs = events.filter((e) => e.kind === "assistant-message") as Extract<AgentEvent, { kind: "assistant-message" }>[]
-  expect(msgs.find((m) => m.text === "reply:A")!.chat_id).toBe("chatA")
-  expect(msgs.find((m) => m.text === "reply:B")!.chat_id).toBe("chatB")
+  expect(msgs.map((m) => m.text)).toEqual(["reply:A", "reply:B"])
+  expect(msgs.every((m) => !("chat_id" in m))).toBe(true)
 })
 
 test("send() watchdog: turn activity disarms it so a slow turn still completes", async () => {

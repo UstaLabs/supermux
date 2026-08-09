@@ -67,7 +67,6 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   private currentTurnId?: string
   private persistThreadId: (id: string) => Promise<void>
   private initialThreadId?: string
-  private lastChatId?: string
   private resolveAttachment?: (file_id: string) => Promise<string>
   private deferredWebSearchStarts = new Set<string>()
 
@@ -103,7 +102,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
           break
         case "item/completed":
           if (params?.item?.type === "agentMessage" && typeof params.item.text === "string") {
-            this.emit("assistant-message", { kind: "assistant-message", text: params.item.text, chat_id: this.lastChatId })
+            this.emit("assistant-message", { kind: "assistant-message", text: params.item.text })
           }
           if (isCodexToolItem(params?.item?.type)) {
             const callId = String(params.item.id ?? "")
@@ -181,10 +180,6 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
     if (!this.threadId) throw new Error("codex adapter: not started")
-    // Codex may emit multiple agentMessage items in one turn (for example,
-    // commentary followed by the final answer). Keep the destination for all
-    // of them, and replace it explicitly when the next inbound turn starts.
-    this.lastChatId = meta?.chat_id
     const input = await this.buildInput(text, meta)
     if (this.currentTurnId) {
       await this.client.request("turn/steer", { threadId: this.threadId, expectedTurnId: this.currentTurnId, input })

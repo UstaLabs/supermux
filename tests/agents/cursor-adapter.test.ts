@@ -78,15 +78,16 @@ describe("CursorAdapter", () => {
     expect(got).toEqual(["Hello world"])  // only the final snapshot
   })
 
-  test("web-originated send preserves chat_id on buffered assistant message", async () => {
+  test("web-originated send emits the buffered message and names no destination", async () => {
     const { runner, runs } = mockRunner()
     const a = new CursorAdapter({
       sessionName: "s-web", workdir: "/w", runner,
       persistSessionId: async () => {}, initialSessionId: "id",
     })
-    const got: Array<{ text: string; chat_id?: string }> = []
-    a.on("assistant-message", (ev) => got.push({ text: ev.text, chat_id: ev.chat_id }))
+    const got: Array<Record<string, unknown>> = []
+    a.on("assistant-message", (ev) => got.push({ ...ev }))
 
+    // The inbound meta still carries a chat_id; the adapter must not pass it on.
     const sendP = a.send("from web", { chat_id: "web:phone", message_id: "m1" })
     await new Promise(r => setImmediate(r))
     runs[0]!.emit(JSON.stringify({ type: "assistant", message: { content: [{ text: "Hello web" }] } }))
@@ -94,7 +95,7 @@ describe("CursorAdapter", () => {
     runs[0]!.finish()
     await sendP
 
-    expect(got).toEqual([{ text: "Hello web", chat_id: "web:phone" }])
+    expect(got).toEqual([{ kind: "assistant-message", text: "Hello web" }])
   })
 
   test("send() with attachment folds the resolved local path into the prompt", async () => {

@@ -43,9 +43,8 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
   // `draining` flag prevents two drains from running in parallel. This
   // pattern eliminates the race window where `this.active` was briefly
   // undefined between successive runOne calls.
-  private queue: { text: string; chat_id?: string; attachmentFileId?: string; attachmentName?: string; resolve: () => void; reject: (e: Error) => void }[] = []
+  private queue: { text: string; attachmentFileId?: string; attachmentName?: string; resolve: () => void; reject: (e: Error) => void }[] = []
   private draining = false
-  private activeChatId?: string
   // AbortController for the turn currently running (set in runOne, cleared on
   // exit). interrupt() aborts it → the runner SIGTERMs cursor-agent.
   private activeAbort?: AbortController
@@ -75,7 +74,7 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
     return new Promise<void>((resolve, reject) => {
       // Carry attachment meta through the queue and resolve it in the drain
       // loop (not here) so concurrent sends keep their enqueue order.
-      this.queue.push({ text, chat_id: meta?.chat_id, attachmentFileId: meta?.attachment_file_id, attachmentName: meta?.attachment_name, resolve, reject })
+      this.queue.push({ text, attachmentFileId: meta?.attachment_file_id, attachmentName: meta?.attachment_name, resolve, reject })
       if (!this.draining) void this.drain()
     })
   }
@@ -87,14 +86,11 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
       while (this.queue.length) {
         const next = this.queue.shift()!
         try {
-          this.activeChatId = next.chat_id
           const text = await this.withAttachment(next.text, next.attachmentFileId, next.attachmentName)
           await this.runOne(text)
           next.resolve()
         } catch (err: any) {
           next.reject(err instanceof Error ? err : new Error(String(err)))
-        } finally {
-          this.activeChatId = undefined
         }
       }
     } finally {
@@ -185,7 +181,7 @@ export class CursorAdapter extends EventEmitter implements AgentAdapter {
 
   private flushAssistant(): void {
     if (this.pendingAssistantText != null) {
-      this.emit("assistant-message", { kind: "assistant-message", text: this.pendingAssistantText, chat_id: this.activeChatId })
+      this.emit("assistant-message", { kind: "assistant-message", text: this.pendingAssistantText })
       this.pendingAssistantText = undefined
     }
   }
