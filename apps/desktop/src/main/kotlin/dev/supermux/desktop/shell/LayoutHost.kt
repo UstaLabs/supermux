@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
 import dev.supermux.desktop.ui.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -47,7 +46,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -385,11 +383,13 @@ private fun GroupHost(
             // Name the group; do NOT hand back a rebuilt `group`. This lambda is
             // captured by the tab's pointer handler and can outlive this composition.
             onSelect = { viewId -> applyEdit { setActiveViewInGroup(it, group.id, viewId) } },
-            onClose = onCloseView,
             dragState = dragState,
             onDrop = onDrop,
             onAddView = onAddView?.let { add -> { kind, place -> add(group.id, kind, place) } },
             chrome = chrome,
+            tabSlot = { itemId, state ->
+                WorkspaceTab(itemId, titleFor(itemId), state, onCloseView)
+            },
         )
         // A group that leaves composition (workspace switch, session switch, a split
         // collapsing) must take its registered bounds with it. Otherwise resolveDrop
@@ -498,15 +498,6 @@ internal fun EmptyWorkspaceHint() {
     )
 }
 
-/**
- * A row of tabs for a group's views. Each tab is a clickable label plus a close
- * affordance tagged `tab-close-<viewId>`. The active tab uses the teal primary
- * accent. No animation — this strip changes many times a day.
- *
- * Tabs support press-and-drag reorder (and cross-strip / edge-split via the
- * shared [dragState]). A plain click still selects — movement below
- * [TAB_DRAG_THRESHOLD_PX] is treated as a click, not a drag.
- */
 /** The view kinds the "+" offers. Order is the order they appear in the popover. */
 enum class NewViewKind(val wire: String, val label: String) {
     CHAT("chat", "Chat"),
@@ -563,15 +554,28 @@ fun ViewTabStrip(
         activeViewId = activeViewId,
         titleFor = titleFor,
         onSelect = onSelect,
-        onClose = onClose,
         dragState = null,
         onDrop = {},
         modifier = modifier,
         onAddView = onAddView,
         chrome = chrome,
+        tabSlot = { itemId, state -> WorkspaceTab(itemId, titleFor(itemId), state, onClose) },
     )
 }
 
+/**
+ * A row of tabs for a group's views.
+ *
+ * Tabs support press-and-drag reorder (and cross-strip / edge-split via the
+ * shared [dragState]). A plain click still selects — movement below
+ * [TAB_DRAG_THRESHOLD_PX] is treated as a click, not a drag. No animation on the
+ * strip itself — it changes many times a day.
+ *
+ * There is no close callback here. This layer draws no chip of its own: it owns
+ * each tab's position, size, gestures, and `view-tab-<id>` tag, and [tabSlot]
+ * draws everything inside — label, colours, and whatever affordances that
+ * content wants (see WorkspaceTab).
+ */
 @Composable
 internal fun ViewTabStrip(
     groupId: String,
@@ -579,10 +583,10 @@ internal fun ViewTabStrip(
     activeViewId: String,
     titleFor: (String) -> String,
     onSelect: (String) -> Unit,
-    onClose: (String) -> Unit,
     dragState: TabDragState?,
     onDrop: (TabDropTarget) -> Unit,
     chrome: PaneStripChrome,
+    tabSlot: @Composable (itemId: String, state: TabSlotState) -> Unit,
     modifier: Modifier = Modifier,
     onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
 ) {
@@ -671,10 +675,8 @@ internal fun ViewTabStrip(
                         label = "tab-morph-x-$id",
                     )
                     val selected = id == activeViewId
-                    val bg = if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
-                    val fg = if (selected) cs.primary else cs.onSurfaceVariant
                     val z = if (isDragged) 0f else 1f
-                    Row(
+                    Box(
                         Modifier
                             .zIndex(z)
                             .graphicsLayer { translationX = animatedX }
@@ -703,38 +705,22 @@ internal fun ViewTabStrip(
                                     Modifier.clickable { onSelect(id) }
                                 },
                             )
-                            .background(bg)
-                            .padding(start = 14.dp, end = 8.dp)
                             // Fully hide the source slot — ghost is the moving tab.
                             // Keeping a dimmed chip that also translated was feeding
                             // pointer local-coords and looping the live order.
+                            //
+                            // The slot's background is now INSIDE this alpha layer, where it
+                            // was outside before the chip moved out of this chain. That makes
+                            // the hide complete: dragging the ACTIVE tab used to leave its
+                            // 0.14α primary tint painted at the source slot, because
+                            // Modifier.alpha only fades what is inner to it. "Fully hide"
+                            // above was always the intent; it is now also the behaviour.
                             .alpha(if (isDragged) 0f else 1f)
                             .testTag("view-tab-$id"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        // The 56 dp minimum must reach the slot, or its background stops short.
+                        propagateMinConstraints = true,
                     ) {
-                        Text(
-                            text = titleFor(id),
-                            color = fg,
-                            fontFamily = MonoFontFamily,
-                            fontSize = 11.sp,
-                            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                        )
-                        Box(
-                            Modifier
-                                .size(16.dp)
-                                .clickable { onClose(id) }
-                                .alpha(if (selected) 0.85f else 0.5f)
-                                .testTag("tab-close-$id"),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Filled.Close,
-                                contentDescription = "Close view",
-                                tint = fg,
-                                modifier = Modifier.size(12.dp),
-                            )
-                        }
+                        tabSlot(id, TabSlotState(selected = selected, dragged = isDragged))
                     }
                 }
             }

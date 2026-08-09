@@ -1,6 +1,8 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -209,5 +211,34 @@ class LayoutHostTest {
         onNodeWithTag("tab-add-place-here").assertDoesNotExist()
         onNodeWithTag("tab-add-place-split_right").assertDoesNotExist()
         assertEquals(Triple("only", NewViewKind.TERMINAL, NewViewPlacement.HERE), got)
+    }
+
+    @Test
+    fun tabSlot_drawsTheCallerSuppliedChip() = runComposeUiTest {
+        setContent {
+            ViewTabStrip(
+                groupId = "g1",
+                viewIds = listOf("v1", "v2"),
+                activeViewId = "v1",
+                titleFor = { it },
+                onSelect = {},
+                dragState = null,
+                onDrop = {},
+                chrome = PaneStripChrome.None,
+                tabSlot = { itemId, state ->
+                    Text("slot-$itemId-${state.selected}", modifier = Modifier.testTag("custom-tab-$itemId"))
+                },
+            )
+        }
+        // dragState = null takes the plain Modifier.clickable fallback (see ViewTabStrip),
+        // which merges descendant semantics for accessibility — so the slot's own testTag and
+        // text are only visible in the unmerged tree, not the strip's merged view-tab-v1 node.
+        onNodeWithTag("custom-tab-v1", useUnmergedTree = true).assertExists()
+        onNodeWithText("slot-v1-true", useUnmergedTree = true).assertExists()
+        // The inactive tab exercises the false branch of TabSlotState.selected.
+        onNodeWithText("slot-v2-false", useUnmergedTree = true).assertExists()
+        // The layer itself must draw no chip: the close affordance is the slot's business now.
+        // This fails loudly if a built-in chip is ever reintroduced to the strip.
+        onNodeWithTag("tab-close-v1", useUnmergedTree = true).assertDoesNotExist()
     }
 }
