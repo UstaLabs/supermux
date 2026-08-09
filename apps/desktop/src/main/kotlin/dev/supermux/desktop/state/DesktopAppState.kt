@@ -1769,6 +1769,10 @@ class DesktopAppState(
         replaceDraftId: String? = null,
         /** Join this workspace rather than creating a new one (spec decision 5). */
         workspaceId: String? = null,
+        /** Display-name seed (e.g. Continue handoff reuses the source session's name base). */
+        name: String? = null,
+        /** Source session id for "Continue in new conversation" (broker inheritFrom). */
+        inheritFrom: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
@@ -1783,12 +1787,14 @@ class DesktopAppState(
         val resp = api.spawn(
             SpawnRequest(
                 workdir = resolvedPath,
+                name = name?.ifBlank { null },
                 agent = agent,
                 model = model?.ifBlank { null },
                 worktree = if (worktree) true else null,
                 baseBranch = baseBranch?.ifBlank { null },
                 reasoningLevel = reasoningLevel?.ifBlank { null },
                 workspaceId = workspaceId,
+                inheritFrom = inheritFrom?.ifBlank { null },
             ),
         )
         val sessionId = resolveSpawnId(resp, _sessions.value)
@@ -1804,6 +1810,32 @@ class DesktopAppState(
         }
         firstUploads = sessionId to attachmentIds
         sessionId
+    }
+
+    /**
+     * "Continue in a new conversation": same workdir as [source], no new worktree, inherit
+     * display/worktree metadata via [SpawnRequest.inheritFrom], then send [message] as the first
+     * turn. Returns the new session id, or null on failure.
+     */
+    suspend fun continueConversation(source: SessionInfo, message: String): String? {
+        val text = message.trim()
+        if (text.isEmpty() || source.workdir.isBlank()) return null
+        val agent = dev.supermux.session.HandoffPrefill.defaultAgent(source.agent)
+        val sameAgent = source.agent.equals(agent, ignoreCase = true)
+        val newId = createSessionWithFirstMessage(
+            workdir = source.workdir,
+            agent = agent,
+            model = if (sameAgent) source.model else null,
+            reasoningLevel = if (sameAgent) source.reasoningLevel else null,
+            text = text,
+            staged = emptyList(),
+            worktree = false,
+            baseBranch = null,
+            name = source.name,
+            inheritFrom = source.id,
+        ) ?: return null
+        sendMessage(newId, text, consumeFirstUploads(newId))
+        return newId
     }
 
     /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release

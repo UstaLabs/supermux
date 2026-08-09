@@ -1042,6 +1042,7 @@ fun AppShell(
                                             app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
                                             drafts = drafts,
                                             primarySessionId = current.primarySessionId,
+                                            onSelectSession = { ui.selectSession(it) },
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -1107,6 +1108,7 @@ fun AppShell(
                                 onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
                                 onUsage = { ui.openUsage() },
                                 onLspSettings = { ui.openLspSettings() },
+                                onSelectSession = { ui.selectSession(it) },
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
