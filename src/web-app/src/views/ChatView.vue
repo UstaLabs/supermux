@@ -633,7 +633,11 @@ watch(() => props.id, () => { void loadMessages(); void flushPendingFirstMessage
                   data-testid="chat-message"
                   :data-message-direction="block.entry.direction"
                 >
-                  <MessageContent>
+                  <MessageContent :class="block.entry.error ? 'rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5' : undefined">
+                    <div v-if="block.entry.error" class="flex items-center gap-1.5 text-destructive">
+                      <AlertTriangleIcon class="size-3.5 shrink-0" />
+                      <span class="text-xs font-medium">Agent error</span>
+                    </div>
                     <MessageText v-if="block.entry.text" :content="block.entry.text" @open-file="handleOpenFile" />
                     <AttachmentList :attachments="block.entry.attachments" />
                     <div
