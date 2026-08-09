@@ -20,6 +20,7 @@ repositories {
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":ui"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)

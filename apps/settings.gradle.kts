@@ -24,5 +24,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "supermux-apps"
 include(":shared")
+include(":ui")
 include(":android")
 include(":desktop")
