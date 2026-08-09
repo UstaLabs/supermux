@@ -19,24 +19,34 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.MonoFontFamily
 
 /**
- * The workspace's tab chip — the visual half of a tab, split out of the pane layer so that layer
- * carries no font, no icon, and no colour policy.
+ * The default tab chip: a label and a close affordance.
  *
- * The layer owns position, size, gestures, and the `view-tab-<id>` tag. This owns the look and the
+ * This is what a pane strip draws when the caller supplies no `tabSlot`. It is
+ * deliberately content-free — it takes the font rather than reaching for one, and its only colour
+ * source is [MaterialTheme] — so it can live in the pane layer. A caller that needs more (an
+ * editor's unsaved-changes dot, a loading spinner) passes its own `tabSlot` instead.
+ *
+ * The strip owns position, size, gestures, and the `view-tab-<id>` tag. This owns the look and the
  * `tab-close-<id>` tag.
  */
 @Composable
-fun WorkspaceTab(
+fun DefaultTabChip(
     itemId: String,
     title: String,
     state: TabSlotState,
+    labelFont: FontFamily,
     onClose: (String) -> Unit,
+    /**
+     * Accessibility label for the close affordance. The caller supplies it because only the caller
+     * knows what a tab holds — "view", "file", "tab" are all content vocabulary.
+     */
+    closeLabel: String = "Close view",
 ) {
     val cs = MaterialTheme.colorScheme
     val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
@@ -52,7 +62,7 @@ fun WorkspaceTab(
         Text(
             text = title,
             color = fg,
-            fontFamily = MonoFontFamily,
+            fontFamily = labelFont,
             fontSize = 11.sp,
             fontWeight = if (state.selected) FontWeight.Medium else FontWeight.Normal,
         )
@@ -66,7 +76,7 @@ fun WorkspaceTab(
         ) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Close view",
+                contentDescription = closeLabel,
                 tint = fg,
                 modifier = Modifier.size(12.dp),
             )

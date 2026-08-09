@@ -22,14 +22,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,9 +42,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
-import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.boundsInRoot
@@ -61,6 +53,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -69,7 +62,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
-import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Motion
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.groupIdOf
@@ -126,11 +118,27 @@ fun LayoutHost(
     titleFor: (String) -> String = { it },
     onCloseView: (String) -> Unit = {},
     /**
-     * "+" on each group's tab strip. Receives the GROUP the user clicked in, so a
-     * new view lands as a tab in that group rather than somewhere arbitrary.
-     * Null hides the button.
+     * "+" on each group's tab strip, drawn by the caller. Receives the GROUP the user clicked in,
+     * so a new item lands in that group rather than somewhere arbitrary. Null hides the button.
      */
-    onAddView: ((groupId: String, kind: NewViewKind, placement: NewViewPlacement) -> Unit)? = null,
+    addSlot: (@Composable (groupId: String) -> Unit)? = null,
+    /**
+     * What a group with no items draws. The layer keeps the `layout-empty` box and its bounds;
+     * only the message inside is the caller's, because "no open views" is content vocabulary.
+     * Null draws an empty box.
+     */
+    emptyGroupSlot: (@Composable () -> Unit)? = null,
+    /**
+     * Overrides how one tab is drawn. Null uses [DefaultTabChip] — a label plus a close
+     * affordance. Supply this when a strip needs more than that (an editor's unsaved-changes dot,
+     * a loading spinner). The layer still owns position, size, gestures, and the tab's test tag.
+     */
+    tabSlot: (@Composable (itemId: String, state: TabSlotState) -> Unit)? = null,
+    /**
+     * Font for the drag ghost's label — the only text this layer draws itself. Everything else is
+     * a slot. Defaults to the platform's generic monospace so the layer needs no font resource.
+     */
+    labelFont: FontFamily = FontFamily.Monospace,
     /**
      * Shared drag state so the sidebar can register workspace-row drop targets.
      * When null, [LayoutHost] owns a private instance (standalone / tests).
@@ -234,7 +242,10 @@ fun LayoutHost(
             modifier = Modifier.fillMaxSize(),
             titleFor = titleFor,
             onCloseView = onCloseView,
-            onAddView = onAddView,
+            addSlot = addSlot,
+            emptyGroupSlot = emptyGroupSlot,
+            tabSlot = tabSlot,
+            labelFont = labelFont,
             chrome = chrome,
             content = content,
         )
@@ -242,6 +253,7 @@ fun LayoutHost(
         if (drag.isDragging && g != null && g.visible) {
             TabDragGhostChip(
                 label = g.label,
+                labelFont = labelFont,
                 widthPx = g.width,
                 heightPx = g.height,
                 modifier = Modifier
@@ -262,6 +274,7 @@ fun LayoutHost(
 @Composable
 private fun TabDragGhostChip(
     label: String,
+    labelFont: FontFamily,
     widthPx: Float,
     heightPx: Float,
     modifier: Modifier = Modifier,
@@ -288,7 +301,7 @@ private fun TabDragGhostChip(
             Text(
                 text = label,
                 color = cs.primary,
-                fontFamily = MonoFontFamily,
+                fontFamily = labelFont,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -338,16 +351,21 @@ private fun LayoutHostNode(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
-    onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
+    addSlot: (@Composable (String) -> Unit)?,
+    emptyGroupSlot: (@Composable () -> Unit)?,
+    tabSlot: (@Composable (String, TabSlotState) -> Unit)?,
+    labelFont: FontFamily,
     chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
     when (layout) {
         is LayoutNode.Group -> GroupHost(
-            layout, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, chrome, content,
+            layout, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, addSlot,
+            emptyGroupSlot, tabSlot, labelFont, chrome, content,
         )
         is LayoutNode.Split -> SplitHost(
-            layout, path, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, onAddView, chrome, content,
+            layout, path, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, addSlot,
+            emptyGroupSlot, tabSlot, labelFont, chrome, content,
         )
     }
 }
@@ -361,7 +379,10 @@ private fun GroupHost(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
-    onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
+    addSlot: (@Composable (String) -> Unit)?,
+    emptyGroupSlot: (@Composable () -> Unit)?,
+    tabSlot: (@Composable (String, TabSlotState) -> Unit)?,
+    labelFont: FontFamily,
     chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
@@ -369,7 +390,7 @@ private fun GroupHost(
         // A workspace whose last view just closed. Valid, not an error (spec §9.3
         // answer 3: the workspace stays open).
         Box(modifier.fillMaxSize().testTag("layout-empty"), contentAlignment = Alignment.Center) {
-            EmptyWorkspaceHint()
+            emptyGroupSlot?.invoke()
         }
         return
     }
@@ -385,10 +406,10 @@ private fun GroupHost(
             onSelect = { viewId -> applyEdit { setActiveViewInGroup(it, group.id, viewId) } },
             dragState = dragState,
             onDrop = onDrop,
-            onAddView = onAddView?.let { add -> { kind, place -> add(group.id, kind, place) } },
+            addSlot = addSlot?.let { slot -> { slot(group.id) } },
             chrome = chrome,
-            tabSlot = { itemId, state ->
-                WorkspaceTab(itemId, titleFor(itemId), state, onCloseView)
+            tabSlot = tabSlot ?: { itemId, state ->
+                DefaultTabChip(itemId, titleFor(itemId), state, labelFont, onCloseView)
             },
         )
         // A group that leaves composition (workspace switch, session switch, a split
@@ -452,7 +473,10 @@ private fun SplitHost(
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
-    onAddView: ((String, NewViewKind, NewViewPlacement) -> Unit)?,
+    addSlot: (@Composable (String) -> Unit)?,
+    emptyGroupSlot: (@Composable () -> Unit)?,
+    tabSlot: (@Composable (String, TabSlotState) -> Unit)?,
+    labelFont: FontFamily,
     chrome: PaneStripChrome,
     content: @Composable (String) -> Unit,
 ) {
@@ -479,54 +503,13 @@ private fun SplitHost(
             onDrop = onDrop,
             titleFor = titleFor,
             onCloseView = onCloseView,
-            onAddView = onAddView,
+            addSlot = addSlot,
+            emptyGroupSlot = emptyGroupSlot,
+            tabSlot = tabSlot,
+            labelFont = labelFont,
             chrome = chrome,
             content = content,
             modifier = Modifier,
-        )
-    }
-}
-
-/** Hint for a group with no views (workspace still open, last view closed). */
-@Composable
-internal fun EmptyWorkspaceHint() {
-    val cs = MaterialTheme.colorScheme
-    Text(
-        "This workspace has no open views",
-        color = cs.onSurfaceVariant,
-        fontSize = 13.sp,
-    )
-}
-
-/** The view kinds the "+" offers. Order is the order they appear in the popover. */
-enum class NewViewKind(val wire: String, val label: String) {
-    CHAT("chat", "Chat"),
-    TERMINAL("terminal", "Terminal"),
-    EDITOR("editor", "Editor"),
-    DISPLAY("display", "Display"),
-}
-
-/**
- * Where a new view lands relative to the pane its "+" was clicked in.
- *
- * The "+" menu always uses [HERE] (tab in this pane). [SPLIT_RIGHT] / [SPLIT_DOWN]
- * remain for callers that still create splits programmatically; users split by
- * dragging a tab to a pane edge instead of a second menu step.
- */
-enum class NewViewPlacement(val label: String) {
-    HERE("In this pane"),
-    SPLIT_RIGHT("Split right"),
-    SPLIT_DOWN("Split down"),
-}
-
-/** "+" popover: pick a view kind; always lands as a tab in this pane. */
-@Composable
-private fun KindMenuItems(onPick: (NewViewKind) -> Unit) {
-    for (k in NewViewKind.entries) {
-        DropdownMenuItem(
-            text = { Text(k.label, fontSize = 12.sp) },
-            onClick = { onPick(k) },
-            modifier = Modifier.testTag("tab-add-view-${k.wire}"),
         )
     }
 }
@@ -540,12 +523,12 @@ fun ViewTabStrip(
     onClose: (String) -> Unit,
     modifier: Modifier = Modifier,
     /**
-     * "+" at the end of the strip. Opens a popover of view kinds; picking one
-     * adds it as a tab in THIS group ([NewViewPlacement.HERE]). Null hides the
-     * button entirely (tests and any caller that cannot create views).
+     * "+" at the end of the strip, drawn by the caller. Null hides the button
+     * entirely (tests and any caller that cannot create views).
      */
-    onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
+    addSlot: (@Composable () -> Unit)? = null,
     chrome: PaneStripChrome = PaneStripChrome.None,
+    labelFont: FontFamily = FontFamily.Monospace,
 ) {
     // Back-compat for call sites that do not participate in drag (previews, older tests).
     ViewTabStrip(
@@ -557,9 +540,9 @@ fun ViewTabStrip(
         dragState = null,
         onDrop = {},
         modifier = modifier,
-        onAddView = onAddView,
+        addSlot = addSlot,
         chrome = chrome,
-        tabSlot = { itemId, state -> WorkspaceTab(itemId, titleFor(itemId), state, onClose) },
+        tabSlot = { itemId, state -> DefaultTabChip(itemId, titleFor(itemId), state, labelFont, onClose) },
     )
 }
 
@@ -574,7 +557,7 @@ fun ViewTabStrip(
  * There is no close callback here. This layer draws no chip of its own: it owns
  * each tab's position, size, gestures, and `view-tab-<id>` tag, and [tabSlot]
  * draws everything inside — label, colours, and whatever affordances that
- * content wants (see WorkspaceTab).
+ * content wants (see DefaultTabChip).
  */
 @Composable
 internal fun ViewTabStrip(
@@ -588,7 +571,7 @@ internal fun ViewTabStrip(
     chrome: PaneStripChrome,
     tabSlot: @Composable (itemId: String, state: TabSlotState) -> Unit,
     modifier: Modifier = Modifier,
-    onAddView: ((NewViewKind, NewViewPlacement) -> Unit)? = null,
+    addSlot: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -615,7 +598,7 @@ internal fun ViewTabStrip(
         return x
     }
     val stripContentWidthPx = displayIds.sumOf { widthOf(it).toDouble() }.toFloat() +
-        if (onAddView != null) with(density) { 36.dp.toPx() } else 0f
+        if (addSlot != null) with(density) { 36.dp.toPx() } else 0f
 
     Box(
         modifier
@@ -739,14 +722,13 @@ internal fun ViewTabStrip(
                 )
             }
 
-            if (onAddView != null) {
+            if (addSlot != null) {
                 val addTargetX = targetXForIndex(displayIds.size)
                 val animatedAddX by animateFloatAsState(
                     targetValue = addTargetX,
                     animationSpec = Motion.spatial(),
                     label = "tab-add-x",
                 )
-                var pickerOpen by remember { mutableStateOf(false) }
                 Box(
                     Modifier
                         .zIndex(0.5f)
@@ -754,32 +736,7 @@ internal fun ViewTabStrip(
                         .fillMaxHeight()
                         .width(36.dp),
                 ) {
-                    Box(
-                        Modifier
-                            .fillMaxHeight()
-                            .width(36.dp)
-                            .clickable { pickerOpen = true }
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .testTag("tab-add-view"),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Filled.Add,
-                            contentDescription = "Add a view",
-                            tint = cs.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = pickerOpen,
-                        onDismissRequest = { pickerOpen = false },
-                        modifier = Modifier.testTag("tab-add-view-menu"),
-                    ) {
-                        KindMenuItems(onPick = { kind ->
-                            pickerOpen = false
-                            onAddView(kind, NewViewPlacement.HERE)
-                        })
-                    }
+                    addSlot()
                 }
             }
         }
@@ -800,7 +757,7 @@ private fun TabInsertCaret(modifier: Modifier = Modifier) {
 }
 
 /**
- * Press-to-drag on a tab, matching [dev.supermux.desktop.session.SessionDragReorderState]:
+ * Press-to-drag on a tab, matching the session-list drag reorder:
  * mouse-friendly grab after a small move, click when movement stays under the
  * threshold. Drop resolution is delegated to [TabDragState] so cross-strip and
  * edge targets share one pointer.

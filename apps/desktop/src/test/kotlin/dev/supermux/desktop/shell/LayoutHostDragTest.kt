@@ -21,7 +21,7 @@ class LayoutHostDragTest {
     fun draggingATabToTheRightReordersIt() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b", "c"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-a").performTouchInput {
             down(center); moveBy(androidx.compose.ui.geometry.Offset(120f, 0f)); up()
@@ -33,7 +33,7 @@ class LayoutHostDragTest {
     fun reorderingDoesNotChangeWhichTabIsActive() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b", "c"), "c")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-a").performTouchInput {
             down(center); moveBy(androidx.compose.ui.geometry.Offset(120f, 0f)); up()
@@ -46,7 +46,7 @@ class LayoutHostDragTest {
         // The drag gesture must not swallow the plain click that switches tabs.
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-b").performClick()
         assertEquals("b", (tree as LayoutNode.Group).activeViewId)
@@ -59,7 +59,7 @@ class LayoutHostDragTest {
             LayoutNode.Group("g2", listOf("c"), "c"),
         ))
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         // Drag tab "a" from the left strip onto the right strip.
         onNodeWithTag("view-tab-a").performTouchInput {
@@ -74,7 +74,7 @@ class LayoutHostDragTest {
     fun droppingATabOnTheRightEdgeSplitsTheGroupIntoARow() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-b").performTouchInput {
             down(center); moveTo(androidx.compose.ui.geometry.Offset(1180f, 400f)); up()
@@ -89,7 +89,7 @@ class LayoutHostDragTest {
     fun droppingOnTheBottomEdgeSplitsIntoAColumn() = runComposeUiTest {
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a", "b"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-b").performTouchInput {
             down(center); moveTo(androidx.compose.ui.geometry.Offset(600f, 780f)); up()
@@ -103,7 +103,7 @@ class LayoutHostDragTest {
         // refuses; the UI must not pretend it worked.
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("a"), "a")
         setContent {
-            LayoutHost(layout = tree, onLayoutChange = { tree = it }, onAddView = { _, _, _ -> }) { Text("body") }
+            LayoutHost(layout = tree, onLayoutChange = { tree = it }, addSlot = {}) { Text("body") }
         }
         onNodeWithTag("view-tab-a").performTouchInput {
             down(center); moveTo(androidx.compose.ui.geometry.Offset(1180f, 400f)); up()
@@ -116,7 +116,7 @@ class LayoutHostDragTest {
         setContent {
             LayoutHost(
                 layout = LayoutNode.Group("g1", listOf("a", "b"), "a"),
-                onLayoutChange = {}, onAddView = { _, _, _ -> },
+                onLayoutChange = {}, addSlot = {},
             ) { Text("body") }
         }
         onNodeWithTag("drop-zone-right").assertDoesNotExist()
@@ -151,14 +151,14 @@ class LayoutHostDragTest {
                     layout = LayoutNode.Group("ga", listOf("p", "q"), "p"),
                     onLayoutChange = {},
                     dragState = shared,
-                    onAddView = { _, _, _ -> },
+                    addSlot = {},
                 ) { Text("body-a") }
             } else {
                 LayoutHost(
                     layout = treeB,
                     onLayoutChange = { treeB = it },
                     dragState = shared,
-                    onAddView = { _, _, _ -> },
+                    addSlot = {},
                 ) { Text("body-b") }
             }
         }

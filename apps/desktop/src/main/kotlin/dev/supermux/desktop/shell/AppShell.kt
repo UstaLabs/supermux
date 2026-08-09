@@ -86,6 +86,7 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
@@ -986,26 +987,28 @@ fun AppShell(
                                     // THAT group. A chat needs an agent, so it goes through the
                                     // launcher (spec §9.2); the other kinds are pure views and are
                                     // created straight away.
-                                    onAddView = { groupId, kind, placement ->
-                                        // Every kind, chat included, becomes a TAB. A chat tab starts
-                                        // as the new-session composer and binds to its session on
-                                        // first send — the pane is never replaced.
-                                        //
-                                        // A SPLIT placement pre-splits the tree so the new view lands
-                                        // in a fresh group beside this one. This is the only route to
-                                        // a second pane from a single view: drag-to-split can only
-                                        // divide existing tabs, and one view has nothing to divide.
-                                        app.addWorkspaceView(current.id, kind, groupId) { newViewId ->
-                                            if (placement != NewViewPlacement.HERE) {
-                                                // Create it here FIRST, then split it out. splitGroup
-                                                // needs a real view to move and refuses a group with
-                                                // fewer than two — and an empty group would fail
-                                                // validateLayout. Add-then-split keeps every
-                                                // intermediate tree valid using tested primitives.
-                                                val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
-                                                val newGroupId = java.util.UUID.randomUUID().toString()
-                                                layoutSync.edit {
-                                                    splitGroup(it, groupId, newViewId, dir, newGroupId)
+                                    addSlot = { groupId ->
+                                        WorkspaceAddButton { kind, placement ->
+                                            // Every kind, chat included, becomes a TAB. A chat tab starts
+                                            // as the new-session composer and binds to its session on
+                                            // first send — the pane is never replaced.
+                                            //
+                                            // A SPLIT placement pre-splits the tree so the new view lands
+                                            // in a fresh group beside this one. This is the only route to
+                                            // a second pane from a single view: drag-to-split can only
+                                            // divide existing tabs, and one view has nothing to divide.
+                                            app.addWorkspaceView(current.id, kind, groupId) { newViewId ->
+                                                if (placement != NewViewPlacement.HERE) {
+                                                    // Create it here FIRST, then split it out. splitGroup
+                                                    // needs a real view to move and refuses a group with
+                                                    // fewer than two — and an empty group would fail
+                                                    // validateLayout. Add-then-split keeps every
+                                                    // intermediate tree valid using tested primitives.
+                                                    val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
+                                                    val newGroupId = java.util.UUID.randomUUID().toString()
+                                                    layoutSync.edit {
+                                                        splitGroup(it, groupId, newViewId, dir, newGroupId)
+                                                    }
                                                 }
                                             }
                                         }
@@ -1018,6 +1021,10 @@ fun AppShell(
                                     },
                                     modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
                                     chrome = DesktopStripChrome,
+                                    // "view" and "workspace" are content vocabulary, so the
+                                    // wording lives here rather than in the pane layer.
+                                    emptyGroupSlot = { WorkspaceEmptyHint() },
+                                    labelFont = MonoFontFamily,
                                 ) { viewId ->
                                     val v = viewsById[viewId]
                                     if (v != null && v.kind == "chat" && v.chatSessionId() == null) {

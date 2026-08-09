@@ -128,9 +128,16 @@ class LayoutHostTest {
     @Test
     fun anEmptyGroupRendersThePlaceholderRatherThanCrashing() = runComposeUiTest {
         setContent {
-            LayoutHost(layout = LayoutNode.Group("g1", emptyList(), null), onLayoutChange = {}) { Text("body") }
+            LayoutHost(
+                layout = LayoutNode.Group("g1", emptyList(), null),
+                onLayoutChange = {},
+                emptyGroupSlot = { WorkspaceEmptyHint() },
+            ) { Text("body") }
         }
         onNodeWithTag("layout-empty").assertIsDisplayed()
+        // The box is the layer's; the wording is the caller's. Assert both, or a deleted
+        // emptyGroupSlot at the AppShell call site would leave the suite green.
+        onNodeWithText("This workspace has no open views").assertIsDisplayed()
     }
 
     // ── The "+" belongs on the TAB STRIP, not the sidebar row ────────────────
@@ -145,7 +152,7 @@ class LayoutHostTest {
             LayoutHost(
                 layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
                 onLayoutChange = {},
-                onAddView = { _, _, _ -> },
+                addSlot = { WorkspaceAddButton { _, _ -> } },
             ) { Text("body") }
         }
         onNodeWithTag("tab-add-view").assertIsDisplayed()
@@ -165,7 +172,7 @@ class LayoutHostTest {
             LayoutHost(
                 layout = LayoutNode.Group("g1", listOf("v1"), "v1"),
                 onLayoutChange = {},
-                onAddView = { _, _, _ -> },
+                addSlot = { WorkspaceAddButton { _, _ -> } },
             ) { Text("body") }
         }
         onNodeWithTag("tab-add-view").performClick()
@@ -185,7 +192,7 @@ class LayoutHostTest {
                     LayoutNode.Group("right", listOf("v2"), "v2"),
                 )),
                 onLayoutChange = {},
-                onAddView = { g, k, p -> got = Triple(g, k, p) },
+                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
             ) { Text("body") }
         }
         // Two strips, two "+" — the SECOND one must report the right-hand group.
@@ -202,7 +209,7 @@ class LayoutHostTest {
             LayoutHost(
                 layout = LayoutNode.Group("only", listOf("v1"), "v1"),
                 onLayoutChange = {},
-                onAddView = { g, k, p -> got = Triple(g, k, p) },
+                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
             ) { Text("body") }
         }
         onNodeWithTag("tab-add-view").performClick()
