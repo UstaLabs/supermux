@@ -1,5 +1,6 @@
 import { randomBytes } from "crypto"
 import { Registry } from "./session-manager/registry"
+import { isPersistentRuntimeSession } from "./session-manager/types"
 import type { MessageStore } from "./session-manager/messages"
 import { fetchAllUsage } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
@@ -67,7 +68,10 @@ function cmdSessions(ctx: CommandCtx): SlashReply {
   const lines = sessions.map(s => {
     const tag = s.id === activeId ? "●" : " "
     const muted = s.mute ? " 🔇" : ""
-    const status = s.connected ? "" : " · reconnecting"
+    // `connected` mirrors the claude shim socket; for adapter-driven kinds it is
+    // not a liveness signal, so only persistent-runtime (claude) sessions get
+    // the reconnecting tag.
+    const status = !isPersistentRuntimeSession(s) || s.connected ? "" : " · reconnecting"
     const modelSuffix = s.model ? `:${s.model}` : ""
     const agentTag = `[${s.agent}${modelSuffix}]`
     return `${tag} ${s.name} ${agentTag}${muted}${status}  ${s.workdir}`
@@ -191,8 +195,10 @@ function cmdListPAs(ctx: CommandCtx): SlashReply {
     const star = s.is_default ? "*" : " "
     const modelSuffix = s.model ? `:${s.model}` : ""
     const agentTag = `[${s.agent}${modelSuffix}]`
-    const status = s.connected ? "connected" : "reconnecting"
-    return `${star} ${s.name} ${agentTag}  ${s.workdir}  ${status}`
+    // Same claude-only caveat as cmdSessions: the connected flag means nothing
+    // for adapter-driven PAs, so they get no connection label.
+    const status = isPersistentRuntimeSession(s) ? (s.connected ? "connected" : "reconnecting") : ""
+    return `${star} ${s.name} ${agentTag}  ${s.workdir}${status ? `  ${status}` : ""}`
   })
   return { text: lines.join("\n") }
 }

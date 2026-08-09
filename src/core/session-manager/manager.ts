@@ -725,6 +725,8 @@ export class SessionManager {
   // resume; opencode/grok have suspended arms; the cursor arm passes pluginArgs
   // from every source (boot silently dropped them before).
 
+  // Genuinely claude-only: called from the claude resume arms, where the shim
+  // connect IS the readiness signal. Kind-agnostic waits use waitDeliverable.
   private async waitForConnected(sessionId: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {

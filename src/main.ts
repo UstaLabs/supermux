@@ -2881,7 +2881,11 @@ agentRpc = createAgentRpc({
   newRequestId: () => randomUUID(),
   now: () => Date.now(),
   buildPrompt: buildRpcPrompt,
-  isAlive: (sessionId) => !!registry.get(sessionId)?.connected,
+  // Kind-aware worker liveness (was: a claude-shaped `connected` poll — a
+  // codex/cursor worker would look dead and be respawned on every call):
+  // claude workers are alive while a shim reports CONNECTED, adapter-driven
+  // workers while their adapter is registered.
+  isAlive: (sessionId) => sessionManager.isDeliverable(sessionId),
   killWorker: async (sessionId) => { await killSession(sessionId); unregisterSession(sessionId) },
   deliver: async (sessionId, text) => { await deliverInbound(sessionId, text, {}) },
   spawnWorker: async ({ key, agent, model }) => {
