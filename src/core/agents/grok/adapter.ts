@@ -65,13 +65,8 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
    * push. The slash-command provider reads this live view. */
   availableCommands: { name: string; description?: string; _meta?: { scope?: string; path?: string } }[] = []
 
-  private queue: { text: string; chat_id?: string; attachmentFileId?: string; resolve: () => void; reject: (e: Error) => void }[] = []
+  private queue: { text: string; attachmentFileId?: string; resolve: () => void; reject: (e: Error) => void }[] = []
   private draining = false
-  /** Chat this session last spoke on. Sticky on purpose: a turn grok started by
-   * itself has no inbound message to take a chat_id from, and an undefined one
-   * falls back to the fan-out that reaches nobody once the chat's active session
-   * moved on — the text was dispatched, then dropped. */
-  private lastChatId?: string
   /** Latch for "a turn is open", set by whichever side sees the boundary first —
    * runOne when we prompt, the stream when grok prompts itself. Keeps turn-start /
    * turn-complete at exactly one each per turn. */
@@ -209,7 +204,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this.queue.push({ text, chat_id: meta?.chat_id, attachmentFileId: meta?.attachment_file_id, resolve, reject })
+      this.queue.push({ text, attachmentFileId: meta?.attachment_file_id, resolve, reject })
       if (!this.draining) void this.drain()
     })
   }
@@ -221,7 +216,6 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
       while (this.queue.length) {
         const next = this.queue.shift()!
         try {
-          if (next.chat_id) this.lastChatId = next.chat_id
           const text = await this.withAttachment(next.text, next.attachmentFileId)
           await this.runOne(text)
           next.resolve()
@@ -362,7 +356,7 @@ export class GrokAdapter extends EventEmitter implements AgentAdapter {
   private flushAssistant(): void {
     const text = this.pendingAssistantText.trim()
     this.pendingAssistantText = ""
-    if (text) this.emit("assistant-message", { kind: "assistant-message", text, chat_id: this.lastChatId })
+    if (text) this.emit("assistant-message", { kind: "assistant-message", text })
   }
 
   private async onServerRequest(method: string, params: unknown): Promise<unknown> {

@@ -84,6 +84,10 @@ export type SessionManagerPorts = {
      *  broker can re-broadcast the session's CURRENT agent_state — clears the
      *  client's "Sending…" bubble even if the turn-start hook is dropped. */
     onDelivered?: (sessionId: string) => void
+    /** Fired on every inbound turn with the chat it arrived on (undefined for
+     *  system-generated turns). The broker records it as the session's reply
+     *  destination — the agent never names one. */
+    onTarget?: (sessionId: string, chat_id?: string) => void
   }
   /** Claude's persistent-terminal runtime (tmux window addressing). */
   backend: {
@@ -119,9 +123,11 @@ export type SessionManagerPorts = {
   }
   /** Outbound delivery (shim reply/react/edit ops). */
   outbound: {
+    /** Send text (and any files) to the user. It takes no destination — the
+     *  broker resolves that from the chat the session last heard from. */
     onAssistantMessage(
       sessionId: string,
-      ev: { text: string; chat_id?: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[] },
+      ev: { text: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[] },
     ): Promise<void>
     getChannel(name: string): Channel | undefined
     /** Boot-time constant: telegram token/getFile when telegram is configured. */
@@ -195,6 +201,10 @@ export class SessionManager {
    * frames for every other kind.
    */
   deliver(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
+    // Record where this session is talking, for the reply that comes back. This
+    // is the one place every inbound turn passes through — including the ones
+    // that never reach the message log (curator wakes, agent-rpc calls).
+    this.ports.inbound.onTarget?.(sessionId, meta?.chat_id)
     return deliverInbound({
       getAdapter: (id) => this.runtimes.get(id)?.adapter,
       isClaude: (id) => {
@@ -425,10 +435,14 @@ export class SessionManager {
         }
         // Synchronously await onAssistantMessage so the shim's reply tool
         // call doesn't return until the channel send completes.
+        // NOTE: `chat_id` is deliberately NOT read off op.args. The agent does
+        // not choose the destination — onAssistantMessage resolves it from the
+        // chat this session last heard from. Sessions running an older shim
+        // still send the argument; ignoring it is safe, because that value is
+        // the inbound chat_id, which is exactly what the router returns.
         try {
           await this.ports.outbound.onAssistantMessage(fromSession, {
             text: stringArg(op.args, "text"),
-            chat_id: stringArg(op.args, "chat_id"),
             reply_to: optionalStringArg(op.args, "reply_to"),
             files,
             format: optionalFormatArg(op.args, "format"),

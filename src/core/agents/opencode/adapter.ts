@@ -112,7 +112,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   /** Set during an in-flight turn; the event loop calls it on first activity to
    * disarm the stall watchdog. */
   private onTurnActivity?: () => void
-  private lastChatId?: string
   private closed = false
   /** tool callIDs we've already emitted a `started` for (dedupe the running stream). */
   private startedTools = new Set<string>()
@@ -189,9 +188,8 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
   // prompts per session server-side anyway, and firing a second prompt() while
   // one is in flight makes BOTH HTTP calls resolve to the session's *last*
   // assistant message — so an un-queued second send would clobber the first
-  // turn's reply (and race lastChatId). The FIFO keeps a single prompt() in
-  // flight so each turn returns its own reply, attributed to its own chat.
-  // Mirrors CursorAdapter's queue/drain.
+  // turn's reply. The FIFO keeps a single prompt() in flight so each turn
+  // returns its own reply. Mirrors CursorAdapter's queue/drain.
   async send(text: string, meta?: InboundMeta): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.queue.push({ text, meta, resolve, reject })
@@ -219,7 +217,6 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   private async runTurn(text: string, meta?: InboundMeta): Promise<void> {
     if (!this.sessionId) throw new Error("opencode adapter: not started")
-    this.lastChatId = meta?.chat_id
     const prompt = await this.buildPrompt(text, meta)
     const body: OpenCodePromptBody = { parts: [{ type: "text", text: prompt }] }
     const model = this.parseModel()
@@ -275,7 +272,7 @@ export class OpenCodeAdapter extends EventEmitter implements AgentAdapter {
       if (part.type === "text") {
         const t = (part as { text?: string }).text
         if (typeof t === "string" && t.trim()) {
-          this.emit("assistant-message", { kind: "assistant-message", text: t, chat_id: this.lastChatId })
+          this.emit("assistant-message", { kind: "assistant-message", text: t })
         }
       }
     }

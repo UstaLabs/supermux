@@ -98,7 +98,7 @@ describe("CodexAdapter", () => {
     expect(messages).toEqual(["hi there"])
   })
 
-  test("web-originated send preserves chat_id on assistant message even if turn completes first", async () => {
+  test("an assistant message that lands after turn/completed is still emitted, with no destination", async () => {
     const c = mockClient()
     const a = new CodexAdapter({
       sessionName: "s-web",
@@ -109,9 +109,10 @@ describe("CodexAdapter", () => {
     })
     await driveStart(c, a)
 
-    const messages: Array<{ text: string; chat_id?: string }> = []
-    a.on("assistant-message", (ev) => messages.push({ text: ev.text, chat_id: ev.chat_id }))
+    const messages: Array<Record<string, unknown>> = []
+    a.on("assistant-message", (ev) => messages.push({ ...ev }))
 
+    // The inbound meta still carries a chat_id; the adapter must not pass it on.
     const sendP = a.send("hello from web", { chat_id: "web:phone", message_id: "m1" })
     while (!c.requests[2]) await new Promise(r => setImmediate(r))
     c.requests[2]!.resolve({ turnId: "turn-web" })
@@ -120,10 +121,10 @@ describe("CodexAdapter", () => {
     c.emit({ method: "turn/completed", params: { turnId: "turn-web" } })
     c.emit({ method: "item/completed", params: { item: { type: "agentMessage", text: "hi web" } } })
 
-    expect(messages).toEqual([{ text: "hi web", chat_id: "web:phone" }])
+    expect(messages).toEqual([{ kind: "assistant-message", text: "hi web" }])
   })
 
-  test("preserves chat_id for every assistant message in a turn", async () => {
+  test("emits every assistant message in a turn, none of them addressed", async () => {
     const c = mockClient()
     const a = new CodexAdapter({
       sessionName: "s-web-multiple",
@@ -134,8 +135,8 @@ describe("CodexAdapter", () => {
     })
     await driveStart(c, a)
 
-    const messages: Array<{ text: string; chat_id?: string }> = []
-    a.on("assistant-message", (ev) => messages.push({ text: ev.text, chat_id: ev.chat_id }))
+    const messages: Array<Record<string, unknown>> = []
+    a.on("assistant-message", (ev) => messages.push({ ...ev }))
 
     const sendP = a.send("do work", { chat_id: "web", message_id: "m1" })
     while (!c.requests[2]) await new Promise(r => setImmediate(r))
@@ -146,8 +147,8 @@ describe("CodexAdapter", () => {
     c.emit({ method: "item/completed", params: { item: { type: "agentMessage", text: "finished" } } })
 
     expect(messages).toEqual([
-      { text: "working on it", chat_id: "web" },
-      { text: "finished", chat_id: "web" },
+      { kind: "assistant-message", text: "working on it" },
+      { kind: "assistant-message", text: "finished" },
     ])
   })
 

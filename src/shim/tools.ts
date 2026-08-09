@@ -5,18 +5,19 @@ export type { AgentKind } from "../shared/agents"
 const OUTBOUND_TOOLS = [
   {
     name: "reply",
-    description: "Send a reply to the user via the active channel (Telegram or web). Args: chat_id, text, optional reply_to/files/keyboard/format.",
+    // No chat_id: the agent does not choose the destination. The broker routes
+    // the reply to the chat this session last heard from (core/routing/reply-target).
+    description: "Send a reply to the user. The broker delivers it to the chat this session is talking to — you do not name a destination. Args: text, optional reply_to/files/keyboard/format.",
     inputSchema: {
       type: "object",
       properties: {
-        chat_id: { type: "string" },
         text: { type: "string" },
         reply_to: { type: "string" },
         files: { type: "array", items: { type: "string" } },
         keyboard: { type: "array", items: { type: "string" } },
         format: { type: "string", enum: ["text", "markdownv2"] },
       },
-      required: ["chat_id", "text"],
+      required: ["text"],
     },
   },
   {
@@ -117,7 +118,7 @@ const REPLY_FOR_STREAMED_AGENTS =
   "REQUIRED: files[] with at least one local filesystem path; text is an optional caption (may be empty). " +
   "Use ONLY when sending files — your normal assistant output is relayed automatically; " +
   "do not call reply for plain text (the broker rejects text-only reply from codex/cursor). " +
-  "Args: chat_id, text, files[]."
+  "Args: text, files[]. The broker picks the destination — do not name one."
 
 const ALL = [...OUTBOUND_TOOLS, ...ORCHESTRATION_TOOLS]
 const OUTBOUND_NAMES = new Set(OUTBOUND_TOOLS.map(t => t.name))

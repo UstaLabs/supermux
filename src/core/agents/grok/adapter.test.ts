@@ -154,9 +154,10 @@ test("flushes a turn grok starts by itself at its own turn_completed", async () 
   fr.feed({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "That background task finished." } } } })
   fr.feed({ jsonrpc: "2.0", method: "_x.ai/session_notification", params: { update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-t1", stop_reason: "end_turn" } } })
 
-  // Delivered on its own, in its own message, to the chat we last talked on.
+  // Delivered on its own, in its own message. The adapter names no destination —
+  // the broker routes both to the chat the session last heard from.
   expect(msgs.map((m) => m.text)).toEqual(["Answer.", "That background task finished."])
-  expect(msgs.map((m) => m.chat_id)).toEqual(["web", "web"])
+  expect(msgs.every((m) => !("chat_id" in m))).toBe(true)
   // One start + one complete per turn — no double-fire from the request path.
   expect(turns).toEqual(["turn-start", "turn-complete", "turn-start", "turn-complete"])
 })

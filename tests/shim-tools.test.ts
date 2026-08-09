@@ -39,7 +39,9 @@ test("outbound tool descriptions are channel-neutral", () => {
     return t.description
   }
   expect(desc("reply")).not.toContain("Telegram reply")
-  expect(desc("reply").toLowerCase()).toContain("active channel")
+  // The agent does not choose a destination at all — the broker routes the
+  // reply to the chat the session is talking to.
+  expect(desc("reply")).not.toContain("chat_id")
   expect(desc("download_attachment")).not.toContain("Telegram")
   expect(desc("react")).toContain("Telegram only")
   expect(desc("edit_message")).toContain("Telegram only")
@@ -47,9 +49,15 @@ test("outbound tool descriptions are channel-neutral", () => {
 
 test("reply forwards to broker outbound", async () => {
   const shim = fakeShim()
-  const r = await callTool({ name: "reply", arguments: { chat_id: "c1", text: "hi" } }, shim)
-  expect(shim.outbound).toEqual([{ name: "reply", args: { chat_id: "c1", text: "hi" } }])
+  const r = await callTool({ name: "reply", arguments: { text: "hi" } }, shim)
+  expect(shim.outbound).toEqual([{ name: "reply", args: { text: "hi" } }])
   expect(r.content[0]).toEqual({ type: "text", text: "sent (id: 999)" })
+})
+
+test("reply takes no chat_id — the broker owns the destination", () => {
+  const reply = listTools("claude").find((t) => t.name === "reply")!
+  expect(Object.keys(reply.inputSchema.properties)).not.toContain("chat_id")
+  expect(reply.inputSchema.required).toEqual(["text"])
 })
 
 test("spawn_session forwards to broker orchestration", async () => {

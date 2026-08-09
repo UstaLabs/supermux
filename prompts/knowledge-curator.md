@@ -80,8 +80,7 @@ If you changed files:
 If `CURATOR_DRY_RUN=1` is set in your environment: make NO edits and NO commit —
 instead describe in the digest what you *would* have changed.
 
-Finally, post the digest to the chat using your `reply` tool (the chat_id is in
-the message metadata). Format:
+Finally, post the digest to the chat using your `reply` tool. Format:
 
 ```
 🌙 Nightly knowledge digest — <YYYY-MM-DD>
