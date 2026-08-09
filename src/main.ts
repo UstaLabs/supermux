@@ -737,7 +737,7 @@ async function resolveAttachmentPath(file_id: string): Promise<string> {
 
 async function onAssistantMessage(
   sessionId: string,
-  ev: { text: string; chat_id?: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[] },
+  ev: { text: string; chat_id?: string; reply_to?: string; files?: string[]; format?: "text" | "markdownv2"; keyboard?: string[]; error?: boolean },
 ): Promise<void> {
   agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
@@ -806,6 +806,7 @@ async function onAssistantMessage(
         direction: "outbound", channel: channelName, chat_id,
         message_id: mid ? String(mid) : undefined,
         op: "reply", text: action.text,
+        error: ev.error,
         attachments: action.attachments?.map((a) => ({
           file_id: a.file_id, kind: a.kind, mime: a.mime, size: a.size, name: a.name,
         })),
@@ -827,10 +828,12 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   webChannel?.broadcastToAll({ type: "agent_error", session: sessionName, errorType, errorMessage })
   // Deliver the error into the chat transcript, same fan-out as an assistant
   // reply, so the failure is visible in the conversation history on every
-  // channel (not just as an ephemeral toast). onAssistantMessage also fires
-  // the push hook, so when this succeeds the legacy push below is skipped.
+  // channel (not just as an ephemeral toast). The text is the agent's error
+  // verbatim; error:true flags the entry so clients render it as an error.
+  // onAssistantMessage also fires the push hook, so when this succeeds the
+  // legacy push below is skipped.
   try {
-    await onAssistantMessage(sessionId, { text: `⚠️ ${errorType}: ${errorMessage}` })
+    await onAssistantMessage(sessionId, { text: `${errorType}: ${errorMessage}`, error: true })
     return
   } catch (err) {
     log.warn("agent_error_reply_failed", { session: sessionName, err: String(err) })
