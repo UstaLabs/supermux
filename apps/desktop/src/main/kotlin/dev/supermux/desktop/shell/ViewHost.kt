@@ -70,6 +70,8 @@ fun ViewHost(
      * A workspace with no chat view passes null and the editor says so.
      */
     primarySessionId: String? = null,
+    /** After continue-in-new-conversation — select the new chat session. */
+    onSelectSession: (String) -> Unit = {},
     workspaceTerminalContent: @Composable (connect: () -> TerminalClient, modifier: Modifier) -> Unit =
         { connect, mod -> DesktopTerminalPanel(connect = connect, modifier = mod) },
 ) {
@@ -77,7 +79,7 @@ fun ViewHost(
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatPanelForSession(app, sessionId, drafts, modifier)
+            else ChatPanelForSession(app, sessionId, drafts, onSelectSession, modifier)
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
@@ -137,6 +139,7 @@ private fun ChatPanelForSession(
     app: DesktopAppState,
     sessionId: String,
     drafts: SnapshotStateMap<String, String>,
+    onSelectSession: (String) -> Unit,
     modifier: Modifier,
 ) {
     val sessions by app.sessions.collectAsState()
@@ -152,6 +155,7 @@ private fun ChatPanelForSession(
         onDraftChange = { drafts[sessionId] = it },
         modifier = modifier.fillMaxSize().testTag("view_chat"),
         showHeader = true,
+        onSelectSession = onSelectSession,
     )
 }
 

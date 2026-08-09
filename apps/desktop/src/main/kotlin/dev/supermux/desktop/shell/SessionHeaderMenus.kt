@@ -297,16 +297,16 @@ fun SessionLinksMenu(
 // ── OverflowMenu ───────────────────────────────────────────────────────────────────────
 
 /**
- * The ⋮ overflow: the Usage management-nav row (M4f — see file header, "Usage=M4f" is now
- * resolved) plus session-scoped Rename / Mute-Unmute / Kill (header parity with the session list's
- * right-click). Rename opens an [AlertDialog]+[OutlinedTextField] and Kill a confirm dialog — both
- * copy the session-list pattern. The REST of Android's management-nav rows (Settings/Devices/
- * Proxies/Appearance) are still omitted — those screens don't exist on desktop yet. Editor/LSP
- * is no longer one of them (M4g-4).
+ * The ⋮ overflow on the chat/session header:
+ *  - Detail (tool-call level: Low / Medium / High)
+ *  - Continue in new conversation
+ *  - Rename / Mute / Kill
+ *  - Usage / Editor-LSP management rows (SessionDetail shell only; optional)
  *
- * [onToggleMute] receives the DESIRED next mute state (Android passes `!(session.mute ?: false)`).
- * [onUsage] opens the Usage overlay (ShellUiState.openUsage()); defaults to a no-op so
- * existing call sites/tests that don't care about it keep compiling.
+ * [onToggleMute] receives the DESIRED next mute state.
+ * [onContinue] when non-null shows the continue item; receives the editable handoff message and
+ * returns the new session id (or null). [onContinued] is called with that id so the shell can
+ * select it.
  */
 @Composable
 fun OverflowMenu(
@@ -315,27 +315,37 @@ fun OverflowMenu(
     onToggleMute: (Boolean) -> Unit,
     onKill: () -> Unit,
     onUsage: () -> Unit = {},
-    // Opens the LSP settings overlay (ShellUiState.openLspSettings()) — threaded down to the
-    // header's OverflowMenu "Editor / LSP…" row (M4g-4). Defaults to a no-op so existing callers/
-    // tests that don't exercise it keep compiling.
     onLspSettings: () -> Unit = {},
+    /** When non-null, show "Continue in new conversation" and run this to spawn + send handoff. */
+    onContinue: (suspend (message: String) -> String?)? = null,
+    onContinued: (String) -> Unit = {},
+    /** Hide shell-management rows (Usage / LSP) when this is a slim chat-header menu. */
+    showManagementRows: Boolean = true,
     modifier: Modifier = Modifier,
-    // Off-by-default headless hook (SM_OVERFLOW_MENU, Main.kt) delivery: force-expands the
-    // dropdown only — NEVER auto-clicks Rename/Mute/Kill (those are destructive-ish/user-facing,
-    // so a live verification drives onRename/onToggleMute directly instead). Applied once, then
-    // [onForceOpenConsumed] clears the source.
     forceOpen: Boolean = false,
     onForceOpenConsumed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     var showRename by remember(session.id) { mutableStateOf(false) }
     var renameText by remember(session.id) { mutableStateOf(session.name) }
     var showKill by remember(session.id) { mutableStateOf(false) }
+    var showContinue by remember(session.id) { mutableStateOf(false) }
+    var continueText by remember(session.id) {
+        mutableStateOf(dev.supermux.session.HandoffPrefill.build(session.name, session.id))
+    }
+    var continueBusy by remember { mutableStateOf(false) }
+    var continueFailed by remember { mutableStateOf(false) }
     val muted = session.mute ?: false
     // Close on a session switch so the ⋮ menu never stays bound to the new session's callbacks
     // (a stale open Kill would otherwise target the wrong session).
-    LaunchedEffect(session.id) { expanded = false }
+    LaunchedEffect(session.id) {
+        expanded = false
+        showContinue = false
+        continueText = dev.supermux.session.HandoffPrefill.build(session.name, session.id)
+        continueFailed = false
+    }
     LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
 
     Box(modifier) {
@@ -363,16 +373,30 @@ fun OverflowMenu(
                 modifier = Modifier.testTag("overflow_detail"),
                 onClick = { detailSubmenu = true },
             )
-            DropdownMenuItem(
-                text = { Text("Usage") },
-                modifier = Modifier.testTag("overflow_usage"),
-                onClick = { expanded = false; onUsage() },
-            )
-            DropdownMenuItem(
-                text = { Text("Editor / LSP…") },
-                modifier = Modifier.testTag("overflow_lsp_settings"),
-                onClick = { expanded = false; onLspSettings() },
-            )
+            if (onContinue != null) {
+                DropdownMenuItem(
+                    text = { Text("Continue in new conversation") },
+                    modifier = Modifier.testTag("overflow_continue"),
+                    onClick = {
+                        expanded = false
+                        continueText = dev.supermux.session.HandoffPrefill.build(session.name, session.id)
+                        continueFailed = false
+                        showContinue = true
+                    },
+                )
+            }
+            if (showManagementRows) {
+                DropdownMenuItem(
+                    text = { Text("Usage") },
+                    modifier = Modifier.testTag("overflow_usage"),
+                    onClick = { expanded = false; onUsage() },
+                )
+                DropdownMenuItem(
+                    text = { Text("Editor / LSP…") },
+                    modifier = Modifier.testTag("overflow_lsp_settings"),
+                    onClick = { expanded = false; onLspSettings() },
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Rename") },
                 modifier = Modifier.testTag("overflow_rename"),
@@ -401,10 +425,14 @@ fun OverflowMenu(
                 DropdownMenuItem(
                     text = {
                         Column {
-                            Text(level.label)
-                            Text(desc, color = cs.onSurfaceVariant)
+                            Text(
+                                level.label,
+                                fontWeight = if (chatDetail == level) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                            Text(desc, color = cs.onSurfaceVariant, fontSize = 12.sp)
                         }
                     },
+                    modifier = Modifier.testTag("overflow_detail_${level.wire}"),
                     enabled = true,
                     onClick = {
                         ChatDetailPrefs.set(level)
@@ -451,6 +479,66 @@ fun OverflowMenu(
                 ) { Text("Kill", color = cs.error) }
             },
             dismissButton = { TextButton(onClick = { showKill = false }) { Text("Cancel") } },
+        )
+    }
+    if (showContinue && onContinue != null) {
+        AlertDialog(
+            onDismissRequest = { if (!continueBusy) showContinue = false },
+            title = { Text("Continue in new conversation") },
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    Text(
+                        "Same working directory as ${session.name}. The new agent is told to read this session first. Edit freely before start.",
+                        color = cs.onSurfaceVariant,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = Space.sm),
+                    )
+                    OutlinedTextField(
+                        value = continueText,
+                        onValueChange = { continueText = it; continueFailed = false },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("overflow_continue_field"),
+                        minLines = 8,
+                        maxLines = 14,
+                    )
+                    if (continueFailed) {
+                        Text(
+                            "Couldn't start — check the agent is installed and signed in.",
+                            color = cs.error,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = Space.sm).testTag("overflow_continue_error"),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            continueBusy = true
+                            continueFailed = false
+                            val id = onContinue(continueText)
+                            continueBusy = false
+                            if (id != null) {
+                                showContinue = false
+                                onContinued(id)
+                            } else {
+                                continueFailed = true
+                            }
+                        }
+                    },
+                    enabled = !continueBusy && continueText.isNotBlank() && session.workdir.isNotBlank(),
+                    modifier = Modifier.testTag("overflow_continue_confirm"),
+                ) { Text(if (continueBusy) "Starting…" else "Start") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showContinue = false },
+                    enabled = !continueBusy,
+                    modifier = Modifier.testTag("overflow_continue_cancel"),
+                ) { Text("Cancel") }
+            },
         )
     }
 }

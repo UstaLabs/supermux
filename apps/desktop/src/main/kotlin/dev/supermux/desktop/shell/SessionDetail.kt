@@ -200,6 +200,8 @@ fun SessionDetail(
     // header's OverflowMenu "Editor / LSP…" row (M4g-4). Defaults to a no-op so existing callers/
     // tests that don't exercise it keep compiling.
     onLspSettings: () -> Unit = {},
+    /** After "Continue in new conversation" succeeds — parent selects the new session. */
+    onSelectSession: (String) -> Unit = {},
     // Off-by-default headless hook (SM_CHAT_ATTACH, Main.kt) delivery: a one-shot "stage this file
     // then send" request routed straight through to the chat pane's [DesktopComposer] — see its
     // `externalAttach` KDoc for the funnel. Null in normal operation.
@@ -544,6 +546,8 @@ fun SessionDetail(
                 onKill = { app.kill(session.id) },
                 onUsage = onUsage,
                 onLspSettings = onLspSettings,
+                onContinue = { message -> app.continueConversation(session, message) },
+                onContinued = onSelectSession,
                 forceOpen = forceOverflowMenu,
                 onForceOpenConsumed = onForceOverflowMenuConsumed,
             )

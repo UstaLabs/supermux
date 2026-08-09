@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
+import dev.supermux.desktop.shell.OverflowMenu
 import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
@@ -109,6 +110,8 @@ fun ChatPanel(
     // Edit ▸ Paste image (MenuBar) → DesktopComposer.pasteImageRequestNonce.
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
+    /** After "Continue in new conversation" — parent selects the new session (ViewHost path). */
+    onSelectSession: (String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -211,27 +214,40 @@ fun ChatPanel(
 
     Column(modifier.fillMaxSize().background(cs.surfaceContainerLow)) {
         // Header (suppressed when embedded in the shell SessionDetail, which owns the identity bar).
+        // ViewHost chat views use this header and need the ⋮ menu here.
         if (showHeader) {
-            Column(
+            Row(
                 Modifier
                     .fillMaxWidth()
                     .background(cs.surface)
-                    .padding(horizontal = Space.lg, vertical = Space.md),
+                    .padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.md),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = session.name,
-                    style = MaterialTheme.typography.titleLarge, // Geist SemiBold
-                    color = cs.onSurface,
-                )
-                if (statusText != null) {
+                Column(Modifier.weight(1f)) {
                     Text(
-                        text = statusText,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 12.sp,
-                        color = statusColor,
-                        modifier = Modifier.padding(top = 2.dp),
+                        text = session.name,
+                        style = MaterialTheme.typography.titleLarge, // Geist SemiBold
+                        color = cs.onSurface,
                     )
+                    if (statusText != null) {
+                        Text(
+                            text = statusText,
+                            fontFamily = MonoFontFamily,
+                            fontSize = 12.sp,
+                            color = statusColor,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                 }
+                OverflowMenu(
+                    session = session,
+                    onRename = { name -> app.rename(session.id, name) },
+                    onToggleMute = { muted -> app.setMute(session.id, muted) },
+                    onKill = { app.kill(session.id) },
+                    onContinue = { message -> app.continueConversation(session, message) },
+                    onContinued = onSelectSession,
+                    showManagementRows = false,
+                )
             }
         }
         // "Not responding" dead banner (error-tinted strip; mirrors Android's dead banner).
