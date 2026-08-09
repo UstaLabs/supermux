@@ -3011,19 +3011,27 @@ const modelRefreshInterval = IS_TEST_BROKER ? undefined : setInterval(() => {
         return { name: r.name }
       },
       waitReady: async (name) => {
-        // Wait for the session to report CONNECTED (a shim attached), not just
-        // registered — delivering before the channel shim is up loses the frame.
-        // ~30s budget (claude cold start + shim connect).
+        // Kind-aware readiness (was: a claude-shaped `connected` poll — a codex
+        // curator never attaches a channel shim, so the old wait burned the full
+        // budget and delivery then queued into inbound_undeliverable): claude is
+        // ready when its shim reports CONNECTED; adapter-driven kinds when their
+        // adapter lands in the runtime map. ~30s budget (cold start + connect).
         for (let i = 0; i < 600; i++) {
           const s = registry.get(name) ?? registry.resolveName(name)
-          if (s?.connected) return s.id
+          if (s && sessionManager.isDeliverable(s.id)) return s.id
           await new Promise((res) => setTimeout(res, 50))
         }
         const s = registry.get(name) ?? registry.resolveName(name)
         return s?.id // fall back to whatever we have; deliver-retry is the backstop
       },
       sendInbound: async (sid, content, cid) => {
-        await server.sendInbound(sid, { content, meta: { chat_id: cid } } as any)
+        // Through the ONE funnel (adapter for codex/cursor/…, shim socket for
+        // claude). Deliberately NO message_id in meta: run.ts re-sends on a
+        // quiet agent and the funnel's dedupe would swallow that retry. A
+        // not-ready result is logged, not thrown — the deliverUntilActive
+        // retry/backstop in core/curator/run.ts owns recovery.
+        const r = await sessionManager.deliver(sid, content, { chat_id: cid })
+        if (!r.ok) log.warn("curator_deliver_not_ready", { sid, reason: r.reason })
       },
       isIdle: (sid) => (agentStateStore.get(sid)?.phase ?? "idle") === "idle",
       getActive: (cid) => registry.getActive(cid),
