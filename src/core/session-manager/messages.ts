@@ -117,6 +117,24 @@ export class MessageStore {
     return true
   }
 
+  /** Record the id the channel gave this message. The row is stored before the
+   *  send (the transcript is the durable record), so the channel's own id
+   *  arrives afterwards. Returns false when the row is gone. */
+  setChannelMessageId(sessionId: string, entry_id: string, message_id: string): boolean {
+    const info = this.db.prepare("UPDATE messages SET message_id = ? WHERE id = ? AND session_id = ?")
+      .run(message_id, entry_id, sessionId)
+    return info.changes > 0
+  }
+
+  /** Find a stored row by the id its channel assigned (Telegram's numeric id,
+   *  say) — the only id an agent can name when it edits or reacts. */
+  findByChannelMessageId(sessionId: string, chat_id: string, message_id: string): Message | undefined {
+    const row = this.db.prepare(
+      "SELECT * FROM messages WHERE session_id = ? AND chat_id = ? AND message_id = ? ORDER BY ts DESC, rowid DESC LIMIT 1"
+    ).get(sessionId, chat_id, message_id) as any
+    return row ? rowToMessage(row) : undefined
+  }
+
   addReaction(sessionId: string, entry_id: string, emoji: string, ts: string): boolean {
     const row = this.db.prepare("SELECT reactions FROM messages WHERE id = ? AND session_id = ?").get(entry_id, sessionId) as { reactions: string | null } | undefined
     if (!row) return false

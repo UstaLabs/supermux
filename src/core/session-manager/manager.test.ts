@@ -58,7 +58,7 @@ function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       maybeAutoSendSoulSetup: async () => {},
     },
     outbound: {
-      onAssistantMessage: async () => {},
+      onAssistantMessage: async () => ({ ok: true as const, delivered: 1 }),
       getChannel: () => undefined,
       telegramApi: undefined,
     },
@@ -72,7 +72,7 @@ function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     },
     stores: {
       fileStore: {} as unknown as FileStore,
-      messageLog: { get: () => [], update: () => false, addReaction: () => false },
+      messageLog: { get: () => [], update: () => false, addReaction: () => false, findByChannelMessageId: () => undefined },
       searchStore: { searchKnowledge: () => [], searchSessions: () => [] },
       db,
     },
@@ -396,7 +396,7 @@ describe("SessionManager.handleOutbound reply", () => {
     const ports = fakePorts(db)
     ports.outbound = {
       ...ports.outbound,
-      onAssistantMessage: async (id, ev) => { seen.push({ id, ev }) },
+      onAssistantMessage: async (id, ev) => { seen.push({ id, ev }); return { ok: true as const, delivered: 1 } },
     }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
@@ -409,12 +409,82 @@ describe("SessionManager.handleOutbound reply", () => {
     expect(seen[0]!.ev.text).toBe("hi")
   })
 
+  // Step 1 regression: resolveChannel used to turn the bare value "web" into
+  // "telegram:web", so a web session's react was dispatched to Telegram and
+  // Telegram answered "chat not found".
+  test("react on a web chat reaches the web channel, never telegram", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const asked: string[] = []
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      getChannel: (name) => {
+        asked.push(name)
+        return {
+          name,
+          capabilities: { multiplexesSessions: false, supportsReactions: false, supportsEdit: false, supportsAttachments: true },
+          send: async () => ({ ok: true as const, value: "sent" }),
+        } as any
+      },
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "w1", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "react", args: { chat_id: "web", message_id: "m1", emoji: "👍" } } } as any)
+    expect(asked).toEqual(["web"])
+    // Step 2: the channel cannot react, so the agent is told so — it is no
+    // longer given a success for something that never happened.
+    expect(r.ok).toBe(false)
+    expect((r as any).error).toContain("does not support reactions")
+  })
+
+  test("edit_message on a channel without edits is refused before the wire", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    let sends = 0
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      getChannel: (name) => ({
+        name,
+        capabilities: { multiplexesSessions: false, supportsReactions: false, supportsEdit: false, supportsAttachments: true },
+        send: async () => { sends++; return { ok: true as const, value: "sent" } },
+      }) as any,
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "w2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "edit_message", args: { chat_id: "web", message_id: "m1", text: "new" } } } as any)
+    expect(r.ok).toBe(false)
+    expect(sends).toBe(0)
+  })
+
+  test("react still works on a channel that supports it", async () => {
+    const db = openDb(":memory:")
+    runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
+    const sent: any[] = []
+    const ports = fakePorts(db)
+    ports.outbound = {
+      ...ports.outbound,
+      getChannel: () => ({
+        name: "telegram",
+        capabilities: { multiplexesSessions: true, supportsReactions: true, supportsEdit: true, supportsAttachments: true },
+        send: async (a: any) => { sent.push(a); return { ok: true as const, value: "reacted" } },
+      }) as any,
+    }
+    const m = new SessionManager(new Registry(db), ports)
+    const s = m.registry.register({ name: "t1", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
+    // A bare id is a legacy telegram chat — the address module normalizes it.
+    const r = await m.handleOutbound({ session_id: s.id, op: { name: "react", args: { chat_id: "8264224268", message_id: "m1", emoji: "👍" } } } as any)
+    expect(r.ok).toBe(true)
+    expect(sent[0].chat_id).toBe("telegram:8264224268")
+  })
+
   test("a reply with no chat_id is accepted", async () => {
     const db = openDb(":memory:")
     runMigrations(db, join(import.meta.dirname, "../storage/migrations"))
     const seen: any[] = []
     const ports = fakePorts(db)
-    ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev) } }
+    ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev); return { ok: true as const, delivered: 1 } } }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
     m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
