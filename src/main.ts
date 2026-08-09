@@ -833,7 +833,18 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
   // onAssistantMessage also fires the push hook, so when this succeeds the
   // legacy push below is skipped.
   try {
-    await onAssistantMessage(sessionId, { text: `${errorType}: ${errorMessage}`, error: true })
+    // Route to the chat the user last spoke from. The no-chat_id fan-out in
+    // onAssistantMessage only reaches chats where this session is the ACTIVE
+    // one (a Telegram concept); web sessions log inbound under the logical
+    // "web" chat and are never "active", so without an explicit chat_id the
+    // fan-out finds no targets.
+    let lastChat: string | undefined
+    const entries = messageLog.get(sessionId)
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i]
+      if (e?.direction === "inbound" && typeof e.chat_id === "string") { lastChat = e.chat_id; break }
+    }
+    await onAssistantMessage(sessionId, { text: `${errorType}: ${errorMessage}`, error: true, chat_id: lastChat })
     return
   } catch (err) {
     log.warn("agent_error_reply_failed", { session: sessionName, err: String(err) })
