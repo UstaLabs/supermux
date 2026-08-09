@@ -57,9 +57,8 @@ import { waitForRegisteredSession } from "./core/session-manager/spawn-registrat
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
 import { runInterrupt } from "./core/session-manager/interrupt"
-import { RecentInboundIds } from "./core/session-manager/recent-inbound-ids"
 import { PendingReapply, shouldDeferReapply, changedSince } from "./core/session-manager/pending-reapply"
-import { deliverInbound as deliverInboundCore, type InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
+import type { InboundDeliveryResult } from "./core/session-manager/inbound-delivery"
 import { buildMenuEntries } from "./channels/telegram/menu"
 import { MessageStore } from "./core/session-manager/messages"
 import { appendSoulSetupInvocation, readSoulSetupState, shouldAutoSendSoulSetup } from "./core/session-manager/soul-setup"
@@ -596,7 +595,17 @@ const channels: Record<string, Channel> = {
 const sessionManager = new SessionManager(registry, {
   getWebChannel: () => webChannel,
   getAgentRpc: () => agentRpc,
+  // Component-internal: the claude shim leg of SessionManager.deliver. Every
+  // other sender in this file goes through deliverInbound → sessionManager.deliver.
   socket: { sendInbound: (session_id, payload) => server.sendInbound(session_id, payload) },
+  inbound: {
+    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so
+    // clients clear their local "Sending…" bubble even when the turn-start
+    // UserPromptSubmit hook is dropped (fire-and-forget curl) and the turn emits
+    // no other state change. Mutates nothing — it just re-emits the same frame
+    // the change-listener would send (keeps delivery a pure reflector).
+    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
+  },
   backend: {
     runtimeTargetIdOf,
     kill: (targetId) => sessionBackend.kill(targetId),
@@ -606,7 +615,6 @@ const sessionManager = new SessionManager(registry, {
     fsWatcher: { killSession: (name) => fsWatcher.killSession(name) },
     stopClaudeTailer,
     releaseDraftAttachments: (payload) => releaseDraftAttachmentRefs(payload),
-    recentInbound: { clear: (id) => recentInboundIds.clear(id) },
     pendingReapply: { clear: (id) => pendingReapply.clear(id) },
     syncGitStatus: () => gitStatusService.sync(gitServiceSessions()),
   },
@@ -2109,20 +2117,13 @@ const server = await startSocketServer({
   },
 })
 
-const recentInboundIds = new RecentInboundIds()
 const pendingReapply = new PendingReapply()
+// Thin alias over THE inbound funnel (SessionManager.deliver): adapter.send for
+// codex/cursor/opencode/grok, the shim socket for claude, message_id dedupe,
+// and the "Sending…" reconcile broadcast. Kept as a local function so the many
+// existing call sites read unchanged.
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
-  return deliverInboundCore({
-    getAdapter: (id) => runtimes.get(id)?.adapter,
-    isClaude: (id) => (registry.get(id)?.agent ?? "claude") === "claude",
-    sendInboundSocket: (id, payload) => server.sendInbound(id, payload),
-    seen: recentInboundIds,
-    // Re-broadcast the session's CURRENT agent_state on a successful hand-off so clients clear
-    // their local "Sending…" bubble even when the turn-start UserPromptSubmit hook is dropped
-    // (fire-and-forget curl) and the turn emits no other state change. Mutates nothing — it just
-    // re-emits the same frame the change-listener would send (keeps delivery a pure reflector).
-    onDelivered: (id) => webChannel?.broadcastToAll(toAgentStateFrame(id, agentStateStore.get(id), bgTaskStore.openCount(id))),
-  }, sessionId, text, meta)
+  return sessionManager.deliver(sessionId, text, meta)
 }
 
 async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered: number; reason?: string }> {

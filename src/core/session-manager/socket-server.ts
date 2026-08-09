@@ -19,6 +19,9 @@ export type ServerHandler = {
 
 export type SocketServer = {
   bind: (session_id: string) => Promise<void>
+  // claude shim transport — go through SessionManager.deliver. Only the
+  // SessionManager component / inbound-delivery may call this directly; for any
+  // non-claude session the frame just queues and expires (inbound_undeliverable).
   sendInbound: (session_id: string, payload: { content: string; meta: Record<string, string> }) => Promise<void>
   close: () => Promise<void>
 }
