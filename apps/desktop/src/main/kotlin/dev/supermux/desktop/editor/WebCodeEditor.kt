@@ -348,9 +348,22 @@ private fun NativeCodeEditor(
     val cs = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
 
-    Box(
+    // A Column, not a Box. In a Box the reason line is drawn AFTER the field and lands at the
+    // default TopStart, i.e. painted straight over the first line of the file. That was invisible
+    // while the old EditorPanel kept an empty-state overlay across the surface; a file pane draws
+    // the document immediately, so the overlap shows on every launch that falls back to native.
+    Column(
         modifier.fillMaxSize().background(EDITOR_BG).testTag("editor_native_fallback"),
     ) {
+        Text(
+            reason,
+            color = cs.onSurfaceVariant,
+            fontSize = 10.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Space.sm)
+                .testTag("editor_native_fallback_reason"),
+        )
         BasicTextField(
             value = content,
             onValueChange = onChange,
@@ -362,7 +375,8 @@ private fun NativeCodeEditor(
             ),
             cursorBrush = SolidColor(cs.primary),
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .weight(1f)
                 .verticalScroll(scroll)
                 .padding(Space.md)
                 .testTag("editor_native_input")
@@ -375,12 +389,6 @@ private fun NativeCodeEditor(
                         false
                     }
                 },
-        )
-        Text(
-            reason,
-            color = cs.onSurfaceVariant,
-            fontSize = 10.sp,
-            modifier = Modifier.fillMaxWidth().padding(Space.sm),
         )
     }
 }
