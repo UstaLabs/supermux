@@ -44,7 +44,7 @@ import dev.supermux.desktop.theme.MonoFontFamily
 
 @Composable
 fun EditorTabs(
-    tabs: List<EditorTab>,
+    tabs: List<Document>,
     activeTabPath: String?,
     loadingPath: String? = null,
     isDirty: (String) -> Boolean,
