@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_apps_desktop_src_main_kotlin_dev_supermux_desktop_update_appversion_kt", "label": "AppVersion.kt", "file_type": "code", "source_file": "apps/desktop/src/main/kotlin/dev/supermux/desktop/update/AppVersion.kt", "source_location": "L1"}], "edges": [], "raw_calls": [], "kotlin_package": "dev.supermux.desktop.update"}

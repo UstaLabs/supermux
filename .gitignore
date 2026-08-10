@@ -22,3 +22,12 @@ apps/iosApp/Supermux/HostResources/supermux-broker
 apps/iosApp/Supermux/HostResources/frpc
 apps/iosApp/Supermux/HostResources/tmux
 __pycache__/
+
+# graphify knowledge graph. graphify-out/ IS committed on purpose — the graph is
+# the shared map, and `graphify hook install` sets up a merge driver that
+# union-merges graph.json so parallel commits never conflict. Rebuild: graphify update .
+# cost.json is local token/usage tracking; the other two hold absolute paths to
+# this machine's interpreter and scan root, which break on any other checkout.
+graphify-out/cost.json
+graphify-out/.graphify_python
+graphify-out/.graphify_root
