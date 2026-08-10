@@ -71,7 +71,7 @@ class FileTreeTest {
         val node = dirNode("src")
         e.treeLoadError = mapOf("src" to "stale error") // a prior error that success must clear
 
-        loadAndExpand(e, node) { listOf(TreeNode(entry("a.kt", "file"), "src/a.kt")) }
+        loadAndExpand(e.explorer, node) { listOf(TreeNode(entry("a.kt", "file"), "src/a.kt")) }
 
         assertTrue("src" in e.expandedPaths)
         assertTrue(node.loaded)
@@ -84,7 +84,7 @@ class FileTreeTest {
         val e = editor(this)
         val node = dirNode("src")
 
-        loadAndExpand(e, node) { throw RuntimeException("permission denied") }
+        loadAndExpand(e.explorer, node) { throw RuntimeException("permission denied") }
 
         assertFalse("src" in e.expandedPaths) // NOT expanded on failure
         assertFalse(node.loaded)
@@ -100,7 +100,7 @@ class FileTreeTest {
         e.treeLoadingPaths = setOf("src") // a listing is already in flight for this path
 
         var listed = false
-        loadAndExpand(e, node) { listed = true; emptyList() }
+        loadAndExpand(e.explorer, node) { listed = true; emptyList() }
 
         assertFalse(listed) // guarded — no second listing was issued
         assertFalse("src" in e.expandedPaths) // and it did not expand off the in-flight load

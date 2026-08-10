@@ -501,7 +501,7 @@ fun EditorPanel(
                                 .background(cs.surfaceContainerHigh)
                                 .testTag("editor_tree"),
                         ) {
-                            FileTree(fsList = fsList, editor = editor, onOpenFile = { revealFile(it) })
+                            FileTree(fsList = fsList, explorer = editor.explorer, onOpenFile = { revealFile(it) })
                         }
                         Box(Modifier.width(1.dp).fillMaxHeight().background(cs.outlineVariant))
                     }

@@ -73,11 +73,11 @@ internal fun List<FsEntry>.sortedForTree(): List<FsEntry> =
  * Load [node]'s children via [loadDir] and, ON SUCCESS ONLY, mark it expanded. Split out of the
  * composable so its failure path is unit-testable without Compose (M3-T4 obligation): an fsList
  * failure does NOT add the node to `expandedPaths` (an empty dir would look identical to a failed
- * one otherwise), records the message in `editor.treeLoadError` for an inline error row, and logs.
+ * one otherwise), records the message in `explorer.treeLoadError` for an inline error row, and logs.
  * A success clears any prior error for the path. `treeLoadingPaths` is always cleared in `finally`.
  */
 internal suspend fun loadAndExpand(
-    editor: EditorState,
+    explorer: ExplorerState,
     node: TreeNode,
     loadDir: suspend (String) -> List<TreeNode>,
 ) {
@@ -86,28 +86,28 @@ internal suspend fun loadAndExpand(
     // toggleDir's own guards don't catch it) — two loaders racing on the shared node.children list
     // would double every child row. The check + add below is synchronous (no suspension before the
     // loadDir call), so on the single-threaded UI dispatcher only the first loader passes.
-    if (node.path in editor.treeLoadingPaths) return
-    editor.treeLoadingPaths = editor.treeLoadingPaths + node.path
+    if (node.path in explorer.treeLoadingPaths) return
+    explorer.treeLoadingPaths = explorer.treeLoadingPaths + node.path
     try {
         val children = loadDir(node.path)
         node.children?.apply { clear(); addAll(children) }
         node.loaded = true
-        editor.treeLoadError = editor.treeLoadError - node.path
-        editor.expandedPaths = editor.expandedPaths + node.path // expand ONLY after a good listing
+        explorer.treeLoadError = explorer.treeLoadError - node.path
+        explorer.expandedPaths = explorer.expandedPaths + node.path // expand ONLY after a good listing
     } catch (e: CancellationException) {
         throw e // never swallow a real coroutine cancellation
     } catch (e: Throwable) {
-        editor.treeLoadError = editor.treeLoadError + (node.path to (e.message ?: "Could not list directory"))
+        explorer.treeLoadError = explorer.treeLoadError + (node.path to (e.message ?: "Could not list directory"))
         println("[FileTree] loadDir('${node.path}') failed: $e")
     } finally {
-        editor.treeLoadingPaths = editor.treeLoadingPaths - node.path
+        explorer.treeLoadingPaths = explorer.treeLoadingPaths - node.path
     }
 }
 
 @Composable
 fun FileTree(
     fsList: suspend (String) -> List<FsEntry>,
-    editor: EditorState,
+    explorer: ExplorerState,
     onOpenFile: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -123,26 +123,26 @@ fun FileTree(
         }
 
     LaunchedEffect(Unit) {
-        if (!editor.treeRootLoaded) {
-            editor.treeRoot.clear()
-            editor.treeRoot.addAll(loadDir("."))
-            editor.treeRootLoaded = true
+        if (!explorer.treeRootLoaded) {
+            explorer.treeRoot.clear()
+            explorer.treeRoot.addAll(loadDir("."))
+            explorer.treeRootLoaded = true
         }
     }
 
     fun toggleDir(node: TreeNode) {
-        if (editor.expandedPaths.contains(node.path)) {
-            editor.expandedPaths = editor.expandedPaths - node.path
+        if (explorer.expandedPaths.contains(node.path)) {
+            explorer.expandedPaths = explorer.expandedPaths - node.path
             return
         }
         if (node.loaded || node.children == null) {
             // Already listed (or somehow a file): expand immediately, no fs round-trip.
-            editor.expandedPaths = editor.expandedPaths + node.path
+            explorer.expandedPaths = explorer.expandedPaths + node.path
             return
         }
         // Not yet listed: load first and expand ONLY on success (see [loadAndExpand]). A prior error
         // is retried on tap; the failure path re-records it rather than expanding into a blank dir.
-        scope.launch { loadAndExpand(editor, node, ::loadDir) }
+        scope.launch { loadAndExpand(explorer, node, ::loadDir) }
     }
 
     fun onNodeClick(node: TreeNode) {
@@ -150,13 +150,13 @@ fun FileTree(
     }
 
     LazyColumn(modifier.fillMaxSize()) {
-        items(editor.treeRoot, key = { it.path }) { node ->
+        items(explorer.treeRoot, key = { it.path }) { node ->
             TreeNodeRow(
                 node = node,
                 depth = 0,
-                expanded = editor.expandedPaths,
-                loading = editor.treeLoadingPaths,
-                errors = editor.treeLoadError,
+                expanded = explorer.expandedPaths,
+                loading = explorer.treeLoadingPaths,
+                errors = explorer.treeLoadError,
                 onClick = { onNodeClick(it) },
             )
         }
