@@ -17,6 +17,7 @@ import dev.supermux.desktop.editor.KcefState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.ViewDto
+import dev.supermux.ui.FilePathRef
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -31,6 +32,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 private fun view(kind: String, state: Map<String, String>) = ViewDto(
     id = "v1", workspaceId = "w1", kind = kind,
@@ -315,4 +317,16 @@ class ViewHostTest {
         assertEquals("Changes", viewTitle(view("editor", mapOf("mode" to "diff"))))
     }
 
+    // ── The chat-tap conversion (this used to be dropped on the floor) ───────────────────────
+
+    @Test
+    fun aTappedPathInsideTheWorkspaceBecomesAWorkdirRelativePath() {
+        assertEquals("src/Main.kt", workspaceOpenPath(FilePathRef("/w/src/Main.kt"), "/w"))
+        assertEquals("src/Main.kt", workspaceOpenPath(FilePathRef("src/Main.kt"), "/w"))
+    }
+
+    @Test
+    fun aTappedPathOutsideTheWorkspaceIsNotOpenable() {
+        assertNull(workspaceOpenPath(FilePathRef("/etc/passwd"), "/w"))
+    }
 }

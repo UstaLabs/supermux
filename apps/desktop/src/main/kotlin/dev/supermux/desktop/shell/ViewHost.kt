@@ -45,9 +45,12 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
+import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.panes.PaneHost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
+import dev.supermux.ui.toWorkdirRelativePath
+import dev.supermux.session.inferHomeDir
 
 /**
  * Draw one view's body.
@@ -114,7 +117,7 @@ fun ViewHost(
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatPanelForSession(app, sessionId, drafts, onSelectSession, modifier)
+            else ChatPanelForSession(app, sessionId, workdir, drafts, onSelectSession, onOpenFile, modifier)
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
@@ -204,8 +207,10 @@ fun viewTitle(view: ViewDto): String {
 private fun ChatPanelForSession(
     app: DesktopAppState,
     sessionId: String,
+    workdir: String,
     drafts: SnapshotStateMap<String, String>,
     onSelectSession: (String) -> Unit,
+    onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
 ) {
     val sessions by app.sessions.collectAsState()
@@ -222,8 +227,28 @@ private fun ChatPanelForSession(
         modifier = modifier.fillMaxSize().testTag("view_chat"),
         showHeader = true,
         onSelectSession = onSelectSession,
+        // A tap on a file path in the transcript opens a `file` pane. This used to be dropped on
+        // the floor here: the parameter defaults to {} and nothing was passed, so the tap did
+        // nothing at all in a workspace. Same conversion SessionDetail does — a path outside the
+        // workspace has no workdir-relative form and is logged rather than opened.
+        onOpenFile = { ref ->
+            val rel = workspaceOpenPath(ref, workdir)
+            if (rel == null) {
+                println("[ViewHost] onOpenFile: '${ref.path}' is outside workspace workdir '$workdir' — dropped")
+            } else {
+                onOpenFile(rel, ref.line, ref.endLine)
+            }
+        },
     )
 }
+
+/**
+ * A tapped file-path reference as a workdir-relative path, or null when it points outside the
+ * workspace (nothing the workspace's fs endpoints could read). Split out of the composable so the
+ * conversion is testable without hosting a transcript.
+ */
+internal fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
+    toWorkdirRelativePath(ref.path, workdir, inferHomeDir(workdir))
 
 /**
  * Session-scoped terminal adapter. Mirrors SessionDetail's terminal / native wiring:
