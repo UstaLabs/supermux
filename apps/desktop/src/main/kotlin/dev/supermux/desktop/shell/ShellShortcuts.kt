@@ -27,41 +27,38 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 
-/** Hardware-keyboard actions for the wide shell (all gated behind Ctrl or Cmd/Meta). */
+/**
+ * Hardware-keyboard actions for the wide shell (all gated behind Ctrl or Cmd/Meta).
+ *
+ * Ctrl/Cmd + L/E/T/D used to toggle the old shell's four fixed panes. Those panes are gone: a
+ * workspace's panes are created, split, tabbed and closed through its own layout tree, and there
+ * is no fixed set of four to flip. The chords are unbound rather than rebound to something
+ * approximate — see mapShellShortcut.
+ */
 enum class ShellShortcut {
-    ToggleSidebar, NewSession, ToggleChat, ToggleEditor, ToggleTerminal, ToggleDisplay,
+    ToggleSidebar, NewSession,
 }
 
 /**
  * Pure key→action mapping (platform-independent, keyed on the letter so it is unit-testable off the
- * device). [hasSelection] gates the per-session pane toggles — with no selected session only the
- * global B/N shortcuts resolve. Returns null when the letter is not a bound shortcut.
+ * device). Returns null when the letter is not a bound shortcut.
  */
-fun mapShellShortcut(letter: Char, hasSelection: Boolean): ShellShortcut? =
+fun mapShellShortcut(letter: Char): ShellShortcut? =
     when (letter.uppercaseChar()) {
         'B' -> ShellShortcut.ToggleSidebar
         'N' -> ShellShortcut.NewSession
-        'L' -> ShellShortcut.ToggleChat.takeIf { hasSelection }
-        'E' -> ShellShortcut.ToggleEditor.takeIf { hasSelection }
-        'T' -> ShellShortcut.ToggleTerminal.takeIf { hasSelection }
-        'D' -> ShellShortcut.ToggleDisplay.takeIf { hasSelection }
         else -> null
     }
 
-/** Runs a resolved [shortcut] against the shared [layout] / [selectedId] / [onNewSession]. */
+/** Runs a resolved [shortcut] against the shared [ui] / [onNewSession]. */
 fun applyShellShortcut(
     shortcut: ShellShortcut,
-    layout: ShellLayout,
-    selectedId: String?,
+    ui: ShellUiState,
     onNewSession: () -> Unit,
 ) {
     when (shortcut) {
-        ShellShortcut.ToggleSidebar -> layout.sidebarCollapsed = !layout.sidebarCollapsed
+        ShellShortcut.ToggleSidebar -> ui.sidebarCollapsed = !ui.sidebarCollapsed
         ShellShortcut.NewSession -> onNewSession()
-        ShellShortcut.ToggleChat -> selectedId?.let { layout.toggleChat(it) }
-        ShellShortcut.ToggleEditor -> selectedId?.let { layout.toggleEditor(it) }
-        ShellShortcut.ToggleTerminal -> selectedId?.let { layout.toggleTerminal(it) }
-        ShellShortcut.ToggleDisplay -> selectedId?.let { layout.toggleDisplay(it) }
     }
 }
 
@@ -69,29 +66,22 @@ fun applyShellShortcut(
 private fun Key.shortcutLetter(): Char? = when (this) {
     Key.B -> 'B'
     Key.N -> 'N'
-    Key.L -> 'L'
-    Key.E -> 'E'
-    Key.T -> 'T'
-    Key.D -> 'D'
     else -> null
 }
 
 /**
- * Intercepts Ctrl/Cmd + {B,N,L,E,T,D} on key-down and drives the shell [layout]. Uses
- * `onKeyEvent` (bubble phase) so focused descendants — the chat composer, the terminal — consume
- * their keys FIRST; only chords they leave unhandled reach the shell, so terminal control keys
- * (Ctrl+D/L/E/T) aren't stolen. Returns true ONLY for a handled combo.
+ * Intercepts Ctrl/Cmd + {B,N} on key-down and drives the shell [ui]. Uses `onKeyEvent` (bubble
+ * phase) so focused descendants — the chat composer, the terminal — consume their keys FIRST; only
+ * chords they leave unhandled reach the shell. Returns true ONLY for a handled combo.
  */
 fun Modifier.shellShortcuts(
-    layout: ShellLayout,
-    selectedId: String?,
+    ui: ShellUiState,
     onNewSession: () -> Unit,
 ): Modifier = onKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
     if (!event.isCtrlPressed && !event.isMetaPressed) return@onKeyEvent false
     val letter = event.key.shortcutLetter() ?: return@onKeyEvent false
-    val shortcut = mapShellShortcut(letter, hasSelection = selectedId != null)
-        ?: return@onKeyEvent false
-    applyShellShortcut(shortcut, layout, selectedId, onNewSession)
+    val shortcut = mapShellShortcut(letter) ?: return@onKeyEvent false
+    applyShellShortcut(shortcut, ui, onNewSession)
     true
 }

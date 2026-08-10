@@ -430,14 +430,14 @@ class EditorLspScreenTest {
             }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed)
+        assertFalse(ui.sidebarCollapsed)
         onNodeWithTag("lsp_settings_screen").performKeyInput {
             withKeyDown(Key.CtrlLeft) {
                 pressKey(Key.B)
             }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed)
+        assertFalse(ui.sidebarCollapsed)
         assertTrue(ui.lspSettingsOpen)
     }
 

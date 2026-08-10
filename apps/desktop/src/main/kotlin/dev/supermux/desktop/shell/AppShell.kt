@@ -1,8 +1,13 @@
-// Root of the paired app shell. M1 Task 9 (this) is the workspace chrome: a collapsible,
-// drag-resizable sidebar, the multi-pane SessionDetail with pane toggles, keyboard shortcuts, and
-// UI-state persistence (ShellStateStore → ui-state.json).
+// Root of the paired app shell: a collapsible, drag-resizable sidebar of WORKSPACES, the open
+// workspace's pane tree, keyboard shortcuts, and UI-state persistence (ShellStateStore →
+// ui-state.json).
 //
-// State that the menu bar (Main.kt) also needs — the ShellLayout + the selected session id —
+// There is ONE detail-pane layout model — the workspace's own broker-stored layout tree, drawn by
+// PaneHost. The old single-session shell (SessionDetail + ShellLayout: a fixed chat | work |
+// display split with three saved fractions and four per-session toggles) was a second one, and was
+// deleted along with the SM_WORKSPACES flag that chose between them.
+//
+// State that the menu bar (Main.kt) also needs — the sidebar chrome + the selected session id —
 // lives in a small [ShellUiState] holder created in Main and passed down here, so File/View
 // menu actions and the in-app shortcuts drive the same state.
 package dev.supermux.desktop.shell
@@ -60,6 +65,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import dev.supermux.desktop.editor.isMacOs
@@ -75,6 +81,7 @@ import dev.supermux.desktop.editor.DocumentStore
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDto
 import dev.supermux.workspace.chatSessionIds
@@ -102,6 +109,7 @@ import dev.supermux.session.inferHomeDir
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 
@@ -162,12 +170,24 @@ enum class SettingsSection(val label: String) {
 
 /**
  * Holder for the workspace UI state that both [AppShell] and the window MenuBar (Main.kt) act
- * on: the shared [ShellLayout] and the selected session id. Created once in Main (so the menu
- * can reach it), hydrated from [ShellStateStore] at startup.
+ * on: the sidebar chrome and the selected session id. Created once in Main (so the menu can reach
+ * it), hydrated from [ShellStateStore] at startup.
+ *
+ * The sidebar width/collapse below is the ONLY layout state the shell itself still owns. What is
+ * on screen inside the detail pane is the workspace's own layout tree, stored on the broker — the
+ * desktop has one layout model, not three (the old `ShellLayout` fixed chat|work|display split
+ * went with SessionDetail).
  */
 @Stable
 class ShellUiState {
-    val layout = ShellLayout()
+    var sidebarCollapsed by mutableStateOf(false)
+
+    // Private backing state + read-only property (rather than `by mutableStateOf(...); private
+    // set`) because the latter's generated private JVM setter would clash with [setSidebarWidth].
+    private val sidebarWidthState = mutableStateOf(320.dp)
+    val sidebarWidth: Dp get() = sidebarWidthState.value
+    fun setSidebarWidth(w: Dp) { sidebarWidthState.value = w.coerceIn(SIDEBAR_MIN, SIDEBAR_MAX) }
+
     var selectedId by mutableStateOf<String?>(null)
 
     /**
@@ -289,48 +309,31 @@ class ShellUiState {
     fun openAppUpdate() = navigate(DesktopRoute.AppUpdate)
 
     /**
-     * One-shot external "open this file" request (sessionId → ref), consumed by [SessionDetail] and
-     * routed through the SAME `onOpenFile` chain a chat-tap uses (toWorkdirRelativePath → pending
-     * editor open + editor-pane flip). Set by the off-by-default `SM_OPEN_FILE` headless hook in
-     * Main.kt; null in normal operation. Cleared once the matching SessionDetail consumes it.
+     * One-shot external "open this file" request (sessionId → ref), consumed by the workspace shell
+     * and routed through the SAME [WorkspaceFileOpener] a chat file-path tap and an explorer click
+     * use. Set by the off-by-default `SM_OPEN_FILE` headless hook in Main.kt; null in normal
+     * operation. Cleared once the open has been requested.
      */
     var externalOpen by mutableStateOf<Pair<String, dev.supermux.ui.FilePathRef>?>(null)
 
     /**
-     * One-shot "open the Finish dialog for this session" request (session id), consumed by the
-     * matching [SessionDetail] — it drives the SAME `showFinishDialog` state the FinishButton click
-     * flips, so the dialog opens in its Menu state and loads readiness. Set by the off-by-default
-     * `SM_FINISH_TEST` headless hook in Main.kt; null in normal operation. Cleared once the matching
-     * SessionDetail consumes it. It NEVER triggers a finish action — it only opens the menu.
-     */
-    var forceFinishDialogFor by mutableStateOf<String?>(null)
-
-    /**
-     * One-shot "force-open the header git-badge menu" request (session id + [GitMenuForceOp]),
-     * consumed by the matching [SessionDetail] → [GitBadgeMenu]. `OPEN` only expands the dropdown;
-     * `FETCH`/`PULL` additionally fire that op live through the SAME code path a real click uses
-     * (see [GitMenuForceOp] KDoc — Push/Publish have no member here, so no hook can ever auto-fire
-     * them). Set by the off-by-default `SM_GIT_MENU` headless hook in Main.kt; null in normal
-     * operation. Cleared once the matching SessionDetail consumes it.
+     * One-shot "force-open the git-badge menu" request (session id + [GitMenuForceOp]), consumed by
+     * [WorkspaceHeader] → [GitBadgeMenu] when that session is the open workspace's git session.
+     * `OPEN` only expands the dropdown; `FETCH`/`PULL` additionally fire that op live through the
+     * SAME code path a real click uses (see [GitMenuForceOp] KDoc — Push/Publish have no member
+     * here, so no hook can ever auto-fire them). Set by the off-by-default `SM_GIT_MENU` headless
+     * hook in Main.kt; null in normal operation. Cleared once consumed.
      */
     var forceGitMenuFor by mutableStateOf<Pair<String, GitMenuForceOp>?>(null)
 
     /**
      * One-shot "force-open the session-links (proxies) globe menu" request (session id), consumed
-     * by the matching [SessionDetail] → [SessionLinksMenu]. Never opens a URL — only expands the
+     * by that session's CHAT VIEW header → [SessionLinksMenu]. Never opens a URL — only expands the
      * dropdown. Set by the off-by-default `SM_LINKS_MENU` headless hook in Main.kt; null in normal
      * operation; a no-op when the session has no proxies (the menu doesn't render). Cleared once
      * consumed.
      */
     var forceLinksMenuFor by mutableStateOf<String?>(null)
-
-    /**
-     * One-shot "force-open the ⋮ overflow menu" request (session id), consumed by the matching
-     * [SessionDetail] → [OverflowMenu]. NEVER auto-clicks Rename/Mute/Kill — only expands the
-     * dropdown. Set by the off-by-default `SM_OVERFLOW_MENU` headless hook in Main.kt; null in
-     * normal operation. Cleared once consumed.
-     */
-    var forceOverflowFor by mutableStateOf<String?>(null)
 
     /**
      * One-shot "stage this file into the chat composer, upload it, then send" request (session id +
@@ -377,21 +380,41 @@ class ShellUiState {
     var forceArchivedOpenFor by mutableStateOf<String?>(null)
 
     /**
+     * One-shot "open a view of this kind in the workspace on screen" request (view kind → its
+     * initial `state`), consumed by the workspace shell: it adds the view to the first group of the
+     * open workspace's layout tree.
+     *
+     * Set by the off-by-default `SM_DIFF` / `SM_DISPLAY` headless hooks in Main.kt. Those used to
+     * flip the old shell's fixed editor/display PANE on; a workspace has no fixed panes, so the
+     * hook opens a view instead. Null in normal operation.
+     */
+    var forceWorkspaceView by mutableStateOf<Pair<String, JsonObject>?>(null)
+
+    /** The persisted slice of this state — see [ShellStateStore]. */
+    fun snapshot() = SidebarSnapshot(sidebarCollapsed, sidebarWidth.value)
+
+    fun restore(s: SidebarSnapshot) {
+        sidebarCollapsed = s.sidebarCollapsed
+        setSidebarWidth(s.sidebarWidthDp.dp)
+    }
+
+    /**
      * Reconciles the hydrated UI state against the [live] session-id set: drops a selection whose
-     * session vanished (killed elsewhere / agent exit) and prunes the layout's per-session pane
-     * state.
+     * session vanished (killed elsewhere / agent exit).
      *
      * GUARD: an EMPTY [live] set is treated as "sessions not loaded yet", NOT "everything died" —
      * `app.sessions` starts empty until the first WS Snapshot arrives, and reconciling against that
-     * transient [] would nuke the hydrated selection + panes (and the debounced save would then
-     * persist the emptied state back to ui-state.json permanently). Known edge case: a
-     * genuinely-empty fleet never prunes — harmless, since with zero live sessions there is nothing
-     * to select/render and stale pane entries are inert.
+     * transient [] would nuke the hydrated selection (and the debounced save would then persist the
+     * emptied state back to ui-state.json permanently).
      */
     fun reconcileSessions(live: Set<String>) {
         if (live.isEmpty()) return
         if (selectedId != null && selectedId !in live) selectedId = null
-        layout.prune(live)
+    }
+
+    companion object {
+        val SIDEBAR_MIN = 220.dp
+        val SIDEBAR_MAX = 560.dp
     }
 }
 
@@ -417,14 +440,9 @@ fun AppShell(
     appearance: AppearanceMode = AppearanceMode.DARK,
     onToggleTheme: () -> Unit = {},
 ) {
-    val layout = ui.layout
     // Prefer the merged fleet flows when multi-host; else the single [app]'s. `fleet` is stable
     // across recompositions (remembered in Main), so the `?:` picks the same flow each time.
     val sessions by (fleet?.sessions ?: app.sessions).collectAsState()
-    // Design-review flag: SM_WORKSPACES=1 swaps the session sidebar for the workspace one.
-    // Default OFF, so the shipping shell is unchanged until the row design is signed off.
-    // Read once — an env var cannot change under a hot reload anyway.
-    val workspaceSidebar = remember { System.getenv("SM_WORKSPACES")?.isNotBlank() == true }
     val workspaces by app.workspaces.collectAsState()
     // Shared across the sidebar and the layout host so a tab can drop onto a
     // workspace row (cross-workspace move).
@@ -496,30 +514,14 @@ fun AppShell(
         }
     }
 
-    // Headless-verification hook (like SM_AUTOSELECT): SM_PANES=etd force-opens Editor/Terminal/
-    // Display for the selected session at startup so the 3-pane split can be screenshotted under
-    // Xvfb without menu/pointer input. Each letter e/t/d flips the matching pane on.
-    val panesHook = System.getenv("SM_PANES")?.takeIf { it.isNotBlank() }
-    if (panesHook != null) {
-        LaunchedEffect(ui.selectedId) {
-            val id = ui.selectedId ?: return@LaunchedEffect
-            val p = layout.panesFor(id)
-            layout.setPanes(id, p.copy(
-                editor = p.editor || 'e' in panesHook,
-                terminal = p.terminal || 't' in panesHook,
-                display = p.display || 'd' in panesHook,
-            ))
-        }
-    }
-
     // Re-assert viewing presence whenever the selection or window focus changes (broker per-device
     // "viewing" tracker keys off (session id, visible)). ALSO clears this session's notification
     // cooldown (M5-3) the moment it becomes actively viewed (selected AND focused), so the NEXT
     // reply after the user looks away again notifies immediately rather than waiting out a stale
     // dedup window from before they opened it.
     // Live layout of the open workspace (tab switches update this before the broker PATCH lands)
-    // so Viewing frames track the active view of each group immediately. Only used when
-    // SM_WORKSPACES is on; null otherwise — classic path ignores it.
+    // so Viewing frames track the active view of each group immediately. Null until a workspace is
+    // on screen, which is what the single-selected-session fallback below is for.
     var workspaceViewingLayout by remember { mutableStateOf<LayoutNode?>(null) }
     var workspaceViewingViews by remember { mutableStateOf<Map<String, ViewDto>>(emptyMap()) }
 
@@ -528,40 +530,31 @@ fun AppShell(
     // becomes actively viewed (selected AND focused), so the NEXT reply after the user looks away
     // again notifies immediately rather than waiting out a stale dedup window.
     //
-    // SM_WORKSPACES=1: one Viewing frame per visible chat view (active view of each group).
-    // SM_WORKSPACES unset: classic single selected session — behaviour EXACTLY as before.
-    LaunchedEffect(ui.selectedId, focused, workspaceSidebar, workspaceViewingLayout, workspaceViewingViews) {
+    // One Viewing frame per visible chat view (the active view of each group).
+    LaunchedEffect(ui.selectedId, focused, workspaceViewingLayout, workspaceViewingViews) {
         ui.selectedId?.let { sessionHost[it] }?.let { fleet?.setActiveHost(it) }
-        if (workspaceSidebar) {
-            // Derive visible chat sessions from the open workspace's layout tree — never send a
-            // workspace id as a session. Phase 3 kept ui.selectedId as a SESSION id, so the
-            // classic path below was never broken; this multi path is for two chats on screen.
-            val visibleChatIds = if (focused) {
-                val tree = workspaceViewingLayout
-                if (tree != null) {
-                    collectActiveViewIds(tree).mapNotNull { vid ->
-                        workspaceViewingViews[vid]?.chatSessionId()
-                    }
-                } else {
-                    // Fallback: the selected session alone (sidebar still stores a session id).
-                    listOfNotNull(ui.selectedId)
+        // Derive visible chat sessions from the open workspace's layout tree — never send a
+        // workspace id as a session. The sidebar still stores a SESSION id, so the fallback below
+        // is the single selected session until a tree is on screen.
+        val visibleChatIds = if (focused) {
+            val tree = workspaceViewingLayout
+            if (tree != null) {
+                collectActiveViewIds(tree).mapNotNull { vid ->
+                    workspaceViewingViews[vid]?.chatSessionId()
                 }
             } else {
-                emptyList()
+                listOfNotNull(ui.selectedId)
             }
-            if (fleet != null) {
-                // Fleet still has the classic single-session API; send the first visible (or null).
-                fleet.updateViewing(visibleChatIds.firstOrNull(), focused)
-            } else {
-                app.updateViewingSessions(visibleChatIds, focused)
-            }
-            for (sid in visibleChatIds) notify.onSessionFocused(sid)
         } else {
-            // Classic path — unchanged when SM_WORKSPACES is unset.
-            if (fleet != null) fleet.updateViewing(ui.selectedId, focused) else app.updateViewing(ui.selectedId, focused)
-            val sid = ui.selectedId
-            if (sid != null && focused) notify.onSessionFocused(sid)
+            emptyList()
         }
+        if (fleet != null) {
+            // Fleet still has the classic single-session API; send the first visible (or null).
+            fleet.updateViewing(visibleChatIds.firstOrNull(), focused)
+        } else {
+            app.updateViewingSessions(visibleChatIds, focused)
+        }
+        for (sid in visibleChatIds) notify.onSessionFocused(sid)
     }
 
     // M5-3: observe live agent replies and decide whether to raise a tray notification. Keyed on
@@ -598,7 +591,7 @@ fun AppShell(
     // fraction/pane change and recompose the root per frame during split drags. collectLatest +
     // delay(500) = settle 500ms after the last change; the file write runs off the UI thread.
     LaunchedEffect(Unit) {
-        snapshotFlow { PersistedUiState(layout = layout.snapshot(), selectedId = ui.selectedId) }
+        snapshotFlow { PersistedUiState(layout = ui.snapshot(), selectedId = ui.selectedId) }
             .collectLatest {
                 delay(500)
                 withContext(Dispatchers.IO) { store.save(it) }
@@ -626,7 +619,7 @@ fun AppShell(
                 // toggles the user can't see). Each overlay handles its own Escape; Ctrl+N is
                 // idempotent and reopening an already-open launcher is a no-op, so dropping it here
                 // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
-                .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.shellShortcuts(layout, ui.selectedId, onNewSession)),
+                .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.shellShortcuts(ui, onNewSession)),
         ) {
             Column(Modifier.fillMaxSize()) {
             AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
@@ -705,27 +698,22 @@ fun AppShell(
                         .fillMaxHeight()
                         .background(cs.surfaceContainerHigh)
                         .then(if (sidebarTopPad > 0.dp) Modifier.padding(top = sidebarTopPad) else Modifier)
-                    if (layout.sidebarCollapsed) {
+                    if (ui.sidebarCollapsed) {
                         SessionsRail(
                             sessions = sessions,
                             selectedId = ui.selectedId,
                             agentState = agentState,
                             onSelect = { ui.selectSession(it) },
-                            onExpand = { layout.sidebarCollapsed = false },
+                            onExpand = { ui.sidebarCollapsed = false },
                             onNewSession = onNewSession,
                             lastBySession = lastBySession,
                             lastRead = lastRead,
                             modifier = sidebarMod,
                         )
-                    } else if (workspaceSidebar) {
-                        // Design-review swap only: the sidebar lists workspaces, but selection
-                        // semantics are UNCHANGED — ui.selectedId is still a SESSION id, and the
-                        // detail pane below is untouched. Opening a workspace row selects that
-                        // workspace's first chat session, so everything downstream behaves exactly
-                        // as it does with the session list.
-                        //
-                        // The full swap (spec §13.6 + a workspace-scoped selection model) is Phase 3
-                        // Task 5 onward. This is the minimum needed to look at the rows in context.
+                    } else {
+                        // The sidebar lists WORKSPACES. Selection is still stored as a SESSION id
+                        // (opening a workspace row selects its first chat session), which is what
+                        // the viewing/notification paths above read.
                         val wsOf = { wid: String -> workspaces.firstOrNull { it.id == wid } }
                         WorkspaceListPanel(
                             workspaces = workspaces,
@@ -784,49 +772,12 @@ fun AppShell(
                             onToggleTheme = onToggleTheme,
                             tabDragState = tabDragState,
                             modifier = Modifier
-                                .width(layout.sidebarWidth)
-                                .then(sidebarMod),
-                        )
-                    } else {
-                        SessionListPanel(
-                            sessions = sessions,
-                            home = home,
-                            activeId = ui.selectedId,
-                            onOpen = { ui.selectSession(it) },
-                            lastBySession = lastBySession,
-                            lastRead = lastRead,
-                            agentState = agentState,
-                            // Per-session ops route to the OWNING host (multi-host); single-host → [app].
-                            onRename = { id, name -> appFor(id).rename(id, name) },
-                            onKill = { id -> appFor(id).kill(id) { if (ui.selectedId == id) ui.selectedId = null } },
-                            onMute = { id, muted -> appFor(id).setMute(id, muted) },
-                            onNewSession = onNewSession,
-                            archived = archivedForList,
-                            onResume = { id -> overlayScope.launch { appFor(id).resume(id); archivedForList = runCatching { app.archived() }.getOrDefault(emptyList()) } },
-                            onOpenDraft = { id -> ui.openLauncher(draftId = id) },
-                            onReorder = { ids -> app.reorderSessions(ids) },
-                            // Fleet badges/chips (multi-host only; empty in single-host mode).
-                            hosts = hostViews,
-                            sessionHost = sessionHost,
-                            hostFilter = hostFilter,
-                            onSelectHostFilter = { hostFilter = it },
-                            onAddHost = { addHostOpen = true },
-                            // Footer: usage/devices/settings match File menu; theme toggles [appearance].
-                            onUsage = { ui.openUsage() },
-                            onSettings = { ui.openSettings() },
-                            onDevices = { ui.openSettings(SettingsSection.Devices) },
-                            usageOpen = ui.usageOpen,
-                            onUsageDismiss = { ui.closeUsage() },
-                            usageContent = usagePopoverBody,
-                            appearance = appearance,
-                            onToggleTheme = onToggleTheme,
-                            modifier = Modifier
-                                .width(layout.sidebarWidth)
+                                .width(ui.sidebarWidth)
                                 .then(sidebarMod),
                         )
                     }
 
-                    // ── Detail: launcher (detail-pane only), SessionDetail, or empty prompt ──
+                    // ── Detail: launcher (detail-pane only), the workspace, or an empty prompt ──
                     // New-session is a *side* panel — sidebar + resizer stay mounted. Other modals
                     // (archived / usage / settings) remain full-workspace overlays below.
                     val id = ui.selectedId
@@ -940,7 +891,7 @@ fun AppShell(
                                 Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        workspaceSidebar -> {
+                        else -> {
                             val current = workspaces.firstOrNull { w ->
                                 w.id == id || w.chatSessionIds().contains(id)
                             }
@@ -1037,6 +988,39 @@ fun AppShell(
                                     },
                                     scope = overlayScope,
                                 )
+                                // SM_OPEN_FILE / SM_EDITOR_PREVIEW / SM_LSP_TEST delivery: an
+                                // external "open this file" request goes through the SAME opener a
+                                // chat file-path tap and an explorer click use. It used to flip the
+                                // old shell's editor pane on; a workspace has no fixed pane to flip
+                                // — opening the file IS the pane.
+                                LaunchedEffect(ui.externalOpen, current.id) {
+                                    val req = ui.externalOpen ?: return@LaunchedEffect
+                                    val rel = workspaceOpenPath(req.second, current.workdir)
+                                    if (rel == null) {
+                                        println("[AppShell] externalOpen: '${req.second.path}' is outside workspace workdir '${current.workdir}' — dropped")
+                                    } else {
+                                        fileOpener.open(rel, req.second.line, req.second.endLine, sourceViewId = null)
+                                    }
+                                    ui.externalOpen = null
+                                }
+                                // SM_DIFF / SM_DISPLAY delivery: open the requested view kind in the
+                                // first group of the tree. Same replacement reason as above — the
+                                // hooks used to flip a fixed pane that no longer exists.
+                                LaunchedEffect(ui.forceWorkspaceView, current.id) {
+                                    val req = ui.forceWorkspaceView ?: return@LaunchedEffect
+                                    val gid = firstGroupId(localLayout)
+                                    if (gid == null) {
+                                        println("[AppShell] forceWorkspaceView: workspace layout has no group to open '${req.first}' into")
+                                    } else {
+                                        runCatching {
+                                            wsApp.api.addView(
+                                                current.id,
+                                                AddViewBody(kind = req.first, state = req.second, groupId = gid),
+                                            )
+                                        }.onFailure { println("[AppShell] forceWorkspaceView failed: $it") }
+                                    }
+                                    ui.forceWorkspaceView = null
+                                }
                                 // Feed the viewing LaunchedEffect so a tab switch re-asserts
                                 // Viewing frames for only the active chat of each group.
                                 LaunchedEffect(localLayout, viewsById) {
@@ -1158,6 +1142,16 @@ fun AppShell(
                                             // whose session matches.
                                             forceLinksMenuFor = ui.forceLinksMenuFor,
                                             onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
+                                            // One-shot composer requests, each addressed to ONE
+                                            // session (Edit > Paste image targets the SELECTED one),
+                                            // so a workspace showing two chats never doubles them.
+                                            externalAttach = ui.externalAttach,
+                                            onExternalAttachConsumed = { ui.externalAttach = null },
+                                            externalDictate = ui.externalDictate,
+                                            onExternalDictateConsumed = { ui.externalDictate = null },
+                                            pasteImageFor = ui.selectedId,
+                                            pasteImageRequestNonce = ui.pasteImageRequestNonce,
+                                            onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
@@ -1187,63 +1181,22 @@ fun AppShell(
                                 }
                             }
                         }
-                        session == null -> {
-                            Box(
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("select a session", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        else -> {
-                            SessionDetail(
-                                // Route the detail to the session's OWNING host in multi-host mode.
-                                app = appFor(session.id),
-                                session = session,
-                                agent = agentState[session.id],
-                                layout = layout,
-                                draft = drafts[session.id] ?: "",
-                                onDraftChange = { drafts[session.id] = it },
-                                externalOpen = ui.externalOpen?.takeIf { it.first == session.id }?.second,
-                                onExternalOpenConsumed = { ui.externalOpen = null },
-                                forceFinishDialog = ui.forceFinishDialogFor == session.id,
-                                onForceFinishConsumed = { ui.forceFinishDialogFor = null },
-                                forceGitMenu = ui.forceGitMenuFor?.takeIf { it.first == session.id }?.second,
-                                onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
-                                forceLinksMenu = ui.forceLinksMenuFor == session.id,
-                                onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
-                                forceOverflowMenu = ui.forceOverflowFor == session.id,
-                                onForceOverflowMenuConsumed = { ui.forceOverflowFor = null },
-                                externalAttach = ui.externalAttach?.takeIf { it.first == session.id }?.second,
-                                onExternalAttachConsumed = { ui.externalAttach = null },
-                                externalDictate = ui.externalDictate?.takeIf { it.first == session.id }?.second,
-                                onExternalDictateConsumed = { ui.externalDictate = null },
-                                pasteImageRequestNonce = ui.pasteImageRequestNonce,
-                                onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                                onUsage = { ui.openUsage() },
-                                onLspSettings = { ui.openLspSettings() },
-                                onSelectSession = { ui.selectSession(it) },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
                     }
                 }
 
                 // Resize OVERLAY on the sidebar seam (not a Row child — zero layout width).
-                if (!layout.sidebarCollapsed) {
+                if (!ui.sidebarCollapsed) {
                     SidebarDivider(
-                        onDragDelta = { d -> layout.setSidebarWidth(layout.sidebarWidth + d) },
+                        onDragDelta = { d -> ui.setSidebarWidth(ui.sidebarWidth + d) },
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .offset(x = layout.sidebarWidth - SidebarDividerCenterOffset)
+                            .offset(x = ui.sidebarWidth - SidebarDividerCenterOffset)
                             .zIndex(20f),
                     )
                 }
 
                 // macOS title-bar collapse: only when expanded. Collapsed → rail chevron only.
-                if (macChrome && !layout.sidebarCollapsed) {
+                if (macChrome && !ui.sidebarCollapsed) {
                     // Native window-drag handle: the empty sidebar band under the traffic lights.
                     // Layout-only Box (draws nothing, no pointer input — clicks fall through); the
                     // toggle above punches itself out via macTitleBarNoDragRegion. No-op when the
@@ -1251,12 +1204,12 @@ fun AppShell(
                     Box(
                         Modifier
                             .align(Alignment.TopStart)
-                            .width(layout.sidebarWidth)
+                            .width(ui.sidebarWidth)
                             .height(MacTitleBarHeight)
                             .macTitleBarDragRegion("sidebar-band"),
                     )
                     MacSidebarToggle(
-                        onCollapse = { layout.sidebarCollapsed = true },
+                        onCollapse = { ui.sidebarCollapsed = true },
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .zIndex(30f),
@@ -1421,7 +1374,7 @@ fun AppShell(
             // ── Usage fallback when the sidebar is collapsed (no footer Usage icon to anchor) ──
             // Expanded sidebar: UsagePopover is composed next to sidebar_footer_usage.
             // Collapsed rail / File menu while collapsed: bottom-start of the window.
-            if (ui.usageOpen && layout.sidebarCollapsed) {
+            if (ui.usageOpen && ui.sidebarCollapsed) {
                 Box(Modifier.fillMaxSize().zIndex(20f)) {
                     // Zero-size anchor at bottom-start of the shell so the position provider
                     // still places the card above that corner.

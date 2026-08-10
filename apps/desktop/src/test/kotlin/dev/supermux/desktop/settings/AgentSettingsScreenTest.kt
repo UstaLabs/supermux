@@ -1273,12 +1273,12 @@ class AgentSettingsScreenTest {
             }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed)
+        assertFalse(ui.sidebarCollapsed)
         onNodeWithTag("settings_hub").performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.B) }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed)
+        assertFalse(ui.sidebarCollapsed)
         assertTrue(ui.settingsOpen)
     }
 

@@ -97,7 +97,7 @@ class AppShellTest {
     }
 
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
-        val ui = ShellUiState().apply { layout.sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
+        val ui = ShellUiState().apply { sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
         val app = appFor(mutableListOf())
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
@@ -203,7 +203,7 @@ class AppShellTest {
     @Test fun shell_shortcuts_are_gated_off_while_the_launcher_overlay_is_up() = runComposeUiTest {
         // The overlay is modal — a pane/sidebar chord (Ctrl+B) it leaves unhandled must NOT bubble
         // to shellShortcuts and silently mutate the layout behind it. Ctrl+B typed while the
-        // launcher's message field is focused should be a no-op on ui.layout.sidebarCollapsed.
+        // launcher's message field is focused should be a no-op on ui.sidebarCollapsed.
         val app = appFor(mutableListOf())
         val ui = ShellUiState().apply { launcherOpen = true } // sidebarCollapsed defaults false
         setContent {
@@ -212,14 +212,14 @@ class AppShellTest {
             }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed) // precondition
+        assertFalse(ui.sidebarCollapsed) // precondition
 
         // Focus a node inside the overlay, then send Ctrl+B — it bubbles up to the root Box, where
         // shellShortcuts is gated OFF (…else Modifier) while launcherOpen.
         onNodeWithTag("launcher_message").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
         waitForIdle()
 
-        assertFalse(ui.layout.sidebarCollapsed) // NOT toggled — the chord never reached the layout
+        assertFalse(ui.sidebarCollapsed) // NOT toggled — the chord never reached the layout
         assertTrue(ui.launcherOpen)             // ...and the overlay stayed up
     }
 

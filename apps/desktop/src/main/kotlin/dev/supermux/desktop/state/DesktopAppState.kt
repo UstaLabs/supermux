@@ -592,7 +592,8 @@ class DesktopAppState(
 
     /**
      * Report the foreground chat (`null` = the session list) + whether the app is visible.
-     * Classic single-chat path (SM_WORKSPACES unset). Deduped; starts the keep-alive heartbeat.
+     * Single-chat path, still used by the multi-host fleet wrapper. Deduped; starts the
+     * keep-alive heartbeat.
      */
     fun updateViewing(session: String?, visible: Boolean) {
         viewingSessionIds = if (visible && session != null) listOf(session) else emptyList()
@@ -607,7 +608,7 @@ class DesktopAppState(
 
     /**
      * Report every chat session currently on screen (one per active group). Spec §11.
-     * Used when SM_WORKSPACES is on and a workspace can show two chats at once.
+     * A workspace can show two chats at once, so this is the shell's normal path.
      * Background tabs are not in [sessionIds]. Empty + [visible]=true means the list;
      * empty + [visible]=false means the window is backgrounded.
      */

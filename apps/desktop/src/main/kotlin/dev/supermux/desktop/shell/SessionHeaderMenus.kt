@@ -1,8 +1,14 @@
-// Ported from apps/android/.../shell/SessionShellDetail.kt — the three header affordances the
-// desktop TODO(M4c) called out: the git-badge count menu (Fetch/Pull/Publish-or-Push), the
-// session-links (proxies) menu, and the ⋮ overflow (Rename/Mute/Kill). Android threads these through
-// SessionShellDetail's params + an onGitOp(op) string; desktop splits them into three focused,
-// individually runComposeUiTest-able composables that SessionDetail composes into its header.
+// Ported from apps/android/.../shell/SessionShellDetail.kt — three header affordances: the
+// git-badge count menu (Fetch/Pull/Publish-or-Push), the session-links (proxies) menu, and the ⋮
+// overflow (Rename/Mute/Kill). Android threads these through SessionShellDetail's params + an
+// onGitOp(op) string; desktop splits them into three focused, individually runComposeUiTest-able
+// composables.
+//
+// They no longer share one header. The old single-session shell drew all three in its own bar; that
+// shell is gone, and each affordance followed what it actually belongs to:
+//   • GitBadgeMenu   → [WorkspaceHeader], because the work tree is the WORKSPACE's.
+//   • SessionLinksMenu, OverflowMenu → the chat view's own header (ChatPanel), because a proxy and
+//     a rename/mute/kill belong to ONE session, which is what a chat view is.
 //
 // Differences from Android worth noting:
 //   • Git ops: Android fires onGitOp("fetch") and the AppViewModel shows a snackbar/toast with the
@@ -17,15 +23,15 @@
 //     ui.openInBrowser (java.awt.Desktop.browse on a daemon thread) — injected as onOpenUrl so tests
 //     can capture the URL without spawning a browser.
 //
-// Headless verification (M4c Task 3): there is no xdotool/input-injection under Xvfb, so each menu
-// takes an optional one-shot force-open param (ShellUiState.forceGitMenuFor/forceLinksMenuFor/
-// forceOverflowFor, set by the off-by-default SM_GIT_MENU/SM_LINKS_MENU/SM_OVERFLOW_MENU env hooks
-// in Main.kt) that expands its DropdownMenu exactly the way a real click would. GitBadgeMenu's hook
-// additionally accepts [GitMenuForceOp.FETCH]/[PULL] to fire that op live through the SAME `run(...)`
-// path a click uses — see that enum's KDoc for why Push/Publish are structurally excluded from ever
-// being auto-fired. SessionLinksMenu/OverflowMenu are open-ONLY: opening a URL or renaming/muting/
-// killing a session from a hook is left to a real user (or a direct DesktopAppState call in a test
-// harness) rather than simulating a click through a dialog/text field neither hook can drive.
+// Headless verification (M4c Task 3): there is no xdotool/input-injection under Xvfb, so the git
+// and links menus take an optional one-shot force-open param (ShellUiState.forceGitMenuFor /
+// forceLinksMenuFor, set by the off-by-default SM_GIT_MENU/SM_LINKS_MENU env hooks in Main.kt) that
+// expands its DropdownMenu exactly the way a real click would. GitBadgeMenu's hook additionally
+// accepts [GitMenuForceOp.FETCH]/[PULL] to fire that op live through the SAME `run(...)` path a
+// click uses — see that enum's KDoc for why Push/Publish are structurally excluded from ever being
+// auto-fired. SessionLinksMenu is open-ONLY: opening a URL from a hook is left to a real user.
+// OverflowMenu keeps its `forceOpen` param but has no env hook driving it any more (SM_OVERFLOW_MENU
+// went with the shell whose header it opened).
 package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
@@ -301,7 +307,8 @@ fun SessionLinksMenu(
  *  - Detail (tool-call level: Low / Medium / High)
  *  - Continue in new conversation
  *  - Rename / Mute / Kill
- *  - Usage / Editor-LSP management rows (SessionDetail shell only; optional)
+ *  - Usage / Editor-LSP management rows (optional; no current caller enables them — Usage and
+ *    Editor/LSP are reached from the sidebar footer, the File menu and the Settings hub)
  *
  * [onToggleMute] receives the DESIRED next mute state.
  * [onContinue] when non-null shows the continue item; receives the editable handoff message and

@@ -23,6 +23,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,7 +74,6 @@ import java.io.File
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
 //   SM_PAIR_TOKEN + SM_PAIR_BASE  — seed a pairing without onboarding (both required)   [main, below]
 //   SM_AUTOSELECT=1               — auto-select a session so a pane renders             [AppShell]
-//   SM_PANES=etd                  — force Editor/Terminal/Display panes on              [AppShell]
 //   SM_SMOKE_SEND="name:text"     — send a chat message to a session                    [main]
 //   SM_TERM_INPUT="name:text"     — type into a session's scratch terminal (M2)         [main]
 //   SM_OPEN_FILE="name:path[:ln]" — open a file in the editor at a line (M3)            [main]
@@ -85,12 +86,12 @@ import java.io.File
 //                                  (SM_EDITOR_SAVE_TEST precedent) — not driven from here.  [main, EditorPanel]
 //   SM_LAUNCH_TEST="wd|agent|msg[|attach]" — drive the launcher spawn→first-msg chain (M4a) [main]
 //   SM_LAUNCH_PAUSE_MS=<ms>       — hold the launcher OPEN this long before submitting (M4a) [main]
-//   SM_FINISH_TEST=<session-name> — select the session + open its Finish dialog (menu, M4b) [main]
-//   SM_GIT_MENU="<name>[:fetch|:pull]" — force-open the header git-badge menu; :fetch/:pull ALSO
+//   SM_GIT_MENU="<name>[:fetch|:pull]" — force-open the WORKSPACE header's git-badge menu;
+//                                  :fetch/:pull ALSO
 //                                  fire that op live (M4c, no Push/Publish member — see
 //                                  GitMenuForceOp KDoc)                                   [main]
-//   SM_LINKS_MENU=<session-name>  — force-open the header session-links (proxies) menu (M4c) [main]
-//   SM_OVERFLOW_MENU=<session-name> — force-open the header ⋮ overflow menu (M4c)          [main]
+//   SM_LINKS_MENU=<session-name>  — force-open the CHAT VIEW header's session-links (proxies)
+//                                  menu (M4c)                                              [main]
 //   SM_DICTATE="<session-name>|<wav-path>" — feed a pre-recorded WAV through the real mic-dictation
 //                                  transcribe->append path (no mic under Xvfb) (M5-1)              [main]
 //   SM_CHAT_ATTACH="<session-name>|<file-path>|<text>" — stage+upload a file into the chat
@@ -155,12 +156,11 @@ import java.io.File
 //                                  removes it again — a real, but self-cleaning, POST+DELETE
 //                                  /settings/editor/lsp/custom round trip (M4g-4). Off by default.
 //                                  NEVER combine with SM_LSP_TOGGLE in the same run.         [main]
-//   SM_DIFF="<session-name>"      — select the session + flip its editor pane on; EditorPanel's own
-//                                  env read (SM_EDITOR_SAVE_TEST precedent) then fires the SAME
-//                                  editor.loadDiff(fsDiff) the "View changes" button drives (a real
-//                                  GET /fs/diff) once the panel mounts, so the rendered DiffView
-//                                  (repo/file grouping + +/- diff rows) can be screenshotted
-//                                  headlessly (M4g-2). Off by default.              [main, EditorPanel]
+//   SM_DIFF="<session-name>"      — select the session, then open a `mode: diff` editor VIEW in its
+//                                  workspace. DiffPane fires the SAME loadDiff(fsDiff) the "View
+//                                  changes" button drives (a real GET /fs/diff), so the rendered
+//                                  DiffView can be screenshotted headlessly (M4g-2). Off by
+//                                  default.                                     [main, AppShell]
 //   SM_DIFF_COMMENT=1             — paired with SM_DIFF: once the diff has loaded, ALSO fires a real
 //                                  POST /review/comments on the diff's first addable line (the SAME
 //                                  onReviewAddComment the +-gutter composer drives), then reloads so
@@ -340,7 +340,7 @@ fun main() {
             }
             // Paired flag + shell UI state are hoisted to the Window (FrameWindowScope) so the
             // native MenuBar — which must be called on this scope, not inside a nested @Composable —
-            // can reach the same ShellLayout/selection the shortcuts drive.
+            // can reach the same sidebar state/selection the shortcuts drive.
             // Paired once the fleet holds a host (legacy single-host users were migrated to
             // PairedHost[0] above; onboarding seeds it via the same migration on success).
             var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
@@ -351,7 +351,7 @@ fun main() {
             val ui = remember {
                 ShellUiState().apply {
                     val persisted = uiStore.load()
-                    persisted.layout?.let { layout.restore(it) }
+                    persisted.layout?.let { restore(it) }
                     selectedId = persisted.selectedId
                 }
             }
@@ -409,17 +409,12 @@ fun main() {
                         }
                     }
                     Menu("View", mnemonic = 'V') {
-                        CheckboxItem("Show Sidebar", checked = !ui.layout.sidebarCollapsed) {
-                            ui.layout.sidebarCollapsed = !ui.layout.sidebarCollapsed
-                        }
-                        CheckboxItem("Editor", checked = ui.selectedId?.let { ui.layout.panesFor(it).editor } == true) {
-                            ui.selectedId?.let { ui.layout.toggleEditor(it) }
-                        }
-                        CheckboxItem("Terminal", checked = ui.selectedId?.let { ui.layout.panesFor(it).terminal } == true) {
-                            ui.selectedId?.let { ui.layout.toggleTerminal(it) }
-                        }
-                        CheckboxItem("Display", checked = ui.selectedId?.let { ui.layout.panesFor(it).display } == true) {
-                            ui.selectedId?.let { ui.layout.toggleDisplay(it) }
+                        // Only the sidebar is left: Editor/Terminal/Display were toggles for the
+                        // old shell's four fixed panes. A workspace has no fixed panes — views are
+                        // created, split and closed on its own layout tree, from the tab strip's
+                        // "+" — so there is nothing here to check on or off.
+                        CheckboxItem("Show Sidebar", checked = !ui.sidebarCollapsed) {
+                            ui.sidebarCollapsed = !ui.sidebarCollapsed
                         }
                     }
                 }
@@ -622,10 +617,8 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            // Flip the editor pane on up-front so the panel mounts even before the
-                            // routed onOpenFile runs (onOpenFile flips it too — this is belt-and-braces
-                            // for the screenshot deadline).
-                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
+                            // No pane to flip on: in a workspace, opening the file IS the pane
+                            // (AppShell routes externalOpen through WorkspaceFileOpener).
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, line)
                             println("[openfile] requested '$path'${line?.let { ":$it" } ?: ""} in ${t.name} (${t.id})")
                         }
@@ -659,7 +652,6 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, null)
                             println("[editorpreview] requested '$path' in ${t.name} (${t.id}) — EditorPanel flips previewMode on once it's active")
                         }
@@ -697,7 +689,6 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
                             ui.externalOpen = t.id to dev.supermux.ui.FilePathRef(path, null)
                             println(
                                 "[lsp] requested '$path' in ${t.name} (${t.id}) — " +
@@ -726,8 +717,13 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(editor = true))
-                            println("[diff] selected ${t.name} (${t.id}) — EditorPanel fires loadDiff once mounted")
+                            // Open a diff VIEW in the workspace on screen. The old shell flipped a
+                            // fixed editor pane and let it switch itself to diff mode; a workspace
+                            // has no fixed pane, and `mode: diff` IS the pane (ViewHost → DiffPane).
+                            ui.forceWorkspaceView = "editor" to buildJsonObject {
+                                put("mode", JsonPrimitive("diff"))
+                            }
+                            println("[diff] selected ${t.name} (${t.id}) — requested a diff view in its workspace")
                         }
                     }
 
@@ -801,39 +797,6 @@ fun main() {
                         }
                     }
 
-                    // Headless Finish-verification hook (M4b): SM_FINISH_TEST="<session-name>"
-                    // resolves the named session after the first snapshot, SELECTS it, and flips the
-                    // shared one-shot `forceFinishDialogFor` so the matching SessionDetail opens its
-                    // Finish dialog in the MENU state — the SAME state the FinishButton click flips,
-                    // which loads finishReadiness → the ReadinessCard + Merge/PR/Keep/Discard rows. It
-                    // does NOT trigger any finish action (no merge/discard/keep) — it only opens the
-                    // menu so the readiness card can be screenshot under Xvfb without a pointer. Only
-                    // effective when the session has session_branch != null (else the button/dialog
-                    // don't render and the flag is a no-op). Harmless in production (unset by default).
-                    val finishTest = System.getenv("SM_FINISH_TEST")?.takeIf { it.isNotBlank() }
-                    if (finishTest != null) {
-                        LaunchedEffect(app) {
-                            // Wait (≤30s) for the snapshot to carry the named session.
-                            var target = app.sessions.value.firstOrNull { it.name == finishTest }
-                            val deadline = System.currentTimeMillis() + 30_000
-                            while (target == null && System.currentTimeMillis() < deadline) {
-                                delay(500)
-                                target = app.sessions.value.firstOrNull { it.name == finishTest }
-                            }
-                            val t = target
-                            if (t == null) {
-                                println("[finish] session '$finishTest' not found in snapshot after 30s")
-                                return@LaunchedEffect
-                            }
-                            if (t.session_branch == null) {
-                                println("[finish] session '$finishTest' has no session_branch — Finish button/dialog won't render")
-                            }
-                            ui.selectedId = t.id
-                            ui.forceFinishDialogFor = t.id
-                            println("[finish] opened Finish dialog for ${t.name} (${t.id}); branch=${t.session_branch}")
-                        }
-                    }
-
                     // Headless git-badge-menu verification hook (M4c): SM_GIT_MENU="<session-name>
                     // [:fetch|:pull]" resolves the named session after the first snapshot, SELECTS
                     // it, and flips the shared one-shot `forceGitMenuFor` so the matching
@@ -900,31 +863,6 @@ fun main() {
                             ui.selectedId = t.id
                             ui.forceLinksMenuFor = t.id
                             println("[linksmenu] forced session-links menu for ${t.name} (${t.id})")
-                        }
-                    }
-
-                    // Headless overflow-menu verification hook (M4c): SM_OVERFLOW_MENU=
-                    // "<session-name>" resolves the named session, SELECTS it, and flips the shared
-                    // one-shot `forceOverflowFor` so the matching SessionDetail's ⋮ OverflowMenu
-                    // expands. NEVER auto-clicks Rename/Mute/Kill — only the dropdown. Harmless in
-                    // production (unset by default).
-                    val overflowMenuTest = System.getenv("SM_OVERFLOW_MENU")?.takeIf { it.isNotBlank() }
-                    if (overflowMenuTest != null) {
-                        LaunchedEffect(app) {
-                            var target = app.sessions.value.firstOrNull { it.name == overflowMenuTest }
-                            val deadline = System.currentTimeMillis() + 30_000
-                            while (target == null && System.currentTimeMillis() < deadline) {
-                                delay(500)
-                                target = app.sessions.value.firstOrNull { it.name == overflowMenuTest }
-                            }
-                            val t = target
-                            if (t == null) {
-                                println("[overflowmenu] session '$overflowMenuTest' not found in snapshot after 30s")
-                                return@LaunchedEffect
-                            }
-                            ui.selectedId = t.id
-                            ui.forceOverflowFor = t.id
-                            println("[overflowmenu] forced overflow menu for ${t.name} (${t.id})")
                         }
                     }
 
@@ -1034,7 +972,6 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.layout.setPanes(t.id, ui.layout.panesFor(t.id).copy(display = true))
                             val existing = app.listDisplays().firstOrNull { it.sessionName == t.name && it.status == "running" }
                             if (existing != null) {
                                 println("[display] reusing existing running display ${existing.id} for ${t.name}")
@@ -1042,6 +979,17 @@ fun main() {
                                 println("[display] no running display for '${t.name}' — starting one (real Xvfb+VNC on the broker host)")
                                 val started = app.startDisplay(t.name)
                                 println("[display] startDisplay result: $started")
+                            }
+                            // Then open a display VIEW on that stream — a workspace has no fixed
+                            // display pane to flip on, and a `display` view names its stream by id.
+                            val streamId = app.listDisplays()
+                                .firstOrNull { it.sessionName == t.name && it.status == "running" }?.id
+                            if (streamId == null) {
+                                println("[display] no running stream for '${t.name}' after start — no view opened")
+                            } else {
+                                ui.forceWorkspaceView = "display" to buildJsonObject {
+                                    put("displayId", JsonPrimitive(streamId))
+                                }
                             }
                         }
                     }

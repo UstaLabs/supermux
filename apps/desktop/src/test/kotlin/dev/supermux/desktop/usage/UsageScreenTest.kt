@@ -461,12 +461,12 @@ class UsageScreenTest {
             }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed)
+        assertFalse(ui.sidebarCollapsed)
         onNodeWithTag("usage_screen").performKeyInput {
             withKeyDown(Key.CtrlLeft) { pressKey(Key.B) }
         }
         waitForIdle()
-        assertFalse(ui.layout.sidebarCollapsed) // NOT toggled — the chord never reached the layout
+        assertFalse(ui.sidebarCollapsed) // NOT toggled — the chord never reached the layout
         assertTrue(ui.usageOpen)                // ...and the popover stayed up
     }
 

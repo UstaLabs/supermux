@@ -26,6 +26,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.chat.ChatPanel
+import dev.supermux.desktop.chat.ComposerExternalAttach
+import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
 import dev.supermux.desktop.editor.DiffPane
 import dev.supermux.desktop.editor.DiffState
@@ -124,6 +126,19 @@ fun ViewHost(
     forceLinksMenuFor: String? = null,
     onForceLinksMenuConsumed: () -> Unit = {},
     /**
+     * One-shot composer requests, each addressed to ONE session so only that session's chat view
+     * consumes it. These used to reach the composer through the deleted session header:
+     * `SM_CHAT_ATTACH`, `SM_DICTATE`, and — the one that is NOT a test hook — Edit ▸ Paste image
+     * in the native menu bar, which targets the SELECTED session.
+     */
+    externalAttach: Pair<String, ComposerExternalAttach>? = null,
+    onExternalAttachConsumed: () -> Unit = {},
+    externalDictate: Pair<String, ComposerExternalDictate>? = null,
+    onExternalDictateConsumed: () -> Unit = {},
+    pasteImageFor: String? = null,
+    pasteImageRequestNonce: Long = 0L,
+    onPasteImageRequestConsumed: () -> Unit = {},
+    /**
      * Test seams for the `file` pane's code surface, same shape [EditorPanel] uses: KCEF cannot
      * boot under runComposeUiTest, so tests inject a state the engine is never built from (and an
      * init that does nothing). Production uses the live runtime.
@@ -146,6 +161,14 @@ fun ViewHost(
                 loadProxies = loadProxies,
                 forceLinksMenu = forceLinksMenuFor == sessionId,
                 onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+                externalAttach = externalAttach?.takeIf { it.first == sessionId }?.second,
+                onExternalAttachConsumed = onExternalAttachConsumed,
+                externalDictate = externalDictate?.takeIf { it.first == sessionId }?.second,
+                onExternalDictateConsumed = onExternalDictateConsumed,
+                // Addressed to one session so a workspace showing two chats pastes into the
+                // selected one, not both.
+                pasteImageRequestNonce = if (pasteImageFor == sessionId) pasteImageRequestNonce else 0L,
+                onPasteImageRequestConsumed = onPasteImageRequestConsumed,
                 modifier = modifier,
             )
         }
@@ -245,6 +268,12 @@ private fun ChatPanelForSession(
     loadProxies: (suspend () -> List<ProxyDto>)?,
     forceLinksMenu: Boolean,
     onForceLinksMenuConsumed: () -> Unit,
+    externalAttach: ComposerExternalAttach?,
+    onExternalAttachConsumed: () -> Unit,
+    externalDictate: ComposerExternalDictate?,
+    onExternalDictateConsumed: () -> Unit,
+    pasteImageRequestNonce: Long,
+    onPasteImageRequestConsumed: () -> Unit,
     modifier: Modifier,
 ) {
     val sessions by app.sessions.collectAsState()
@@ -271,6 +300,12 @@ private fun ChatPanelForSession(
         nativeContent = { onExit ->
             key(sessionId) { nativeContent({ app.connectAgentTerminal(sessionId) }, onExit) }
         },
+        externalAttach = externalAttach,
+        onExternalAttachConsumed = onExternalAttachConsumed,
+        externalDictate = externalDictate,
+        onExternalDictateConsumed = onExternalDictateConsumed,
+        pasteImageRequestNonce = pasteImageRequestNonce,
+        onPasteImageRequestConsumed = onPasteImageRequestConsumed,
         // A tap on a file path in the transcript opens a `file` pane. This used to be dropped on
         // the floor here: the parameter defaults to {} and nothing was passed, so the tap did
         // nothing at all in a workspace. Same conversion SessionDetail does — a path outside the

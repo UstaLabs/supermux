@@ -1,7 +1,7 @@
-// Desktop UI-state persistence: the shell layout ([ShellSnapshot]) + the selected session,
+// Desktop UI-state persistence: the sidebar chrome ([SidebarSnapshot]) + the selected session,
 // written to `ui-state.json` next to the token store. There is no `rememberSaveable` process-death
 // persistence on desktop (that's an Android/config-change concept), so AppShell hydrates from
-// this store at startup and debounce-persists to it as the layout changes.
+// this store at startup and debounce-persists to it as the sidebar changes.
 //
 // Unlike DesktopTokenStore, this is NOT a secret — a plain (non-atomic) writeString is fine here.
 package dev.supermux.desktop.shell
@@ -12,10 +12,26 @@ import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** The persisted UI state: the shell [layout] snapshot + the last-selected session id. */
+/**
+ * Sidebar chrome, persisted. This used to be the whole `ShellSnapshot` — the old shell's fixed
+ * chat|work|display fractions and per-session pane flags — but that layout model went with
+ * SessionDetail: what is on screen inside the detail pane is now the workspace's own tree, stored
+ * on the broker. Only the sidebar is still the client's to remember.
+ *
+ * Both fields default, and the store decodes with `ignoreUnknownKeys`, so a ui-state.json written
+ * by the old shell still restores its sidebar and simply drops the pane state it also carried.
+ */
+@Serializable
+data class SidebarSnapshot(
+    val sidebarCollapsed: Boolean = false,
+    val sidebarWidthDp: Float = 320f,
+)
+
+/** The persisted UI state: the sidebar snapshot + the last-selected session id. */
 @Serializable
 data class PersistedUiState(
-    val layout: ShellSnapshot? = null,
+    // Field name kept as `layout` so an existing ui-state.json still hydrates.
+    val layout: SidebarSnapshot? = null,
     val selectedId: String? = null,
 )
 
