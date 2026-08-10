@@ -1,9 +1,10 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.panes
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
@@ -17,8 +18,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import dev.supermux.ui.panes.PaneHost
-import dev.supermux.ui.panes.PaneSplit
 
 /**
  * Invariants of [PaneHost]'s editing model: an edit names WHAT to change — a
@@ -108,7 +107,14 @@ class PaneHostStaleEditTest {
         }
         waitForIdle()
 
-        onNodeWithTag("splitter-0").performTouchInput { swipeRight() }
+        // NOT swipeRight(): its default span is the NODE's own width, and the splitter is a 12 dp
+        // hit strip — well under touch slop, so detectDragGestures never starts and the sizes
+        // never move. Drag an explicit distance instead.
+        onNodeWithTag("splitter-0").performTouchInput {
+            down(center)
+            moveBy(Offset(120f, 0f))
+            up()
+        }
         waitForIdle()
 
         val sizes = (tree as LayoutNode.Split).sizes

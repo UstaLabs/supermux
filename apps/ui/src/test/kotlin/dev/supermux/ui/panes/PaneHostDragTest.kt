@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.panes
 
 import androidx.compose.material3.Text
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -13,8 +13,6 @@ import androidx.compose.ui.geometry.Offset
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import dev.supermux.ui.panes.PaneDragController
-import dev.supermux.ui.panes.PaneHost
 
 @OptIn(ExperimentalTestApi::class)
 class PaneHostDragTest {
