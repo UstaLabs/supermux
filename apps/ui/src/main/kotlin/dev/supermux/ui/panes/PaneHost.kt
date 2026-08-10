@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -618,124 +620,134 @@ fun PaneTabStrip(
         // Absolute-positioned tabs: each id keeps composition identity and slides
         // (graphicsLayer translation) to its live-order slot — "transforms into"
         // the place the neighbour vacated.
+        //
+        // Scrolls (and clips) once the tabs are wider than the strip: horizontalScroll
+        // measures its child with unbounded width, so the fixed-width Box below still
+        // gets its full intrinsic width; this Box only scrolls + clips the viewport.
         Box(
             Modifier
                 .fillMaxHeight()
-                .width(with(density) { stripContentWidthPx.toDp().coerceAtLeast(1.dp) })
-                .then(chrome.tabs("strip-tabs-$chromeKey")),
+                .horizontalScroll(rememberScrollState()),
         ) {
-            // Compose in a stable order (committed viewIds) so keys never reshuffle
-            // under the active pointerInput; visual order is purely animated X.
-            val stableIds = viewIds.ifEmpty { displayIds }
-            fun targetXForOrder(order: List<String>, index: Int): Float {
-                var x = 0f
-                for (i in 0 until index.coerceAtLeast(0)) {
-                    val tid = order.getOrNull(i) ?: break
-                    x += widthOf(tid)
-                }
-                return x
-            }
-            for (id in stableIds) {
-                key(id) {
-                    val isDragged = dragState?.isDragging == true && dragState.draggingViewId == id
-                    // Pin the dragged tab at its press-time slot so its coordinate
-                    // system never rides the morph animation (that caused the
-                    // reorder loop). Neighbours animate to live-order positions;
-                    // the ghost is the moving visual.
-                    val targetX = if (isDragged) {
-                        val pin = viewIds.indexOf(id).let {
-                            if (it >= 0) it else dragState?.dragOriginIndex ?: 0
-                        }
-                        targetXForOrder(viewIds, pin)
-                    } else {
-                        val live = displayIds.indexOf(id).let { if (it < 0) 0 else it }
-                        targetXForOrder(displayIds, live)
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .width(with(density) { stripContentWidthPx.toDp().coerceAtLeast(1.dp) })
+                    .then(chrome.tabs("strip-tabs-$chromeKey")),
+            ) {
+                // Compose in a stable order (committed viewIds) so keys never reshuffle
+                // under the active pointerInput; visual order is purely animated X.
+                val stableIds = viewIds.ifEmpty { displayIds }
+                fun targetXForOrder(order: List<String>, index: Int): Float {
+                    var x = 0f
+                    for (i in 0 until index.coerceAtLeast(0)) {
+                        val tid = order.getOrNull(i) ?: break
+                        x += widthOf(tid)
                     }
-                    val animatedX by animateFloatAsState(
-                        targetValue = targetX,
+                    return x
+                }
+                for (id in stableIds) {
+                    key(id) {
+                        val isDragged = dragState?.isDragging == true && dragState.draggingViewId == id
+                        // Pin the dragged tab at its press-time slot so its coordinate
+                        // system never rides the morph animation (that caused the
+                        // reorder loop). Neighbours animate to live-order positions;
+                        // the ghost is the moving visual.
+                        val targetX = if (isDragged) {
+                            val pin = viewIds.indexOf(id).let {
+                                if (it >= 0) it else dragState?.dragOriginIndex ?: 0
+                            }
+                            targetXForOrder(viewIds, pin)
+                        } else {
+                            val live = displayIds.indexOf(id).let { if (it < 0) 0 else it }
+                            targetXForOrder(displayIds, live)
+                        }
+                        val animatedX by animateFloatAsState(
+                            targetValue = targetX,
+                            animationSpec = Motion.spatial(),
+                            label = "tab-morph-x-$id",
+                        )
+                        val selected = id == activeViewId
+                        val z = if (isDragged) 0f else 1f
+                        Box(
+                            Modifier
+                                .zIndex(z)
+                                .graphicsLayer { translationX = animatedX }
+                                // Min width keeps the geometric centre on the label so
+                                // performClick("view-tab-x") selects instead of hitting ×.
+                                .defaultMinSize(minWidth = 56.dp)
+                                .fillMaxHeight()
+                                .onSizeChanged { tabWidthsPx[id] = it.width.toFloat() }
+                                .onGloballyPositioned { coords ->
+                                    if (groupId.isNotEmpty()) {
+                                        dragState?.registerTab(groupId, id, coords.boundsInRoot())
+                                    }
+                                }
+                                .then(
+                                    if (dragState != null && groupId.isNotEmpty()) {
+                                        Modifier.tabDragGestures(
+                                            viewId = id,
+                                            groupId = groupId,
+                                            stripOrderProvider = { viewIds },
+                                            labelProvider = { titleFor(id) },
+                                            dragState = dragState,
+                                            onSelect = onSelect,
+                                            onDrop = onDrop,
+                                        )
+                                    } else {
+                                        Modifier.clickable { onSelect(id) }
+                                    },
+                                )
+                                // Fully hide the source slot — ghost is the moving tab.
+                                // Keeping a dimmed chip that also translated was feeding
+                                // pointer local-coords and looping the live order.
+                                //
+                                // The slot's background is now INSIDE this alpha layer, where it
+                                // was outside before the chip moved out of this chain. That makes
+                                // the hide complete: dragging the ACTIVE tab used to leave its
+                                // 0.14α primary tint painted at the source slot, because
+                                // Modifier.alpha only fades what is inner to it. "Fully hide"
+                                // above was always the intent; it is now also the behaviour.
+                                .alpha(if (isDragged) 0f else 1f)
+                                .testTag("view-tab-$id"),
+                            // The 56 dp minimum must reach the slot, or its background stops short.
+                            propagateMinConstraints = true,
+                        ) {
+                            tabSlot(id, TabSlotState(selected = selected, dragged = isDragged))
+                        }
+                    }
+                }
+
+                if (showInsertCaret) {
+                    val caretX = targetXForIndex(insertAt.coerceIn(0, displayIds.size))
+                    val animatedCaretX by animateFloatAsState(
+                        targetValue = caretX,
                         animationSpec = Motion.spatial(),
-                        label = "tab-morph-x-$id",
+                        label = "tab-insert-caret-x",
                     )
-                    val selected = id == activeViewId
-                    val z = if (isDragged) 0f else 1f
+                    TabInsertCaret(
+                        Modifier
+                            .zIndex(3f)
+                            .graphicsLayer { translationX = animatedCaretX },
+                    )
+                }
+
+                if (addSlot != null) {
+                    val addTargetX = targetXForIndex(displayIds.size)
+                    val animatedAddX by animateFloatAsState(
+                        targetValue = addTargetX,
+                        animationSpec = Motion.spatial(),
+                        label = "tab-add-x",
+                    )
                     Box(
                         Modifier
-                            .zIndex(z)
-                            .graphicsLayer { translationX = animatedX }
-                            // Min width keeps the geometric centre on the label so
-                            // performClick("view-tab-x") selects instead of hitting ×.
-                            .defaultMinSize(minWidth = 56.dp)
+                            .zIndex(0.5f)
+                            .graphicsLayer { translationX = animatedAddX }
                             .fillMaxHeight()
-                            .onSizeChanged { tabWidthsPx[id] = it.width.toFloat() }
-                            .onGloballyPositioned { coords ->
-                                if (groupId.isNotEmpty()) {
-                                    dragState?.registerTab(groupId, id, coords.boundsInRoot())
-                                }
-                            }
-                            .then(
-                                if (dragState != null && groupId.isNotEmpty()) {
-                                    Modifier.tabDragGestures(
-                                        viewId = id,
-                                        groupId = groupId,
-                                        stripOrderProvider = { viewIds },
-                                        labelProvider = { titleFor(id) },
-                                        dragState = dragState,
-                                        onSelect = onSelect,
-                                        onDrop = onDrop,
-                                    )
-                                } else {
-                                    Modifier.clickable { onSelect(id) }
-                                },
-                            )
-                            // Fully hide the source slot — ghost is the moving tab.
-                            // Keeping a dimmed chip that also translated was feeding
-                            // pointer local-coords and looping the live order.
-                            //
-                            // The slot's background is now INSIDE this alpha layer, where it
-                            // was outside before the chip moved out of this chain. That makes
-                            // the hide complete: dragging the ACTIVE tab used to leave its
-                            // 0.14α primary tint painted at the source slot, because
-                            // Modifier.alpha only fades what is inner to it. "Fully hide"
-                            // above was always the intent; it is now also the behaviour.
-                            .alpha(if (isDragged) 0f else 1f)
-                            .testTag("view-tab-$id"),
-                        // The 56 dp minimum must reach the slot, or its background stops short.
-                        propagateMinConstraints = true,
+                            .width(36.dp),
                     ) {
-                        tabSlot(id, TabSlotState(selected = selected, dragged = isDragged))
+                        addSlot()
                     }
-                }
-            }
-
-            if (showInsertCaret) {
-                val caretX = targetXForIndex(insertAt.coerceIn(0, displayIds.size))
-                val animatedCaretX by animateFloatAsState(
-                    targetValue = caretX,
-                    animationSpec = Motion.spatial(),
-                    label = "tab-insert-caret-x",
-                )
-                TabInsertCaret(
-                    Modifier
-                        .zIndex(3f)
-                        .graphicsLayer { translationX = animatedCaretX },
-                )
-            }
-
-            if (addSlot != null) {
-                val addTargetX = targetXForIndex(displayIds.size)
-                val animatedAddX by animateFloatAsState(
-                    targetValue = addTargetX,
-                    animationSpec = Motion.spatial(),
-                    label = "tab-add-x",
-                )
-                Box(
-                    Modifier
-                        .zIndex(0.5f)
-                        .graphicsLayer { translationX = animatedAddX }
-                        .fillMaxHeight()
-                        .width(36.dp),
-                ) {
-                    addSlot()
                 }
             }
         }

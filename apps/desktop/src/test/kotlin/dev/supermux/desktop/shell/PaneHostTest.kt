@@ -1,15 +1,23 @@
 package dev.supermux.desktop.shell
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.dp
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -251,5 +259,66 @@ class PaneHostTest {
         // The layer itself must draw no chip: the close affordance is the slot's business now.
         // This fails loudly if a built-in chip is ever reintroduced to the strip.
         onNodeWithTag("tab-close-v1", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun theStripClipsTabsThatOverflowItsWidth() = runComposeUiTest {
+        // assertIsNotDisplayed()/isDisplayed() cannot prove this: Compose's boundsInWindow()
+        // intersects a node's position against EVERY ancestor's own measured rectangle, not
+        // just ones that actually clip their painting. A plain, unclipped Box narrower than a
+        // graphicsLayer-translated child already reports that child as "not displayed" (checked
+        // with a throwaway probe: a bare Box with no clip modifier at all behaved identically to
+        // one with an explicit clipToBounds()). Since a strip narrower than its tab content is
+        // exactly that shape, that assertion would pass whether or not the fix is present.
+        // Real pixels are the only thing that distinguishes "clipped" from "merely reported
+        // as clipped" here, so this test renders the strip and reads them back.
+        val ids = (1..4).map { "v$it" }
+        setContent {
+            // Solid marker colours: the wrapper is green, every tab is red. The wrapper (260 dp)
+            // is wider than the tabs' combined 224 dp, so an unclipped tab is never cut off by
+            // the wrapper itself — only by the strip's own fix, if present.
+            Box(
+                Modifier
+                    .size(260.dp, 32.dp)
+                    .background(Color.Green)
+                    .testTag("clip-probe"),
+            ) {
+                Box(Modifier.size(100.dp, 32.dp)) {
+                    PaneTabStrip(
+                        groupId = "g1",
+                        viewIds = ids,
+                        activeViewId = "v1",
+                        titleFor = { it },
+                        onSelect = {},
+                        dragState = null,
+                        onDrop = {},
+                        chrome = PaneStripChrome.None,
+                        // No fillMaxWidth()/fillMaxSize() here: the strip's per-tab wrapper
+                        // already sizes this to at least 56x32 dp via propagateMinConstraints,
+                        // and under the fix this slot is measured with unbounded max width
+                        // (horizontalScroll's own doing) — fillMaxSize() against an unbounded
+                        // width throws (Constraints.kt), so plain background-only content is
+                        // both simpler and the only thing that's actually safe here.
+                        tabSlot = { _, _ -> Box(Modifier.fillMaxHeight().background(Color.Red)) },
+                    )
+                }
+            }
+        }
+        waitForIdle()
+
+        val pixels = onNodeWithTag("clip-probe").captureToImage().toPixelMap()
+        val y = with(density) { 16.dp.roundToPx() }
+
+        // Sanity: tab 1, inside the 100 dp strip, really does paint red — proves the marker
+        // colours and pixel sampling work at all, independent of the fix.
+        val insideX = with(density) { 28.dp.roundToPx() }
+        assertEquals(Color.Red, pixels[insideX, y], "expected tab content inside the strip to be red")
+
+        // The load-bearing assertion. 140 dp is the centre of tab 3's unclipped [112, 168) dp
+        // span: comfortably past the 100 dp strip, comfortably inside the 260 dp wrapper. Without
+        // the fix nothing clips it and this pixel is red; with the fix the strip's scroll
+        // viewport clips it and only the wrapper's green shows through.
+        val overflowX = with(density) { 140.dp.roundToPx() }
+        assertEquals(Color.Green, pixels[overflowX, y], "expected overflow past the strip to be clipped")
     }
 }
