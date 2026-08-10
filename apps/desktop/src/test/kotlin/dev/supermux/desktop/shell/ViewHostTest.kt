@@ -5,17 +5,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.editor.DocumentStore
 import dev.supermux.desktop.editor.KcefState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.net.BrokerApi
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ServerFrame
+import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.ui.FilePathRef
 import io.ktor.client.HttpClient
@@ -328,5 +335,50 @@ class ViewHostTest {
     @Test
     fun aTappedPathOutsideTheWorkspaceIsNotOpenable() {
         assertNull(workspaceOpenPath(FilePathRef("/etc/passwd"), "/w"))
+    }
+
+    /**
+     * End-to-end through the REAL transcript, which is what SessionDetailTest's
+     * `chatTapOpensTheEditorPaneAndDeliversAWorkdirRelativePendingOpen` asserted before that shell
+     * was deleted. The conversion above is unit-tested, but nothing proved a click on a rendered
+     * file-path ref actually reaches it — and "the parameter was never passed" is exactly the bug
+     * this wiring was added to fix, so the gesture itself needs covering, not only the maths.
+     *
+     * The seeded message body IS the ref (nothing else on the line) so the link's range is known;
+     * a plain performClick() lands at the fillMaxWidth row's centre, past the short link's glyphs,
+     * so this clicks near the text's top-left instead.
+     */
+    @Test
+    fun aFilePathTappedInAWorkspaceTranscriptOpensThatFile() = runComposeUiTest {
+        val app = fakeApp()
+        app.reduce(
+            ServerFrame.SessionAdded(
+                SessionInfo(id = "s1", name = "demo", workdir = "/w", agent = "claude"),
+            ),
+        )
+        app.reduce(
+            ServerFrame.MessageAppend(
+                session = "s1",
+                entry = LogEntry(
+                    id = "m1", ts = "2026-08-09T00:00:00Z", direction = "outbound",
+                    text = "src/main.kt:42",
+                ),
+            ),
+        )
+        val opened = mutableListOf<Triple<String, Int?, Int?>>()
+        setContent {
+            ViewHost(
+                view = view("chat", mapOf("sessionId" to "s1")),
+                workspaceId = "w1",
+                workdir = "/w",
+                app = app,
+                drafts = mutableStateMapOf(),
+                loadProxies = { emptyList() },
+                onOpenFile = { p, line, endLine -> opened.add(Triple(p, line, endLine)) },
+            )
+        }
+        onNodeWithText("src/main.kt:42").performTouchInput { click(Offset(4f, 4f)) }
+        waitForIdle()
+        assertEquals(listOf(Triple<String, Int?, Int?>("src/main.kt", 42, null)), opened.toList())
     }
 }

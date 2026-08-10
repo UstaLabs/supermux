@@ -18,6 +18,8 @@ import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.ServerFrame
+import dev.supermux.workspace.singleViewLayout
+import dev.supermux.workspace.toDto
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -301,4 +303,65 @@ class AppShellTest {
 
         assertTrue(fakeManager.calls.isEmpty())
     }
+
+    // ── One shell ───────────────────────────────────────────────────────────────────────────
+    // Selecting a session used to hand the detail pane to SessionDetail unless SM_WORKSPACES was
+    // set. There is no flag and no second shell: the detail pane is the selected session's
+    // WORKSPACE, drawn by PaneHost. These two cases pin that, and the "no workspace yet" prompt
+    // that replaced the old one-session fallback.
+
+    @Test fun selecting_a_session_draws_its_workspace() = runComposeUiTest {
+        val app = appFor(mutableListOf())
+        app.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(
+                    dev.supermux.proto.SessionInfo(id = "s1", name = "worker-1", workdir = "/w", agent = "claude"),
+                ),
+                workspaces = listOf(
+                    dev.supermux.proto.WorkspaceDto(
+                        id = "w1", name = "proj", workdir = "/w",
+                        primarySessionId = "s1",
+                        layout = singleViewLayout("g1", "v1").toDto(),
+                        views = listOf(
+                            dev.supermux.proto.ViewDto(
+                                id = "v1", workspaceId = "w1", kind = "chat",
+                                state = kotlinx.serialization.json.JsonObject(
+                                    mapOf("sessionId" to kotlinx.serialization.json.JsonPrimitive("s1")),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("workspace_layout_host").assertIsDisplayed()
+        onNodeWithTag("view_chat").assertIsDisplayed()
+    }
+
+    @Test fun a_session_with_no_workspace_says_so_rather_than_falling_back_to_a_one_session_view() =
+        runComposeUiTest {
+            val app = appFor(mutableListOf())
+            app.reduce(
+                ServerFrame.Snapshot(
+                    sessions = listOf(
+                        dev.supermux.proto.SessionInfo(id = "s1", name = "worker-1", workdir = "/w", agent = "claude"),
+                    ),
+                ),
+            )
+            val ui = ShellUiState().apply { selectedId = "s1" }
+            setContent {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+                }
+            }
+            waitForIdle()
+            onNodeWithTag("workspace_welcome").assertIsDisplayed()
+        }
 }
