@@ -31,3 +31,6 @@ __pycache__/
 graphify-out/cost.json
 graphify-out/.graphify_python
 graphify-out/.graphify_root
+# Rewritten on every query/explain/path, so tracking it leaves the tree dirty
+# after anyone merely reads the graph.
+graphify-out/cache/last_query_stamp
