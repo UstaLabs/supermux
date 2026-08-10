@@ -39,6 +39,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -67,8 +68,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.net.AddViewBody
 import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.chatSessionId
+import dev.supermux.desktop.editor.DocumentStore
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
@@ -966,8 +969,74 @@ fun AppShell(
                                     app.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
                                 }
                                 val localLayout = layoutSync.tree
-                                val viewsById = remember(current) { current.views.associateBy { it.id } }
+                                val serverViews = remember(current) { current.views.associateBy { it.id } }
+                                // Views this client minted and put in the tree before the POST
+                                // returned (spec §9.0). Without a record here the layout would name
+                                // an id nothing knows about: the tab would say "view" and the pane
+                                // would draw nothing until the broker frame landed.
+                                val provisionalViews = remember(current.id) { mutableStateMapOf<String, ViewDto>() }
+                                // The broker ALWAYS wins on a collision — its row is the real one,
+                                // and ours was only ever a stand-in for it.
+                                val viewsById = if (provisionalViews.isEmpty()) {
+                                    serverViews
+                                } else {
+                                    provisionalViews.toMap() + serverViews
+                                }
+                                // …and the stand-in goes as soon as the real row arrives.
+                                LaunchedEffect(serverViews) {
+                                    provisionalViews.keys.filter { it in serverViews }.forEach { provisionalViews.remove(it) }
+                                }
                                 val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
+
+                                // ── The workspace's open documents ────────────────────────────
+                                // ONE store for the whole workspace, not one per pane: two `file`
+                                // panes on one path must share one buffer, so a split shows the same
+                                // unsaved text on both sides and dragging a file tab between groups
+                                // cannot lose an edit (spec §7.2 / §18).
+                                val wsApp = appFor(current.primarySessionId ?: session?.id ?: "")
+                                val documents = remember(current.id) {
+                                    DocumentStore(
+                                        fsRead = { p -> wsApp.workspaceFsRead(current.id, p) },
+                                        fsWrite = { p, content -> wsApp.workspaceFsWrite(current.id, p, content) },
+                                        scope = overlayScope,
+                                    )
+                                }
+                                // The changed-on-disk banner is dead without the broker's watcher,
+                                // and the watcher is still session-keyed. Run it ONCE for the
+                                // workspace while it has any editor pane at all — not per pane,
+                                // which would let one pane's close stop the other's watcher.
+                                val lspSession = sessions.firstOrNull { it.id == current.primarySessionId }
+                                val hasEditorView = viewsById.values.any { it.kind == "editor" }
+                                DisposableEffect(lspSession?.id, hasEditorView) {
+                                    if (lspSession != null && hasEditorView) wsApp.editorOpen(lspSession)
+                                    onDispose { if (lspSession != null && hasEditorView) wsApp.editorClose(lspSession) }
+                                }
+                                LaunchedEffect(documents, lspSession?.id) {
+                                    val sid = lspSession?.id ?: return@LaunchedEffect
+                                    wsApp.fsChanges.collect { f -> if (f.session == sid) documents.markChanged(f.paths) }
+                                }
+
+                                // Opening a file is a layout edit plus a POST that carries the id
+                                // we already used — see WorkspaceFileOpen.kt. Rebuilt every
+                                // composition on purpose: it reads the tree and the view map at
+                                // CALL time, and capturing either in a remember would freeze it.
+                                val fileOpener = WorkspaceFileOpener(
+                                    workspaceId = current.id,
+                                    treeOf = { layoutSync.tree },
+                                    viewsOf = { viewsById },
+                                    edit = { transform -> layoutSync.edit(transform) },
+                                    provisional = provisionalViews,
+                                    reveal = { p, line, endLine -> documents.openAtLine(p, line, endLine) },
+                                    post = { id, state, groupId ->
+                                        runCatching {
+                                            wsApp.api.addView(
+                                                current.id,
+                                                AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
+                                            )
+                                        }.onFailure { println("[AppShell] open file view failed: $it") }.isSuccess
+                                    },
+                                    scope = overlayScope,
+                                )
                                 // Feed the viewing LaunchedEffect so a tab switch re-asserts
                                 // Viewing frames for only the active chat of each group.
                                 LaunchedEffect(localLayout, viewsById) {
@@ -1051,6 +1120,15 @@ fun AppShell(
                                             workdir = current.workdir,
                                             app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
                                             drafts = drafts,
+                                            documents = documents,
+                                            // The tree, a search hit and a file path in a transcript
+                                            // all open the same way; the view asking is only used to
+                                            // decide which group to split when there is no file pane
+                                            // to join.
+                                            onOpenFile = { p, line, endLine ->
+                                                fileOpener.open(p, line, endLine, sourceViewId = viewId)
+                                            },
+                                            onCloseView = { closeCandidate = v },
                                             primarySessionId = current.primarySessionId,
                                             onSelectSession = { ui.selectSession(it) },
                                             modifier = Modifier.fillMaxSize(),
