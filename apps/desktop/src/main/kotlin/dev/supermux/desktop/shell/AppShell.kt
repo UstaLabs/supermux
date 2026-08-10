@@ -1153,6 +1153,11 @@ fun AppShell(
                                             onCloseView = { closeCandidate = v },
                                             primarySessionId = current.primarySessionId,
                                             onSelectSession = { ui.selectSession(it) },
+                                            // SM_LINKS_MENU: the globe menu now lives on the chat
+                                            // view's header, so the one-shot lands on the chat view
+                                            // whose session matches.
+                                            forceLinksMenuFor = ui.forceLinksMenuFor,
+                                            onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }

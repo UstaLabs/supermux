@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,17 +34,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
+import dev.supermux.desktop.shell.AgentViewToggle
 import dev.supermux.desktop.shell.OverflowMenu
+import dev.supermux.desktop.shell.SessionLinksMenu
 import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.desktop.ui.keepAlivePanel
 import dev.supermux.net.ModelsResponse
+import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.ChatDetailLevel
@@ -112,6 +120,29 @@ fun ChatPanel(
     onPasteImageRequestConsumed: () -> Unit = {},
     /** After "Continue in new conversation" — parent selects the new session (ViewHost path). */
     onSelectSession: (String) -> Unit = {},
+    // ── Header affordances that moved off the old session header (SessionDetail, deleted) ──
+    // Both belong to ONE session, and a chat view IS one session — unlike the git badge, which
+    // belongs to the work tree and moved to the workspace header instead.
+    /**
+     * This session's exposed proxies, for the header's globe (links) menu. Loaded on open and on
+     * session change, and only when [showHeader] — no proxy_* frame is reduced, so this is a plain
+     * load-on-open. getOrNull-degraded upstream: a broker hiccup just leaves the menu hidden.
+     */
+    loadProxies: suspend () -> List<ProxyDto> = { app.proxies() },
+    // Off-by-default headless hook (SM_LINKS_MENU, Main.kt): force-expands the links dropdown.
+    // Never opens a URL. Applied once, then [onForceLinksMenuConsumed] clears the source.
+    forceLinksMenu: Boolean = false,
+    onForceLinksMenuConsumed: () -> Unit = {},
+    /**
+     * The agent's raw ("Native") PTY. When non-null AND the session's agent is claude, the header
+     * shows the Chat⇄Native pill and flipping it swaps the transcript+composer for this content —
+     * the header itself stays put, so the way back is always on screen.
+     *
+     * Null (the default) hides the pill entirely: a chat with no native surface has nothing to
+     * flip to. The lambda receives an `onExit` to call when the PTY dies, which drops the panel
+     * and returns to the transcript.
+     */
+    nativeContent: (@Composable (onExit: () -> Unit) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -212,6 +243,26 @@ fun ChatPanel(
     }
     val statusColor = if (agent?.waiting == true && !working && !sending) sem.warning else cs.primary
 
+    // ── Header affordances (links menu + Chat⇄Native) ───────────────────────────────────
+    // Proxies are a plain load-on-open; cleared first so the previous session's list can't
+    // transiently render filtered-for-the-new-session while the fresh load is in flight.
+    var proxies by remember(session.id) { mutableStateOf<List<ProxyDto>>(emptyList()) }
+    LaunchedEffect(session.id, showHeader) {
+        if (!showHeader) return@LaunchedEffect
+        proxies = emptyList()
+        proxies = loadProxies()
+    }
+    // Chat ⇄ Native. Only claude has a native view, and only a caller that handed us
+    // [nativeContent] has one to show.
+    val hasNative = nativeContent != null && session.agent == "claude"
+    var nativeView by remember(session.id) { mutableStateOf(false) }
+    // Once Native has been shown for this session, keep it composed so a flip back to Chat does
+    // not drop its PTY; reset per session so a switch starts closed. Latched in an effect, not a
+    // bare state write during composition (which Compose may re-execute/discard).
+    var nativeOpened by remember(session.id) { mutableStateOf(false) }
+    LaunchedEffect(session.id, nativeView) { if (nativeView) nativeOpened = true }
+    val showNative = hasNative && nativeView
+
     Column(modifier.fillMaxSize().background(cs.surfaceContainerLow)) {
         // Header (suppressed when embedded in the shell SessionDetail, which owns the identity bar).
         // ViewHost chat views use this header and need the ⋮ menu here.
@@ -238,6 +289,22 @@ fun ChatPanel(
                             modifier = Modifier.padding(top = 2.dp),
                         )
                     }
+                }
+                // The proxies exposed by THIS session (hidden when it has none). Moved here from
+                // the old session header: a proxy belongs to one session, and this view is one.
+                SessionLinksMenu(
+                    session = session,
+                    proxies = proxies,
+                    forceOpen = forceLinksMenu,
+                    onForceOpenConsumed = onForceLinksMenuConsumed,
+                )
+                if (hasNative) {
+                    AgentViewToggle(
+                        nativeView = nativeView,
+                        onSetNative = { nativeView = it },
+                        modifier = Modifier.testTag("toggle_native"),
+                    )
+                    Spacer(Modifier.width(Space.xs))
                 }
                 OverflowMenu(
                     session = session,
@@ -268,6 +335,15 @@ fun ChatPanel(
             }
         }
 
+        // Body: the transcript + composer, or the agent's raw PTY over the top of them.
+        //
+        // The two are a keep-alive PAIR, not an if/else: Chat is pure Compose and hides through the
+        // lightweight `Modifier.keepAlivePanel` (so its unsaved draft and scroll survive a flip and
+        // it never remounts), while Native is a heavyweight SwingPanel that only a 0×0 layout can
+        // hide — hence the `KeepAlivePanel` composable. Native is LAZY: not composed at all until
+        // first opened, then kept alive across flips so its PTY survives.
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+        Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body")) {
         // Timeline — keyed LazyColumn (obligation 1), reading-width capped + centered (obligation 2).
         Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
             LazyColumn(
@@ -348,6 +424,16 @@ fun ChatPanel(
                     .widthIn(max = CONTENT_MAX_WIDTH)
                     .padding(horizontal = Space.lg, vertical = Space.md),
             )
+        }
+        }
+        if (hasNative && nativeOpened) {
+            KeepAlivePanel(visible = showNative, modifier = Modifier.testTag("pane_native")) {
+                // Agent PTY exited (the broker's exit frame) → drop the kept-alive panel so a later
+                // re-open builds a fresh client rather than showing the dead one, and fall back to
+                // the transcript.
+                nativeContent?.invoke { nativeView = false; nativeOpened = false }
+            }
+        }
         }
     }
 }

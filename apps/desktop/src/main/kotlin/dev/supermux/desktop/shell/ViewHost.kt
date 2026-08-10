@@ -40,6 +40,7 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
+import dev.supermux.net.ProxyDto
 import dev.supermux.net.TerminalClient
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
@@ -106,6 +107,23 @@ fun ViewHost(
     workspaceTerminalContent: @Composable (connect: () -> TerminalClient, modifier: Modifier) -> Unit =
         { connect, mod -> DesktopTerminalPanel(connect = connect, modifier = mod) },
     /**
+     * The agent's raw PTY, drawn behind a chat view's Chat⇄Native pill. Same test-seam reason as
+     * [workspaceTerminalContent]: DesktopTerminalPanel is a SwingPanel and cannot be hosted under
+     * runComposeUiTest, so tests inject a pure-Compose stand-in.
+     */
+    chatNativeContent: @Composable (connect: () -> TerminalClient, onExit: () -> Unit) -> Unit =
+        { connect, onExit ->
+            DesktopTerminalPanel(connect = connect, modifier = Modifier.fillMaxSize(), onExit = onExit)
+        },
+    /**
+     * Per-session proxy load for a chat view's links menu — the globe dropdown that moved off the
+     * old session header. Defaults to the real broker fetch.
+     */
+    loadProxies: (suspend () -> List<ProxyDto>)? = null,
+    /** Off-by-default headless hook (SM_LINKS_MENU): the session whose links menu to force-open. */
+    forceLinksMenuFor: String? = null,
+    onForceLinksMenuConsumed: () -> Unit = {},
+    /**
      * Test seams for the `file` pane's code surface, same shape [EditorPanel] uses: KCEF cannot
      * boot under runComposeUiTest, so tests inject a state the engine is never built from (and an
      * init that does nothing). Production uses the live runtime.
@@ -117,7 +135,19 @@ fun ViewHost(
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatPanelForSession(app, sessionId, workdir, drafts, onSelectSession, onOpenFile, modifier)
+            else ChatPanelForSession(
+                app = app,
+                sessionId = sessionId,
+                workdir = workdir,
+                drafts = drafts,
+                onSelectSession = onSelectSession,
+                onOpenFile = onOpenFile,
+                nativeContent = chatNativeContent,
+                loadProxies = loadProxies,
+                forceLinksMenu = forceLinksMenuFor == sessionId,
+                onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+                modifier = modifier,
+            )
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
@@ -211,6 +241,10 @@ private fun ChatPanelForSession(
     drafts: SnapshotStateMap<String, String>,
     onSelectSession: (String) -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
+    nativeContent: @Composable (connect: () -> TerminalClient, onExit: () -> Unit) -> Unit,
+    loadProxies: (suspend () -> List<ProxyDto>)?,
+    forceLinksMenu: Boolean,
+    onForceLinksMenuConsumed: () -> Unit,
     modifier: Modifier,
 ) {
     val sessions by app.sessions.collectAsState()
@@ -227,6 +261,16 @@ private fun ChatPanelForSession(
         modifier = modifier.fillMaxSize().testTag("view_chat"),
         showHeader = true,
         onSelectSession = onSelectSession,
+        // The globe (links) menu + the Chat⇄Native pill, both moved here off the deleted session
+        // header. Each belongs to ONE session, which is exactly what a chat view is.
+        loadProxies = loadProxies ?: { app.proxies() },
+        forceLinksMenu = forceLinksMenu,
+        onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+        // key(sessionId) so a view rebound to another session never reuses the previous session's
+        // agent PTY: DesktopTerminalPanel's `remember { connect() }` is deliberately unkeyed.
+        nativeContent = { onExit ->
+            key(sessionId) { nativeContent({ app.connectAgentTerminal(sessionId) }, onExit) }
+        },
         // A tap on a file path in the transcript opens a `file` pane. This used to be dropped on
         // the floor here: the parameter defaults to {} and nothing was passed, so the tap did
         // nothing at all in a workspace. Same conversion SessionDetail does — a path outside the
