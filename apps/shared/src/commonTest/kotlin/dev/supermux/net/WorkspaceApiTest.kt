@@ -46,6 +46,33 @@ class WorkspaceApiTest {
         assertEquals(true, encoded.contains("\"terminalId\":\"main\""))
     }
 
+    // ── Client-minted view ids ────────────────────────────────────────────────
+    // The editor-as-views phase needs a tab to appear the instant a file opens,
+    // before the broker round-trip completes. That only works if the client can
+    // mint the id itself and have the broker honour it, so the wire body must
+    // carry `id` when set and stay silent about it when the broker should mint
+    // its own (the omitted-id case still has to work).
+
+    @Test
+    fun addViewBodyCarriesAClientMintedId() {
+        val body = AddViewBody(
+            kind = "editor",
+            state = json.parseToJsonElement("""{"mode":"tree"}""").let { it as kotlinx.serialization.json.JsonObject },
+            id = "9c3f6d2a-1e4b-4a7c-8f2d-6b1a2c3d4e5f",
+        )
+        val encoded = json.encodeToString(body)
+        assertEquals(true, encoded.contains("\"id\":\"9c3f6d2a-1e4b-4a7c-8f2d-6b1a2c3d4e5f\""))
+    }
+
+    @Test
+    fun addViewBodyOmitsIdWhenNotSet() {
+        val body = AddViewBody(
+            kind = "editor",
+            state = json.parseToJsonElement("""{"mode":"tree"}""").let { it as kotlinx.serialization.json.JsonObject },
+        )
+        assertEquals(false, json.encodeToString(body).contains("\"id\""))
+    }
+
     @Test
     fun patchWorkspaceBodyOmitsAbsentFields() {
         assertEquals("""{"name":"new"}""", json.encodeToString(PatchWorkspaceBody(name = "new")))

@@ -83,6 +83,10 @@ export function __resetAuthFailures(): void {}
 
 const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
 const MAX_CLIENT_LOG_RING = 800
+// randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
+// match what the store would have generated itself — it ends up in layout trees
+// and in URLs, so anything looser is a foothold for an arbitrary string.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 // Vue routes and REST APIs share several top-level paths (/settings, /devices,
 // /usage, /proxies, /displays). API_PREFIXES keeps fetch() from those prefixes
@@ -232,8 +236,10 @@ export interface WebChannelOpts {
     => import("../../core/workspace/dto").WorkspaceDto
   archiveWorkspace?: (id: string) => Promise<void>
   reorderWorkspaces?: (orderedIds: string[]) => void
-  addWorkspaceView?: (workspaceId: string, args: { kind: string; state: unknown; title?: string; groupId?: string })
+  addWorkspaceView?: (workspaceId: string, args: { id?: string; kind: string; state: unknown; title?: string; groupId?: string })
     => import("../../core/workspace/dto").ViewDto
+  /** Look up a view by id, so the route can reject a client-minted duplicate with 409 before insert. */
+  getWorkspaceView?: (viewId: string) => import("../../core/workspace/dto").ViewDto | undefined
   patchWorkspaceView?: (viewId: string, patch: { title?: string; state?: unknown })
     => import("../../core/workspace/dto").ViewDto
   closeWorkspaceView?: (viewId: string) => Promise<void>
@@ -2607,9 +2613,20 @@ export class WebChannel implements Channel {
         return this.json({ error: `unknown view kind: ${String(kind)}` }, 400)
       }
       if (body.state == null) return this.json({ error: "state required" }, 400)
+      const rawId = body.id
+      if (rawId !== undefined && typeof rawId !== "string") {
+        return this.json({ error: "id must be a string" }, 400)
+      }
+      const id = rawId as string | undefined
+      if (id !== undefined && !UUID_RE.test(id)) {
+        return this.json({ error: `id must be a UUID: ${id}` }, 400)
+      }
+      if (id !== undefined && this.opts.getWorkspaceView?.(id)) {
+        return this.json({ error: `view already exists: ${id}` }, 409)
+      }
       try {
         const view = this.opts.addWorkspaceView(workspaceId, {
-          kind, state: body.state,
+          id, kind, state: body.state,
           title: body.title as string | undefined,
           groupId: body.groupId as string | undefined,
         })

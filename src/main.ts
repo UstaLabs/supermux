@@ -1769,9 +1769,13 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
     addWorkspaceView: (workspaceId, args) => {
       const v = registry.workspaces.addView(workspaceId, {
-        kind: args.kind as any, state: args.state as any, title: args.title, groupId: args.groupId,
+        id: args.id, kind: args.kind as any, state: args.state as any, title: args.title, groupId: args.groupId,
       })
       return viewDto(v)
+    },
+    getWorkspaceView: (viewId) => {
+      const v = registry.workspaces.getView(viewId)
+      return v ? viewDto(v) : undefined
     },
     patchWorkspaceView: (viewId, patch) => {
       if (patch.title !== undefined) registry.workspaces.setViewTitle(viewId, patch.title)

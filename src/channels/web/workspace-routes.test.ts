@@ -1,9 +1,14 @@
-import { test, expect } from "bun:test"
+import { test, expect, afterEach } from "bun:test"
+import { mkdtempSync } from "fs"
+import { join } from "path"
+import { tmpdir } from "os"
 import { openDb, runMigrations } from "../../core/storage/db"
 import { MIGRATIONS } from "../../core/storage/migrations"
 import { WorkspaceStore } from "../../core/workspace/store"
 import { WorkspaceService } from "../../core/workspace/service"
-import { workspaceDto } from "../../core/workspace/dto"
+import { workspaceDto, viewDto } from "../../core/workspace/dto"
+import { WebChannel, type WebChannelOpts } from "./index"
+import { DeviceStore } from "./device-store"
 
 /**
  * These test the opts layer the routes call, not Bun's HTTP server. The route
@@ -115,4 +120,116 @@ test("workspace REST paths are treated as API, not as SPA routes", () => {
 
 test("an unrelated top-level path is still an SPA route", () => {
   expect(isApiPath("/somewhere-else")).toBe(false)
+})
+
+// ── POST /workspaces/:id/views: client-minted ids ────────────────────────────
+// A later phase makes every open editor tab a view, and the tab has to appear
+// the instant the file opens — before the broker round-trip completes. That
+// only works if the client can mint the id itself and the broker just honours
+// it. These go through the real HTTP route (not just the opts layer above)
+// because the id validation and the duplicate check live in the route body.
+
+let channel: WebChannel | undefined
+afterEach(async () => { if (channel) { await channel.stop(); channel = undefined } })
+
+function viewsHarness() {
+  const db = openDb(":memory:")
+  runMigrations(db, MIGRATIONS)
+  const store = new WorkspaceStore(db)
+  const frames: any[] = []
+  const dir = mkdtempSync(join(tmpdir(), "mux-workspace-views-"))
+  const devicesFile = join(dir, "devices.json")
+  const opts: WebChannelOpts = {
+    port: 0,
+    devicesFile,
+    publicUrl: "http://localhost",
+    getSessionsSnapshot: () => [],
+    getSessionLog: () => [],
+    setMute: () => {},
+    onSendFromWeb: () => {},
+    getWorkspace: (id) => {
+      const ws = store.getById(id)
+      return ws ? workspaceDto(ws, store.listViews(id)) : undefined
+    },
+    addWorkspaceView: (workspaceId, args) => viewDto(store.addView(workspaceId, args as any)),
+    getWorkspaceView: (viewId) => {
+      const v = store.getView(viewId)
+      return v ? viewDto(v) : undefined
+    },
+  }
+  channel = new WebChannel(opts)
+  return { store, frames, devicesFile }
+}
+
+async function authedFetch(devicesFile: string, path: string, init?: RequestInit) {
+  const token = new DeviceStore(devicesFile).mint("test-device").token
+  return fetch(`http://127.0.0.1:${channel!.boundPort}${path}`, {
+    ...init,
+    headers: { ...(init?.headers ?? {}), authorization: `Bearer ${token}` },
+  })
+}
+
+test("POST /workspaces/:id/views honours a client-supplied id", async () => {
+  const { store, devicesFile } = viewsHarness()
+  await channel!.start()
+  const w = store.create({ name: "a", workdir: "/w" })
+  const mintedId = "9c3f6d2a-1e4b-4a7c-8f2d-6b1a2c3d4e5f"
+
+  const res = await authedFetch(devicesFile, `/workspaces/${w.id}/views`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: mintedId, kind: "editor", state: { mode: "tree" } }),
+  })
+
+  expect(res.status).toBe(200)
+  const body = await res.json() as { id: string }
+  expect(body.id).toBe(mintedId)
+  expect(store.getView(mintedId)?.id).toBe(mintedId)
+})
+
+test("POST /workspaces/:id/views rejects a malformed id with 400", async () => {
+  const { store, devicesFile } = viewsHarness()
+  await channel!.start()
+  const w = store.create({ name: "a", workdir: "/w" })
+
+  const res = await authedFetch(devicesFile, `/workspaces/${w.id}/views`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: "not-a-uuid", kind: "editor", state: { mode: "tree" } }),
+  })
+
+  expect(res.status).toBe(400)
+})
+
+test("POST /workspaces/:id/views rejects a duplicate id with 409", async () => {
+  const { store, devicesFile } = viewsHarness()
+  await channel!.start()
+  const w = store.create({ name: "a", workdir: "/w" })
+  const existing = store.addView(w.id, { kind: "chat", state: { sessionId: "s1" } })
+
+  const res = await authedFetch(devicesFile, `/workspaces/${w.id}/views`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: existing.id, kind: "editor", state: { mode: "tree" } }),
+  })
+
+  expect(res.status).toBe(409)
+})
+
+test("POST /workspaces/:id/views still mints an id when the client omits one", async () => {
+  const { store, devicesFile } = viewsHarness()
+  await channel!.start()
+  const w = store.create({ name: "a", workdir: "/w" })
+
+  const res = await authedFetch(devicesFile, `/workspaces/${w.id}/views`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ kind: "editor", state: { mode: "tree" } }),
+  })
+
+  expect(res.status).toBe(200)
+  const body = await res.json() as { id: string }
+  expect(typeof body.id).toBe("string")
+  expect(body.id.length).toBeGreaterThan(0)
+  expect(store.getView(body.id)).toBeDefined()
 })

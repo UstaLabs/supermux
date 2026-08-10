@@ -231,6 +231,7 @@ data class PatchWorkspaceBody(
 data class AddViewBody(
     val kind: String,
     val state: JsonObject,
+    val id: String? = null,
     val title: String? = null,
     val groupId: String? = null,
 )
