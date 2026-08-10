@@ -1047,6 +1047,28 @@ fun AppShell(
                                 // bound registered for it is stale. Belt-and-braces alongside
                                 // GroupHost's per-group onDispose.
                                 LaunchedEffect(current.id) { tabDragState.forgetAllBounds() }
+                                // The git badge belongs to the WORK TREE, and the work tree belongs
+                                // to the workspace — so it is drawn ONCE here, above the panes,
+                                // rather than once per chat header (two chats on one tree used to
+                                // draw the same badge twice). Its data + ops are still session-keyed
+                                // on the broker, so it runs through the workspace's primary chat —
+                                // the same session WorkspaceListPanel reads `git` off for the row.
+                                val gitSession = remember(sessions, current) {
+                                    val sid = current.primarySessionId ?: current.chatSessionIds().firstOrNull()
+                                    sessions.firstOrNull { it.id == sid }
+                                }
+                                Column(Modifier.fillMaxSize()) {
+                                WorkspaceHeader(
+                                    gitSession = gitSession,
+                                    onFetch = { gitSession?.let { s -> appFor(s.id).gitFetch(s.id) } },
+                                    onPull = { gitSession?.let { s -> appFor(s.id).gitPull(s.id) } },
+                                    onPush = { gitSession?.let { s -> appFor(s.id).gitPush(s.id) } },
+                                    onPublish = { gitSession?.let { s -> appFor(s.id).gitPublish(s.id) } },
+                                    forceGitMenu = gitSession?.let { s ->
+                                        ui.forceGitMenuFor?.takeIf { it.first == s.id }?.second
+                                    },
+                                    onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
+                                )
                                 PaneHost(
                                     layout = localLayout,
                                     titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
@@ -1090,7 +1112,7 @@ fun AppShell(
                                             app.moveViewToWorkspace(viewId, toWs)
                                         }
                                     },
-                                    modifier = Modifier.fillMaxSize().testTag("workspace_layout_host"),
+                                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
                                     chrome = DesktopStripChrome,
                                     // "view" and "workspace" are content vocabulary, so the
                                     // wording lives here rather than in the pane layer.
@@ -1134,6 +1156,7 @@ fun AppShell(
                                             modifier = Modifier.fillMaxSize(),
                                         )
                                     }
+                                }
                                 }
                                 // Spec §9.3: a close that ends work asks first. Editor skips the dialog.
                                 // NOT the Finish flow — one question, two buttons (Close / Cancel).
