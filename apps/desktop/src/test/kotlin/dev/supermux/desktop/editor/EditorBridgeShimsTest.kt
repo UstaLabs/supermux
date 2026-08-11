@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** The pure half of the KCEF bridge: JS quoting, shim/init script shape, payload parse, push plan. */
+/** The pure half of the JCEF bridge: JS quoting, shim/init script shape, payload parse, push plan. */
 class EditorBridgeShimsTest {
 
     // ── jsQuote ──────────────────────────────────────────────────────────────
@@ -102,6 +102,20 @@ class EditorBridgeShimsTest {
     }
 
     @Test
+    fun parse_eval_result_reads_the_nested_request_id_and_value() {
+        assertEquals(
+            BridgeEvent.EvalResult(17, "hello\nworld"),
+            parseBridgeEvent("""{"fn":"evalResult","arg":"{\"id\":17,\"value\":\"hello\\nworld\"}"}"""),
+        )
+    }
+
+    @Test
+    fun parse_eval_result_rejects_a_missing_or_negative_request_id() {
+        assertNull(parseBridgeEvent("""{"fn":"evalResult","arg":"{\"value\":\"x\"}"}"""))
+        assertNull(parseBridgeEvent("""{"fn":"evalResult","arg":"{\"id\":-1,\"value\":\"x\"}"}"""))
+    }
+
+    @Test
     fun parse_unknown_fn_is_null() {
         assertNull(parseBridgeEvent("""{"fn":"onWat","arg":"x"}"""))
     }
@@ -126,6 +140,16 @@ class EditorBridgeShimsTest {
             ),
         )
         assertEquals(BridgeEvent.Change(content), parseBridgeEvent(request))
+    }
+
+    @Test
+    fun eval_result_script_routes_a_stringified_value_through_the_named_query_function() {
+        val script = evalResultJs("smxEditorQuery", 42, "cmGetContent()")
+        assertTrue(script.contains("window.smxEditorQuery"))
+        assertTrue(script.contains("fn: \"evalResult\""))
+        assertTrue(script.contains("id: 42"))
+        assertTrue(script.contains("send((cmGetContent()))"))
+        assertTrue(script.contains("catch (e) { send(\"\"); }"))
     }
 
     // ── parseLspOut (M4g-3) ──────────────────────────────────────────────────

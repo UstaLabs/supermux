@@ -16,7 +16,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * Pure Flow-state-machine tests for [DesktopLspBridge] — no broker, no KCEF. Uses `runTest`'s
+ * Pure Flow-state-machine tests for [DesktopLspBridge] — no broker, no JCEF. Uses `runTest`'s
  * virtual clock so the 9s/1.5s/2s real-world timeouts in [DesktopLspBridge.queryStatus]/[DesktopLspBridge.open]
  * resolve instantly.
  */

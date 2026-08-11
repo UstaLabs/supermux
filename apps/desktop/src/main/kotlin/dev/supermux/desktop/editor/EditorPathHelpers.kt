@@ -4,14 +4,14 @@
 // Diff panes) still uses every one of them, so the code moves here rather than going with it.
 //
 // `internal` (not `private`) so EditorPanelMarkdownTest / EditorLspUriTest can drive them directly:
-// the pure/testable-seam discipline this module uses for KCEF-adjacent logic.
+// the pure/testable-seam discipline this module uses for JCEF-adjacent logic.
 package dev.supermux.desktop.editor
 
 // ─── Markdown-preview toggle (M4g-1) ───────────────────────────────────────
 
 /** `.md` / `.markdown` → markdown preview eligible (verbatim port of Android
  *  EditorScreen.kt:582-583). `internal` (not `private`) so [EditorPanelMarkdownTest] can drive it
- *  directly — the pure/testable-seam discipline this module uses for KCEF-adjacent logic. */
+ *  directly — the pure/testable-seam discipline this module uses for JCEF-adjacent logic. */
 internal fun isMarkdownPath(path: String): Boolean =
     path.lowercase().let { it.endsWith(".md") || it.endsWith(".markdown") }
 

@@ -11,7 +11,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Flow-based LSP control-plane + relay — the desktop counterpart to Android `AndroidLspBridge.kt`
  * / iOS `LspBridge.swift` / the web `stores/lsp.ts`. The broker is a dumb JSON-RPC pipe; the real
  * LSP protocol (initialize, didOpen, completion, hover…) runs inside cm6's `LSPClient` in the
- * KCEF-hosted bundle.
+ * JCEF-hosted bundle.
  *
  * [DesktopAppState] already folds every inbound frame into app-wide flows ([lspStatus] keyed
  * "session|path", [lspRpc] a SharedFlow) — so this bridge just sends the outbound control frames

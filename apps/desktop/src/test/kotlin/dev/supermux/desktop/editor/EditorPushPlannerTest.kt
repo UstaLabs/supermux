@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** The push ordering / echo-skip / reveal-queue-until-ready state machine (pure, no KCEF). */
+/** The push ordering / echo-skip / reveal-queue-until-ready state machine (pure, no JCEF). */
 class EditorPushPlannerTest {
 
     private fun planner(wrap: Boolean = false, size: Int = 13) = EditorPushPlanner(wrap, size)

@@ -10,7 +10,7 @@ import androidx.compose.ui.window.DialogProperties
 /**
  * Drop-in replacements for the Material3 / Compose modal surfaces that also
  * register with [LocalModalPresence], so the heavyweight AWT children (JediTerm,
- * KCEF) hide themselves and the modal is actually visible.
+ * JCEF) hide themselves and the modal is actually visible.
  *
  * These deliberately carry the SAME NAMES as the originals. A call site opts in
  * by changing one import line —

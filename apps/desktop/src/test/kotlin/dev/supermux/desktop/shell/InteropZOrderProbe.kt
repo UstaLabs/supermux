@@ -36,7 +36,7 @@ import javax.swing.JTextArea
  * Throwaway probe: can a Compose dialog or dropdown paint ABOVE a SwingPanel?
  *
  * Ahmet: "most modals etc. stays under when there is terminal view". The app's
- * two heavyweight AWT children (JediTerm, KCEF) are documented as unbeatable by
+ * two heavyweight AWT children (JediTerm, JCEF) are documented as unbeatable by
  * Compose siblings — this measures whether a JVM property changes that on
  * Compose 1.11.1, instead of taking either candidate on faith.
  *

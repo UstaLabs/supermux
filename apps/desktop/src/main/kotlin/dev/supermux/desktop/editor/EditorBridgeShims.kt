@@ -1,6 +1,6 @@
-// M3 editor bridge — the PURE half of the KCEF↔CodeMirror wiring, split out from [DesktopEditorEngine]
+// M3 editor bridge — the PURE half of the JCEF↔CodeMirror wiring, split out from [DesktopEditorEngine]
 // so every decision it makes (JS quoting, the injected shim JS, the JS→Kotlin payload parse, and the
-// push/echo-skip/reveal-queue ordering) is unit-testable WITHOUT booting Chromium (KCEF can't run in
+// push/echo-skip/reveal-queue ordering) is unit-testable WITHOUT booting Chromium (JCEF can't run in
 // `kotlin.test`). The engine is a thin adapter: it forwards the JS strings these helpers return to
 // `browser.executeJavaScript` and feeds `onQuery` requests through [parseBridgeEvent].
 //
@@ -91,6 +91,9 @@ internal sealed interface BridgeEvent {
     /** Outbound LSP JSON-RPC (`{serverId,message}`); parsed by [parseLspOut] and forwarded to the
      *  DesktopLspBridge via the engine's `onLspOut` callback (M4g-3). */
     data class LspOut(val payload: String) : BridgeEvent
+
+    /** A direct-JCEF async JavaScript read completed. */
+    data class EvalResult(val id: Long, val value: String) : BridgeEvent
 }
 
 private val bridgeJson = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -114,12 +117,47 @@ internal fun parseBridgeEvent(request: String): BridgeEvent? {
         "onReady" -> BridgeEvent.Ready
         "onFontSize" -> payload.arg.trim().toIntOrNull()?.let { BridgeEvent.FontSize(it) }
         "lspOut" -> BridgeEvent.LspOut(payload.arg)
+        "evalResult" -> parseEvalResult(payload.arg)?.let { BridgeEvent.EvalResult(it.id, it.value) }
         else -> null
     }
 }
 
 @kotlinx.serialization.Serializable
 private data class BridgePayload(val fn: String = "", val arg: String = "")
+
+@kotlinx.serialization.Serializable
+private data class EvalResultPayload(val id: Long = -1, val value: String = "")
+
+private fun parseEvalResult(payload: String): EvalResultPayload? {
+    val parsed = try {
+        bridgeJson.decodeFromString<EvalResultPayload>(payload)
+    } catch (_: SerializationException) {
+        return null
+    } catch (_: IllegalArgumentException) {
+        return null
+    }
+    return parsed.takeIf { it.id >= 0 }
+}
+
+/**
+ * Direct JCEF exposes fire-and-forget `executeJavaScript`, so reads return through the same message
+ * router as editor events. [expression] is always an internal cm6 call, never user-provided source.
+ */
+internal fun evalResultJs(queryFn: String, id: Long, expression: String): String = """
+    (function () {
+      function send(value) {
+        try {
+          if (window.$queryFn) window.$queryFn({
+            request: JSON.stringify({
+              fn: "evalResult",
+              arg: JSON.stringify({ id: $id, value: String(value == null ? "" : value) })
+            })
+          });
+        } catch (e) {}
+      }
+      try { send(($expression)); } catch (e) { send(""); }
+    })();
+""".trimIndent()
 
 /**
  * Parse cm6's outbound `{serverId,message}` JSON payload (posted via the shim's `lspOut` hook — see
@@ -164,7 +202,7 @@ internal fun lspDisconnectJs(): String = "window.cmLspDisconnect && window.cmLsp
  * last-pushed document — the desktop analog of Android EditorEngine's pushToView/setDocument/
  * reveal-queue logic (EditorEngine.kt:101-130,233-241). Emits a `List<String>` of JS statements (in
  * order) that the engine forwards to `browser.executeJavaScript`; returns an empty list when a call
- * must be deferred until [onReady] (e.g. a reveal before cm6 first-paints). Pure — no KCEF — so the
+ * must be deferred until [onReady] (e.g. a reveal before cm6 first-paints). Pure — no JCEF — so the
  * ordering, the echo-skip, and the queue-until-ready are all unit-tested directly.
  */
 internal class EditorPushPlanner(

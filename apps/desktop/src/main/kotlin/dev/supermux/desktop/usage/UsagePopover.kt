@@ -1,6 +1,6 @@
 // Anchored Usage popover — sits above the sidebar footer Usage icon (not a centered modal).
 // Parent must be the icon's Box so Popup measures against that anchor. ModalOpen hides
-// JediTerm/KCEF while open (Compose cannot paint over heavyweight AWT children).
+// JediTerm/JCEF while open (Compose cannot paint over heavyweight AWT children).
 package dev.supermux.desktop.usage
 
 import androidx.compose.foundation.focusable

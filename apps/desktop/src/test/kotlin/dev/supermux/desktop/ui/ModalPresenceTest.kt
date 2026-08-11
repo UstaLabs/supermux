@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
  *
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
- * Compose cannot paint over JediTerm or KCEF, so [ModalPresence] tells them to
+ * Compose cannot paint over JediTerm or JCEF, so [ModalPresence] tells them to
  * step aside. The failure modes are asymmetric and both bad: miss a retain and
  * the dialog is invisible again; miss a release and the terminal stays hidden
  * forever with no way for the user to get it back. The count is what these pin

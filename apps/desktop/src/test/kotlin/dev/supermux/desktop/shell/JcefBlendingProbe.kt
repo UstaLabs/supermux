@@ -28,8 +28,8 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.jediterm.terminal.ui.JediTermWidget
 import com.jediterm.terminal.ui.settings.DefaultSettingsProvider
-import dev.supermux.desktop.editor.KcefRuntime
-import dev.supermux.desktop.editor.KcefState
+import dev.supermux.desktop.editor.JcefRuntime
+import dev.supermux.desktop.editor.JcefState
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Container
@@ -41,15 +41,14 @@ import javax.swing.JPanel
  * Probe 2 proved blending works on Metal for a plain Swing JTextArea. That is
  * the EASY case. The two children that actually matter are:
  *   • JediTermWidget — pure Swing, but a big custom-painted canvas.
- *   • KCEF — a WINDOWED (not offscreen) Chromium, i.e. a real native NSView
+ *   • JCEF — a WINDOWED (not offscreen) Chromium, i.e. a real native NSView
  *     child. Nothing about probe 2 says Compose can paint over THAT.
  *
  * So this hosts both for real and puts a dialog + a dropdown across both.
  *
- * Isolation: run with XDG_CONFIG_HOME pointed at a scratch dir whose
- * `kcef-bundle` is a symlink to the installed one. That reuses the ~150MB
- * download but gives CEF its OWN cache dir, so this probe cannot disturb a
- * running Supermux Desktop (CefApp is per-process; the cache dir is not).
+ * Isolation: run with XDG_CONFIG_HOME pointed at a scratch directory. The probe launches with the
+ * same pinned JBR/JCEF runtime as the app but gets its own CEF cache, so it cannot disturb a running
+ * Supermux Desktop process.
  *
  * Never ships: test source only.
  */
@@ -59,14 +58,37 @@ fun main() {
             "xdg=${System.getenv("XDG_CONFIG_HOME")}")
 
     application {
-        Window(onCloseRequest = ::exitApplication, title = "kcef-blending-probe") {
+        var shuttingDown by remember { mutableStateOf(false) }
+        LaunchedEffect(shuttingDown) {
+            if (shuttingDown) {
+                kotlinx.coroutines.delay(100)
+                exitApplication()
+            }
+        }
+        Window(onCloseRequest = { shuttingDown = true }, title = "jcef-blending-probe") {
+            if (shuttingDown) return@Window
+
             val scope = rememberCoroutineScope()
-            val kcef by KcefRuntime.state.collectAsState()
+            val jcef by JcefRuntime.state.collectAsState()
 
             LaunchedEffect(Unit) {
-                KcefRuntime.ensureInit(scope)
+                JcefRuntime.ensureInit(scope)
             }
-            LaunchedEffect(kcef) { println("PROBE3 kcefState=$kcef") }
+            LaunchedEffect(jcef) {
+                val state = jcef
+                println("PROBE3 jcefState=$state")
+                if (System.getenv("SM_EXIT_ON_READY") == "1") {
+                    when (state) {
+                        JcefState.Ready -> {
+                            // Leave enough time for SwingPanel to realize the native browser child.
+                            kotlinx.coroutines.delay(3000)
+                            shuttingDown = true
+                        }
+                        is JcefState.Error -> error("JCEF probe failed: ${state.msg}")
+                        else -> Unit
+                    }
+                }
+            }
             LaunchedEffect(Unit) {
                 kotlinx.coroutines.delay(2000)
                 reportRenderApi2(window)
@@ -76,8 +98,8 @@ fun main() {
             // Component.paint() actually produces pixels — true for Swing, unknown for a
             // native windowed Chromium. Dump both to PNG and look.
             if (System.getenv("SM_SNAPSHOT") == "1") {
-                LaunchedEffect(kcef) {
-                    if (kcef == KcefState.Ready) {
+                LaunchedEffect(jcef) {
+                    if (jcef == JcefState.Ready) {
                         kotlinx.coroutines.delay(6000)
                         snapshotHeavyweights(window)
                     }
@@ -96,9 +118,9 @@ fun main() {
                                 JediTermWidget(80, 18, DefaultSettingsProvider())
                             },
                         )
-                        Text("── KCEF (real windowed Chromium) below ──", color = Color.White,
+                        Text("── JCEF (real windowed Chromium) below ──", color = Color.White,
                              modifier = Modifier.padding(4.dp))
-                        if (kcef == KcefState.Ready) {
+                        if (jcef == JcefState.Ready) {
                             SwingPanel(
                                 background = Color.White,
                                 modifier = Modifier.fillMaxWidth().height(320.dp),
@@ -115,14 +137,15 @@ fun main() {
                                         org.cef.browser.CefRendering.DEFAULT
                                     }
                                     println("PROBE3 rendering=$rendering")
-                                    val b = KcefRuntime.newClient()?.createBrowser(
+                                    val b = JcefRuntime.newClient()?.createBrowser(
                                         "data:text/html," +
                                         "<body style='margin:0;background:%23FF6D00;" +
                                         "font:28px monospace;color:%23000'>" +
-                                        "<div>KCEF CHROMIUM PAGE</div>" +
+                                        "<div>JCEF CHROMIUM PAGE</div>" +
                                         "<input style='font-size:24px' value='type here'>" +
                                         "</body>",
                                         rendering,
+                                        false,
                                     )
                                     println("PROBE3 browser=$b uiComponent=${b?.uiComponent?.javaClass?.name}")
                                     b?.uiComponent?.let { host.add(it, BorderLayout.CENTER) }
@@ -130,7 +153,7 @@ fun main() {
                                 },
                             )
                         } else {
-                            Text("kcef: $kcef", color = Color.Yellow,
+                            Text("jcef: $jcef", color = Color.Yellow,
                                  modifier = Modifier.padding(8.dp))
                         }
                     }
@@ -153,7 +176,7 @@ fun main() {
                     Box(Modifier.padding(start = 520.dp, top = 430.dp)) {
                         DropdownMenu(
                             expanded = menuOpen,
-                            onDismissRequest = { println("PROBE3 kcef menu dismiss requested") },
+                            onDismissRequest = { println("PROBE3 jcef menu dismiss requested") },
                         ) {
                             repeat(3) { i ->
                                 DropdownMenuItem(text = { Text("MENU OVER CHROMIUM $i") }, onClick = {})
@@ -161,7 +184,7 @@ fun main() {
                         }
                     }
 
-                    // A Compose sibling squarely over the KCEF surface.
+                    // A Compose sibling squarely over the JCEF surface.
                     Box(
                         Modifier.padding(start = 500.dp, top = 420.dp)
                             .background(Color(0xFF00E676)).padding(20.dp)
@@ -182,6 +205,8 @@ fun main() {
             }
         }
     }
+    // Dispose CEF only after Compose has removed the SwingPanel/browser from the closed window.
+    JcefRuntime.dispose()
 }
 
 /**

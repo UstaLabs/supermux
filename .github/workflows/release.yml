@@ -231,8 +231,8 @@ jobs:
     # jpackage (dpkg-deb/fakeroot are preinstalled on ubuntu-latest). Runs on tag pushes
     # AND workflow_dispatch dry runs (builds + uploads; publishes nothing) — like the
     # other build-* jobs. The app carries its OWN packageVersion (independent of the v*
-    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; KCEF (embedded
-    # Chromium, ~100-150MB) downloads on first editor use and is NOT bundled in the .deb.
+    # tag), so the asset name is stable: supermux-linux.deb. Unsigned; the pinned JBR/JCEF
+    # runtime is bundled so the CodeMirror editor works offline on first launch.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -544,7 +544,9 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          # JDK 21 jpackage supplies --app-content, used to merge JBR's sibling JCEF
+          # Frameworks/helpers into Contents/runtime before signing the app bundle.
+          java-version: "21"
       - uses: oven-sh/setup-bun@v2
       - name: Resolve version
         id: ver

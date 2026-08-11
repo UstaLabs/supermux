@@ -86,11 +86,11 @@ import java.util.UUID
  * editor, a terminal, or a display (see ViewHost.kt).
  *
  * Only the ACTIVE view of each group is composed. That is load-bearing, not an
- * optimisation: JediTerm and KCEF are heavyweight AWT SwingPanel children, and
- * one live KCEF per background tab would exhaust memory.
+ * optimisation: JediTerm and JCEF are heavyweight AWT SwingPanel children, and
+ * one live JCEF per background tab would exhaust memory.
  *
  * While a tab drag targets a pane body, content stays mounted and a translucent
- * [PaneDropOverlay] is shown in a [Popup] above SwingPanel (JediTerm / KCEF).
+ * [PaneDropOverlay] is shown in a [Popup] above SwingPanel (JediTerm / JCEF).
  * Compose siblings cannot paint over heavyweight children — Popup can.
  */
 @Composable

@@ -17,7 +17,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.editor.DocumentStore
-import dev.supermux.desktop.editor.KcefState
+import dev.supermux.desktop.editor.JcefState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.LogEntry
@@ -53,7 +53,7 @@ private fun view(kind: String, state: Map<String, String>) = ViewDto(
  * Workspace terminals inject a pure-Compose stand-in: SwingPanel/JediTerm cannot
  * be hosted under runComposeUiTest (same pattern as SessionDetailTest's nativePanelContent).
  *
- * The `file` pane injects a KCEF state instead: an Error state makes [EditorSurface] draw its
+ * The `file` pane injects a JCEF state instead: an Error state makes [EditorSurface] draw its
  * native BasicTextField fallback, which is pure Compose AND shows the document's text — so a
  * test can read the buffer a pane is displaying without booting Chromium.
  */
@@ -77,8 +77,8 @@ class ViewHostTest {
         )
     }
 
-    /** KCEF is never Ready in a test, so no engine is ever built. Error picks the visible fallback. */
-    private val noKcef = MutableStateFlow<KcefState>(KcefState.Error("no chromium under test"))
+    /** JCEF is never Ready in a test, so no engine is ever built. Error picks the visible fallback. */
+    private val noJcef = MutableStateFlow<JcefState>(JcefState.Error("no chromium under test"))
 
     /**
      * Unconfined so a non-suspending fsRead resolves inside [DocumentStore.open] itself — the
@@ -150,7 +150,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -170,7 +170,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -187,7 +187,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -205,7 +205,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
                 documents = store("fun main() {}"),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -226,7 +226,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
                 documents = store(),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -243,7 +243,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -263,7 +263,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
                 documents = store(),
-                editorKcefState = noKcef,
+                editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
         }
@@ -285,7 +285,7 @@ class ViewHostTest {
                     app = app,
                     drafts = mutableStateMapOf(),
                     documents = documents,
-                    editorKcefState = noKcef,
+                    editorJcefState = noJcef,
                     editorEnsureInit = {},
                     modifier = Modifier.testTag("left"),
                 )
@@ -299,7 +299,7 @@ class ViewHostTest {
                     app = app,
                     drafts = mutableStateMapOf(),
                     documents = documents,
-                    editorKcefState = noKcef,
+                    editorJcefState = noJcef,
                     editorEnsureInit = {},
                     modifier = Modifier.testTag("right"),
                 )

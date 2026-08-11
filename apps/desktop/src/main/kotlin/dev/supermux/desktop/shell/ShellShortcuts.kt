@@ -9,7 +9,7 @@
 //      keydown handler. No letter/symbol overlaps.
 //   2. Even if they DID share a key, [Modifier.shellShortcuts] is attached to the outer Compose
 //      window and only fires via `onKeyEvent`'s BUBBLE phase — i.e. only for chords a focused
-//      Compose descendant left unhandled. The editor's KCEF surface is a HEAVYWEIGHT AWT child
+//      Compose descendant left unhandled. The editor's JCEF surface is a HEAVYWEIGHT AWT child
 //      (SwingPanel, see WebCodeEditor.kt/EditorSwingHost): once it has native AWT focus, key events
 //      go straight to the embedded Chromium widget and never reach Compose's onKeyEvent dispatch at
 //      all — so a chord typed while the CodeMirror surface is focused can't be "stolen" by

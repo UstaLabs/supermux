@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 
 /**
  * Compose UI tests for [DiffView] (M4g-2 Task 4). Unlike the rest of the editor, DiffView is pure
- * Compose (no KCEF) so it hosts cleanly under [runComposeUiTest] with no engine seam needed — every
+ * Compose (no JCEF) so it hosts cleanly under [runComposeUiTest] with no engine seam needed — every
  * interactive surface (file expand, comment composer, resolve, submit, wrap toggle) is driven and
  * asserted directly here.
  */

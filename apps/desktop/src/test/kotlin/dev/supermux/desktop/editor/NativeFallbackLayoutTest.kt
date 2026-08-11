@@ -31,7 +31,7 @@ class NativeFallbackLayoutTest {
         setContent {
             Box(Modifier.size(600.dp, 400.dp)) {
                 EditorSurface(
-                    kcefState = KcefState.Error("no browser here"),
+                    jcefState = JcefState.Error("no browser here"),
                     content = "line one\nline two\nline three",
                     filename = "a.kt",
                     lineWrap = false,
@@ -63,7 +63,7 @@ class NativeFallbackLayoutTest {
         setContent {
             Box(Modifier.size(600.dp, 400.dp)) {
                 EditorSurface(
-                    kcefState = KcefState.Error("no browser here"),
+                    jcefState = JcefState.Error("no browser here"),
                     content = "x",
                     filename = "a.kt",
                     lineWrap = false,

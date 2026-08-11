@@ -11,7 +11,7 @@
 //     touch feedback concept (EditorPanel.kt/FileTree.kt precedent).
 //   - testTags added throughout (`diff_view`, `diff_file_<n>`, `diff_add_comment`, `diff_comment_thread`,
 //     `diff_resolve`, `diff_submit`, `diff_wrap_toggle`, `diff_back`) so runComposeUiTest can drive
-//     every interactive surface without a pointer — DiffView is pure Compose (no KCEF), so unlike the
+//     every interactive surface without a pointer — DiffView is pure Compose (no JCEF), so unlike the
 //     rest of the editor it's FULLY host-able under the Compose UI test harness.
 //   - [parseDiffLines] and [diffStats] are kept BYTE-FOR-BYTE identical to Android (the load-bearing
 //     diff parser, "ported 1:1 from DiffView.swift/DiffView.vue") — not "improved".

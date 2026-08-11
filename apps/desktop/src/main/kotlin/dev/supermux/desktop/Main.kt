@@ -171,14 +171,14 @@ import java.io.File
 //                                  shows diff +/- lines with no pointer/xdotool available (M4g-2;
 //                                  desktop-only verification convenience, not an Android field).
 //                                  Off by default.                                      [EditorPanel]
-//   SMX_KCEF_FORCE_ERROR=1        — force KcefState.Error (native-fallback editor, M3)   [KcefRuntime]
+//   SMX_JCEF_FORCE_ERROR=1        — force JcefState.Error (native-fallback editor, M3)  [JcefRuntime]
 //   SM_EDITOR_SAVE_TEST           — drive the editor save path (M3)                      [EditorPanel]
 //   SM_NOTIFY_TEST="<session-name>"  — force-unselect a session so its NEXT agent reply is
 //                                  guaranteed "unviewed" (M5-3); watch stdout for the
 //                                  unconditional "[notify] session=... text=..." decision+dispatch
 //                                  log line NotificationController prints right before it would
 //                                  raise a tray toast. Off by default; harmless in production.  [main]
-//   SMX_KCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                   [KcefRuntime]
+//   SMX_JCEF_EXTRA_ARGS="…"       — extra CEF switches for headless CI                  [JcefRuntime]
 //   SM_INTRO=1 / SM_INTRO=0       — force-show / force-suppress the first-run intro cinematic.
 //                                  Default: plays once ever (intro-seen marker), and NEVER in
 //                                  SM_PAIR_TOKEN-seeded runs so headless verification shots are
@@ -215,7 +215,7 @@ fun main() {
     //
     // Compose 1.11.1 gates blending on the render API — Direct3D and Metal only,
     // never OpenGL — so it is a no-op on Linux by construction. It also does not
-    // rescue KCEF at all (a native NSView: the dialog comes out sheared off at
+    // rescue JCEF at all (a native NSView: the dialog comes out sheared off at
     // the page's top edge). Still marked experimental by JetBrains.
     System.setProperty("compose.interop.blending", "true")
 
@@ -253,7 +253,8 @@ fun main() {
     runCatching { DesktopHostStores.migrateFromLegacyIfNeeded(hostStore, store) }
         .onFailure { println("[Main] legacy→fleet migration failed (falling through): $it") }
 
-    application {
+    try {
+        application {
         // M5-3: TrayState + NotificationController are hoisted ABOVE Window because Tray(...) is
         // an ApplicationScope-receiver composable (confirmed via javap: Tray_desktopKt.Tray's
         // first parameter is ApplicationScope) — it can only be called directly inside
@@ -262,6 +263,15 @@ fun main() {
         // receiver-bound — purely so the tray icon's click handler can un-minimize the SAME
         // WindowState instance passed to Window below.
         val windowState = rememberWindowState(width = 1440.dp, height = 900.dp)
+        var shuttingDown by remember { mutableStateOf(false) }
+        LaunchedEffect(shuttingDown) {
+            if (shuttingDown) {
+                // First let the Window content recompose empty, detaching every SwingPanel while
+                // Compose's Skia layer is still live. Then close the native window.
+                delay(100)
+                exitApplication()
+            }
+        }
         val trayState = rememberTrayState()
         // Published once pairing completes (below, inside Window's content) so the tray icon's
         // click handler can select a session on the live ShellUiState. null before pairing
@@ -299,32 +309,21 @@ fun main() {
         }
 
         Window(
-            // Dispose the shared KCEF (embedded Chromium) runtime BEFORE the process exits, on this
-            // (main/AWT) thread while the window still exists — CEF wants an orderly shutdown here,
-            // not from a JVM shutdown hook. No-op if the editor never booted KCEF. Without it,
-            // closing the window orphans the Chromium helper/GPU/renderer subprocesses. try/finally:
-            // a CEF teardown failure must NEVER trap the user in a window that won't close. See
-            // KcefRuntime.dispose (incl. the mid-download skip).
-            onCloseRequest = {
-                try {
-                    dev.supermux.desktop.editor.KcefRuntime.dispose()
-                } finally {
-                    exitApplication()
-                }
-            },
+            onCloseRequest = { shuttingDown = true },
             // Empty on macOS: with the transparent/full-size-content title bar below, a non-empty
             // title still paints centred over our own UI on runtimes that ignore
-            // `apple.awt.windowTitleVisible` (Corretto in the packaged app; the JBR used by
-            // :desktop:hotRun honours it). Other platforms keep the normal caption text.
+            // `apple.awt.windowTitleVisible`. Other platforms keep the normal caption text.
             title = if (isMacOs()) "" else "supermux",
             state = windowState,
         ) {
+            if (shuttingDown) return@Window
+
             // macOS chrome: no title bar strip — the window content runs edge-to-edge to the top
             // and only the traffic lights (close / minimize / zoom) float over it. Preferred route
             // is the JBR custom title bar (rememberMacWindowChrome): same edge-to-edge look, but
             // the title-bar band stops hijacking drags over Compose content (tabs!) — the window
             // only drags from areas opted in via macTitleBarDragRegion (see MacWindowChrome.kt).
-            // On a non-JBR runtime (packaged Corretto) it returns null and we fall back to the
+            // On a runtime without that API it returns null and we fall back to the
             // plain client properties — AWT's route to NSWindow's FullSizeContentView +
             // titlebarAppearsTransparent + hidden title — where the band drag (and the tab-drag
             // collision) remains, since stock AWT has no hit-test hook. AppShell leaves a left
@@ -424,7 +423,7 @@ fun main() {
             // Not persisted yet (M4 Settings/Appearance can own that later).
             var appearance by remember { mutableStateOf(AppearanceMode.DARK) }
             // One presence for the whole window: a dialog opened anywhere must hide
-            // EVERY heavyweight AWT child (JediTerm, KCEF), not just the one in the
+            // EVERY heavyweight AWT child (JediTerm, JCEF), not just the one in the
             // pane that owns it — Compose cannot paint over any of them, and a split
             // can show a terminal next to the pane the dialog came from.
             val modalPresence = remember { ModalPresence() }
@@ -663,7 +662,7 @@ fun main() {
                     // above. Opening the file is enough — EditorPanel's OWN connect-sequencing
                     // LaunchedEffect (Task 5) then drives the real lsp_status_query → lsp_open →
                     // cmLspConnect round trip against the broker's live language server once the file
-                    // becomes the active tab and the KCEF engine reports ready; no further driving is
+                    // becomes the active tab and the JCEF engine reports ready; no further driving is
                     // needed from here. Point <file-path> at a file extension the broker's LSP config
                     // covers (GET /settings/editor lists supported extensions per server, e.g. the
                     // typescript server covers .ts/.tsx/.js/...). Off by default; harmless in production.
@@ -1372,6 +1371,11 @@ fun main() {
             }
         }
         }
+        }
+    } finally {
+        // No-op if the editor never started. Runs after every Compose window/interoperability child
+        // has been disposed, but before JVM shutdown, so Chromium helper processes exit cleanly.
+        dev.supermux.desktop.editor.JcefRuntime.dispose()
     }
 }
 

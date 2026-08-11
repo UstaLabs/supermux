@@ -1,24 +1,22 @@
-// M3 editor — the KCEF↔CodeMirror bridge. One [DesktopEditorEngine] drives ONE embedded-Chromium
+// M3 editor — the direct-JCEF↔CodeMirror bridge. One [DesktopEditorEngine] drives ONE embedded-Chromium
 // browser hosting the SAME committed cm6 bundle iOS/Android ship. It mirrors the Android
 // EditorEngine surface (setDocument / revealLine / setFontSize / setLineWrap / get|setScrollTop /
 // getContent / ready + onChange/onSave/onReady/onFontSize) so the pane logic ports 1:1 in later
 // tasks.
 //
 // ── Architecture: CLIENT-PER-ENGINE ─────────────────────────────────────────
-// Each engine owns its own [KCEFClient] (from [KcefRuntime.newClient]) + [KCEFBrowser]. KCEFClient
+// Each engine owns its own [CefClient] (from [JcefRuntime.newClient]) + [CefBrowser]. CefClient
 // exposes only a SINGLE load handler and a SINGLE display handler (addLoadHandler REPLACES, it does
 // not append), so a shared client couldn't host two editors without their handlers stomping each
 // other. One client per browser also gives a clean teardown: dispose the client and everything it
-// owns dies with it. The CefApp underneath is still the ONE process-global singleton (KcefRuntime);
+// owns dies with it. The CefApp underneath is still the ONE process-global singleton (JcefRuntime);
 // only the lightweight client/browser are per-engine.
 //
 // ── JS→Kotlin: renamed message-router query function ─────────────────────────
-// KCEF's own `evaluateJavaScript` reads (getContent/getScrollTop below) ride CEF's DEFAULT
-// message-router query function, `cefQuery`. To avoid colliding with that, this engine registers its
-// OWN CefMessageRouter under a DISTINCT name, [QUERY_FN] = "smxEditorQuery". The injected shim
-// (EditorBridgeShims) routes the bundle's window.AndroidEditor.* / window.webkit…lsp.postMessage
-// calls through window.smxEditorQuery, and [onQuery] parses `{fn,arg}` → [BridgeEvent] → engine
-// callback. Reads and events therefore never contend for the same query channel.
+// The injected shim routes the bundle's window.AndroidEditor.* / window.webkit…lsp.postMessage calls
+// through the engine's CefMessageRouter. Direct JCEF has no callback-returning evaluateJavaScript
+// convenience API, so async reads use that same router with a generated request id; [evalResultJs]
+// posts the result and [BridgeEvent.EvalResult] completes the matching Kotlin callback.
 //
 // ── THREADING (per the M2 MuxTtyConnector/PredictionPipeline convention) ──────
 // ⚠️ CEF callbacks — onLoadEnd, onQuery (the bridge), the evaluateJavaScript result callback, and
@@ -32,15 +30,14 @@
 // the renderer).
 package dev.supermux.desktop.editor
 
-import dev.datlag.kcef.KCEFBrowser
-import dev.datlag.kcef.KCEFClient
-import dev.datlag.kcef.KCEFFrame
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.cef.CefClient
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.browser.CefMessageRouter
+import org.cef.browser.CefRendering
 import org.cef.callback.CefQueryCallback
 import org.cef.handler.CefDisplayHandlerAdapter
 import org.cef.handler.CefLoadHandler
@@ -49,11 +46,12 @@ import org.cef.handler.CefMessageRouterHandlerAdapter
 import org.cef.handler.CefRequestHandler
 import org.cef.handler.CefRequestHandlerAdapter
 import java.awt.Component
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
 
 /**
- * Drives one CodeMirror browser. Construct, set the callbacks, then [load] once KCEF is
- * [KcefState.Ready]; embed [uiComponent] in a SwingPanel. Push docs with [setDocument] (queued until
+ * Drives one CodeMirror browser. Construct, set the callbacks, then [load] once JCEF is
+ * [JcefState.Ready]; embed [uiComponent] in a SwingPanel. Push docs with [setDocument] (queued until
  * cm6 first-paints), and [dispose] on teardown.
  *
  * @param indexUrl `file://<dir>/index.html` — the extracted bundle (see [EditorWebAssets]).
@@ -81,23 +79,25 @@ class DesktopEditorEngine(
 
     private val planner = EditorPushPlanner(lineWrap, fontSize)
 
-    private var client: KCEFClient? = null
+    private var client: CefClient? = null
     private var router: CefMessageRouter? = null
-    private var browser: KCEFBrowser? = null
+    private var browser: CefBrowser? = null
+    private val nextEvaluationId = AtomicLong(1)
+    private val pendingEvaluations = mutableMapOf<Long, (String) -> Unit>()
 
     /** The AWT child to embed in a SwingPanel; null until [load]. */
     fun uiComponent(): Component? = browser?.uiComponent
 
     /**
      * Create the client + router + browser and start loading the bundle. No-op if already loaded or
-     * if KCEF isn't [KcefState.Ready] (gated in [KcefRuntime.newClient] — callers should observe the
+     * if JCEF isn't [JcefState.Ready] (gated in [JcefRuntime.newClient] — callers should observe the
      * state and only call load when ready). The router + load/display handlers are attached to the
      * client BEFORE createBrowser so the query function exists and onLoadEnd fires for this page.
      */
     fun load() {
         if (browser != null) return
-        val c = KcefRuntime.newClient() ?: run {
-            println("[DesktopEditorEngine] load() skipped — KCEF not ready")
+        val c = JcefRuntime.newClient() ?: run {
+            println("[DesktopEditorEngine] load() skipped — JCEF not ready")
             return
         }
         val r = CefMessageRouter.create(CefMessageRouter.CefMessageRouterConfig(QUERY_FN, QUERY_CANCEL_FN))
@@ -108,7 +108,7 @@ class DesktopEditorEngine(
         c.addRequestHandler(crashHandler)
         client = c
         router = r
-        browser = c.createBrowser(indexUrl)
+        browser = c.createBrowser(indexUrl, CefRendering.DEFAULT, /* isTransparent = */ false)
     }
 
     // ── Kotlin → JS (called from the EDT/Compose) ────────────────────────────
@@ -127,33 +127,17 @@ class DesktopEditorEngine(
     // ── JS → Kotlin reads (async; result marshalled to the EDT) ──────────────
 
     /**
-     * Read the live document. cmGetContent() returns a JS string; KCEF's evaluateJavaScript delivers
-     * it to the callback on a CEF thread → marshalled to the EDT here. Fires with "" if not loaded.
+     * Read the live document through the message-router return channel. Fires with "" if unloaded.
      */
     fun getContent(cb: (String) -> Unit) {
-        val b = browser ?: return cb("")
-        b.evaluateJavaScript(
-            "cmGetContent()",
-            object : KCEFFrame.EvaluateJavascriptCallback {
-                override fun invoke(value: String?) = onEdt { cb(value ?: "") }
-            },
-        )
+        evaluateJavaScript("cmGetContent()", cb)
     }
 
     /** Read cm6's scroll offset (px). Same async shape as [getContent]. Fires with 0 if not loaded. */
     fun getScrollTop(cb: (Int) -> Unit) {
-        val b = browser ?: return cb(0)
-        b.evaluateJavaScript(
-            "cmGetScrollTop()",
-            object : KCEFFrame.EvaluateJavascriptCallback {
-                override fun invoke(value: String?) {
-                    // Defensive trim('"'): a number normally arrives bare, but Android saw the JS
-                    // eval result arrive quoted (EditorEngine.kt:96) — strip either shape.
-                    val n = value?.trim()?.trim('"')?.toDoubleOrNull()?.toInt() ?: 0
-                    onEdt { cb(n) }
-                }
-            },
-        )
+        evaluateJavaScript("cmGetScrollTop()") { value ->
+            cb(value.trim().trim('"').toDoubleOrNull()?.toInt() ?: 0)
+        }
     }
 
     // ── LSP bridge (mirrors setDocument/revealLine — drives the cm6 LSP client over the shim) ────
@@ -179,16 +163,18 @@ class DesktopEditorEngine(
     }
 
     /**
-     * Dispose the browser and the whole client. Teardown order: browser FIRST (KCEFBrowser.dispose
+     * Dispose the browser and the whole client. Teardown order: browser FIRST (close(true)
      * force-closes it, stopping the renderer — so no more page JS can post queries into a router
      * we're about to tear down), THEN detach + dispose the router, THEN dispose the client that
      * owned both. Idempotent — every field is nulled so a second call is a no-op.
      */
     fun dispose() {
         _ready.value = false
-        browser?.dispose()
+        browser?.close(true)
         router?.let { r -> client?.removeMessageRouter(r); r.dispose() }
         client?.dispose()
+        pendingEvaluations.values.toList().forEach { it("") }
+        pendingEvaluations.clear()
         browser = null
         router = null
         client = null
@@ -244,8 +230,10 @@ class DesktopEditorEngine(
         override fun onRenderProcessTerminated(
             browser: CefBrowser?,
             status: CefRequestHandler.TerminationStatus?,
+            errorCode: Int,
+            errorText: String?,
         ) {
-            rendererLost("onRenderProcessTerminated $status")
+            rendererLost("onRenderProcessTerminated $status ($errorCode: $errorText)")
         }
     }
 
@@ -317,7 +305,16 @@ class DesktopEditorEngine(
                     onLspOut(parsed.first, parsed.second)
                 }
             }
+            is BridgeEvent.EvalResult -> pendingEvaluations.remove(event.id)?.invoke(event.value)
         }
+    }
+
+    /** Execute one internal expression and return its string value through [QUERY_FN]. */
+    private fun evaluateJavaScript(expression: String, cb: (String) -> Unit) {
+        val b = browser ?: return cb("")
+        val id = nextEvaluationId.getAndIncrement()
+        pendingEvaluations[id] = cb
+        b.executeJavaScript(evalResultJs(QUERY_FN, id, expression), b.url ?: "", 0)
     }
 
     /** Forward planner-emitted JS statements to the browser, in order. */
@@ -333,8 +330,7 @@ class DesktopEditorEngine(
 
     companion object {
         /**
-         * The message-router query function this engine injects + listens on. DISTINCT from CEF's
-         * default `cefQuery` (which KCEF's evaluateJavaScript reads use) so the two never collide.
+         * The message-router query function this engine injects + listens on.
          */
         const val QUERY_FN: String = "smxEditorQuery"
         const val QUERY_CANCEL_FN: String = "smxEditorQueryCancel"

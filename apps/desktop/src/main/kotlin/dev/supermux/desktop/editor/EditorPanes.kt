@@ -16,7 +16,7 @@
 //     shows the same unsaved text on both sides, and dragging a file tab between groups cannot
 //     lose an edit (the pane is destroyed and rebuilt; the document never moves).
 //  2. A pane is composed only while it is the ACTIVE tab of its group — PaneHost guarantees that,
-//     and it is load-bearing, not an optimisation. [FilePane] therefore builds its KCEF engine on
+//     and it is load-bearing, not an optimisation. [FilePane] therefore builds its JCEF engine on
 //     composition; one live engine per background tab would exhaust memory. Nothing here may
 //     pre-warm a surface for a tab the user is not looking at.
 package dev.supermux.desktop.editor
@@ -171,7 +171,7 @@ fun ExplorerPane(
  * destroyed and rebuilt — by a drag, a split, a tab switch — without the file noticing.
  *
  * The markdown preview is a SWAP, not an overlay, for the same reason it is in [EditorPanel]:
- * KCEF's heavyweight AWT child always paints above lightweight Compose siblings, so an overlay is
+ * JCEF's heavyweight AWT child always paints above lightweight Compose siblings, so an overlay is
  * invisible while the engine is live. While the preview shows, [EditorSurface] is not composed.
  */
 @Composable
@@ -191,8 +191,8 @@ fun FilePane(
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
     prefs: EditorPrefs = EditorPrefs(),
     onFontSize: (Int) -> Unit = {},
-    kcefStateFlow: StateFlow<KcefState> = KcefRuntime.state,
-    onEnsureInit: (CoroutineScope) -> Unit = { KcefRuntime.ensureInit(it) },
+    jcefStateFlow: StateFlow<JcefState> = JcefRuntime.state,
+    onEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
     /**
      * Markdown preview, hoisted. It used to be local state driven by a button in this pane's action
      * row; that row is gone (the tab carries the per-file controls now), so the caller holds it.
@@ -202,7 +202,7 @@ fun FilePane(
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
-    val kcefState by kcefStateFlow.collectAsState()
+    val jcefState by jcefStateFlow.collectAsState()
 
     // Ask the store for the document. Already open (another pane, an earlier visit) → an immediate
     // hit and no read; otherwise the store's in-flight guard means two panes racing on one cold
@@ -309,7 +309,7 @@ fun FilePane(
                 }
             } else {
                 EditorSurface(
-                    kcefState = kcefState,
+                    jcefState = jcefState,
                     // An empty filename means "no document" to the surface, which lays the browser
                     // out at 0×0. Hold it back until the read lands so the engine is born full-size.
                     content = doc?.content ?: "",

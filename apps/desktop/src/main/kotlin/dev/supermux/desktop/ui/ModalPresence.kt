@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
  * Compose cannot paint over a heavyweight AWT child. The two in this app are
- * JediTerm (DesktopTerminalPanel) and KCEF (WebCodeEditor), and everything
+ * JediTerm (DesktopTerminalPanel) and JCEF (WebCodeEditor), and everything
  * Compose draws in its own layer — all 22 AlertDialogs, both raw Dialogs, all 24
  * DropdownMenus — is simply invisible while one of them is on screen.
  *
@@ -86,7 +86,7 @@ fun ModalOpen() {
 }
 
 /**
- * Wrap a heavyweight AWT child (JediTerm, KCEF) so it steps aside while anything
+ * Wrap a heavyweight AWT child (JediTerm, JCEF) so it steps aside while anything
  * modal is open.
  *
  * The outer box KEEPS its full size; only the inner slot collapses to 0×0. That
@@ -108,7 +108,7 @@ fun HeavyweightModalShield(
     /**
      * False for a child that interop blending can rescue — a SWING child, which
      * Compose can then paint straight over, so it never has to hide at all. True
-     * for one blending cannot rescue: a native window (KCEF's NSView), which
+     * for one blending cannot rescue: a native window (JCEF's NSView), which
      * still has to step aside on every platform.
      *
      * See [interopBlendingSupported] for why this is not simply always true.
@@ -137,7 +137,7 @@ fun HeavyweightModalShield(
  * `useInteropBlending=true` read off the live SkiaLayer, not assumed):
  *
  *   Compose over JediTerm, a SWING child ........ paints correctly, terminal stays live
- *   Compose over KCEF, a native Chromium NSView . sheared off at the page's top edge
+ *   Compose over JCEF, a native Chromium NSView . sheared off at the page's top edge
  *
  * That is the whole reason [HeavyweightModalShield] still exists: "Compose cannot
  * paint over a heavyweight AWT child" is really two different problems, and

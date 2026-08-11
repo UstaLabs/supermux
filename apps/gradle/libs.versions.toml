@@ -29,10 +29,13 @@ composeHotReload = "1.2.0"
 navigation3 = "1.1.1"
 jediterm = "3.73"
 # JBR API facade (Maven Central, Apache-2.0). Compiles against any JDK; at run time
-# JBR.getWindowDecorations() returns the real service only under a JetBrains Runtime
-# (:desktop:hotRun) and null elsewhere (packaged Corretto) — see MacWindowChrome.kt.
+# JBR.getWindowDecorations() returns the real service under the pinned JetBrains Runtime used by
+# :desktop:run, :desktop:hotRun, and packaged apps; it remains a safe null facade in stock-JDK tests.
 jbrApi = "1.10.1"
-kcef = "2025.03.23"
+# Direct JetBrains JCEF API matched to the pinned JBR 21 / Chromium 137 runtime bundled by
+# :desktop's native-distribution tasks. Keep this coordinate and the JBR pin in
+# desktop/build.gradle.kts in lockstep: JCEF's Java/native ABI is a compatibility unit.
+jcef = "137.0.17-gf354b0e-chromium-137.0.7151.104-api-1.20-253-b13"
 markdown = "0.7.6"
 coil = "3.5.0"
 reorderable = "3.1.0"
@@ -78,7 +81,7 @@ coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", 
 jediterm-core = { module = "org.jetbrains.jediterm:jediterm-core", version.ref = "jediterm" }
 jediterm-ui = { module = "org.jetbrains.jediterm:jediterm-ui", version.ref = "jediterm" }
 jbr-api = { module = "org.jetbrains.runtime:jbr-api", version.ref = "jbrApi" }
-kcef = { module = "dev.datlag:kcef", version.ref = "kcef" }
+jcef = { module = "org.jetbrains.intellij.deps.jcef:jcef", version.ref = "jcef" }
 # GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its
 # own native MarkdownView, so Kotlin/Native dead-code-strips this from the Apple framework.
 markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }

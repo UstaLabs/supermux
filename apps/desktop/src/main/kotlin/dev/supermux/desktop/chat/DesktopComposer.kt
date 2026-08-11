@@ -295,7 +295,7 @@ internal const val PASTE_IMAGE_MAX_ENCODED_BYTES: Long = 8L * 1024L * 1024L // 8
 // ── paste-cache: app-owned directory, random names, age-based prune only ─────────
 //
 // Pasted raster images are written under `<desktop-config>/paste-cache/` (next to auth.json /
-// ui-state.json / kcef-bundle), NOT under shared /tmp. Each write uses a fresh UUID name; names
+// ui-state.json / jcef-cache), NOT under shared /tmp. Each write uses a fresh UUID name; names
 // are never reused. Individual files are never deleted by path during chip remove / send /
 // session dispose — that class of bug is removed by design. [prunePasteCache] reclaims entries
 // older than [PASTE_CACHE_TTL] on startup and opportunistically on write. The pruner never

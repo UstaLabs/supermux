@@ -36,8 +36,8 @@ import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.ExplorerPane
 import dev.supermux.desktop.editor.ExplorerState
 import dev.supermux.desktop.editor.FilePane
-import dev.supermux.desktop.editor.KcefRuntime
-import dev.supermux.desktop.editor.KcefState
+import dev.supermux.desktop.editor.JcefRuntime
+import dev.supermux.desktop.editor.JcefState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.desktop.theme.MonoFontFamily
@@ -60,7 +60,7 @@ import dev.supermux.session.inferHomeDir
  *
  * Only the ACTIVE view of each group reaches here — PaneHost composes nothing
  * else. That is load-bearing, not an optimization: the terminal and the editor
- * are heavyweight AWT SwingPanel children, and one live KCEF per background tab
+ * are heavyweight AWT SwingPanel children, and one live JCEF per background tab
  * would exhaust memory. Do not compose an inactive tab.
  *
  * An unknown kind draws a hint rather than throwing. A future view kind must
@@ -141,12 +141,12 @@ fun ViewHost(
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
     /**
-     * Test seams for the `file` pane's code surface, same shape [EditorPanel] uses: KCEF cannot
+     * Test seams for the `file` pane's code surface, same shape [EditorSurface] uses: JCEF cannot
      * boot under runComposeUiTest, so tests inject a state the engine is never built from (and an
      * init that does nothing). Production uses the live runtime.
      */
-    editorKcefState: StateFlow<KcefState> = KcefRuntime.state,
-    editorEnsureInit: (CoroutineScope) -> Unit = { KcefRuntime.ensureInit(it) },
+    editorJcefState: StateFlow<JcefState> = JcefRuntime.state,
+    editorEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
 ) {
     when (view.kind) {
         "chat" -> {
@@ -208,7 +208,7 @@ fun ViewHost(
                         // LSP is still keyed by session (see the plan header). A workspace with
                         // no chat view gets no code intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
-                        kcefStateFlow = editorKcefState,
+                        jcefStateFlow = editorJcefState,
                         onEnsureInit = editorEnsureInit,
                         modifier = modifier.testTag("editor-$workdir"),
                     )
@@ -436,7 +436,7 @@ private fun FilePaneForWorkspace(
     path: String,
     documents: DocumentStore,
     lspSessionId: String?,
-    kcefStateFlow: StateFlow<KcefState>,
+    jcefStateFlow: StateFlow<JcefState>,
     onEnsureInit: (CoroutineScope) -> Unit,
     modifier: Modifier,
 ) {
@@ -463,7 +463,7 @@ private fun FilePaneForWorkspace(
             prefs = next
             prefsStore.save(next)
         },
-        kcefStateFlow = kcefStateFlow,
+        jcefStateFlow = jcefStateFlow,
         onEnsureInit = onEnsureInit,
         modifier = modifier.fillMaxSize(),
     )

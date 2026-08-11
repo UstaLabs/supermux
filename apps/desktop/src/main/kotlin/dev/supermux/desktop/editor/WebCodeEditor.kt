@@ -1,24 +1,23 @@
 // M3 editor: the engine-backed editing SURFACE (the desktop analog of Android's WebCodeEditor.kt).
-// Routes editing to a KCEF-hosted [DesktopEditorEngine] (embedded Chromium running the committed cm6
+// Routes editing to a direct-JCEF [DesktopEditorEngine] (embedded Chromium running the committed cm6
 // bundle), falling back to a native BasicTextField editor when the runtime can't host a browser:
-//   • KcefState.Error / RestartRequired — KCEF init failed or wants a JVM restart (both TERMINAL —
-//     see KcefRuntime). No browser will ever come, so drop straight to the native editor.
-//   • the 8s ready-miss — KCEF is up and a browser was created but cm6 never fired onReady (a wedged
+//   • JcefState.Error — JCEF init failed (terminal for this process), so use the native editor.
+//   • the 8s ready-miss — JCEF is up and a browser was created but cm6 never fired onReady (a wedged
 //     renderer). Port of WebCodeEditor.kt:53-57.
 //
 // ── The ready-state machine (what renders when) ──────────────────────────────
-//   KcefState.Idle / Downloading   → dark cover / a "Downloading…" strip; NO engine is built yet, so
+//   JcefState.Idle / Initializing  → dark cover / an initialization strip; NO engine is built yet, so
 //                                    a browser is NEVER created optimistically (obligation: the panel
-//                                    only builds the engine once KCEF is Ready).
-//   KcefState.Ready, !engine.ready → dark #282C34 cover (the white-flash guard) while cm6 first-paints;
-//                                    the KCEF view is composed but laid out at 0×0 (KeepAlivePanel) so
+//                                    only builds the engine once JCEF is Ready).
+//   JcefState.Ready, !engine.ready → dark #282C34 cover (the white-flash guard) while cm6 first-paints;
+//                                    the JCEF view is composed but laid out at 0×0 (KeepAlivePanel) so
 //                                    a half-attached browser never flashes.
-//   KcefState.Ready, engine.ready  → the KCEF view is shown full-size (the real CodeMirror surface).
-//   Error / RestartRequired / 8s   → the native BasicTextField fallback (still fully editable + saves).
+//   JcefState.Ready, engine.ready  → the JCEF view is shown full-size (the real CodeMirror surface).
+//   Error / 8s                     → the native BasicTextField fallback (still fully editable + saves).
 //
-// The whole surface is a plain @Composable driven by an injected [kcefState] + [onEnsureInit] seam, so
+// The whole surface is a plain @Composable driven by an injected [jcefState] + [onEnsureInit] seam, so
 // the panel's UI tests exercise every state (cover / downloading / native-fallback) WITHOUT booting
-// Chromium — the engine is only ever built when [kcefState] is Ready, which the tests never pass.
+// Chromium — the engine is only ever built when [jcefState] is Ready, which the tests never pass.
 package dev.supermux.desktop.editor
 
 import androidx.compose.foundation.background
@@ -91,7 +90,7 @@ class EditorScrollReader {
 /**
  * Seam letting the panel drive the live engine's LSP bridge (connect/message/disconnect) without
  * owning the engine itself (which stays encapsulated in [EditorSurface]) — mirrors
- * [EditorScrollReader]. Before an engine is attached (KCEF not Ready yet) or after one is disposed,
+ * [EditorScrollReader]. Before an engine is attached (JCEF not Ready yet) or after one is disposed,
  * every call is a harmless no-op; [EditorSurface] rebinds the real engine calls into this each time
  * its engine identity changes (see its `SideEffect`).
  */
@@ -124,10 +123,10 @@ internal fun captureOutgoingScroll(editor: EditorState, reader: EditorScrollRead
 }
 
 /**
- * The editing surface for the active tab. Builds + drives a [DesktopEditorEngine] once KCEF is
- * [KcefState.Ready], and falls back to a native editor on a terminal KCEF error or an 8s ready-miss.
+ * The editing surface for the active tab. Builds + drives a [DesktopEditorEngine] once JCEF is
+ * [JcefState.Ready], and falls back to a native editor on a terminal JCEF error or an 8s ready-miss.
  *
- * @param onEnsureInit kicks the (idempotent) KCEF init on first mount. Injected so tests pass `{}`.
+ * @param onEnsureInit kicks the (idempotent) JCEF init on first mount. Injected so tests pass `{}`.
  * @param indexUrlProvider `file://…/index.html` for the extracted bundle; only called once Ready.
  * @param engineFactory builds the engine (seam for tests; never invoked unless Ready).
  * @param scrollReader when non-null, receives this surface's live scroll reader so the panel can
@@ -135,7 +134,7 @@ internal fun captureOutgoingScroll(editor: EditorState, reader: EditorScrollRead
  */
 @Composable
 fun EditorSurface(
-    kcefState: KcefState,
+    jcefState: JcefState,
     content: String,
     filename: String,
     lineWrap: Boolean,
@@ -147,7 +146,7 @@ fun EditorSurface(
     onRevealConsumed: () -> Unit,
     onFontSize: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    onEnsureInit: (CoroutineScope) -> Unit = { KcefRuntime.ensureInit(it) },
+    onEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
     indexUrlProvider: () -> String? = { defaultIndexUrl() },
     engineFactory: (String, Boolean, Int) -> DesktopEditorEngine = { url, lw, fs ->
         DesktopEditorEngine(url, lw, fs)
@@ -161,15 +160,15 @@ fun EditorSurface(
     lspHandle: EditorLspHandle? = null,
 ) {
     val scope = rememberCoroutineScope()
-    // Idempotent: only the first editor pane ever mounted actually starts KCEF (started CAS in the
+    // Idempotent: only the first editor pane ever mounted actually starts JCEF (started CAS in the
     // runtime), and it's a no-op once Ready/Error — so calling it unconditionally on mount is safe.
     LaunchedEffect(Unit) { onEnsureInit(scope) }
 
-    val kcefReady = kcefState is KcefState.Ready
-    // NEVER build a browser optimistically: the engine is null until KCEF is Ready. On a Ready→build
+    val jcefReady = jcefState is JcefState.Ready
+    // NEVER build a browser optimistically: the engine is null until JCEF is Ready. On a Ready→build
     // failure (bundle extraction / construction) it stays null → the cover/fallback shows, no browser.
-    val engine: DesktopEditorEngine? = remember(kcefReady) {
-        if (!kcefReady) null
+    val engine: DesktopEditorEngine? = remember(jcefReady) {
+        if (!jcefReady) null
         else runCatching { indexUrlProvider()?.let { engineFactory(it, lineWrap, fontSize) } }.getOrNull()
     }
 
@@ -215,7 +214,7 @@ fun EditorSurface(
         }
     }
 
-    // A browser needs a document to be worth showing; the KCEF view is laid out full-size only when
+    // A browser needs a document to be worth showing; the JCEF view is laid out full-size only when
     // there's an active tab (empty filename = no tab). ⚠️ A CEF browser at 0×0 never loads its page,
     // so onReady can't fire while hidden — the ready-gate + fallback timer are therefore keyed on
     // `hasDoc` too, never arming while the view is deliberately hidden.
@@ -231,22 +230,20 @@ fun EditorSurface(
         if (!engine.ready.value) missedReady = true
     }
 
-    val nativeFallback = kcefState is KcefState.Error ||
-        kcefState is KcefState.RestartRequired ||
-        missedReady
+    val nativeFallback = jcefState is JcefState.Error || missedReady
 
     when {
         nativeFallback -> NativeCodeEditor(
             content = content,
             fontSize = fontSize,
-            reason = fallbackReason(kcefState),
+            reason = fallbackReason(jcefState),
             onChange = onChange,
             onSave = onSave,
             modifier = modifier,
         )
-        kcefState is KcefState.Downloading -> DownloadingView(kcefState.pct, modifier)
+        jcefState is JcefState.Initializing -> InitializingView(modifier)
         else -> {
-            // Ready / initializing. The KCEF view is a HEAVYWEIGHT AWT child: Compose siblings can't
+            // Ready / initializing. The JCEF view is a HEAVYWEIGHT AWT child: Compose siblings can't
             // paint over it, so the "white-flash cover" is the AWT holder's OWN dark #282C34 backing
             // (set in EditorSwingHost) plus cm6's dark HTML — shown until the page first-paints.
             //
@@ -272,7 +269,7 @@ fun EditorSurface(
 }
 
 /**
- * Hosts the engine's KCEF AWT child. The browser is CREATED here — inside the SwingPanel factory,
+ * Hosts the engine's JCEF AWT child. The browser is CREATED here — inside the SwingPanel factory,
  * which the compose-desktop runtime runs on the EDT when the panel is realized at full size — so the
  * windowed CEF browser is born attached to a shown, non-zero window and actually loads its page (the
  * load-forever-if-detached trap this avoids). The [update] block parents the browser's UI component
@@ -283,7 +280,7 @@ private fun EditorSwingHost(engine: DesktopEditorEngine, modifier: Modifier = Mo
     val holder = remember { JPanel(BorderLayout()).apply { background = java.awt.Color(0x28, 0x2C, 0x34) } }
     // Step aside while anything modal is open — Compose cannot paint over this
     // heavyweight child, so a dialog or menu over the editor would be invisible.
-    // Unlike the terminal this cannot be rescued by interop blending: KCEF is a
+    // Unlike the terminal this cannot be rescued by interop blending: JCEF is a
     // NATIVE window, not Swing content, and a dialog over it comes out sheared off
     // at the page's top edge (measured on Metal). So this one hides on every
     // platform — hence no `evenWithBlending = false` here.
@@ -312,16 +309,16 @@ private fun EditorSwingHost(engine: DesktopEditorEngine, modifier: Modifier = Mo
 }
 
 @Composable
-private fun DownloadingView(pct: Float, modifier: Modifier = Modifier) {
+private fun InitializingView(modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Box(
-        modifier.fillMaxSize().background(EDITOR_BG).testTag("editor_downloading"),
+        modifier.fillMaxSize().background(EDITOR_BG).testTag("editor_initializing"),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = cs.primary)
             Text(
-                "Downloading editor… ${pct.toInt()}%",
+                "Starting editor…",
                 color = EDITOR_FG,
                 fontFamily = MonoFontFamily,
                 fontSize = 12.sp,
@@ -393,14 +390,13 @@ private fun NativeCodeEditor(
     }
 }
 
-private fun fallbackReason(kcefState: KcefState): String = when (kcefState) {
-    is KcefState.Error -> "Native editor (embedded browser failed: ${kcefState.msg})"
-    is KcefState.RestartRequired -> "Native editor (restart the app to enable the rich editor)"
+private fun fallbackReason(jcefState: JcefState): String = when (jcefState) {
+    is JcefState.Error -> "Native editor (embedded browser failed: ${jcefState.msg})"
     else -> "Native editor (rich editor unavailable)"
 }
 
 /** `file://…/index.html` for the extracted bundle, or null if extraction fails. Only called once
- *  KCEF is Ready, so touching [KcefRuntime.installDir] / the classpath here is on the live path. */
+ *  JCEF is Ready, so touching the classpath here is on the live path. */
 private fun defaultIndexUrl(): String? = runCatching {
-    EditorWebAssets.extractTo(KcefRuntime.installDir().resolve("editor-web")).toUri().toString()
+    EditorWebAssets.extractTo(JcefRuntime.editorWebDir()).toUri().toString()
 }.getOrNull()

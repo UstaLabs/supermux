@@ -6,11 +6,9 @@
 
   • allow-jit + allow-unsigned-executable-memory — the JVM JITs, and CEF/V8 does too. Without these
     the app dies the moment HotSpot writes an executable page.
-  • disable-library-validation — LOAD-BEARING for the editor. Library validation only allows dylibs
-    signed by the SAME team (or Apple). KCEF downloads a JetBrains-signed CEF framework at runtime
-    into ~/.config/supermux-desktop/kcef-bundle and dlopens it; under a Developer-ID signature
-    (team 57L7J9XA89) that load is refused without this. The editor pane would break in the signed
-    build even though it works unsigned — see KcefRuntime's macOS section.
+  • disable-library-validation — LOAD-BEARING for the editor. Library validation normally allows dylibs
+    signed by the SAME team (or Apple). The bundled JBR/JCEF framework originates with JetBrains and
+    is loaded dynamically by Chromium; this entitlement keeps that load valid in the notarized app.
   • allow-dyld-environment-variables — CEF's helper processes are launched with DYLD_* set.
 -->
 <plist version="1.0">

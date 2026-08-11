@@ -41,9 +41,9 @@ import kotlin.test.assertTrue
 
 /**
  * M4a Task 5 — wiring the launcher into the app shell. [AppShell] wasn't previously
- * UI-tested (its detail pane, [SessionDetail], drags in the KCEF-backed editor); this suite adds
+ * UI-tested (its detail pane, [SessionDetail], drags in the JCEF-backed editor); this suite adds
  * the minimal harness needed to exercise the launcher overlay without ever selecting a session
- * (so [SessionDetail]/KCEF never mounts): a real [DesktopAppState] (connectOnInit=false, HTTP via
+ * (so [SessionDetail]/JCEF never mounts): a real [DesktopAppState] (connectOnInit=false, HTTP via
  * a ktor MockEngine, outbound WS frames captured through `sendFrameOverride`) and a real
  * [ShellUiState] + [ShellStateStore]/[LauncherStore] pointed at a scratch temp file each,
  * so no test ever touches the developer's real ~/.config/supermux-desktop.

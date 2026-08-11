@@ -26,7 +26,7 @@
 //   - testTags added throughout (`lsp_settings_screen`, `lsp_server_row_<id>`, `lsp_toggle_<id>`,
 //     `lsp_install_<id>`, `lsp_install_log_<id>`, `lsp_install_result_<id>`, `lsp_remove_<id>`,
 //     `lsp_add_*`) so runComposeUiTest can drive every interactive surface without a pointer — this
-//     screen is pure Compose (no KCEF), so it hosts cleanly under the Compose UI test harness.
+//     screen is pure Compose (no JCEF), so it hosts cleanly under the Compose UI test harness.
 //   - stateLabel/extSummary/slugId are `internal` (not `private`), matching EditorPanel.kt's
 //     joinPath/pathToUri convention, so they're independently unit-tested.
 package dev.supermux.desktop.settings

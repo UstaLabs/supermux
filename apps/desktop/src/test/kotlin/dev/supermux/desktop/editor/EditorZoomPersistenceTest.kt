@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
 /**
- * M3-T5 "zoom persistence confirmation" — pins the two guarantees at the seam level (no KCEF):
+ * M3-T5 "zoom persistence confirmation" — pins the two guarantees at the seam level (no JCEF):
  *
  *  1. The writeback path (DesktopEditorPanel's `onFontSize` — EditorPrefsStore.save) round-trips
  *     into a BRAND-NEW panel/engine's init push: a fresh [EditorPushPlanner] built from the persisted
@@ -14,7 +14,7 @@ import kotlin.test.assertFalse
  *     (EDITOR_FONT_DEFAULT). This is the "survives reopen/relaunch" half of the plan item.
  *  2. A zoom change on an ALREADY-ready engine never re-sends `cmSetContent`/`cmSetLanguage` (i.e.
  *     never reloads the file) — only `cmSetFontSize` — which is also what keeps
- *     [dev.supermux.desktop.editor.EditorSurface]'s `remember(kcefReady)` (WebCodeEditor.kt) safe to
+ *     [dev.supermux.desktop.editor.EditorSurface]'s `remember(jcefReady)` (WebCodeEditor.kt) safe to
  *     leave un-rekeyed on a font-size prop change: the engine instance is never rebuilt for a zoom.
  */
 class EditorZoomPersistenceTest {
