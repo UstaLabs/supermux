@@ -54,6 +54,20 @@ final class GitHostingSettingsTests: XCTestCase {
         ])
     }
 
+    func testCustomHostKeepsAnExplicitHttpScheme() throws {
+        let url = try XCTUnwrap(ForgeTokenTemplate.url(
+            provider: .gitlab,
+            baseURL: "http://gitlab.acme.internal"
+        ))
+        XCTAssertEqual(url.scheme, "http")
+        XCTAssertEqual(url.host, "gitlab.acme.internal")
+    }
+
+    func testSaaSIgnoresAnHttpSchemeAndStaysHttps() throws {
+        let url = try XCTUnwrap(ForgeTokenTemplate.url(provider: .gitlab, baseURL: ""))
+        XCTAssertEqual(url.scheme, "https")
+    }
+
     func testMalformedCustomHostDoesNotFallBackToSaaS() {
         XCTAssertNil(ForgeTokenTemplate.url(provider: .github, baseURL: "not a host"))
         XCTAssertNil(ForgeTokenTemplate.url(provider: .gitlab, baseURL: "https://"))

@@ -332,7 +332,8 @@ enum ForgeTokenTemplate {
         }
 
         var components = URLComponents()
-        components.scheme = "https"
+        // A self-hosted instance entered as http:// has no https token page to link to.
+        components.scheme = customHost == nil ? "https" : scheme(from: rawBase)
         switch provider {
         case .github where customHost != nil && customHost != "github.com":
             components.host = customHost
@@ -368,6 +369,11 @@ enum ForgeTokenTemplate {
             return "Contents + Administration (read & write)"
         }
         return "repo, read:org"
+    }
+
+    /// The scheme the user typed; https unless they explicitly asked for http.
+    private static func scheme(from baseURL: String) -> String {
+        baseURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("http://") ? "http" : "https"
     }
 
     private static func host(from baseURL: String) -> String? {
