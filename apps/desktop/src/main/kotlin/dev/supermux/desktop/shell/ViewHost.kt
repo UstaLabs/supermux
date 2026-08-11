@@ -248,7 +248,8 @@ fun viewTitle(view: ViewDto): String {
         "editor" -> when (view.stateString("mode")) {
             "file" -> view.stateString("path")?.substringAfterLast('/')?.ifBlank { null } ?: "File"
             "diff" -> "Changes"
-            else -> "Explorer"
+            // "Files", not "Explorer": the tab says what it holds, the way Changes does.
+            else -> "Files"
         }
         "display" -> "Display"
         else -> view.kind

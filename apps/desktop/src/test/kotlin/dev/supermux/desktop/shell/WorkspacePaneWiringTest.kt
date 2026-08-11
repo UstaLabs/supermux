@@ -92,6 +92,22 @@ class WorkspacePaneWiringTest {
         onNodeWithTag("tab-add-view-diff").performClick()
         assertEquals(Triple("only", NewViewKind.DIFF, NewViewPlacement.SPLIT_RIGHT), got)
     }
+    // Ahmet: "editor (explorer - lets rename it Files) should be by default opened
+    // in a split similar to how changes open".
+    @Test
+    fun pickingFilesAsksForASplitRatherThanATab() = runComposeUiTest {
+        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
+        setContent {
+            PaneHost(
+                layout = LayoutNode.Group("only", listOf("v1"), "v1"),
+                onLayoutChange = {},
+                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
+            ) { Text("body") }
+        }
+        onNodeWithTag("tab-add-view").performClick()
+        onNodeWithTag("tab-add-view-editor").performClick()
+        assertEquals(Triple("only", NewViewKind.EDITOR, NewViewPlacement.SPLIT_RIGHT), got)
+    }
     @Test
     fun pickingAKindReportsItWithTheGroupItWasClickedIn() = runComposeUiTest {
         var got: Triple<String, NewViewKind, NewViewPlacement>? = null

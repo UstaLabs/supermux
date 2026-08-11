@@ -83,6 +83,7 @@ import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDto
 import dev.supermux.workspace.chatSessionIds
@@ -1078,6 +1079,16 @@ fun AppShell(
                                     // created straight away.
                                     addSlot = { groupId ->
                                         WorkspaceAddButton { kind, placement ->
+                                            // Files and Changes are one per workspace: a second one is
+                                            // the same pane twice. Picking an open one reveals it —
+                                            // which, when it is already the visible tab, is the no-op
+                                            // it looks like.
+                                            val open = openSingletonView(localLayout, viewsById, kind)
+                                            if (open != null) {
+                                                val (viewId, ownerGroup) = open
+                                                layoutSync.edit { setActiveViewInGroup(it, ownerGroup, viewId) }
+                                                return@WorkspaceAddButton
+                                            }
                                             // Every kind, chat included, becomes a TAB. A chat tab starts
                                             // as the new-session composer and binds to its session on
                                             // first send — the pane is never replaced.

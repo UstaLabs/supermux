@@ -319,8 +319,8 @@ class ViewHostTest {
     @Test
     fun aFileTabIsNamedAfterItsFile() {
         assertEquals("Main.kt", viewTitle(view("editor", mapOf("mode" to "file", "path" to "src/Main.kt"))))
-        assertEquals("Explorer", viewTitle(view("editor", mapOf("mode" to "tree"))))
-        assertEquals("Explorer", viewTitle(view("editor", emptyMap())))
+        assertEquals("Files", viewTitle(view("editor", mapOf("mode" to "tree"))))
+        assertEquals("Files", viewTitle(view("editor", emptyMap())))
         assertEquals("Changes", viewTitle(view("editor", mapOf("mode" to "diff"))))
     }
 
