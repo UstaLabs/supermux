@@ -10,7 +10,7 @@ import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.toDomainOrNull
-import kotlinx.coroutines.CancellationException
+import dev.supermux.workspace.validateLayout
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -49,6 +49,19 @@ internal const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
  * back. Every primitive used here is: setSplitSizes and setActiveViewInGroup
  * write a value, addViewToGroup and moveViewToGroup no-op once the view is in
  * place, and splitGroup requires the view to still be in the source group.
+ *
+ * Idempotent ON THE TREE THE EDIT WAS MADE AGAINST, though — not on any tree.
+ * `addViewToGroup(tree, g, v)` only looks at `g`: replay it onto a frame where
+ * the broker has put `v` somewhere ELSE and it adds a second copy, and one view
+ * id in two groups draws as the same file in two tabs. So the replay is CHECKED,
+ * not trusted: an edit that no longer produces a layout the broker would accept
+ * is dropped, and the broker's frame stands on its own. `normalizeLayout` will
+ * not catch this — it drops empty groups and collapses splits, and a duplicate
+ * id survives it untouched.
+ *
+ * The other half of the same rule is [rollback]: an edit the broker REFUSES has
+ * to be dropped too, or it is replayed over every frame for the rest of the
+ * session. See the call site for why that branch used to be unreachable.
  */
 internal class WorkspaceLayoutState(initial: LayoutNode) {
     /** What PaneHost renders and what the next PATCH will send. */
@@ -65,30 +78,72 @@ internal class WorkspaceLayoutState(initial: LayoutNode) {
      */
     private var pending: ((LayoutNode) -> LayoutNode)? = null
 
+    /** The last tree the broker sent us — what [rollback] falls back to. */
+    private var server: LayoutNode = initial
+
     /**
      * A local edit (tab click, drag, splitter, add-view), expressed as a
      * transform of the tree rather than a replacement for it.
+     *
+     * An edit that would corrupt the layout is refused outright rather than
+     * drawn and then rejected by the broker: the tree on screen is always one
+     * the broker could store.
      */
     fun edit(transform: (LayoutNode) -> LayoutNode) {
+        val next = normalizeLayout(transform(tree)) ?: tree
+        validateLayout(next)?.let { err ->
+            println("[WorkspaceLayoutState] refusing a local edit that would corrupt the layout: $err")
+            return
+        }
         val prior = pending
         pending = if (prior == null) transform else ({ node -> transform(prior(node)) })
-        tree = normalizeLayout(transform(tree)) ?: tree
+        tree = next
         dirty = true
     }
 
     /**
      * A `workspace_changed` frame. With nothing pending this is a plain adopt;
-     * otherwise the unconfirmed edit is replayed on top of it.
+     * otherwise the unconfirmed edit is replayed on top of it — as long as the
+     * result is still a layout the broker would take.
      */
-    internal fun onServerFrame(server: LayoutNode) {
+    internal fun onServerFrame(frame: LayoutNode) {
+        server = frame
         val replay = pending
-        tree = if (replay == null) server else (normalizeLayout(replay(server)) ?: server)
+        if (replay == null) {
+            tree = frame
+            return
+        }
+        val replayed = normalizeLayout(replay(frame))
+        val err = if (replayed == null) "the edit leaves nothing to draw" else validateLayout(replayed)
+        if (replayed == null || err != null) {
+            // The broker's tree has moved somewhere our edit no longer describes. Drawing
+            // the result anyway is how one view ends up in two groups; the broker would
+            // refuse it, and we would keep replaying it. Let the frame stand.
+            println("[WorkspaceLayoutState] dropping an unconfirmed edit that no longer applies: $err")
+            pending = null
+            dirty = false
+            tree = frame
+            return
+        }
+        tree = replayed
+    }
+
+    /**
+     * The broker REFUSED this tree. Its own is the truth, so show that and stop
+     * resending ours — an edit that cannot be written must never become a
+     * permanent offset applied to every frame that follows.
+     */
+    internal fun rollback() {
+        pending = null
+        dirty = false
+        tree = server
     }
 
     /** The broker now holds [tree]: nothing is outstanding. */
     internal fun markClean() {
         pending = null
         dirty = false
+        server = tree
     }
 }
 
@@ -121,31 +176,40 @@ internal fun rememberWorkspaceLayout(
         delay(LAYOUT_PATCH_DEBOUNCE_MS)
         try {
             push(state.tree)
-        } catch (cancelled: CancellationException) {
-            // A newer local edit changed the key and restarted this effect, which
-            // threw the cancellation into the request that was still in flight.
-            //
-            // That is NOT a successful write, and it must not clear the flag. It
-            // used to: `runCatching` catches Throwable, cancellation included, so
-            // the tree we were still sending counted as confirmed. The newer tree
-            // was then never PATCHed (the restarted job sees a clean flag and
-            // returns), the broker kept the older one, and the next
-            // workspace_changed — a view added anywhere, an agent renaming its
-            // session, another device — was adopted WHOLE and rolled the layout
-            // back across every group. That is what "click a tab on a split and it
-            // also switches on another split" looked like.
-            //
-            // Rethrowing leaves [dirty] set, so the restarted job (which owns the
-            // newer tree) is the one that confirms it.
-            throw cancelled
         } catch (failed: Throwable) {
-            // A rejected write is different: the broker refused this tree, so it is
-            // the broker's tree we should be showing. Fall through and let the next
-            // frame be adopted rather than pinning the client to a layout the
-            // broker will never accept.
+            // Two very different things land here, and the exception TYPE cannot tell
+            // them apart:
+            //
+            //  1. A newer local edit changed the key and restarted this effect, which
+            //     threw the cancellation into the request still in flight. That is NOT
+            //     a successful write and must not clear the flag — it used to, because
+            //     `runCatching` catches cancellation too, so the tree we were still
+            //     sending counted as confirmed. The broker kept the older one and the
+            //     next workspace_changed was adopted WHOLE, rolling the layout back
+            //     across every group: "click a tab on a split and it also switches on
+            //     another split".
+            //
+            //  2. The broker REFUSED this tree (a 400). Then its tree is the one to
+            //     show, and our edit has to go — an edit that cannot be written would
+            //     otherwise be replayed onto every frame for the rest of the session.
+            //
+            // Distinguishing them by catching CancellationException for (1) made (2)
+            // unreachable: `BrokerApi.decode` reports EVERY non-2xx as a
+            // CancellationException on purpose (a raw throw out of a SKIE-bridged
+            // suspend call SIGABRTs the iOS process), so a 400 was read as "superseded"
+            // and rethrown, keeping the edit. The refused edit then went onto every
+            // frame — re-adding a view the broker does not hold, and adding one that
+            // had since moved a SECOND time, which draws the same file in two tabs.
+            // Reported as "opening a file opens it twice".
+            //
+            // So ask the JOB, not the exception. Only a cancelled job was superseded;
+            // ensureActive rethrows for (1) and falls through for (2).
+            currentCoroutineContext().ensureActive()
+            println("[workspace] layout write refused, dropping the unconfirmed edit: $failed")
+            state.rollback()
+            return@LaunchedEffect
         }
-        // Belt and braces for a transport that wraps cancellation in its own
-        // exception type: never confirm a write from a job that is already dead.
+        // Never confirm a write from a job that is already dead.
         currentCoroutineContext().ensureActive()
         state.markClean()
     }

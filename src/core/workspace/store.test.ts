@@ -2,6 +2,7 @@ import { test, expect } from "bun:test"
 import { openDb, runMigrations } from "../storage/db"
 import { MIGRATIONS } from "../storage/migrations"
 import { WorkspaceStore } from "./store"
+import { collectViewIds } from "./layout-tree"
 
 function store() {
   const db = openDb(":memory:")
@@ -26,6 +27,23 @@ test("addView appends the view to the layout and makes it active", () => {
   expect(after.active_view_id).toBe(v.id)
   expect(after.layout).toEqual({ type: "group", id: expect.any(String), viewIds: [v.id], activeViewId: v.id })
   expect(ws.listViews(w.id)).toHaveLength(1)
+})
+
+test("addView into a group this layout does not have still lands the view somewhere", () => {
+  // The desktop client opens a file by putting the tab in a group it split off LOCALLY and
+  // PATCHing the layout after, so the POST can reach the broker first — naming a group the
+  // stored tree has never seen. addViewToGroup is a no-op for an unknown group, which used to
+  // leave the row in no layout at all: an orphan nothing draws and no tab can close. The live
+  // db had three of them.
+  const { ws } = store()
+  const w = ws.create({ name: "app", workdir: "/w" })
+  const chat = ws.addView(w.id, { kind: "chat", state: { sessionId: "s1" } })
+
+  const v = ws.addView(w.id, { kind: "editor", state: { mode: "file", path: "a.kt" }, groupId: "a-group-only-the-client-has" })
+
+  const after = ws.getById(w.id)!
+  expect(collectViewIds(after.layout)).toEqual([chat.id, v.id])
+  expect(after.active_view_id).toBe(v.id)
 })
 
 test("addView twice puts both views in the same group", () => {

@@ -132,10 +132,12 @@ internal class WorkspaceFileOpener(
     /**
      * Paths this opener has placed but has not seen come back through [viewsOf] yet.
      *
-     * [viewsOf] is only as fresh as the caller makes it — AppShell hands over the map its LAST
-     * composition computed, so a second click in the same frame plans against a world where the
-     * first file is not open. Without this, that opens the file twice, with two broker rows behind
-     * it. DocumentStore.open guards the identical race one layer down with `loadingPath`.
+     * Belt to [viewsOf]'s braces, and NO MORE than that — be clear about its reach before
+     * relying on it. AppShell builds a new opener every composition, so this map lives for one
+     * composition: it guards two `open` calls in the SAME frame and nothing wider. Anything that
+     * spans a recomposition is caught by [viewsOf] reading `provisionalViews` live instead, which
+     * is the guard that actually does the work. DocumentStore.open has the same shape one layer
+     * down in `loadingPath`.
      *
      * An entry is dropped as soon as the view is visible to [viewsOf] (the normal path) or the POST
      * fails (the rollback) — never held longer, or a genuine re-open would stop working.

@@ -161,10 +161,13 @@ export class WorkspaceStore {
 
     const ws = this.getById(workspaceId)
     if (ws) {
-      const groupId = input.groupId ?? firstGroupId(ws.layout)
-      const next = groupId ? addViewToGroup(ws.layout, groupId, id) : ws.layout
+      // A view row that is in no layout is invisible and uncloseable — nothing draws it and
+      // nothing can reach its tab. So the requested group is a PREFERENCE, not a promise:
+      // `addViewToGroup` is a no-op for a group id this layout does not have, and a client
+      // opening a file names the group it split off a moment ago and has not PATCHed yet.
+      // When the group is unknown, fall back to the first group rather than storing an orphan.
       this.db.run("UPDATE workspaces SET layout = ?, active_view_id = ? WHERE id = ?",
-        [JSON.stringify(next), id, workspaceId])
+        [JSON.stringify(placeView(ws.layout, id, input.groupId)), id, workspaceId])
     }
     return this.getView(id)!
   }
@@ -202,10 +205,8 @@ export class WorkspaceStore {
 
     const target = this.getById(toWorkspaceId)
     if (target) {
-      const groupId = toGroupId ?? firstGroupId(target.layout)
-      const next = groupId ? addViewToGroup(target.layout, groupId, viewId) : target.layout
       this.db.run("UPDATE workspaces SET layout = ?, active_view_id = ? WHERE id = ?",
-        [JSON.stringify(next), viewId, toWorkspaceId])
+        [JSON.stringify(placeView(target.layout, viewId, toGroupId)), viewId, toWorkspaceId])
     }
   }
 
@@ -226,6 +227,25 @@ export class WorkspaceStore {
     this.db.run("UPDATE workspaces SET layout = ?, active_view_id = ? WHERE id = ?",
       [JSON.stringify(next), active, workspaceId])
   }
+}
+
+/**
+ * Put [viewId] into [groupId], or into the first group when the tree has no such group.
+ *
+ * The caller's group id is a preference, not a promise: `addViewToGroup` silently does
+ * nothing for a group that is not in this tree, and the desktop client legitimately names one
+ * that is not — it puts a file tab into a group it split off locally and PATCHes the layout
+ * after, so the POST can arrive first. Leaving the view out would store a row in no layout at
+ * all: nothing draws it and no tab can close it. Landing in the wrong group is recoverable;
+ * being nowhere is not.
+ */
+function placeView(layout: LayoutNode, viewId: string, groupId?: string): LayoutNode {
+  if (groupId) {
+    const wanted = addViewToGroup(layout, groupId, viewId)
+    if (collectViewIds(wanted).includes(viewId)) return wanted
+  }
+  const first = firstGroupId(layout)
+  return first ? addViewToGroup(layout, first, viewId) : layout
 }
 
 /** The id of the first group found in document order, or undefined for an empty tree. */

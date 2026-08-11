@@ -10,16 +10,22 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.onAllNodesWithTag
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.addViewToGroup
+import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.toDto
+import dev.supermux.workspace.validateLayout
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import dev.supermux.ui.panes.PaneHost
 
 /**
@@ -138,6 +144,133 @@ class WorkspaceLayoutSyncTest {
         assertEquals("b", left.activeViewId, "the LEFT pane was never touched by the broker's change")
         assertEquals("e", right.activeViewId)
         onNodeWithText("body-b").assertIsDisplayed()
+    }
+
+    /**
+     * A layout the broker REFUSES must be dropped, not replayed over every frame forever.
+     *
+     * Ahmet: "opening a file opens it twice… it opens two tabs, sometimes in the same view
+     * group, sometimes in two different view groups."
+     *
+     * The unconfirmed edit is kept as a function and replayed onto every `workspace_changed`
+     * frame. That is only safe while the edit is *outstanding*. [rememberWorkspaceLayout] has a
+     * branch for "the broker refused this tree — fall through and let the next frame be
+     * adopted", and that branch was UNREACHABLE: `BrokerApi.decode` turns every non-2xx into a
+     * `CancellationException` (deliberately — a raw throw out of a SKIE-bridged suspend call
+     * SIGABRTs the iOS process), and the effect read `CancellationException` as "a newer edit
+     * restarted me" and rethrew, which KEEPS the pending edit.
+     *
+     * A refused write therefore pinned that edit for the rest of the session. Every frame from
+     * then on was rebased through it, which is how a view the broker does not hold keeps coming
+     * back, and how one that has since moved gets added a second time.
+     *
+     * The optimistic file open makes this easy to hit: the tab goes into the tree at once and
+     * the `POST /views` that mints its row is still in flight, so a PATCH that overtakes it is
+     * refused with `layout names a view that is not in this workspace` — which is exactly what
+     * the running app logs.
+     */
+    @Test
+    fun aRefusedLayoutIsDroppedInsteadOfBeingReplayedOverEveryFrame() = runComposeUiTest {
+        val owned = setOf("a", "b")
+        var server: LayoutNodeDto by mutableStateOf(LayoutNode.Group("g", listOf("a", "b"), "a").toDto())
+        var refusals = 0
+        var sync: WorkspaceLayoutState? = null
+
+        setContent {
+            val s = rememberWorkspaceLayout(
+                workspaceId = "ws1",
+                serverLayout = server,
+                push = { next ->
+                    if (collectViewIds(next).any { it !in owned }) {
+                        refusals++
+                        // How the real transport reports a 400, byte for byte: a
+                        // CancellationException, thrown on a job nobody cancelled.
+                        throw CancellationException("BrokerApi request unavailable")
+                    }
+                    withContext(NonCancellable) { server = next.toDto() }
+                },
+            )
+            sync = s
+            PaneHost(layout = s.tree, onEdit = { edit -> s.edit(edit) }) { Text("body-$it") }
+        }
+        waitForIdle()
+
+        // The optimistic open: a tab whose view row the broker does not have (yet, or ever).
+        runOnIdle { sync!!.edit { t -> addViewToGroup(t, "g", "ghost") } }
+        repeat(5) { mainClock.advanceTimeBy(200); waitForIdle() }
+        assertEquals(1, refusals, "the broker must have seen the write, and refused it")
+
+        // Any later frame at all — a view added elsewhere, an agent renaming its session.
+        server = LayoutNode.Group("g", listOf("a", "b"), "b").toDto()
+        repeat(10) { mainClock.advanceTimeBy(200); waitForIdle() }
+
+        assertEquals(
+            listOf("a", "b"),
+            collectViewIds(sync!!.tree),
+            "a tab the broker refused must not be re-added to every frame that follows",
+        )
+        assertFalse(sync!!.dirty, "a write the broker refused is not still outstanding")
+    }
+
+    /**
+     * The replay must never put one view in two groups. That is what "it opens two tabs"
+     * looks like on screen: [PaneHost] draws a tab per view id per group, so one id in two
+     * groups is the same file twice — and `normalizeLayout` does not dedupe, so nothing
+     * downstream catches it.
+     *
+     * The shape below is the real one. `WorkspaceFileOpener` puts the tab in the group it
+     * chose AT ONCE and POSTs after; the broker's own `addView` appends the row to whichever
+     * group it can find, and it has never heard of a group this client made a moment ago. So
+     * the frame comes back with the view somewhere else, and `addViewToGroup` — which only
+     * checks the group it is told about — happily adds it a second time.
+     */
+    @Test
+    fun anUnconfirmedEditThatWouldDuplicateAViewIsDroppedRatherThanDrawn() = runComposeUiTest {
+        var server: LayoutNodeDto by mutableStateOf(twoPanes())
+        var sync: WorkspaceLayoutState? = null
+
+        setContent {
+            val s = rememberWorkspaceLayout(
+                workspaceId = "ws1",
+                serverLayout = server,
+                push = { next ->
+                    // A real broker validates before it stores, and reports the refusal the
+                    // way BrokerApi surfaces every non-2xx.
+                    validateLayout(next)?.let { throw CancellationException("HTTP 400: $it") }
+                    withContext(NonCancellable) { server = next.toDto() }
+                    delay(brokerLatencyMs)
+                },
+            )
+            sync = s
+            PaneHost(layout = s.tree, onEdit = { edit -> s.edit(edit) }) { Text("body-$it") }
+        }
+        waitForIdle()
+
+        // The tab lands in the group the client picked, before the broker knows the view.
+        runOnIdle { sync!!.edit { t -> addViewToGroup(t, "right", "e") } }
+        waitForIdle()
+
+        // …and the broker puts the very same view in a DIFFERENT group.
+        server = LayoutNode.Split(
+            "row", listOf(0.5, 0.5),
+            listOf(
+                LayoutNode.Group("left", listOf("a", "b", "e"), "e"),
+                LayoutNode.Group("right", listOf("c", "d"), "c"),
+            ),
+        ).toDto()
+        repeat(10) { mainClock.advanceTimeBy(200); waitForIdle() }
+
+        assertNull(validateLayout(sync!!.tree), "the tree on screen must be one the broker could store")
+        assertEquals(
+            1,
+            collectViewIds(sync!!.tree).count { it == "e" },
+            "one open, one tab — got ${collectViewIds(sync!!.tree)}",
+        )
+        assertEquals(
+            1,
+            onAllNodesWithTag("view-tab-e").fetchSemanticsNodes().size,
+            "the tab strip must show the view once",
+        )
     }
 
     @Test
