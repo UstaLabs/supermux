@@ -153,8 +153,26 @@ internal class WorkspaceFileOpener(
             // Add THEN split, the same two tested primitives the "+" menu uses: splitGroup refuses
             // a group with fewer than two views, and an empty group would fail validateLayout, so
             // there is no way to make a fresh group directly. Every intermediate tree stays valid.
+            //
+            // Minted OUTSIDE the transform: a replay must land on the SAME group id, not invent a
+            // new one each time it is rebased onto a frame.
             val newGroupId = newId()
-            edit { tree -> splitGroup(addViewToGroup(tree, groupId, id), groupId, id, "row", newGroupId) }
+            edit { tree ->
+                // Address the view's CURRENT group, never the one it started in. This transform is
+                // replayed over every workspace_changed frame, and the split's whole job is to move
+                // the view OUT of `groupId` — so a naive `addViewToGroup(tree, groupId, id)` stops
+                // finding it there on the second pass and adds it AGAIN. That is what "opening a
+                // file opens it twice" was: the same file in two groups at once.
+                when (val owner = groupIdOf(tree, id)) {
+                    // Already split out (our own edit, echoed back). Nothing to do.
+                    newGroupId -> tree
+                    // Not placed yet: put it in the source group so splitGroup has two to divide.
+                    null -> splitGroup(addViewToGroup(tree, groupId, id), groupId, id, "row", newGroupId)
+                    // The broker placed it (it runs addViewToGroup for the groupId we POSTed).
+                    // Split it out of wherever it actually landed.
+                    else -> splitGroup(tree, owner, id, "row", newGroupId)
+                }
+            }
         } else {
             edit { tree -> addViewToGroup(tree, groupId, id) }
         }

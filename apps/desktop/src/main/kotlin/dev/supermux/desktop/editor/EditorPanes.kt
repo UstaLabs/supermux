@@ -193,6 +193,11 @@ fun FilePane(
     onFontSize: (Int) -> Unit = {},
     kcefStateFlow: StateFlow<KcefState> = KcefRuntime.state,
     onEnsureInit: (CoroutineScope) -> Unit = { KcefRuntime.ensureInit(it) },
+    /**
+     * Markdown preview, hoisted. It used to be local state driven by a button in this pane's action
+     * row; that row is gone (the tab carries the per-file controls now), so the caller holds it.
+     */
+    previewMode: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
@@ -221,7 +226,6 @@ fun FilePane(
         }
     }
 
-    var previewMode by remember(path) { mutableStateOf(false) }
     val previewGate = editorPreviewGate(path, previewMode, showDiff = false)
     val showPreview = previewGate.showPreview
 
@@ -262,50 +266,9 @@ fun FilePane(
                     .testTag("editor-no-lsp"),
             )
         }
-        // A THIN action row — not the composite's 44dp header. The tree toggle and the tab row it
-        // used to carry are gone: the group's strip owns the tabs, and the tree is its own pane.
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(32.dp)
-                .background(cs.surfaceContainerLow)
-                .padding(horizontal = Space.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.weight(1f))
-            if (previewGate.showPreviewToggle) {
-                IconButton(
-                    onClick = { previewMode = !previewMode },
-                    modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand).testTag("editor_preview_toggle"),
-                ) {
-                    Icon(
-                        imageVector = if (previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
-                        contentDescription = if (previewMode) "Edit" else "Preview",
-                        tint = if (previewMode) cs.primary else cs.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-            if (documents.saving) {
-                Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = cs.primary)
-                }
-            } else {
-                IconButton(
-                    onClick = { doc?.let { documents.save(it) } },
-                    enabled = dirty,
-                    modifier = Modifier.size(28.dp).pointerHoverIcon(PointerIcon.Hand).testTag("editor_save"),
-                ) {
-                    Icon(
-                        Icons.Filled.Check,
-                        contentDescription = "Save",
-                        tint = if (dirty) cs.primary else cs.onSurfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-        }
-        HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+        // No action row. Save and the markdown toggle are per-FILE controls, so they live on the
+        // file's TAB (see WorkspaceFileTab) — a strip of chrome above every document, holding two
+        // buttons, was a row of the old composite editor that nothing here needed to inherit.
 
         if (stale) {
             Row(

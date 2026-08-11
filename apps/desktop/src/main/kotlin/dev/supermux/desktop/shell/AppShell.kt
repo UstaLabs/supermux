@@ -96,6 +96,8 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.ui.panes.DefaultTabChip
+import dev.supermux.proto.stateString
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
@@ -971,6 +973,10 @@ fun AppShell(
                                 // we already used — see WorkspaceFileOpen.kt. Rebuilt every
                                 // composition on purpose: it reads the tree and the view map at
                                 // CALL time, and capturing either in a remember would freeze it.
+                                // Markdown preview per view id. It used to be local state inside
+                                // FilePane, driven by a button in that pane's action row; the row is
+                                // gone and the tab owns the toggle, so the state lives out here.
+                                val previewModes = remember(current.id) { mutableStateMapOf<String, Boolean>() }
                                 val fileOpener = WorkspaceFileOpener(
                                     workspaceId = current.id,
                                     treeOf = { layoutSync.tree },
@@ -1102,6 +1108,38 @@ fun AppShell(
                                     // wording lives here rather than in the pane layer.
                                     emptyGroupSlot = { WorkspaceEmptyHint() },
                                     labelFont = MonoFontFamily,
+                                    // A file tab carries its own save + preview controls, which is
+                                    // why the pane layer takes a slot instead of drawing tabs itself.
+                                    tabSlot = { itemId, tabState ->
+                                        val v = viewsById[itemId]
+                                        val filePath = v
+                                            ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
+                                            ?.stateString("path")
+                                        if (filePath == null) {
+                                            DefaultTabChip(
+                                                itemId = itemId,
+                                                title = v?.let { viewTitle(it) } ?: "view",
+                                                state = tabState,
+                                                labelFont = MonoFontFamily,
+                                                onClose = { _ -> closeCandidate = v },
+                                            )
+                                        } else {
+                                            WorkspaceFileTab(
+                                                itemId = itemId,
+                                                title = filePath.substringAfterLast('/'),
+                                                path = filePath,
+                                                state = tabState,
+                                                dirty = documents.isDirty(filePath),
+                                                saving = documents.saving,
+                                                previewMode = previewModes[itemId] == true,
+                                                onSave = { documents.get(filePath)?.let { documents.save(it) } },
+                                                onTogglePreview = {
+                                                    previewModes[itemId] = previewModes[itemId] != true
+                                                },
+                                                onClose = { _ -> closeCandidate = v },
+                                            )
+                                        }
+                                    },
                                 ) { viewId ->
                                     val v = viewsById[viewId]
                                     if (v != null && v.kind == "chat" && v.chatSessionId() == null) {
@@ -1121,6 +1159,7 @@ fun AppShell(
                                         )
                                     } else if (v != null) {
                                         ViewHost(
+                                            previewModeFor = { previewModes[it] == true },
                                             view = v,
                                             workspaceId = current.id,
                                             workdir = current.workdir,

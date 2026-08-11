@@ -97,6 +97,8 @@ fun ViewHost(
      * path tapped in a chat transcript. The workspace decides which group it lands in.
      */
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit = { _, _, _ -> },
+    /** Markdown preview per view id — the file's TAB owns the toggle now, so the state is hoisted. */
+    previewModeFor: (String) -> Boolean = { false },
     /** Close THIS view — the diff pane's close button is a tab close, not a mode toggle. */
     onCloseView: () -> Unit = {},
     /**
@@ -197,6 +199,7 @@ fun ViewHost(
                 "file" ->
                     if (path == null) UnknownViewHint(view.kind, modifier)
                     else FilePaneForWorkspace(
+                        previewMode = previewModeFor(view.id),
                         app = app,
                         workspaceId = workspaceId,
                         workdir = workdir,
@@ -426,6 +429,7 @@ private fun ExplorerPaneForWorkspace(
  */
 @Composable
 private fun FilePaneForWorkspace(
+    previewMode: Boolean,
     app: DesktopAppState,
     workspaceId: String,
     workdir: String,
@@ -442,6 +446,7 @@ private fun FilePaneForWorkspace(
     var prefs by remember { mutableStateOf(prefsStore.load()) }
 
     FilePane(
+        previewMode = previewMode,
         path = path,
         documents = documents,
         fsRead = { p -> app.workspaceFsRead(workspaceId, p) },
