@@ -92,6 +92,30 @@ test("pullCloned rejects a path outside the projects root", () => {
   expect(() => s.pullCloned("/etc")).toThrow()
 })
 
+test("addConnection honours an http:// self-hosted host: bare host, http apiBase", async () => {
+  const s = svc([])
+  s.setAdapterFactory(() => ({ ...fakeAdapter([]), apiBaseFor: (h) => `https://${h}/api/v3`, verify: async () => ({ login: "ahmet" }) }))
+  const conn = await s.addConnection({ kind: "github", host: "http://git.acme.com", token: "t", source: "pat" })
+  expect(conn.host).toBe("git.acme.com")
+  expect(conn.apiBase).toBe("http://git.acme.com/api/v3")
+  expect(conn.id).toBe("github:git.acme.com:ahmet")
+})
+
+test("addConnection still defaults to https for a scheme-less host", async () => {
+  const s = svc([])
+  s.setAdapterFactory(() => ({ ...fakeAdapter([]), apiBaseFor: (h) => `https://${h}/api/v3`, verify: async () => ({ login: "ahmet" }) }))
+  const conn = await s.addConnection({ kind: "github", host: "git.acme.com", token: "t", source: "pat" })
+  expect(conn.apiBase).toBe("https://git.acme.com/api/v3")
+})
+
+test("clone over an http connection uses an http:// clone URL", async () => {
+  const s = svc([])
+  s["store"].add({ ...cred("github:nope.invalid:a"), host: "nope.invalid", apiBase: "http://nope.invalid/api/v3" })
+  const err = await s.clone("github:nope.invalid:a", "o", "r").catch((e) => e)
+  expect(err.message).toContain("http://nope.invalid/o/r.git")
+  expect(err.message).not.toContain("https://nope.invalid")
+}, 30_000)
+
 test("clone maps a git failure to a ForgeError (and never a raw Error)", async () => {
   const s = svc([])
   // a connection whose host won't resolve → git clone fails fast (DNS), exercising the wrap

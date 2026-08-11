@@ -51,6 +51,9 @@ function openSheet(kind?: Kind) {
 /** Host from the optional self-hosted base URL (empty for SaaS). */
 const tokenHost = computed(() => baseUrl.value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
 
+/** Scheme the user typed — an http-only instance has no https page to link to. */
+const tokenScheme = computed(() => (/^http:\/\//i.test(baseUrl.value.trim()) ? "http" : "https"))
+
 /** Encode params with %20 for spaces, matching GitHub/GitLab template-URL docs. */
 function enc(p: Record<string, string>): string {
   return new URLSearchParams(p).toString().replace(/\+/g, "%20")
@@ -65,12 +68,12 @@ const tokenDocsUrl = computed(() => {
   if (addKind.value === "github") {
     // Self-hosted GHES: classic tokens prefill on all versions (fine-grained template URLs need ≥3.19).
     if (host && host !== "github.com")
-      return `https://${host}/settings/tokens/new?${enc({ description: TOKEN_DESC, scopes: "repo,read:org" })}`
+      return `${tokenScheme.value}://${host}/settings/tokens/new?${enc({ description: TOKEN_DESC, scopes: "repo,read:org" })}`
     // github.com: fine-grained template URL — one query param per permission (GA Aug 2025).
     return `https://github.com/settings/personal-access-tokens/new?${enc({ name: TOKEN_NAME, description: TOKEN_DESC, contents: "write", administration: "write" })}`
   }
   // GitLab (SaaS or self-hosted ≥14.1): name + scopes prefill.
-  const base = host && host !== "gitlab.com" ? `https://${host}` : "https://gitlab.com"
+  const base = host && host !== "gitlab.com" ? `${tokenScheme.value}://${host}` : "https://gitlab.com"
   return `${base}/-/user_settings/personal_access_tokens?${enc({ name: TOKEN_NAME, scopes: "api", description: TOKEN_DESC })}`
 })
 

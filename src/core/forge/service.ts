@@ -10,6 +10,7 @@ import { mkdirSync } from "fs"
 import { execFileSync } from "child_process"
 import { scanCloned, removeCloned as rmCloned, isInsideRoot, type ClonedRepo } from "./cloned"
 import { pullBranch, isAuthError, type PullResult } from "../git/remote"
+import { parseHostInput, schemeOf, withScheme } from "./host"
 
 export interface ForgeServiceConfig { projectsRoot: string; sshRoot: string; credentialHelperPath: string }
 export interface ConnError { connectionId: string; code: string; message: string }
@@ -29,9 +30,10 @@ export class ForgeService {
   connections(): ForgeConnection[] { return this.store.list() }
 
   async addConnection(opts: { kind: ForgeKind; host?: string; apiBase?: string; token: string; source: "pat" | "cli"; transport?: "https" | "ssh" }): Promise<ForgeConnection> {
-    const host = opts.host ?? (opts.kind === "github" ? "github.com" : "gitlab.com")
+    // A user-entered host may carry an explicit scheme ("http://git.acme.com"); honour it.
+    const { host, scheme } = parseHostInput(opts.host ?? (opts.kind === "github" ? "github.com" : "gitlab.com"))
     const adapter = this.adapterFactory(opts.kind)
-    const apiBase = opts.apiBase ?? adapter.apiBaseFor(host)
+    const apiBase = opts.apiBase ?? withScheme(adapter.apiBaseFor(host), scheme)
     const probe = { id: "", kind: opts.kind, host, apiBase, label: "", account: { login: "" },
       source: opts.source, transport: opts.transport ?? "https", status: "ok", token: opts.token } as const
     const account = await adapter.verify(probe as any)
@@ -91,9 +93,12 @@ export class ForgeService {
         const res = await gitClone({ url: adapter.sshRemoteUrl(repo), targetDir: target, sshCommand: ssh })
         if (!res.reused) bindSshCommand(target, ssh)
       } else {
-        const res = await gitClone({ url: `https://${c.host}/${owner}/${name}.git`, targetDir: target,
+        // Clone over the same scheme the connection's API uses — an http-only
+        // self-hosted instance has no https endpoint to fall back to.
+        const scheme = schemeOf(c.apiBase)
+        const res = await gitClone({ url: `${scheme}://${c.host}/${owner}/${name}.git`, targetDir: target,
           https: { user: adapter.gitUser(), token: c.token } })
-        if (!res.reused) bindHttpsCredentials(target, c.host, connectionId, this.cfg.credentialHelperPath)
+        if (!res.reused) bindHttpsCredentials(target, c.host, connectionId, this.cfg.credentialHelperPath, scheme)
       }
     } catch (e) {
       if (e instanceof ForgeError) throw e
