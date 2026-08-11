@@ -1206,6 +1206,9 @@ class DesktopAppState(
                 put("terminalId", JsonPrimitive("t" + Instant.now().toEpochMilli().toString().takeLast(6)))
             }
             dev.supermux.desktop.shell.NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
+            // Same `editor` kind, different mode — a diff pane. No `diffBase`: the pane defaults to
+            // the working tree and the base picker writes one when the user chooses another.
+            dev.supermux.desktop.shell.NewViewKind.DIFF -> buildJsonObject { put("mode", JsonPrimitive("diff")) }
             dev.supermux.desktop.shell.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
             // A pending chat: no sessionId yet. The tab renders the new-session
             // composer, and binds to a real session on first send (bindChatView).

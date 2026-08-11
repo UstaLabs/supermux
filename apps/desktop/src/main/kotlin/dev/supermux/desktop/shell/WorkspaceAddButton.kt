@@ -25,20 +25,36 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** The view kinds the "+" offers. Order is the order they appear in the popover. */
-enum class NewViewKind(val wire: String, val label: String) {
+/**
+ * The view kinds the "+" offers. Order is the order they appear in the popover.
+ *
+ * [wire] is the view kind the broker stores, and it is NOT unique: Diff is an `editor` view whose
+ * state says `mode = "diff"` (spec §7.2), exactly like Editor is an `editor` in `tree` mode. So the
+ * test tag hangs off [tag] rather than the wire, or the two would collide on `tab-add-view-editor`.
+ *
+ * [placement] is where picking this kind puts the view. Most kinds are a tab in the pane you clicked
+ * in; a diff opens BESIDE it, because a diff you cannot see next to the thing you are changing is
+ * the one view where a tab is the wrong answer.
+ */
+enum class NewViewKind(
+    val wire: String,
+    val label: String,
+    val tag: String = wire,
+    val placement: NewViewPlacement = NewViewPlacement.HERE,
+) {
     CHAT("chat", "Chat"),
     TERMINAL("terminal", "Terminal"),
     EDITOR("editor", "Editor"),
+    DIFF("editor", "Diff", tag = "diff", placement = NewViewPlacement.SPLIT_RIGHT),
     DISPLAY("display", "Display"),
 }
 
 /**
  * Where a new view lands relative to the pane its "+" was clicked in.
  *
- * The "+" menu always uses [HERE] (tab in this pane). [SPLIT_RIGHT] / [SPLIT_DOWN]
- * remain for callers that still create splits programmatically; users split by
- * dragging a tab to a pane edge instead of a second menu step.
+ * The "+" menu uses each kind's own [NewViewKind.placement] — [HERE] (a tab in this pane) for
+ * everything except Diff, which takes [SPLIT_RIGHT]. There is still no second menu step: users
+ * split anything else by dragging a tab to a pane edge.
  */
 enum class NewViewPlacement(val label: String) {
     HERE("In this pane"),
@@ -54,8 +70,8 @@ enum class NewViewPlacement(val label: String) {
  *
  * The layer owns position and size: it places this inside an animated 36 dp slot at the end of
  * the strip. This owns everything drawn inside that slot — the icon, the popover of view kinds,
- * and the `tab-add-view`, `tab-add-view-menu`, and `tab-add-view-<wire>` tags. Picking a kind
- * always reports [NewViewPlacement.HERE]; that is the only step the popover offers.
+ * and the `tab-add-view`, `tab-add-view-menu`, and `tab-add-view-<tag>` tags. Picking a kind
+ * reports that kind's own [NewViewKind.placement]; picking is the only step the popover offers.
  */
 @Composable
 fun WorkspaceAddButton(onPick: (NewViewKind, NewViewPlacement) -> Unit) {
@@ -87,9 +103,9 @@ fun WorkspaceAddButton(onPick: (NewViewKind, NewViewPlacement) -> Unit) {
                 text = { Text(k.label, fontSize = 12.sp) },
                 onClick = {
                     pickerOpen = false
-                    onPick(k, NewViewPlacement.HERE)
+                    onPick(k, k.placement)
                 },
-                modifier = Modifier.testTag("tab-add-view-${k.wire}"),
+                modifier = Modifier.testTag("tab-add-view-${k.tag}"),
             )
         }
     }

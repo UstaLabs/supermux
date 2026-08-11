@@ -82,6 +82,7 @@ import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDto
 import dev.supermux.workspace.chatSessionIds
@@ -1087,15 +1088,24 @@ fun AppShell(
                                             // divide existing tabs, and one view has nothing to divide.
                                             app.addWorkspaceView(current.id, kind, groupId) { newViewId ->
                                                 if (placement != NewViewPlacement.HERE) {
-                                                    // Create it here FIRST, then split it out. splitGroup
-                                                    // needs a real view to move and refuses a group with
-                                                    // fewer than two — and an empty group would fail
-                                                    // validateLayout. Add-then-split keeps every
-                                                    // intermediate tree valid using tested primitives.
+                                                    // The broker has already added it to `groupId`, so this
+                                                    // only has to move it out. splitGroup refuses a group
+                                                    // with fewer than two views and an empty group would
+                                                    // fail validateLayout, so splitting an existing view
+                                                    // out is the only way to make a second pane.
                                                     val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
+                                                    // Minted OUTSIDE the transform: a replay must land on
+                                                    // the SAME group id rather than invent one per pass.
                                                     val newGroupId = java.util.UUID.randomUUID().toString()
-                                                    layoutSync.edit {
-                                                        splitGroup(it, groupId, newViewId, dir, newGroupId)
+                                                    layoutSync.edit { tree ->
+                                                        // Address the view's CURRENT group — this transform
+                                                        // is replayed over every workspace_changed frame,
+                                                        // and the split's whole job is to move the view out
+                                                        // of `groupId` (same trap WorkspaceFileOpener hit).
+                                                        when (val owner = groupIdOf(tree, newViewId)) {
+                                                            newGroupId, null -> tree // already split out, or not placed yet
+                                                            else -> splitGroup(tree, owner, newViewId, dir, newGroupId)
+                                                        }
                                                     }
                                                 }
                                             }

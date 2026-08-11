@@ -72,7 +72,25 @@ class WorkspacePaneWiringTest {
         onNodeWithTag("tab-add-view-chat").assertIsDisplayed()
         onNodeWithTag("tab-add-view-terminal").assertIsDisplayed()
         onNodeWithTag("tab-add-view-editor").assertIsDisplayed()
+        // Diff is an `editor` view in diff mode, so its tag is its own — not the wire.
+        onNodeWithTag("tab-add-view-diff").assertIsDisplayed()
         onNodeWithTag("tab-add-view-display").assertIsDisplayed()
+    }
+    // Ahmet: "add the diff as in the + section in workspace panes, it will by
+    // default open on a split".
+    @Test
+    fun pickingDiffAsksForASplitRatherThanATab() = runComposeUiTest {
+        var got: Triple<String, NewViewKind, NewViewPlacement>? = null
+        setContent {
+            PaneHost(
+                layout = LayoutNode.Group("only", listOf("v1"), "v1"),
+                onLayoutChange = {},
+                addSlot = { g -> WorkspaceAddButton { k, p -> got = Triple(g, k, p) } },
+            ) { Text("body") }
+        }
+        onNodeWithTag("tab-add-view").performClick()
+        onNodeWithTag("tab-add-view-diff").performClick()
+        assertEquals(Triple("only", NewViewKind.DIFF, NewViewPlacement.SPLIT_RIGHT), got)
     }
     @Test
     fun pickingAKindReportsItWithTheGroupItWasClickedIn() = runComposeUiTest {
