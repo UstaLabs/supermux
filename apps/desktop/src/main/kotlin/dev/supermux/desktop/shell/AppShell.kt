@@ -980,7 +980,12 @@ fun AppShell(
                                 val fileOpener = WorkspaceFileOpener(
                                     workspaceId = current.id,
                                     treeOf = { layoutSync.tree },
-                                    viewsOf = { viewsById },
+                                    // Computed INSIDE the lambda, not captured. `viewsById` is a
+                                    // per-composition value, so handing it over froze the opener's
+                                    // idea of what is open until the next recomposition — and two
+                                    // clicks in one frame then both decided the file was not open
+                                    // yet and each made a view. Read it live.
+                                    viewsOf = { provisionalViews.toMap() + current.views.associateBy { it.id } },
                                     edit = { transform -> layoutSync.edit(transform) },
                                     provisional = provisionalViews,
                                     reveal = { p, line, endLine -> documents.openAtLine(p, line, endLine) },

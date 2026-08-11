@@ -129,12 +129,36 @@ internal class WorkspaceFileOpener(
     private val scope: CoroutineScope,
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
+    /**
+     * Paths this opener has placed but has not seen come back through [viewsOf] yet.
+     *
+     * [viewsOf] is only as fresh as the caller makes it — AppShell hands over the map its LAST
+     * composition computed, so a second click in the same frame plans against a world where the
+     * first file is not open. Without this, that opens the file twice, with two broker rows behind
+     * it. DocumentStore.open guards the identical race one layer down with `loadingPath`.
+     *
+     * An entry is dropped as soon as the view is visible to [viewsOf] (the normal path) or the POST
+     * fails (the rollback) — never held longer, or a genuine re-open would stop working.
+     */
+    private val placing = mutableMapOf<String, String>()
     fun open(path: String, line: Int? = null, endLine: Int? = null, sourceViewId: String? = null) {
         // The document first, always: the pane reads it out of the store, and a re-open of an
         // already-open file is only ever about the reveal.
         reveal(path, line, endLine)
 
         val views = viewsOf()
+
+        // Already placed by an earlier click that this `views` snapshot cannot see yet? Then this
+        // is an activate, not a new pane — exactly what planFileOpen would decide with fresh eyes.
+        placing[path]?.let { pending ->
+            if (views.containsKey(pending)) {
+                placing.remove(path) // the world caught up; fall through and plan normally
+            } else {
+                groupIdOf(treeOf(), pending)?.let { g -> edit { setActiveViewInGroup(it, g, pending) } }
+                return
+            }
+        }
+
         when (val plan = planFileOpen(treeOf(), views, path, sourceViewId)) {
             is FileOpenPlan.Activate -> edit { setActiveViewInGroup(it, plan.groupId, plan.viewId) }
             is FileOpenPlan.AddToGroup -> place(path, plan.groupId, split = false)
@@ -148,6 +172,7 @@ internal class WorkspaceFileOpener(
         val id = newId()
         val state = fileViewState(path)
         provisional[id] = ViewDto(id = id, workspaceId = workspaceId, kind = "editor", state = state)
+        placing[path] = id
 
         if (split) {
             // Add THEN split, the same two tested primitives the "+" menu uses: splitGroup refuses
@@ -182,6 +207,7 @@ internal class WorkspaceFileOpener(
             // A rejected POST must leave NO trace: a tab whose view will never exist draws as
             // "view" forever and cannot be closed through the broker.
             provisional.remove(id)
+            placing.remove(path, id)
             edit { tree -> removeViewFromLayout(tree, id) ?: tree }
         }
     }
