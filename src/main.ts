@@ -1788,6 +1788,27 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     moveWorkspaceView: (viewId, toWorkspaceId, toGroupId) =>
       registry.workspaces.moveView(viewId, toWorkspaceId, toGroupId),
     getWorkspaceWorkdir: (id) => registry.workspaces.getById(id)?.workdir,
+    // A workspace has no base commits of its own — its sessions do. Take the
+    // oldest live session in the workspace (the one that started the work) and
+    // use its captured baseline; fall back to the workspace's own creation time
+    // so "session-start" still resolves by timestamp instead of the empty tree.
+    getWorkspaceDiffBase: (id) => {
+      const ws = registry.workspaces.getById(id)
+      if (!ws) return undefined
+      const ids = [
+        ...(ws.primary_session_id ? [ws.primary_session_id] : []),
+        ...registry.workspaces.chatSessionIds(id),
+      ]
+      const sessions = [...new Set(ids)]
+        .map((sid) => registry.get(sid))
+        .filter((s): s is NonNullable<typeof s> => !!s)
+        .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""))
+      const oldest = sessions[0]
+      return {
+        baseCommits: oldest?.base_commits ?? {},
+        createdAt: oldest?.created_at ?? ws.created_at,
+      }
+    },
     // sessions.workspace_id lives on disk; SessionRecord does not expose it.
     getSessionWorkspaceId: (id) => {
       const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(id) as

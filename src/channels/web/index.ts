@@ -246,6 +246,12 @@ export interface WebChannelOpts {
   moveWorkspaceView?: (viewId: string, toWorkspaceId: string, toGroupId?: string) => void
   /** Workdir of a workspace, for the fs and terminal routes in Phase 4. */
   getWorkspaceWorkdir?: (id: string) => string | undefined
+  /**
+   * Diff baseline for a workspace: the base commits and creation time of the
+   * workspace's oldest session, so "session-start" means the same thing on the
+   * workspace-scoped diff route as on the session-scoped one.
+   */
+  getWorkspaceDiffBase?: (id: string) => { baseCommits: Record<string, string>; createdAt?: string } | undefined
   /** Workspace id a session belongs to (for fs_changed). */
   getSessionWorkspaceId?: (sessionId: string) => string | undefined
   transcribe?: (sessionId: string | undefined, input: { draft?: string; audioPath?: string }) => Promise<{ text: string; degraded?: boolean }>
@@ -2159,10 +2165,13 @@ export class WebChannel implements Channel {
       const id = decodeURIComponent(path.split("/")[2]!)
       const workdir = this.opts.getWorkspaceWorkdir?.(id)
       if (!workdir) return this.json({ error: "workspace not found" }, 404)
-      // Workspace id is not a session id — base-commit / review bookkeeping stays
-      // session-keyed. Diff still works from the workdir alone with empty base commits.
-      const baseCommits: Record<string, string> = {}
-      const createdAt = undefined
+      // Workspace id is not a session id, but "session-start" must still mean the
+      // start of the work — resolve the baseline from the workspace's oldest
+      // session. With no baseline at all every tracked file diffs against the
+      // empty tree, which is why the whole repo used to show up as added.
+      const base = this.opts.getWorkspaceDiffBase?.(id)
+      const baseCommits: Record<string, string> = base?.baseCommits ?? {}
+      const createdAt = base?.createdAt
       const baseSpec = url.searchParams.get("base") ?? undefined
       const repos = await computeWorkdirDiff(workdir, baseCommits, createdAt, baseSpec)
       const comments: unknown[] = []
