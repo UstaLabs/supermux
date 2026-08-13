@@ -124,8 +124,16 @@ internal class WorkspaceFileOpener(
     private val provisional: MutableMap<String, ViewDto>,
     /** Load the document, and reveal a line in it if one was asked for. */
     private val reveal: (path: String, line: Int?, endLine: Int?) -> Unit,
-    /** POST the view with the id we already put in the tree. False → the open is rolled back. */
-    private val post: suspend (id: String, state: JsonObject, groupId: String) -> Boolean,
+    /**
+     * POST the view with the id we already put in the tree, and answer with the id the broker
+     * ACTUALLY created. Null → the open is rolled back.
+     *
+     * It is not always the id we sent. A broker older than 3bfb400c ignores the client's id and
+     * mints its own, and one was live for two days: the tab we drew then names a view that will
+     * never exist, so its layout write is refused forever and the tab can never be closed. Asking
+     * for the real id is what lets [place] notice and get out of the way.
+     */
+    private val post: suspend (id: String, state: JsonObject, groupId: String) -> String?,
     private val scope: CoroutineScope,
     private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -205,9 +213,21 @@ internal class WorkspaceFileOpener(
         }
 
         scope.launch {
-            if (post(id, state, groupId)) return@launch
-            // A rejected POST must leave NO trace: a tab whose view will never exist draws as
-            // "view" forever and cannot be closed through the broker.
+            val created = post(id, state, groupId)
+            if (created == id) return@launch
+            // Either the POST was rejected (null), or the broker created the view under a DIFFERENT
+            // id than the one we drew. Both leave the same wreckage if ignored: a tab naming a view
+            // that will never exist, which draws as "view", cannot be closed through the broker, and
+            // pins the layout write open forever waiting for a confirmation that cannot come.
+            //
+            // So both take the same exit — withdraw the optimistic tab and let the broker's own
+            // placement stand. Withdrawing is safe to compose: this edit is applied AFTER the split
+            // that created the tab, so on every replay the pair cancels out rather than fighting.
+            // A mismatched id costs the split (the file lands wherever the broker put it) but never
+            // an unclosable duplicate — degrade, don't wedge.
+            if (created != null) {
+                println("[WorkspaceFileOpener] broker created '$path' as $created, not the $id we drew — withdrawing our tab")
+            }
             provisional.remove(id)
             placing.remove(path, id)
             edit { tree -> removeViewFromLayout(tree, id) ?: tree }

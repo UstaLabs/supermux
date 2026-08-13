@@ -917,19 +917,24 @@ fun AppShell(
                                 // Local tree for drag responsiveness; the debounced PATCH and the
                                 // workspace_changed adoption both live in rememberWorkspaceLayout,
                                 // where the round trip can be tested on its own.
+                                // Views this client minted and put in the tree before the POST
+                                // returned (spec §9.0). Without a record here the layout would name
+                                // an id nothing knows about: the tab would say "view" and the pane
+                                // would draw nothing until the broker frame landed.
+                                //
+                                // Declared BEFORE the layout sync because the sync needs it: a
+                                // layout naming one of these is a layout the broker will refuse,
+                                // so the PATCH waits for them (see rememberWorkspaceLayout).
+                                val provisionalViews = remember(current.id) { mutableStateMapOf<String, ViewDto>() }
                                 val layoutSync = rememberWorkspaceLayout(
                                     workspaceId = current.id,
                                     serverLayout = current.layout,
+                                    unconfirmedViews = provisionalViews.keys.toSet(),
                                 ) { tree ->
                                     app.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
                                 }
                                 val localLayout = layoutSync.tree
                                 val serverViews = remember(current) { current.views.associateBy { it.id } }
-                                // Views this client minted and put in the tree before the POST
-                                // returned (spec §9.0). Without a record here the layout would name
-                                // an id nothing knows about: the tab would say "view" and the pane
-                                // would draw nothing until the broker frame landed.
-                                val provisionalViews = remember(current.id) { mutableStateMapOf<String, ViewDto>() }
                                 // The broker ALWAYS wins on a collision — its row is the real one,
                                 // and ours was only ever a stand-in for it.
                                 val viewsById = if (provisionalViews.isEmpty()) {
@@ -991,13 +996,16 @@ fun AppShell(
                                     edit = { transform -> layoutSync.edit(transform) },
                                     provisional = provisionalViews,
                                     reveal = { p, line, endLine -> documents.openAtLine(p, line, endLine) },
+                                    // Answers with the id the broker actually created, which is not
+                                    // always the one we asked for — see WorkspaceFileOpener.post.
                                     post = { id, state, groupId ->
                                         runCatching {
                                             wsApp.api.addView(
                                                 current.id,
                                                 AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
                                             )
-                                        }.onFailure { println("[AppShell] open file view failed: $it") }.isSuccess
+                                        }.onFailure { println("[AppShell] open file view failed: $it") }
+                                            .getOrNull()?.id
                                     },
                                     scope = overlayScope,
                                 )

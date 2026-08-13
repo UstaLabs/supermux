@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.normalizeLayout
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.validateLayout
@@ -156,11 +157,17 @@ internal class WorkspaceLayoutState(initial: LayoutNode) {
  *
  *  - broker → UI: take EVERY frame, replaying any unconfirmed edit on top of it.
  *  - UI → broker: debounce, PATCH, and clear the flag ONLY on a confirmed write.
+ *
+ * [unconfirmedViews] are view ids this client has MINTED and drawn but whose
+ * `POST /views` has not come back yet (AppShell's `provisionalViews`). The PATCH
+ * waits for them, and that wait is not an optimisation — see the barrier at the
+ * call site below.
  */
 @Composable
 internal fun rememberWorkspaceLayout(
     workspaceId: String,
     serverLayout: LayoutNodeDto?,
+    unconfirmedViews: Set<String> = emptySet(),
     push: suspend (LayoutNode) -> Unit,
 ): WorkspaceLayoutState {
     val state = remember(workspaceId) { WorkspaceLayoutState(serverLayout.toDomain()) }
@@ -171,9 +178,31 @@ internal fun rememberWorkspaceLayout(
         state.onServerFrame(serverLayout.toDomain())
     }
 
-    LaunchedEffect(state.tree, state.dirty) {
+    LaunchedEffect(state.tree, state.dirty, unconfirmedViews) {
         if (!state.dirty) return@LaunchedEffect
         delay(LAYOUT_PATCH_DEBOUNCE_MS)
+        // A layout naming a view the broker has not created yet is a 400, not a write:
+        // `WorkspaceStore.setLayout` refuses any tree that names a view the workspace does not
+        // own, which is the guard that stops a stale client resurrecting a closed view.
+        //
+        // An optimistic open collides with it head on. Opening a file mints the view id, draws
+        // the tab AT ONCE, and fires two requests: `POST /views` immediately and this PATCH
+        // 300ms later. Over a remote broker the POST can take longer than the debounce, so the
+        // PATCH goes first, names a view id nothing has heard of, and is refused — and a refusal
+        // drops the whole unconfirmed edit (it has to; see [rollback]). The user watched the tab
+        // they just opened disappear and come back a moment later tabbed next to the file tree,
+        // its split gone, because all that survived was the broker's own placement.
+        //
+        // So the two requests are ORDERED here rather than raced: hold the layout until every id
+        // in it exists on the broker. Returning (not looping) is the wait — the effect's key
+        // includes [unconfirmedViews], so the view's arrival restarts it, `dirty` is still set,
+        // and the edit is still pending. A POST that FAILS clears the id too (the opener rolls
+        // its tab out of the tree), so nothing can wedge this shut.
+        val waitingOn = collectViewIds(state.tree).filter { it in unconfirmedViews }
+        if (waitingOn.isNotEmpty()) {
+            println("[workspace] holding the layout PATCH, waiting on ${waitingOn.size} unconfirmed view(s): $waitingOn")
+            return@LaunchedEffect
+        }
         try {
             push(state.tree)
         } catch (failed: Throwable) {
