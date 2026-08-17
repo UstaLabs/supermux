@@ -23,6 +23,8 @@ import java.nio.file.Path
 data class EditorPrefs(
     val lineWrap: Boolean = true,
     val fontSize: Int = EDITOR_FONT_DEFAULT,
+    /** Desktop-only Changes pane: true = nested folder tree (default), false = flat path list. */
+    val diffTreeView: Boolean = true,
 ) {
     /** A copy with [fontSize] coerced into the bundle's valid range (defensive against a hand-edited
      *  or drifted json — cm6 itself clamps too, but a clamped value keeps our persisted copy honest). */

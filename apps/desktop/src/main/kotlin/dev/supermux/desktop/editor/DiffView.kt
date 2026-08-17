@@ -42,11 +42,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
 import dev.supermux.desktop.ui.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -132,6 +136,9 @@ fun DiffView(
     // Keys are stable strings so the sets survive re-composition (Set<String> like iOS/Vue).
     var expandedFiles by remember { mutableStateOf(setOf<String>()) }
     var expandedRepos by remember { mutableStateOf(setOf<String>()) }
+    var expandedFolders by remember { mutableStateOf(setOf<String>()) }
+    val prefsStore = remember { EditorPrefsStore() }
+    var treeView by remember { mutableStateOf(prefsStore.load().diffTreeView) }
     // `repo||path||newLine` of the line whose composer is open (null = none).
     var composerFor by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf("") }
@@ -142,11 +149,14 @@ fun DiffView(
     // Seed expansion to every repo, re-seeding when the repo set itself changes (parity with the
     // iOS seedRepos + onChange(of: repos.map(\.repo)) — DiffView.swift:61-69). [autoExpandAll] ALSO
     // seeds every file (see the KDoc above) — off by default, so normal behavior is unaffected.
-    val repoKey = repos.joinToString(" ") { it.repo }
-    LaunchedEffect(repoKey, autoExpandAll) {
+    val repoKey = repos.joinToString(" ") { r -> "${r.repo}:${r.files.joinToString { it.path }}" }
+    LaunchedEffect(repoKey, autoExpandAll, treeView) {
         expandedRepos = repos.map { it.repo }.toSet()
         if (autoExpandAll) {
             expandedFiles = repos.flatMap { r -> r.files.map { fileKey(r.repo, it.path) } }.toSet()
+        }
+        if (treeView) {
+            expandedFolders = repos.flatMap { allFolderPaths(buildDiffTree(it.files)) }.toSet()
         }
     }
 
@@ -191,6 +201,20 @@ fun DiffView(
                 onSelect = { spec -> showBaseMenu = false; onSetBase(spec) },
             )
             Spacer(Modifier.width(Space.xs))
+            IconButton(
+                onClick = {
+                    treeView = !treeView
+                    prefsStore.save(prefsStore.load().copy(diffTreeView = treeView))
+                },
+                modifier = Modifier.testTag("diff_tree_toggle"),
+            ) {
+                Icon(
+                    if (treeView) Icons.Filled.AccountTree else Icons.Filled.ViewList,
+                    contentDescription = if (treeView) "Show as list" else "Show as tree",
+                    tint = if (treeView) cs.primary else cs.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
             TextButton(onClick = { wrap = !wrap }, modifier = Modifier.testTag("diff_wrap_toggle")) {
                 Text(
                     "Wrap",
@@ -229,44 +253,104 @@ fun DiffView(
                         }
                     }
                     if (!multiRepo || repo.repo in expandedRepos) {
-                        repo.files.forEach { file ->
-                            val key = fileKey(repo.repo, file.path)
-                            val idx = fileIndex++
-                            item(key = "file:$key") {
-                                FileSection(
-                                    repo = repo.repo,
-                                    file = file,
-                                    testTagIndex = idx,
-                                    expanded = key in expandedFiles,
-                                    multiRepo = multiRepo,
-                                    wrap = wrap,
-                                    comments = comments,
-                                    composerFor = composerFor,
-                                    draft = draft,
-                                    submitting = submitting,
-                                    onToggleFile = { expandedFiles = toggle(expandedFiles, key) },
-                                    onToggleComposer = { ck -> toggleComposer(ck) },
-                                    onDraftChange = { draft = it },
-                                    onCancelComposer = { composerFor = null; draft = "" },
-                                    onAdd = { repoId, path, line, hunkHeader ->
-                                        val body = draft.trim()
-                                        val newLine = line.newLine
-                                        if (body.isNotEmpty() && newLine != null) {
-                                            scope.launch {
-                                                submitting = true
-                                                onAddComment(repoId, path, newLine, line.content, hunkHeader, body)
-                                                draft = ""
-                                                composerFor = null
-                                                submitting = false
-                                                onReload()
-                                            }
+                        if (treeView) {
+                            val visible = flattenVisible(buildDiffTree(repo.files), expandedFolders)
+                            visible.forEach { row ->
+                                when (val node = row.node) {
+                                    is DiffTreeNode.Folder -> item(key = "folder:${repo.repo}:${node.path}") {
+                                        FolderRow(
+                                            folder = node,
+                                            depth = row.depth,
+                                            multiRepo = multiRepo,
+                                            expanded = node.path in expandedFolders,
+                                            onToggle = { expandedFolders = toggle(expandedFolders, node.path) },
+                                        )
+                                        HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+                                    }
+                                    is DiffTreeNode.File -> {
+                                        val key = fileKey(repo.repo, node.file.path)
+                                        val idx = fileIndex++
+                                        item(key = "file:$key") {
+                                            FileSection(
+                                                repo = repo.repo,
+                                                file = node.file,
+                                                testTagIndex = idx,
+                                                expanded = key in expandedFiles,
+                                                multiRepo = multiRepo,
+                                                wrap = wrap,
+                                                comments = comments,
+                                                composerFor = composerFor,
+                                                draft = draft,
+                                                submitting = submitting,
+                                                depth = row.depth,
+                                                label = node.name,
+                                                onToggleFile = { expandedFiles = toggle(expandedFiles, key) },
+                                                onToggleComposer = { ck -> toggleComposer(ck) },
+                                                onDraftChange = { draft = it },
+                                                onCancelComposer = { composerFor = null; draft = "" },
+                                                onAdd = { repoId, path, line, hunkHeader ->
+                                                    val body = draft.trim()
+                                                    val newLine = line.newLine
+                                                    if (body.isNotEmpty() && newLine != null) {
+                                                        scope.launch {
+                                                            submitting = true
+                                                            onAddComment(repoId, path, newLine, line.content, hunkHeader, body)
+                                                            draft = ""
+                                                            composerFor = null
+                                                            submitting = false
+                                                            onReload()
+                                                        }
+                                                    }
+                                                },
+                                                onResolve = { commentId ->
+                                                    scope.launch { onResolve(commentId); onReload() }
+                                                },
+                                            )
+                                            HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                                         }
-                                    },
-                                    onResolve = { commentId ->
-                                        scope.launch { onResolve(commentId); onReload() }
-                                    },
-                                )
-                                HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+                                    }
+                                }
+                            }
+                        } else {
+                            repo.files.forEach { file ->
+                                val key = fileKey(repo.repo, file.path)
+                                val idx = fileIndex++
+                                item(key = "file:$key") {
+                                    FileSection(
+                                        repo = repo.repo,
+                                        file = file,
+                                        testTagIndex = idx,
+                                        expanded = key in expandedFiles,
+                                        multiRepo = multiRepo,
+                                        wrap = wrap,
+                                        comments = comments,
+                                        composerFor = composerFor,
+                                        draft = draft,
+                                        submitting = submitting,
+                                        onToggleFile = { expandedFiles = toggle(expandedFiles, key) },
+                                        onToggleComposer = { ck -> toggleComposer(ck) },
+                                        onDraftChange = { draft = it },
+                                        onCancelComposer = { composerFor = null; draft = "" },
+                                        onAdd = { repoId, path, line, hunkHeader ->
+                                            val body = draft.trim()
+                                            val newLine = line.newLine
+                                            if (body.isNotEmpty() && newLine != null) {
+                                                scope.launch {
+                                                    submitting = true
+                                                    onAddComment(repoId, path, newLine, line.content, hunkHeader, body)
+                                                    draft = ""
+                                                    composerFor = null
+                                                    submitting = false
+                                                    onReload()
+                                                }
+                                            }
+                                        },
+                                        onResolve = { commentId ->
+                                            scope.launch { onResolve(commentId); onReload() }
+                                        },
+                                    )
+                                    HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
+                                }
                             }
                         }
                     }
@@ -514,6 +598,71 @@ private fun RepoHeader(repo: RepoDiff, expanded: Boolean, onToggle: () -> Unit) 
     }
 }
 
+// ── Folder row (tree mode) ─────────────────────────────────────────────────────
+
+@Composable
+private fun FolderRow(
+    folder: DiffTreeNode.Folder,
+    depth: Int,
+    multiRepo: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val stats = remember(folder) { folderDiffStats(folder) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = (if (multiRepo) Space.md else 0.dp) + Space.lg * depth)
+            .clickable(onClick = onToggle)
+            .heightIn(min = 48.dp)
+            .padding(horizontal = Space.md)
+            .testTag("diff_folder_${folder.path.replace('/', '_')}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (expanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        Icon(
+            if (expanded) Icons.Filled.FolderOpen else Icons.Filled.Folder,
+            contentDescription = null,
+            tint = Amber,
+            modifier = Modifier.size(16.dp).padding(start = Space.xs),
+        )
+        Text(
+            folder.name,
+            fontFamily = MonoFontFamily,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = cs.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(horizontal = Space.sm),
+        )
+        if (stats.first > 0) {
+            Text(
+                "+${stats.first}",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = Emerald,
+                modifier = Modifier.padding(start = Space.xs),
+            )
+        }
+        if (stats.second > 0) {
+            Text(
+                "-${stats.second}",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = DiffRed,
+                modifier = Modifier.padding(start = Space.xs),
+            )
+        }
+    }
+}
+
 // ── File section (header row + expanded diff) ──────────────────────────────────
 
 @Composable
@@ -534,13 +683,15 @@ private fun FileSection(
     onCancelComposer: () -> Unit,
     onAdd: (repo: String, path: String, line: DiffLine, hunkHeader: String) -> Unit,
     onResolve: (commentId: String) -> Unit,
+    depth: Int = 0,
+    label: String = file.path,
 ) {
     val cs = MaterialTheme.colorScheme
     val stats = remember(file.diff) { diffStats(file.diff) }
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = if (multiRepo) Space.md else 0.dp)
+            .padding(start = (if (multiRepo) Space.md else 0.dp) + Space.lg * depth)
             .testTag("diff_file_$testTagIndex"),
     ) {
         // File header
@@ -559,7 +710,7 @@ private fun FileSection(
                 modifier = Modifier.size(16.dp),
             )
             Text(
-                file.path,
+                label,
                 fontFamily = MonoFontFamily,
                 fontSize = 13.sp,
                 color = cs.onSurface,
