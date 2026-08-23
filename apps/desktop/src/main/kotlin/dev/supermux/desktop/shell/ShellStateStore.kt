@@ -25,6 +25,8 @@ import java.nio.file.Path
 data class SidebarSnapshot(
     val sidebarCollapsed: Boolean = false,
     val sidebarWidthDp: Float = 320f,
+    /** Project-group keys (workdir / group key) the user has collapsed in the sidebar. */
+    val collapsedProjectPaths: List<String> = emptyList(),
 )
 
 /** The persisted UI state: the sidebar snapshot + the last-selected session id. */
@@ -33,6 +35,11 @@ data class PersistedUiState(
     // Field name kept as `layout` so an existing ui-state.json still hydrates.
     val layout: SidebarSnapshot? = null,
     val selectedId: String? = null,
+    /**
+     * AppearanceMode name (`DARK` / `LIGHT` / `SYSTEM`). Local-only — not a broker setting.
+     * Null on files written before this field existed; hydrate as DARK.
+     */
+    val appearance: String? = null,
 )
 
 class ShellStateStore(val path: Path = defaultPath()) {

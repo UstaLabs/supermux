@@ -347,11 +347,14 @@ fun main() {
             val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
             // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
             // against live sessions inside AppShell once the first snapshot lands).
+            val persistedUi = remember { uiStore.load() }
             val ui = remember {
                 ShellUiState().apply {
-                    val persisted = uiStore.load()
-                    persisted.layout?.let { restore(it) }
-                    selectedId = persisted.selectedId
+                    persistedUi.layout?.let { restore(it) }
+                    selectedId = persistedUi.selectedId
+                    appearance = persistedUi.appearance
+                        ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
+                        ?: AppearanceMode.DARK
                 }
             }
             // M5-3: publish this pairing's ShellUiState up to the tray icon's onAction
@@ -419,16 +422,14 @@ fun main() {
                 }
             }
 
-            // Appearance lives here so the sidebar theme toggle and SupermuxTheme share one source.
-            // Not persisted yet (M4 Settings/Appearance can own that later).
-            var appearance by remember { mutableStateOf(AppearanceMode.DARK) }
+            // Appearance lives on [ui] so the sidebar toggle, theme, and ui-state.json share one source.
             // One presence for the whole window: a dialog opened anywhere must hide
             // EVERY heavyweight AWT child (JediTerm, JCEF), not just the one in the
             // pane that owns it — Compose cannot paint over any of them, and a split
             // can show a terminal next to the pane the dialog came from.
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
-            SupermuxTheme(appearance = appearance) {
+            SupermuxTheme(appearance = ui.appearance) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
@@ -1305,9 +1306,9 @@ fun main() {
                             launcherStore,
                             notificationController,
                             fleet = fleet,
-                            appearance = appearance,
+                            appearance = ui.appearance,
                             onToggleTheme = {
-                                appearance = if (appearance == AppearanceMode.DARK) {
+                                ui.appearance = if (ui.appearance == AppearanceMode.DARK) {
                                     AppearanceMode.LIGHT
                                 } else {
                                     AppearanceMode.DARK

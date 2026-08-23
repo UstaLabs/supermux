@@ -179,6 +179,9 @@ fun WorkspaceListPanel(
     /** Current app appearance — footer theme button shows the opposite affordance. */
     appearance: AppearanceMode = AppearanceMode.DARK,
     onToggleTheme: () -> Unit = {},
+    /** Hydrated collapsed project-group keys. Defaults empty so tests keep working. */
+    initialCollapsedPaths: Set<String> = emptySet(),
+    onCollapsedPathsChange: (Set<String>) -> Unit = {},
     /**
      * Per-workspace affordance: add a view/tab to this workspace.
      * Hover-revealed on the row; caller may open the launcher until a dedicated flow exists.
@@ -249,7 +252,11 @@ fun WorkspaceListPanel(
     }
 
     var groupByProject by remember { mutableStateOf(true) }
-    var collapsedPaths by remember { mutableStateOf(setOf<String>()) }
+    var collapsedPaths by remember { mutableStateOf(initialCollapsedPaths) }
+    fun setCollapsedPaths(next: Set<String>) {
+        collapsedPaths = next
+        onCollapsedPathsChange(next)
+    }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
@@ -543,11 +550,9 @@ fun WorkspaceListPanel(
                             g.workspaces.size,
                             collapsed = isCollapsed,
                             onToggle = {
-                                collapsedPaths = if (isCollapsed) {
-                                    collapsedPaths - g.key
-                                } else {
-                                    collapsedPaths + g.key
-                                }
+                                setCollapsedPaths(
+                                    if (isCollapsed) collapsedPaths - g.key else collapsedPaths + g.key,
+                                )
                             },
                         )
                     }

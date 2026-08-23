@@ -36,17 +36,40 @@ class ShellStateStoreTest {
         val ui = ShellUiState().apply {
             sidebarCollapsed = true
             setSidebarWidth(440.dp)
+            collapsedProjectPaths = setOf("/home/a/proj", "/tmp/other")
         }
 
-        store.save(PersistedUiState(layout = ui.snapshot(), selectedId = "s1"))
+        store.save(
+            PersistedUiState(
+                layout = ui.snapshot(),
+                selectedId = "s1",
+                appearance = "LIGHT",
+            ),
+        )
 
         val loaded = store.load()
         assertEquals("s1", loaded.selectedId)
+        assertEquals("LIGHT", loaded.appearance)
         val snap = loaded.layout
         assertTrue(snap != null)
         val restored = ShellUiState().apply { restore(snap) }
         assertTrue(restored.sidebarCollapsed)
         assertEquals(440.dp, restored.sidebarWidth)
+        assertEquals(setOf("/home/a/proj", "/tmp/other"), restored.collapsedProjectPaths)
+    }
+
+    @Test fun oldFileWithoutAppearanceOrCollapsedPathsStillLoads() {
+        val dir = Files.createTempDirectory("smx-ui-state")
+        val path = dir.resolve("ui-state.json")
+        Files.writeString(
+            path,
+            """{"layout":{"sidebarCollapsed":false,"sidebarWidthDp":320.0},"selectedId":"s1"}""",
+        )
+        val loaded = ShellStateStore(path).load()
+        assertEquals("s1", loaded.selectedId)
+        assertEquals(null, loaded.appearance)
+        val restored = ShellUiState().apply { loaded.layout?.let { restore(it) } }
+        assertTrue(restored.collapsedProjectPaths.isEmpty())
     }
 
     @Test fun aFileWrittenByTheOldShellStillRestoresItsSidebar() {
