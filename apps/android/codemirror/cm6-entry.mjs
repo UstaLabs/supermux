@@ -24,8 +24,39 @@ import { html } from "@codemirror/lang-html"
 import { css } from "@codemirror/lang-css"
 import { xml } from "@codemirror/lang-xml"
 import { yaml } from "@codemirror/lang-yaml"
+import { vue } from "@codemirror/lang-vue"
+import { wast } from "@codemirror/lang-wast"
 import { shell } from "@codemirror/legacy-modes/mode/shell"
-import { kotlin } from "@codemirror/legacy-modes/mode/clike"
+import { kotlin, dart, csharp, scala, objectiveC, objectiveCpp, shader } from "@codemirror/legacy-modes/mode/clike"
+import { ruby } from "@codemirror/legacy-modes/mode/ruby"
+import { swift } from "@codemirror/legacy-modes/mode/swift"
+import { groovy } from "@codemirror/legacy-modes/mode/groovy"
+import { lua } from "@codemirror/legacy-modes/mode/lua"
+import { perl } from "@codemirror/legacy-modes/mode/perl"
+import { r } from "@codemirror/legacy-modes/mode/r"
+import { julia } from "@codemirror/legacy-modes/mode/julia"
+import { haskell } from "@codemirror/legacy-modes/mode/haskell"
+import { erlang } from "@codemirror/legacy-modes/mode/erlang"
+import { fSharp, oCaml } from "@codemirror/legacy-modes/mode/mllike"
+import { clojure } from "@codemirror/legacy-modes/mode/clojure"
+import { elm } from "@codemirror/legacy-modes/mode/elm"
+import { crystal } from "@codemirror/legacy-modes/mode/crystal"
+import { coffeeScript } from "@codemirror/legacy-modes/mode/coffeescript"
+import { toml } from "@codemirror/legacy-modes/mode/toml"
+import { properties } from "@codemirror/legacy-modes/mode/properties"
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell"
+import { protobuf } from "@codemirror/legacy-modes/mode/protobuf"
+import { stex } from "@codemirror/legacy-modes/mode/stex"
+import { diff } from "@codemirror/legacy-modes/mode/diff"
+import { pug } from "@codemirror/legacy-modes/mode/pug"
+import { fortran } from "@codemirror/legacy-modes/mode/fortran"
+import { pascal } from "@codemirror/legacy-modes/mode/pascal"
+import { vb } from "@codemirror/legacy-modes/mode/vb"
+import { vbScript } from "@codemirror/legacy-modes/mode/vbscript"
+import { haxe } from "@codemirror/legacy-modes/mode/haxe"
+import { cmake } from "@codemirror/legacy-modes/mode/cmake"
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile"
+import { nginx } from "@codemirror/legacy-modes/mode/nginx"
 
 // LSP (language-server) support — additive and gated. Inactive unless a native
 // host opens an LSP bridge via window.cmLspConnect (no bridge → plain editor).
@@ -43,27 +74,69 @@ import {
 } from "@codemirror/lsp-client"
 
 function langFor(filename) {
-  const ext = (String(filename || "").split(".").pop() || "").toLowerCase()
+  const base = String(filename || "").split(/[/\\]/).pop() || ""
+  const lower = base.toLowerCase()
+  const st = (mode) => StreamLanguage.define(mode)
+  if (lower === "dockerfile" || lower.startsWith("dockerfile.")) return st(dockerFile)
+  if (lower === "cmakelists.txt") return st(cmake)
+  if (lower === "nginx.conf") return st(nginx)
+  const ext = (lower.split(".").pop() || "")
   switch (ext) {
     case "js": case "mjs": case "cjs": return javascript()
     case "jsx": return javascript({ jsx: true })
-    case "ts": return javascript({ typescript: true })
+    case "ts": case "mts": case "cts": return javascript({ typescript: true })
     case "tsx": return javascript({ jsx: true, typescript: true })
-    case "py": return python()
+    case "py": case "pyi": return python()
     case "java": return java()
     case "c": case "h": case "cc": case "cpp": case "hpp": case "cxx": case "hxx": return cpp()
+    case "cs": case "csx": return st(csharp)
+    case "m": return st(objectiveC)
+    case "mm": return st(objectiveCpp)
     case "rs": return rust()
     case "go": return go()
     case "php": return php()
+    case "swift": return st(swift)
+    case "kt": case "kts": return st(kotlin)
+    case "dart": return st(dart)
+    case "scala": case "sc": return st(scala)
+    case "rb": return st(ruby)
+    case "groovy": case "gradle": return st(groovy)
+    case "lua": return st(lua)
+    case "pl": case "pm": return st(perl)
+    case "r": return st(r)
+    case "jl": return st(julia)
+    case "hs": return st(haskell)
+    case "erl": case "hrl": return st(erlang)
+    case "fs": case "fsx": case "fsi": return st(fSharp)
+    case "ml": case "mli": return st(oCaml)
+    case "clj": case "cljs": case "cljc": return st(clojure)
+    case "elm": return st(elm)
+    case "cr": return st(crystal)
+    case "coffee": return st(coffeeScript)
     case "sql": return sql()
-    case "json": return json()
-    case "md": case "markdown": return markdown()
-    case "html": case "htm": case "vue": return html()
+    case "json": case "jsonc": return json()
+    case "md": case "markdown": case "mdx": return markdown()
+    case "html": case "htm": return html()
+    case "vue": return vue()
     case "css": case "scss": case "sass": case "less": return css()
     case "xml": case "svg": return xml()
     case "yaml": case "yml": return yaml()
-    case "kt": case "kts": return StreamLanguage.define(kotlin)
-    case "sh": case "bash": case "zsh": return StreamLanguage.define(shell)
+    case "toml": return st(toml)
+    case "ini": case "properties": return st(properties)
+    case "sh": case "bash": case "zsh": return st(shell)
+    case "ps1": case "psm1": case "psd1": return st(powerShell)
+    case "proto": return st(protobuf)
+    case "tex": case "latex": return st(stex)
+    case "diff": case "patch": return st(diff)
+    case "wat": case "wast": return wast()
+    case "pug": case "jade": return st(pug)
+    case "f": case "for": case "f90": case "f95": return st(fortran)
+    case "pas": return st(pascal)
+    case "vb": return st(vb)
+    case "vbs": return st(vbScript)
+    case "hx": return st(haxe)
+    case "glsl": case "frag": case "vert": case "geom": return st(shader)
+    case "cmake": return st(cmake)
     default: return []
   }
 }
