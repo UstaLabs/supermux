@@ -194,6 +194,12 @@ class ShellUiState {
 
     var selectedId by mutableStateOf<String?>(null)
 
+    /** Project-group keys collapsed in the workspace list. Survives restart via [ShellStateStore]. */
+    var collapsedProjectPaths by mutableStateOf(setOf<String>())
+
+    /** Local light/dark (not a broker setting). Survives restart via [ShellStateStore]. */
+    var appearance by mutableStateOf(AppearanceMode.DARK)
+
     /**
      * Whether the New-Session launcher is showing in the **detail pane** (sidebar stays mounted).
      * Not a [DesktopRoute]: it is a side panel inside [DesktopRoute.Home], not a full-pane push.
@@ -395,11 +401,16 @@ class ShellUiState {
     var forceWorkspaceView by mutableStateOf<Pair<String, JsonObject>?>(null)
 
     /** The persisted slice of this state — see [ShellStateStore]. */
-    fun snapshot() = SidebarSnapshot(sidebarCollapsed, sidebarWidth.value)
+    fun snapshot() = SidebarSnapshot(
+        sidebarCollapsed = sidebarCollapsed,
+        sidebarWidthDp = sidebarWidth.value,
+        collapsedProjectPaths = collapsedProjectPaths.sorted(),
+    )
 
     fun restore(s: SidebarSnapshot) {
         sidebarCollapsed = s.sidebarCollapsed
         setSidebarWidth(s.sidebarWidthDp.dp)
+        collapsedProjectPaths = s.collapsedProjectPaths.toSet()
     }
 
     /**
@@ -595,7 +606,13 @@ fun AppShell(
     // fraction/pane change and recompose the root per frame during split drags. collectLatest +
     // delay(500) = settle 500ms after the last change; the file write runs off the UI thread.
     LaunchedEffect(Unit) {
-        snapshotFlow { PersistedUiState(layout = ui.snapshot(), selectedId = ui.selectedId) }
+        snapshotFlow {
+            PersistedUiState(
+                layout = ui.snapshot(),
+                selectedId = ui.selectedId,
+                appearance = ui.appearance.name,
+            )
+        }
             .collectLatest {
                 delay(500)
                 withContext(Dispatchers.IO) { store.save(it) }
@@ -774,6 +791,8 @@ fun AppShell(
                             usageContent = usagePopoverBody,
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
+                            initialCollapsedPaths = ui.collapsedProjectPaths,
+                            onCollapsedPathsChange = { ui.collapsedProjectPaths = it },
                             tabDragState = tabDragState,
                             modifier = Modifier
                                 .width(ui.sidebarWidth)
