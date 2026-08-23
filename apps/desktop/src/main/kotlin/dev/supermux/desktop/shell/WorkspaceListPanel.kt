@@ -249,6 +249,7 @@ fun WorkspaceListPanel(
     }
 
     var groupByProject by remember { mutableStateOf(true) }
+    var collapsedPaths by remember { mutableStateOf(setOf<String>()) }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
@@ -535,7 +536,22 @@ fun WorkspaceListPanel(
                 // - No "orphan" fold stacked under the list — that invented extra "Show N settled"
                 //   chrome SessionListPanel never draws.
                 groups.forEach { g ->
-                    item(key = "h:${g.key}") { PathGroupHeader(g.label, g.workspaces.size) }
+                    val isCollapsed = collapsedPaths.contains(g.key)
+                    item(key = "h:${g.key}") {
+                        PathGroupHeader(
+                            g.label,
+                            g.workspaces.size,
+                            collapsed = isCollapsed,
+                            onToggle = {
+                                collapsedPaths = if (isCollapsed) {
+                                    collapsedPaths - g.key
+                                } else {
+                                    collapsedPaths + g.key
+                                }
+                            },
+                        )
+                    }
+                    if (isCollapsed) return@forEach
                     val canDrag = g.key != PA_GROUP_KEY
                     val ordered = applyWorkspaceWorkingOrder(
                         g.workspaces,

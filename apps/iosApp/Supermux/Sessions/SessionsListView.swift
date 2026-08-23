@@ -441,6 +441,15 @@ struct SessionsListView: View {
         // open row only ends the section when there is no settled block under it.
         let openRowIsLast = settled.isEmpty
         Section {
+            // macOS AppKit List swallows Button taps in `header:`. Put the chevron
+            // row in the section body so collapse actually fires.
+            #if os(macOS)
+            header(group, count: activeCount)
+                .moveDisabled(true)
+                .deleteDisabled(true)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+            #endif
             if !collapsed.contains(group.workdir) {
                 ForEach(rows, id: \.id) { session in
                     let recordId = owner[session.id] ?? ""
@@ -494,7 +503,11 @@ struct SessionsListView: View {
                 }
             }
         } header: {
+            #if os(macOS)
+            EmptyView()
+            #else
             header(group, count: activeCount)
+            #endif
         }
         }
     }

@@ -61,11 +61,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -165,16 +170,40 @@ fun SessionAvatar(
 
 /** Path-group header — shell-style: colored letter tile + label (Cursor-like rail). */
 @Composable
-fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
+fun PathGroupHeader(
+    label: String,
+    count: Int,
+    collapsed: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+) {
     val cs = MaterialTheme.colorScheme
     val leaf = label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
     val letter = leaf.firstOrNull()?.uppercaseChar()?.toString() ?: "·"
     // Stable-ish pastel from label hash so adjacent groups don't all share the same tile.
     val hue = ((leaf.hashCode() ushr 1) % 360).toFloat()
     val tile = Color.hsl(hue, 0.45f, 0.42f)
+    val rotation by animateFloatAsState(
+        targetValue = if (collapsed) -90f else 0f,
+        label = "groupChevronRotation",
+    )
+    val clickable = if (onToggle != null) {
+        Modifier
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (collapsed) "Expand" else "Collapse",
+            ) { onToggle() }
+            .semantics {
+                contentDescription = if (collapsed) "Expand $leaf" else "Collapse $leaf"
+                stateDescription = if (collapsed) "Collapsed" else "Expanded"
+            }
+    } else {
+        Modifier
+    }
     Row(
         Modifier
             .fillMaxWidth()
+            .then(clickable)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -215,7 +244,7 @@ fun PathGroupHeader(label: String, count: Int, collapsed: Boolean = false) {
             tint = cs.onSurfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier
                 .size(14.dp)
-                .rotate(if (collapsed) -90f else 0f),
+                .rotate(rotation),
         )
     }
 }
@@ -466,6 +495,7 @@ fun SessionListPanel(
     }
     // Shell-style default (project groups), matching the Cursor-like rail mock.
     var groupByProject by remember { mutableStateOf(true) }
+    var collapsedPaths by remember { mutableStateOf(setOf<String>()) }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }
 
@@ -638,9 +668,24 @@ fun SessionListPanel(
                 }
             } else {
                 groups.forEach { g ->
+                    val isCollapsed = collapsedPaths.contains(g.workdir)
                     val activeCount = if (g.workdir == PA_GROUP_KEY) g.sessions.size
                     else g.sections.filter { it.key != SectionKey.SETTLED }.sumOf { it.sessions.size }
-                    item(key = "h:${g.workdir}") { PathGroupHeader(g.label, activeCount) }
+                    item(key = "h:${g.workdir}") {
+                        PathGroupHeader(
+                            g.label,
+                            activeCount,
+                            collapsed = isCollapsed,
+                            onToggle = {
+                                collapsedPaths = if (isCollapsed) {
+                                    collapsedPaths - g.workdir
+                                } else {
+                                    collapsedPaths + g.workdir
+                                }
+                            },
+                        )
+                    }
+                    if (isCollapsed) return@forEach
                     val openSections = if (g.sections.isEmpty()) {
                         listOf(TaskSection(SectionKey.IN_PROGRESS, "In Progress", g.sessions))
                     } else g.sections.filter { it.key != SectionKey.SETTLED }
