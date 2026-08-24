@@ -679,7 +679,7 @@ fun AppShell(
                 layout = ui.snapshot(),
                 selectedId = ui.selectedId,
                 appearance = ui.appearance.name,
-                windows = ui.windowHosts.extras().map { it.toPersisted() },
+                windows = mergePersistedWindowHosts(ui.pendingWindowHosts, ui.windowHosts.extras()),
             )
         }
             .collectLatest {

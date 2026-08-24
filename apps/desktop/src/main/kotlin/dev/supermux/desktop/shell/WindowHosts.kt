@@ -133,6 +133,30 @@ class WindowHostRegistry(mainId: String = "main") {
         if (extraHosts.remove(hostId) != null) bumpExtras()
     }
 
+    fun updateBounds(hostId: String, bounds: WindowBounds) {
+        if (hostId == mainHost.id) {
+            mainHost = mainHost.copy(bounds = bounds)
+            return
+        }
+        val existing = extraHosts[hostId] ?: return
+        if (existing.bounds == bounds) return
+        extraHosts[hostId] = existing.copy(bounds = bounds)
+        bumpExtras()
+    }
+
+    /**
+     * Remove [viewId] from [hostId]'s claim. Unclaims the extra if the remainder is empty or
+     * no longer covering.
+     */
+    fun shrinkClaim(hostId: String, viewId: String, tree: LayoutNode): Boolean {
+        val host = extraHosts[hostId] ?: return false
+        if (host.claimedViewIds.isEmpty()) return false
+        if (viewId !in host.claimedViewIds) return false
+        applyRemaining(host, host.claimedViewIds - viewId, tree)
+        bumpExtras()
+        return true
+    }
+
     fun rebase(workspaceId: String, tree: LayoutNode) {
         val live = collectViewIds(tree).toSet()
         val taken = mutableSetOf<String>()
@@ -216,6 +240,16 @@ fun WindowHost.toPersisted(): PersistedWindowHost = PersistedWindowHost(
     height = bounds.height,
 )
 
+/** Pending extras for workspaces not restored this session, union live extras (live wins on id). */
+fun mergePersistedWindowHosts(
+    pending: List<PersistedWindowHost>,
+    liveExtras: List<WindowHost>,
+): List<PersistedWindowHost> {
+    val live = liveExtras.map { it.toPersisted() }
+    val liveIds = live.map { it.id }.toSet()
+    return pending.filter { it.id !in liveIds } + live
+}
+
 fun planTearOutTab(
     tree: LayoutNode,
     viewId: String,
@@ -247,7 +281,14 @@ fun tearOutTab(
     edit: (LayoutNode) -> LayoutNode,
 ): WindowHost? {
     val plan = planTearOutTab(tree, viewId, newGroupId) ?: return null
+    val sourceExtra = registry.extras().firstOrNull { viewId in it.claimedViewIds }
+    if (sourceExtra != null && sourceExtra.claimedViewIds == setOf(viewId)) {
+        return null
+    }
     val nextTree = edit(plan.first(tree))
+    if (sourceExtra != null) {
+        registry.shrinkClaim(sourceExtra.id, viewId, nextTree)
+    }
     return registry.tryClaim(workspaceId, plan.second, bounds, hostId, nextTree)
 }
 

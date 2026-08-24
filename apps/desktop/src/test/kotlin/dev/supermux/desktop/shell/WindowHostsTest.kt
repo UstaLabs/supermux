@@ -338,6 +338,93 @@ class WindowHostsTest {
     }
 
     @Test
+    fun mergePersistedWindowHostsUnionsPendingWithLiveAndLiveWinsOnSameId() {
+        val pending = listOf(
+            PersistedWindowHost("other", "ws-b", listOf("v9"), 1f, 2f, 3f, 4f),
+            PersistedWindowHost("live-id", "ws-a", listOf("old"), 0f, 0f, 10f, 10f),
+        )
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws-a")
+        assertNotNull(r.tryClaim("ws-a", setOf("v3"), bounds, "live-id", tree()))
+        val merged = mergePersistedWindowHosts(pending, r.extras())
+        assertEquals(2, merged.size)
+        val other = merged.single { it.id == "other" }
+        assertEquals("ws-b", other.workspaceId)
+        val live = merged.single { it.id == "live-id" }
+        assertEquals(listOf("v3"), live.claimedViewIds)
+        assertEquals(bounds.width, live.width)
+    }
+
+    @Test
+    fun tryRestoreKeepsUnrestoredHostsInPending() {
+        val ui = ShellUiState()
+        ui.pendingWindowHosts = listOf(
+            PersistedWindowHost("a", "ws", listOf("v1", "v2"), 0f, 0f, 100f, 100f),
+            PersistedWindowHost("b", "other", listOf("v9"), 1f, 1f, 100f, 100f),
+            PersistedWindowHost("bad", "ws", listOf("v2"), 0f, 0f, 100f, 100f),
+        )
+        ui.tryRestoreWindowHosts("ws", tree())
+        assertEquals(1, ui.windowHosts.extras("ws").size)
+        assertEquals("a", ui.windowHosts.extras("ws").single().id)
+        assertEquals(setOf("b", "bad"), ui.pendingWindowHosts.map { it.id }.toSet())
+    }
+
+    @Test
+    fun tearOutTabFromTwoTabExtraYieldsTwoCoveringExtras() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = LayoutNode.Group("g1", listOf("v1", "v2"), "v1")
+        assertNotNull(r.tryClaim("ws", setOf("v1", "v2"), bounds, "extra-src", t))
+        var applied: LayoutNode? = null
+        val extra = tearOutTab(
+            registry = r,
+            tree = t,
+            viewId = "v2",
+            workspaceId = "ws",
+            newGroupId = "g-new",
+            bounds = bounds,
+            hostId = "extra-2",
+            edit = { next -> applied = next; next },
+        )
+        assertNotNull(extra)
+        val next = applied!!
+        val extras = r.extras("ws")
+        assertEquals(2, extras.size)
+        assertEquals(setOf("v1"), extras.single { it.id == "extra-src" }.claimedViewIds)
+        assertEquals(setOf("v2"), extras.single { it.id == "extra-2" }.claimedViewIds)
+        assertNotNull(subtreeCovering(next, setOf("v1")))
+        assertNotNull(subtreeCovering(next, setOf("v2")))
+        assertEquals(subtreeCovering(next, setOf("v2")), r.layoutFor(extra, next))
+        assertEquals(subtreeCovering(next, setOf("v1")), r.layoutFor(extras.single { it.id == "extra-src" }, next))
+    }
+
+    @Test
+    fun tearOutTabFromSingletonExtraIsNoOp() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = LayoutNode.Group("g1", listOf("v1"), "v1")
+        assertNotNull(r.tryClaim("ws", setOf("v1"), bounds, "extra-src", t))
+        assertNull(
+            tearOutTab(r, t, "v1", "ws", "g-new", bounds, "extra-2") { it },
+        )
+        assertEquals(1, r.extras("ws").size)
+        assertEquals("extra-src", r.extras("ws").single().id)
+    }
+
+    @Test
+    fun updateBoundsWritesExtraHostBounds() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        assertNotNull(r.tryClaim("ws", setOf("v3"), bounds, "e", tree()))
+        val next = WindowBounds(40f, 50f, 640f, 480f)
+        r.updateBounds("e", next)
+        assertEquals(next, r.extras("ws").single().bounds)
+        assertEquals(next, r.extras("ws").single().toPersisted().let {
+            WindowBounds(it.x, it.y, it.width, it.height)
+        })
+    }
+
+    @Test
     fun extraWindowTitleUsesWorkspaceAndActiveView() {
         val hosted = LayoutNode.Group("g1", listOf("v1", "v2"), "v2")
         val views = mapOf(

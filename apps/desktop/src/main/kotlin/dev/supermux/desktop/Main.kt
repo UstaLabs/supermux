@@ -18,6 +18,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -72,6 +73,7 @@ import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.WindowBounds
 import dev.supermux.desktop.shell.tearOutCanvasLive
 import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
@@ -1408,6 +1410,23 @@ fun main() {
                     width = host.bounds.width.dp.coerceAtLeast(200.dp),
                     height = host.bounds.height.dp.coerceAtLeast(200.dp),
                 )
+                LaunchedEffect(host.id) {
+                    snapshotFlow {
+                        extraState.position to extraState.size
+                    }.collect { (pos, size) ->
+                        if (pos is WindowPosition.Absolute) {
+                            ui.windowHosts.updateBounds(
+                                host.id,
+                                WindowBounds(
+                                    x = pos.x.value,
+                                    y = pos.y.value,
+                                    width = size.width.value,
+                                    height = size.height.value,
+                                ),
+                            )
+                        }
+                    }
+                }
                 Window(
                     onCloseRequest = { ui.windowHosts.unclaim(host.id) },
                     title = extraWindowTitle(
