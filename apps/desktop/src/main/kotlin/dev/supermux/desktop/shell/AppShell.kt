@@ -75,9 +75,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.supermux.net.AddViewBody
-import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.chatSessionId
-import dev.supermux.desktop.editor.DocumentStore
+
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
@@ -85,7 +84,7 @@ import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
-import dev.supermux.workspace.toDto
+
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.desktop.host.AddHostScreen
 import dev.supermux.desktop.host.FleetState
@@ -966,53 +965,15 @@ fun AppShell(
                                     Text("select a workspace", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             } else {
-                                // Local tree for drag responsiveness; the debounced PATCH and the
-                                // workspace_changed adoption both live in rememberWorkspaceLayout,
-                                // where the round trip can be tested on its own.
-                                // Views this client minted and put in the tree before the POST
-                                // returned (spec §9.0). Without a record here the layout would name
-                                // an id nothing knows about: the tab would say "view" and the pane
-                                // would draw nothing until the broker frame landed.
-                                //
-                                // Declared BEFORE the layout sync because the sync needs it: a
-                                // layout naming one of these is a layout the broker will refuse,
-                                // so the PATCH waits for them (see rememberWorkspaceLayout).
-                                val provisionalViews = remember(current.id) { mutableStateMapOf<String, ViewDto>() }
-                                val layoutSync = rememberWorkspaceLayout(
-                                    workspaceId = current.id,
-                                    serverLayout = current.layout,
-                                    unconfirmedViews = provisionalViews.keys.toSet(),
-                                ) { tree ->
-                                    app.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
-                                }
-                                val localLayout = layoutSync.tree
-                                val serverViews = remember(current) { current.views.associateBy { it.id } }
-                                // The broker ALWAYS wins on a collision — its row is the real one,
-                                // and ours was only ever a stand-in for it.
-                                val viewsById = if (provisionalViews.isEmpty()) {
-                                    serverViews
-                                } else {
-                                    provisionalViews.toMap() + serverViews
-                                }
-                                // …and the stand-in goes as soon as the real row arrives.
-                                LaunchedEffect(serverViews) {
-                                    provisionalViews.keys.filter { it in serverViews }.forEach { provisionalViews.remove(it) }
-                                }
                                 val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
-
-                                // ── The workspace's open documents ────────────────────────────
-                                // ONE store for the whole workspace, not one per pane: two `file`
-                                // panes on one path must share one buffer, so a split shows the same
-                                // unsaved text on both sides and dragging a file tab between groups
-                                // cannot lose an edit (spec §7.2 / §18).
                                 val wsApp = appFor(current.primarySessionId ?: session?.id ?: "")
-                                val documents = remember(current.id) {
-                                    DocumentStore(
-                                        fsRead = { p -> wsApp.workspaceFsRead(current.id, p) },
-                                        fsWrite = { p, content -> wsApp.workspaceFsWrite(current.id, p, content) },
-                                        scope = overlayScope,
-                                    )
-                                }
+                                val ws = rememberWorkspaceSession(current, wsApp, overlayScope)
+                                val layoutSync = ws.layoutSync
+                                val localLayout = layoutSync.tree
+                                val viewsById = ws.viewsById
+                                val documents = ws.documents
+                                val previewModes = ws.previewModes
+                                val fileOpener = ws.fileOpener
                                 // The changed-on-disk banner is dead without the broker's watcher,
                                 // and the watcher is still session-keyed. Run it ONCE for the
                                 // workspace while it has any editor pane at all — not per pane,
@@ -1028,39 +989,6 @@ fun AppShell(
                                     wsApp.fsChanges.collect { f -> if (f.session == sid) documents.markChanged(f.paths) }
                                 }
 
-                                // Opening a file is a layout edit plus a POST that carries the id
-                                // we already used — see WorkspaceFileOpen.kt. Rebuilt every
-                                // composition on purpose: it reads the tree and the view map at
-                                // CALL time, and capturing either in a remember would freeze it.
-                                // Markdown preview per view id. It used to be local state inside
-                                // FilePane, driven by a button in that pane's action row; the row is
-                                // gone and the tab owns the toggle, so the state lives out here.
-                                val previewModes = remember(current.id) { mutableStateMapOf<String, Boolean>() }
-                                val fileOpener = WorkspaceFileOpener(
-                                    workspaceId = current.id,
-                                    treeOf = { layoutSync.tree },
-                                    // Computed INSIDE the lambda, not captured. `viewsById` is a
-                                    // per-composition value, so handing it over froze the opener's
-                                    // idea of what is open until the next recomposition — and two
-                                    // clicks in one frame then both decided the file was not open
-                                    // yet and each made a view. Read it live.
-                                    viewsOf = { provisionalViews.toMap() + current.views.associateBy { it.id } },
-                                    edit = { transform -> layoutSync.edit(transform) },
-                                    provisional = provisionalViews,
-                                    reveal = { p, line, endLine -> documents.openAtLine(p, line, endLine) },
-                                    // Answers with the id the broker actually created, which is not
-                                    // always the one we asked for — see WorkspaceFileOpener.post.
-                                    post = { id, state, groupId ->
-                                        runCatching {
-                                            wsApp.api.addView(
-                                                current.id,
-                                                AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
-                                            )
-                                        }.onFailure { println("[AppShell] open file view failed: $it") }
-                                            .getOrNull()?.id
-                                    },
-                                    scope = overlayScope,
-                                )
                                 // SM_OPEN_FILE / SM_EDITOR_PREVIEW / SM_LSP_TEST delivery: an
                                 // external "open this file" request goes through the SAME opener a
                                 // chat file-path tap and an explorer click use. It used to flip the
