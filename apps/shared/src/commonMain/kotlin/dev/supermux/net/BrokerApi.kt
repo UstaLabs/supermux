@@ -1339,6 +1339,16 @@ class BrokerApi(
         })
     }
 
+    /** GET /archived-workspaces */
+    suspend fun listArchivedWorkspaces(): List<WorkspaceDto> =
+        getJson<WorkspacesResponse>("$httpBase/archived-workspaces").workspaces
+
+    /** POST /workspaces/{id}/restore — unarchives the workspace and resumes its chats. */
+    suspend fun restoreWorkspace(id: String): WorkspaceDto =
+        decode(http.post("$httpBase/workspaces/$id/restore") {
+            header("Authorization", bearerHeader())
+        })
+
     /** PATCH /workspaces/reorder */
     suspend fun reorderWorkspaces(orderedIds: List<String>) {
         ensureMutationSuccess(http.patch("$httpBase/workspaces/reorder") {

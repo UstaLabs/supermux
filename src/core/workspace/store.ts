@@ -95,6 +95,13 @@ export class WorkspaceStore {
     )
   }
 
+  unarchive(id: string): void {
+    this.db.run(
+      "UPDATE workspaces SET status = 'active', archived_at = NULL WHERE id = ?",
+      [id],
+    )
+  }
+
   reorder(orderedIds: string[]): void {
     const tx = this.db.transaction((ids: string[]) => {
       ids.forEach((id, i) => this.db.run("UPDATE workspaces SET sort_order = ? WHERE id = ?", [i, id]))

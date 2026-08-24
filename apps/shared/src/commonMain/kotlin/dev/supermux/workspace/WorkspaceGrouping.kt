@@ -84,3 +84,25 @@ fun groupWorkspaces(
     result.addAll(projectGroups)
     return result
 }
+
+/**
+ * Archived workspaces grouped by project, newest-archived first inside a group.
+ * Live rows are ignored — pair with [groupWorkspaces] for the sidebar fold.
+ */
+fun groupArchivedWorkspaces(
+    workspaces: List<WorkspaceDto>,
+    home: String,
+): List<WorkspaceGroup> {
+    val dead = workspaces.filter { it.status == "archived" }
+    val byPath = LinkedHashMap<String, MutableList<WorkspaceDto>>()
+    for (w in dead) byPath.getOrPut(w.repoRoot ?: w.workdir) { mutableListOf() }.add(w)
+    return byPath.map { (key, list) ->
+        WorkspaceGroup(
+            key = key,
+            label = formatWorkdir(key, home),
+            workspaces = list.sortedWith(
+                compareByDescending<WorkspaceDto> { it.archivedAt ?: "" }.thenBy { it.id },
+            ),
+        )
+    }.sortedBy { it.label }
+}

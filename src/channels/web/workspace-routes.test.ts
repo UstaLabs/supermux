@@ -21,6 +21,7 @@ function harness() {
   const frames: any[] = []
   const svc = new WorkspaceService(store, {
     archiveSession: async () => {},
+    resumeSession: async () => {},
     closeTerminal: async () => {},
     stopDisplay: async () => {},
   }, db)
@@ -60,6 +61,7 @@ test("closeView runs the side effect then broadcasts view_removed", async () => 
   const archived: string[] = []
   const svc = new WorkspaceService(store, {
     archiveSession: async (id) => { archived.push(id) },
+    resumeSession: async () => {},
     closeTerminal: async () => {},
     stopDisplay: async () => {},
   }, db)
@@ -111,6 +113,8 @@ import { isApiPath } from "./index"
 
 test("workspace REST paths are treated as API, not as SPA routes", () => {
   expect(isApiPath("/workspaces")).toBe(true)
+  expect(isApiPath("/archived-workspaces")).toBe(true)
+  expect(isApiPath("/workspaces/abc-123/restore")).toBe(true)
   expect(isApiPath("/workspaces/abc-123")).toBe(true)
   expect(isApiPath("/workspaces/abc-123/fs")).toBe(true)
   expect(isApiPath("/workspaces/abc-123/fs/read")).toBe(true)

@@ -1092,6 +1092,10 @@ const workspaceService = new WorkspaceService(
       unregisterSession(s.id)
       webChannel?.broadcastToAll({ type: "session_removed", id: s.id })
     },
+    resumeSession: async (id) => {
+      const r = await resumeFromArchive(id)
+      if (!r.ok) throw new Error(r.error ?? "resume failed")
+    },
     closeTerminal: async (scope, terminalId) => {
       await terminalManager.close(scope, terminalId)
     },
@@ -1780,6 +1784,23 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return dto
     },
     archiveWorkspace: async (id) => { await workspaceService.archiveWorkspace(id) },
+    restoreWorkspace: async (id) => {
+      await workspaceService.restoreWorkspace(id)
+      const dto = wsDto(id)
+      if (!dto) throw new Error("workspace not found")
+      return dto
+    },
+    listArchivedWorkspaces: () => {
+      const internal = new Set(
+        (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
+          .map((r) => r.id),
+      )
+      return registry.workspaces
+        .list({ includeArchived: true })
+        .filter((w) => w.status === "archived")
+        .filter((w) => !w.primary_session_id || !internal.has(w.primary_session_id))
+        .map((w) => workspaceDto(w, registry.workspaces.listViews(w.id)))
+    },
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
     addWorkspaceView: (workspaceId, args) => {
       const v = registry.workspaces.addView(workspaceId, {

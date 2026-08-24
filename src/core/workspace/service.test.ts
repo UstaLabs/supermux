@@ -8,9 +8,10 @@ function make(overrides: Partial<WorkspaceDeps> = {}) {
   const db = openDb(":memory:")
   runMigrations(db, MIGRATIONS)
   const store = new WorkspaceStore(db)
-  const calls = { archived: [] as string[], terminalsClosed: [] as string[][], displaysStopped: [] as string[] }
+  const calls = { archived: [] as string[], resumed: [] as string[], terminalsClosed: [] as string[][], displaysStopped: [] as string[] }
   const deps: WorkspaceDeps = {
     archiveSession: async (id) => { calls.archived.push(id) },
+    resumeSession: async (id) => { calls.resumed.push(id) },
     closeTerminal: async (scope, terminalId) => { calls.terminalsClosed.push([scope, terminalId]) },
     stopDisplay: async (id) => { calls.displaysStopped.push(id) },
     ...overrides,
@@ -117,7 +118,7 @@ test("closeView on an editor stops nothing", async () => {
 
   await svc.closeView(v.id)
 
-  expect(calls).toEqual({ archived: [], terminalsClosed: [], displaysStopped: [] })
+  expect(calls).toEqual({ archived: [], resumed: [], terminalsClosed: [], displaysStopped: [] })
   expect(store.listViews(w.id)).toEqual([])
 })
 
@@ -162,4 +163,52 @@ test("archiveWorkspace archives every chat session and the workspace", async () 
 
   expect(calls.archived.sort()).toEqual(["s1", "s2"])
   expect(store.getById(w.id)!.status).toBe("archived")
+})
+
+test("restoreWorkspace unarchives and resumes every archived chat", async () => {
+  const { store, svc, calls, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+  await svc.archiveWorkspace(w.id)
+  db.run(`UPDATE sessions SET status = 'archived' WHERE id IN ('s1','s2')`)
+
+  await svc.restoreWorkspace(w.id)
+
+  expect(calls.resumed.sort()).toEqual(["s1", "s2"])
+  expect(store.getById(w.id)!.status).toBe("active")
+  expect(store.getById(w.id)!.archived_at).toBeUndefined()
+})
+
+test("restoreWorkspace skips chats that are already live", async () => {
+  const { store, svc, calls, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  store.archive(w.id)
+
+  await svc.restoreWorkspace(w.id)
+
+  expect(calls.resumed).toEqual([])
+  expect(store.getById(w.id)!.status).toBe("active")
+})
+
+test("restoreWorkspace keeps the workspace live if one resume fails", async () => {
+  const { store, svc, db } = make({
+    resumeSession: async (id) => { if (id === "s1") throw new Error("boom") },
+  })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','archived','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','archived','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  svc.addChatSession(w.id, "s2")
+  store.archive(w.id)
+
+  await svc.restoreWorkspace(w.id)
+
+  expect(store.getById(w.id)!.status).toBe("active")
+})
+
+test("restoreWorkspace throws when the id is unknown", async () => {
+  const { svc } = make()
+  await expect(svc.restoreWorkspace("missing")).rejects.toThrow("workspace not found")
 })

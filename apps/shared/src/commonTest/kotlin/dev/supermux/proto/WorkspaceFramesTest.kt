@@ -96,5 +96,6 @@ class WorkspaceFramesTest {
         // An old broker sends no workspaces key. A new client must not crash.
         val snap = json.decodeFromString<ServerFrame>("""{"type":"snapshot","sessions":[]}""")
         assertEquals(emptyList(), (snap as ServerFrame.Snapshot).workspaces)
+        assertEquals(emptyList(), snap.archivedWorkspaces)
     }
 }

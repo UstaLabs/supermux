@@ -194,6 +194,12 @@ class ShellUiState {
 
     var selectedId by mutableStateOf<String?>(null)
 
+    /**
+     * Archived workspace highlighted in the sidebar fold. Never copied into [selectedId]
+     * (that id is a session id and was once wrongly set to a workspace id).
+     */
+    var selectedArchivedWorkspaceId by mutableStateOf<String?>(null)
+
     /** Project-group keys collapsed in the workspace list. Survives restart via [ShellStateStore]. */
     var collapsedProjectPaths by mutableStateOf(setOf<String>())
 
@@ -289,6 +295,14 @@ class ShellUiState {
 
     fun selectSession(id: String) {
         selectedId = id
+        selectedArchivedWorkspaceId = null
+        launcherOpen = false
+        launcherDraftId = null
+    }
+
+    fun selectArchivedWorkspace(id: String) {
+        selectedArchivedWorkspaceId = id
+        selectedId = null
         launcherOpen = false
         launcherDraftId = null
     }
@@ -459,6 +473,7 @@ fun AppShell(
     // across recompositions (remembered in Main), so the `?:` picks the same flow each time.
     val sessions by (fleet?.sessions ?: app.sessions).collectAsState()
     val workspaces by app.workspaces.collectAsState()
+    val archivedWorkspaces by app.archivedWorkspaces.collectAsState()
     // Shared across the sidebar and the layout host so a tab can drop onto a
     // workspace row (cross-workspace move).
     val tabDragState = remember { PaneDragController() }
@@ -769,12 +784,12 @@ fun AppShell(
                                 if (sid != null) appFor(sid).setMute(sid, muted)
                             },
                             onNewSession = onNewSession,
-                            archived = archivedForList,
-                            onResume = { id ->
-                                overlayScope.launch {
-                                    appFor(id).resume(id)
-                                    archivedForList = runCatching { app.archived() }.getOrDefault(emptyList())
-                                }
+                            archivedWorkspaces = archivedWorkspaces,
+                            archivedActiveId = ui.selectedArchivedWorkspaceId,
+                            onSelectArchived = { ui.selectArchivedWorkspace(it) },
+                            onRestore = { wid ->
+                                app.restoreWorkspace(wid)
+                                ui.selectedArchivedWorkspaceId = null
                             },
                             onOpenDraft = { id -> ui.openLauncher(draftId = id) },
                             onReorder = { ids -> app.reorderWorkspaces(ids) },
@@ -882,6 +897,24 @@ fun AppShell(
                     )
         }
                     when {
+                        ui.selectedArchivedWorkspaceId != null -> {
+                            val archived = archivedWorkspaces.firstOrNull { it.id == ui.selectedArchivedWorkspaceId }
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                    .testTag("archived_workspace_detail"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    if (archived != null)
+                                        "“${archived.name}” is archived. Restore it from the menu to continue."
+                                    else
+                                        "This workspace is archived. Restore it from the menu to continue.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                         ui.launcherOpen -> {
                             Box(
                                 Modifier

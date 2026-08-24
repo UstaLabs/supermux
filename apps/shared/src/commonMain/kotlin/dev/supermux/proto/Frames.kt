@@ -251,6 +251,8 @@ sealed interface ServerFrame {
         val reads: Map<String, String> = emptyMap(),
         /** Empty from a broker older than the workspaces change — never null. */
         val workspaces: List<WorkspaceDto> = emptyList(),
+        /** Archived workspaces for the desktop sidebar fold. Empty on older brokers. */
+        val archivedWorkspaces: List<WorkspaceDto> = emptyList(),
     ) : ServerFrame
 
     @Serializable @SerialName("session_added")

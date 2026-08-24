@@ -56,6 +56,17 @@ class WorkspaceGroupingTest {
     }
 
     @Test
+    fun groupArchivedWorkspaces_onlyArchived_byProject() {
+        val live = ws("w1", "a", "/home/u/projects/app")
+        val deadA = ws("w2", "old", "/home/u/projects/app").copy(status = "archived", archivedAt = "2026-08-02T00:00:00Z")
+        val deadB = ws("w3", "older", "/home/u/projects/app").copy(status = "archived", archivedAt = "2026-08-01T00:00:00Z")
+        val other = ws("w4", "gone", "/home/u/projects/other").copy(status = "archived", archivedAt = "2026-08-03T00:00:00Z")
+        val groups = groupArchivedWorkspaces(listOf(live, deadA, deadB, other), home = "/home/u")
+        assertEquals(listOf("w2", "w3"), groups.first { it.key == "/home/u/projects/app" }.workspaces.map { it.id })
+        assertEquals(listOf("w4"), groups.first { it.key == "/home/u/projects/other" }.workspaces.map { it.id })
+    }
+
+    @Test
     fun agentStateIsTheBusiestOfTheChatSessions() {
         val w = ws("w1", "a", "/p", views = listOf(chatView("v1", "s1"), chatView("v2", "s2")))
         val states = mapOf(

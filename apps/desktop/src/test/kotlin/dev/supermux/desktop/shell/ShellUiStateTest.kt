@@ -43,6 +43,21 @@ class WorkspaceUiStateTest {
         assertEquals("s1", ui.selectedId)
     }
 
+    @Test fun selectArchivedWorkspaceDoesNotPutTheWorkspaceIdInSelectedId() {
+        val ui = hydrated()
+        ui.selectArchivedWorkspace("w-archived")
+        assertEquals("w-archived", ui.selectedArchivedWorkspaceId)
+        assertNull(ui.selectedId)
+    }
+
+    @Test fun selectSessionClearsArchivedSelection() {
+        val ui = hydrated()
+        ui.selectArchivedWorkspace("w-archived")
+        ui.selectSession("s1")
+        assertEquals("s1", ui.selectedId)
+        assertNull(ui.selectedArchivedWorkspaceId)
+    }
+
     // ── "at most one overlay" invariant (M4e Task 2) ──────────────────────────────────────────────
     // The two full-pane overlays draw opaquely over one another; both being open would leave a
     // stale one surfacing when the other closes. openLauncher()/openArchived() enforce exclusivity.

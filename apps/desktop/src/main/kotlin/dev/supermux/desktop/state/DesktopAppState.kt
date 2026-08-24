@@ -197,6 +197,8 @@ class DesktopAppState(
     val sessions: StateFlow<List<SessionInfo>> = _sessions
     private val _workspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
     val workspaces: StateFlow<List<WorkspaceDto>> = _workspaces
+    private val _archivedWorkspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
+    val archivedWorkspaces: StateFlow<List<WorkspaceDto>> = _archivedWorkspaces
     private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
     val messages: StateFlow<Map<String, List<LogEntry>>> = _messages
     private val _activity = MutableStateFlow<Map<String, List<ActivityEvent>>>(emptyMap())
@@ -349,6 +351,7 @@ class DesktopAppState(
                 // Straight replacement (not read-modify-write) — plain assignment is atomic.
                 _sessions.value = frame.sessions
                 _workspaces.value = frame.workspaces
+                _archivedWorkspaces.value = frame.archivedWorkspaces
                 _messages.value = frame.logs
                 _activity.value = frame.activity
                 _bgTasks.value = frame.bgTasks
@@ -426,6 +429,7 @@ class DesktopAppState(
                 // The broker re-broadcasts the same workspace (early add on spawn, then the
                 // authoritative one carrying repo_root / branch). Replace, never duplicate —
                 // the same trap SessionAdded documents above.
+                _archivedWorkspaces.update { cur -> cur.filter { it.id != frame.workspace.id } }
                 _workspaces.update { cur ->
                     if (cur.none { it.id == frame.workspace.id }) cur + frame.workspace
                     else cur.map { if (it.id == frame.workspace.id) frame.workspace else it }
@@ -439,7 +443,15 @@ class DesktopAppState(
                 }
             }
             is ServerFrame.WorkspaceRemoved -> {
+                val moving = _workspaces.value.find { it.id == frame.id }
                 _workspaces.update { cur -> cur.filter { it.id != frame.id } }
+                if (moving != null) {
+                    val archived = moving.copy(status = "archived")
+                    _archivedWorkspaces.update { cur ->
+                        if (cur.any { it.id == frame.id }) cur.map { if (it.id == frame.id) archived else it }
+                        else cur + archived
+                    }
+                }
             }
             is ServerFrame.WorkspacesReordered -> {
                 val rank = frame.orderedIds.withIndex().associate { (i, id) -> id to i }
@@ -1258,12 +1270,39 @@ class DesktopAppState(
      * to kill, so the row never left the sidebar and looked un-archivable.
      */
     fun archiveWorkspace(workspaceId: String) {
-        // Optimistic removal so the row leaves immediately; the workspace_removed
-        // frame is authoritative and peers get it too.
+        // Optimistic: live list drops it, archived fold gains it. workspace_removed
+        // is authoritative for peers (they still have the DTO in live list).
+        val moving = _workspaces.value.find { it.id == workspaceId }
         _workspaces.update { cur -> cur.filter { it.id != workspaceId } }
+        if (moving != null) {
+            val archived = moving.copy(status = "archived")
+            _archivedWorkspaces.update { cur ->
+                if (cur.any { it.id == workspaceId }) cur else cur + archived
+            }
+        }
         stateScope.launch {
             runCatching { api.archiveWorkspace(workspaceId) }
                 .onFailure { println("[DesktopAppState] archiveWorkspace failed: $it") }
+        }
+    }
+
+    /**
+     * Restore an archived workspace: unarchive the row and resume every chat.
+     * Optimistic move live; workspace_added is authoritative.
+     */
+    fun restoreWorkspace(workspaceId: String) {
+        val moving = _archivedWorkspaces.value.find { it.id == workspaceId }
+        _archivedWorkspaces.update { cur -> cur.filter { it.id != workspaceId } }
+        if (moving != null) {
+            val live = moving.copy(status = "active", archivedAt = null)
+            _workspaces.update { cur ->
+                if (cur.any { it.id == workspaceId }) cur.map { if (it.id == workspaceId) live else it }
+                else cur + live
+            }
+        }
+        stateScope.launch {
+            runCatching { api.restoreWorkspace(workspaceId) }
+                .onFailure { println("[DesktopAppState] restoreWorkspace failed: $it") }
         }
     }
 

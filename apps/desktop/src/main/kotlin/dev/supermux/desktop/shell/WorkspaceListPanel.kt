@@ -94,21 +94,19 @@ import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.softElevation
-import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
 import dev.supermux.session.SectionKey
-import dev.supermux.session.buildTaskSections
-import dev.supermux.session.combinedTaskSessions
 import dev.supermux.session.inferHomeDir
 import dev.supermux.session.projectLabel
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.workspace.WorkspaceActivity
 import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.workspace.isMultiAgent
 import dev.supermux.workspace.workspaceActivity
@@ -153,8 +151,10 @@ fun WorkspaceListPanel(
     /** Mute via the workspace's primary session. */
     onMute: (String, Boolean) -> Unit = { _, _ -> },
     onNewSession: () -> Unit = {},
-    archived: List<ArchivedDto> = emptyList(),
-    onResume: (String) -> Unit = {},
+    archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+    archivedActiveId: String? = null,
+    onSelectArchived: (String) -> Unit = {},
+    onRestore: (String) -> Unit = {},
     onOpenDraft: (String) -> Unit = {},
     onReorder: (List<String>) -> Unit = {},
     // ── Multi-host fleet (spec §5); all default to single-host (no badges/chips) ──
@@ -230,22 +230,10 @@ fun WorkspaceListPanel(
         }
     }
 
-    val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
-    val flatSections = remember(visibleSessions, lastBySession, archived) {
-        buildTaskSections(combinedTaskSessions(visibleSessions, archived), lastTs)
+    val archivedGroups = remember(archivedWorkspaces, effectiveHome) {
+        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome)
     }
-    // Settled sessions keyed by project path for the fold under each workspace group.
-    // Recency order matches buildTaskSections (SessionListPanel parity).
-    val settledByPath = remember(visibleSessions, archived, lastBySession) {
-        val combined = combinedTaskSessions(visibleSessions, archived)
-        val settled = combined.filter { it.sectionKey() == SectionKey.SETTLED }
-        settled.groupBy { it.repo_root ?: it.workdir }.mapValues { (_, list) ->
-            buildTaskSections(list, lastTs)
-                .firstOrNull { it.key == SectionKey.SETTLED }
-                ?.sessions
-                .orEmpty()
-        }
-    }
+    val archivedByPath = remember(archivedGroups) { archivedGroups.associate { it.key to it.workspaces } }
     // Draft sessions still live on the session model (workspaces don't draft yet).
     val draftSessions = remember(visibleSessions) {
         sessionsByUserOrder(visibleSessions.filter { it.sectionKey() == SectionKey.DRAFT })
@@ -257,8 +245,8 @@ fun WorkspaceListPanel(
         collapsedPaths = next
         onCollapsedPathsChange(next)
     }
-    var settledExpanded by remember { mutableStateOf(setOf<String>()) }
-    var flatSettledExpanded by remember { mutableStateOf(false) }
+    var archivedExpanded by remember { mutableStateOf(setOf<String>()) }
+    var flatArchivedExpanded by remember { mutableStateOf(false) }
 
     var renameTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -377,7 +365,7 @@ fun WorkspaceListPanel(
                 .testTag("workspaces_list")
                 .fillMaxSize(),
         ) {
-            if (groups.isEmpty() && flatSections.isEmpty()) {
+            if (groups.isEmpty() && archivedWorkspaces.isEmpty()) {
                 item(key = "empty_hint") {
                     Text(
                         "No workspaces yet",
@@ -514,24 +502,22 @@ fun WorkspaceListPanel(
                         )
                     }
                 }
-                val settledSection = flatSections.firstOrNull { it.key == SectionKey.SETTLED }
-                if (settledSection != null && settledSection.sessions.isNotEmpty()) {
-                    item(key = "flat:settled") {
-                        SettledFoldButton(
-                            count = settledSection.sessions.size,
-                            expanded = flatSettledExpanded,
-                            onClick = { flatSettledExpanded = !flatSettledExpanded },
+                val flatArchived = archivedGroups.flatMap { it.workspaces }
+                if (flatArchived.isNotEmpty()) {
+                    item(key = "flat:archived") {
+                        ArchivedFoldButton(
+                            count = flatArchived.size,
+                            expanded = flatArchivedExpanded,
+                            onClick = { flatArchivedExpanded = !flatArchivedExpanded },
                         )
                     }
-                    if (flatSettledExpanded) {
-                        items(settledSection.sessions, key = { "f:s:${it.id}" }) { s ->
-                            SessionRow(
-                                s, active = s.id == activeId, preview = lastBySession[s.id],
-                                lastReadAt = lastRead[s.id],
-                                host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
-                                projectTag = projectLabel(s, effectiveHome),
-                                onClick = { onResume(s.id) },
-                                onResume = { onResume(s.id) },
+                    if (flatArchivedExpanded) {
+                        items(flatArchived, key = { "f:a:${it.id}" }) { w ->
+                            ArchivedWorkspaceRow(
+                                w = w,
+                                active = w.id == archivedActiveId,
+                                onSelect = { onSelectArchived(w.id) },
+                                onRestore = { onRestore(w.id) },
                             )
                         }
                     }
@@ -626,54 +612,49 @@ fun WorkspaceListPanel(
                             )
                         }
                     }
-                    // Settled fold under this project (SessionListPanel: g.sections SETTLED).
                     val pathKey = g.key
-                    val settled = if (pathKey == PA_GROUP_KEY) emptyList()
-                    else settledByPath[pathKey].orEmpty()
-                    if (settled.isNotEmpty()) {
-                        item(key = "settled:${g.key}") {
-                            val open = settledExpanded.contains(g.key)
-                            SettledFoldButton(
-                                count = settled.size,
+                    val archivedHere = if (pathKey == PA_GROUP_KEY) emptyList()
+                    else archivedByPath[pathKey].orEmpty()
+                    if (archivedHere.isNotEmpty()) {
+                        item(key = "archived:${g.key}") {
+                            val open = archivedExpanded.contains(g.key)
+                            ArchivedFoldButton(
+                                count = archivedHere.size,
                                 expanded = open,
                                 onClick = {
-                                    settledExpanded = if (open) settledExpanded - g.key else settledExpanded + g.key
+                                    archivedExpanded = if (open) archivedExpanded - g.key else archivedExpanded + g.key
                                 },
                             )
                         }
-                        if (settledExpanded.contains(g.key)) {
-                            items(settled, key = { "s:${it.id}" }) { s ->
-                                SessionRow(
-                                    s, active = false, preview = lastBySession[s.id],
-                                    lastReadAt = lastRead[s.id],
-                                    host = if (showRowHostBadge) hostByRecord[sessionHost[s.id]] else null,
-                                    onClick = { onResume(s.id) },
-                                    onResume = { onResume(s.id) },
+                        if (archivedExpanded.contains(g.key)) {
+                            items(archivedHere, key = { "a:${it.id}" }) { w ->
+                                ArchivedWorkspaceRow(
+                                    w = w,
+                                    active = w.id == archivedActiveId,
+                                    onSelect = { onSelectArchived(w.id) },
+                                    onRestore = { onRestore(w.id) },
                                 )
                             }
                         }
                     }
                 }
-                // Empty live list but archived data: one global fold (empty-workspace chrome).
-                // SessionListPanel group mode would show nothing here; we keep a single fold so
-                // archived remains reachable when there are zero workspaces.
                 if (groups.isEmpty()) {
-                    val settledSection = flatSections.firstOrNull { it.key == SectionKey.SETTLED }
-                    if (settledSection != null && settledSection.sessions.isNotEmpty()) {
-                        item(key = "settled:all") {
-                            SettledFoldButton(
-                                count = settledSection.sessions.size,
-                                expanded = flatSettledExpanded,
-                                onClick = { flatSettledExpanded = !flatSettledExpanded },
+                    val allArchived = archivedGroups.flatMap { it.workspaces }
+                    if (allArchived.isNotEmpty()) {
+                        item(key = "archived:all") {
+                            ArchivedFoldButton(
+                                count = allArchived.size,
+                                expanded = flatArchivedExpanded,
+                                onClick = { flatArchivedExpanded = !flatArchivedExpanded },
                             )
                         }
-                        if (flatSettledExpanded) {
-                            items(settledSection.sessions, key = { "s:all:${it.id}" }) { s ->
-                                SessionRow(
-                                    s, active = false, preview = lastBySession[s.id],
-                                    lastReadAt = lastRead[s.id],
-                                    onClick = { onResume(s.id) },
-                                    onResume = { onResume(s.id) },
+                        if (flatArchivedExpanded) {
+                            items(allArchived, key = { "a:all:${it.id}" }) { w ->
+                                ArchivedWorkspaceRow(
+                                    w = w,
+                                    active = w.id == archivedActiveId,
+                                    onSelect = { onSelectArchived(w.id) },
+                                    onRestore = { onRestore(w.id) },
                                 )
                             }
                         }
@@ -723,9 +704,9 @@ fun WorkspaceListPanel(
     }
 }
 
-/** "Show N settled" / "Hide N settled" — shared by flat + per-group folds. */
+/** "Show N archived" / "Hide N archived" — shared by flat + per-group folds. */
 @Composable
-private fun SettledFoldButton(
+private fun ArchivedFoldButton(
     count: Int,
     expanded: Boolean,
     onClick: () -> Unit,
@@ -733,13 +714,53 @@ private fun SettledFoldButton(
     val cs = MaterialTheme.colorScheme
     TextButton(
         onClick = onClick,
-        modifier = Modifier.testTag("settled_fold"),
+        modifier = Modifier.testTag("archived_fold"),
     ) {
         Text(
-            if (expanded) "Hide $count settled" else "Show $count settled",
+            if (expanded) "Hide $count archived" else "Show $count archived",
             fontSize = 12.sp,
             color = cs.onSurfaceVariant,
         )
+    }
+}
+
+fun archivedWorkspaceRowContextLabels(): List<String> = listOf("Restore")
+
+@Composable
+private fun ArchivedWorkspaceRow(
+    w: WorkspaceDto,
+    active: Boolean,
+    onSelect: () -> Unit,
+    onRestore: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val rowBg = if (active) cs.surfaceContainer else Color.Transparent
+    ContextMenuArea(
+        items = {
+            archivedWorkspaceRowContextLabels().map { label ->
+                ContextMenuItem(label) { if (label == "Restore") onRestore() }
+            }
+        },
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(rowBg)
+                .clickable(onClick = onSelect)
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .testTag("archived_workspace_${w.id}"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                w.name,
+                fontSize = 13.sp,
+                color = cs.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

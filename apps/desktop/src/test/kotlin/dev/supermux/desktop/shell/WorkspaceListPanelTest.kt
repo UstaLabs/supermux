@@ -12,7 +12,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.host.HostView
-import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -205,35 +204,35 @@ class WorkspaceListPanelTest {
     }
 
     @Test
-    fun settledSection_appearsWhenArchivedDataIsSupplied() = runComposeUiTest {
+    fun archivedSection_appearsWhenArchivedWorkspacesAreSupplied() = runComposeUiTest {
         setContent {
             WorkspaceListPanel(
                 workspaces = emptyList(),
                 home = "/home/u",
                 activeId = null,
                 onOpen = {},
-                archived = listOf(
-                    ArchivedDto(id = "a1", name = "old sess", workdir = "/home/u/projects/app"),
+                archivedWorkspaces = listOf(
+                    ws("a1", "old ws", "/home/u/projects/app").copy(status = "archived"),
                 ),
             )
         }
-        onNodeWithText("Show 1 settled").assertIsDisplayed()
+        onNodeWithText("Show 1 archived").assertIsDisplayed()
     }
 
     @Test
-    fun settledSection_appearsUnderProjectGroupWhenArchivedMatchesPath() = runComposeUiTest {
+    fun archivedSection_appearsUnderProjectGroupWhenArchivedMatchesPath() = runComposeUiTest {
         setContent {
             WorkspaceListPanel(
                 workspaces = listOf(ws("w1", "live", "/home/u/projects/app")),
                 home = "/home/u",
                 activeId = null,
                 onOpen = {},
-                archived = listOf(
-                    ArchivedDto(id = "a1", name = "old sess", workdir = "/home/u/projects/app"),
+                archivedWorkspaces = listOf(
+                    ws("a1", "old ws", "/home/u/projects/app").copy(status = "archived"),
                 ),
             )
         }
-        onNodeWithText("Show 1 settled").assertIsDisplayed()
+        onNodeWithText("Show 1 archived").assertIsDisplayed()
     }
 
     @Test
@@ -288,30 +287,32 @@ class WorkspaceListPanelTest {
      * (orphan path + per-group) that stack three "Show N settled" buttons.
      */
     @Test
-    fun settledFold_exactlyOne_forLiveGroupWithSettledOnlyElsewhere() = runComposeUiTest {
+    fun archivedFold_exactlyOne_forLiveGroupWithArchivedOnlyElsewhere() = runComposeUiTest {
         setContent {
             WorkspaceListPanel(
                 workspaces = listOf(ws("w1", "live", "/home/u/projects/app")),
                 home = "/home/u",
                 activeId = null,
                 onOpen = {},
-                archived = listOf(
-                    ArchivedDto(id = "a1", name = "old-a", workdir = "/home/u/projects/app"),
-                    ArchivedDto(id = "a2", name = "old-b", workdir = "/home/u/projects/app"),
-                    // Settled-only project — SessionListPanel hides this; must not add a fold.
-                    ArchivedDto(id = "o1", name = "orphan-settled", workdir = "/home/u/projects/other"),
-                    ArchivedDto(id = "o2", name = "orphan-settled-2", workdir = "/home/u/projects/other"),
-                    ArchivedDto(id = "o3", name = "orphan-settled-3", workdir = "/home/u/projects/third"),
+                archivedWorkspaces = listOf(
+                    ws("a1", "old-a", "/home/u/projects/app").copy(status = "archived"),
+                    ws("a2", "old-b", "/home/u/projects/app").copy(status = "archived"),
+                    ws("o1", "orphan", "/home/u/projects/other").copy(status = "archived"),
+                    ws("o2", "orphan-2", "/home/u/projects/other").copy(status = "archived"),
+                    ws("o3", "orphan-3", "/home/u/projects/third").copy(status = "archived"),
                 ),
             )
         }
-        // Exactly one fold in the tree (assert the count, not mere presence).
-        onAllNodesWithTag("settled_fold").assertCountEquals(1)
-        onNodeWithText("Show 2 settled").assertIsDisplayed()
-        // Must not stack settled-only / orphan chrome.
-        onNodeWithText("Show 3 settled").assertDoesNotExist()
-        onNodeWithText("Show 5 settled").assertDoesNotExist()
-        onNodeWithText("Show 1 settled").assertDoesNotExist()
+        onAllNodesWithTag("archived_fold").assertCountEquals(1)
+        onNodeWithText("Show 2 archived").assertIsDisplayed()
+        onNodeWithText("Show 3 archived").assertDoesNotExist()
+        onNodeWithText("Show 5 archived").assertDoesNotExist()
+        onNodeWithText("Show 1 archived").assertDoesNotExist()
+    }
+
+    @Test
+    fun archivedRowContextMenu_offersRestoreOnly() {
+        assertEquals(listOf("Restore"), archivedWorkspaceRowContextLabels())
     }
 
     @Test

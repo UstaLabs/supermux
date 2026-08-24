@@ -14,6 +14,8 @@ import type { Database as Db } from "bun:sqlite"
  */
 export type WorkspaceDeps = {
   archiveSession: (sessionId: string) => Promise<void>
+  /** Inverse of archiveSession: archived → live. */
+  resumeSession: (sessionId: string) => Promise<void>
   /** scope is "w:<workspaceId>" for a workspace terminal, or the session name/id for an agent one. */
   closeTerminal: (scope: string, terminalId: string) => Promise<void>
   stopDisplay: (displayId: string) => Promise<void>
@@ -109,6 +111,29 @@ export class WorkspaceService {
       await this.deps.archiveSession(sessionId)
     }
     this.store.archive(workspaceId)
+  }
+
+  /**
+   * Inverse of archiveWorkspace: unarchive the row and resume every archived
+   * chat. A resume failure on one session does not roll back the others or
+   * the workspace row.
+   */
+  async restoreWorkspace(workspaceId: string): Promise<void> {
+    const ws = this.store.getById(workspaceId)
+    if (!ws) throw new Error("workspace not found")
+    if (ws.status === "archived") this.store.unarchive(workspaceId)
+
+    for (const sessionId of this.store.chatSessionIds(workspaceId)) {
+      const row = this.db
+        ?.query("SELECT status FROM sessions WHERE id = ?")
+        .get(sessionId) as { status?: string } | null
+      if (row?.status !== "archived") continue
+      try {
+        await this.deps.resumeSession(sessionId)
+      } catch {
+        // Keep restoring the rest; the workspace is already live.
+      }
+    }
   }
 
   private linkSession(sessionId: string, workspaceId: string): void {

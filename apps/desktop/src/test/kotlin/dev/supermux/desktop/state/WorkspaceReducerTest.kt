@@ -89,6 +89,30 @@ class WorkspaceReducerTest {
         app.reduce(ServerFrame.Snapshot(workspaces = listOf(ws("w1"), ws("w2"))))
         app.reduce(ServerFrame.WorkspaceRemoved("w1"))
         assertEquals(listOf("w2"), app.workspaces.value.map { it.id })
+        assertEquals(listOf("w1"), app.archivedWorkspaces.value.map { it.id })
+        assertEquals("archived", app.archivedWorkspaces.value[0].status)
+    }
+
+    @Test
+    fun snapshotSeedsArchivedWorkspaces() {
+        val app = app()
+        app.reduce(
+            ServerFrame.Snapshot(
+                workspaces = listOf(ws("w1")),
+                archivedWorkspaces = listOf(ws("w2").copy(status = "archived")),
+            ),
+        )
+        assertEquals(listOf("w1"), app.workspaces.value.map { it.id })
+        assertEquals(listOf("w2"), app.archivedWorkspaces.value.map { it.id })
+    }
+
+    @Test
+    fun workspaceAddedLeavesTheArchivedList() {
+        val app = app()
+        app.reduce(ServerFrame.Snapshot(archivedWorkspaces = listOf(ws("w1").copy(status = "archived"))))
+        app.reduce(ServerFrame.WorkspaceAdded(ws("w1")))
+        assertEquals(listOf("w1"), app.workspaces.value.map { it.id })
+        assertEquals(emptyList(), app.archivedWorkspaces.value.map { it.id })
     }
 
     @Test

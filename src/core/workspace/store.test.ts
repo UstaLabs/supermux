@@ -138,6 +138,18 @@ test("archive sets the status and the timestamp and hides it from list()", () =>
   expect(got.archived_at).toBeTruthy()
 })
 
+test("unarchive returns the workspace to the live list", () => {
+  const { ws } = store()
+  const w = ws.create({ name: "a", workdir: "/w" })
+  ws.archive(w.id)
+  ws.unarchive(w.id)
+
+  expect(ws.list().map((x) => x.id)).toEqual([w.id])
+  const got = ws.getById(w.id)!
+  expect(got.status).toBe("active")
+  expect(got.archived_at).toBeUndefined()
+})
+
 test("list returns active workspaces in sort_order then id", () => {
   const { ws } = store()
   const a = ws.create({ name: "a", workdir: "/w", sort_order: 2 })

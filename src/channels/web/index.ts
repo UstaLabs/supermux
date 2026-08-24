@@ -81,7 +81,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -235,6 +235,8 @@ export interface WebChannelOpts {
   patchWorkspace?: (id: string, patch: { name?: string; layout?: unknown; activeViewId?: string })
     => import("../../core/workspace/dto").WorkspaceDto
   archiveWorkspace?: (id: string) => Promise<void>
+  restoreWorkspace?: (id: string) => Promise<import("../../core/workspace/dto").WorkspaceDto>
+  listArchivedWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
   reorderWorkspaces?: (orderedIds: string[]) => void
   addWorkspaceView?: (workspaceId: string, args: { id?: string; kind: string; state: unknown; title?: string; groupId?: string })
     => import("../../core/workspace/dto").ViewDto
@@ -972,10 +974,11 @@ export class WebChannel implements Channel {
       const proxies = this.opts.listProxies?.() ?? []
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
+      const archivedWorkspaces = this.opts.listArchivedWorkspaces?.() ?? []
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
@@ -2559,6 +2562,9 @@ export class WebChannel implements Channel {
     if (method === "GET" && path === "/workspaces") {
       return this.json({ workspaces: this.opts.listWorkspaces?.() ?? [] })
     }
+    if (method === "GET" && path === "/archived-workspaces") {
+      return this.json({ workspaces: this.opts.listArchivedWorkspaces?.() ?? [] })
+    }
     if (method === "POST" && path === "/workspaces") {
       if (!this.opts.createWorkspace) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
@@ -2611,6 +2617,19 @@ export class WebChannel implements Channel {
         return new Response(null, { status: 204 })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
+      }
+    }
+    if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/restore$/)) {
+      if (!this.opts.restoreWorkspace) return this.json({ error: "not configured" }, 503)
+      const id = decodeURIComponent(path.split("/")[2]!)
+      try {
+        const ws = await this.opts.restoreWorkspace(id)
+        this.broadcastToAll({ type: "workspace_added", workspace: ws })
+        return this.json(ws)
+      } catch (err: any) {
+        const msg = err?.message ?? String(err)
+        const code = msg.includes("not found") ? 404 : 500
+        return this.json({ error: msg }, code)
       }
     }
     if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/views$/)) {
