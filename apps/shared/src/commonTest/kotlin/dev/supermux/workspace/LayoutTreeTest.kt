@@ -264,4 +264,49 @@ class LayoutTreeTest {
         assertNull(validateLayout(moveViewToGroup(l, "a", "g2", 0)!!))
         assertNull(validateLayout(splitGroup(group("g1", listOf("a", "b"), "a"), "g1", "b", "column", "gNew")))
     }
+
+    @Test
+    fun subtreeCovering_returns_the_group_when_ids_match_exactly() {
+        val g = LayoutNode.Group("g1", listOf("v1", "v2"), "v1")
+        assertEquals(g, subtreeCovering(g, setOf("v1", "v2")))
+    }
+
+    @Test
+    fun subtreeCovering_walks_into_the_smallest_exact_node() {
+        val g2 = LayoutNode.Group("g2", listOf("v2", "v3"), "v2")
+        val split = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(LayoutNode.Group("g1", listOf("v1"), "v1"), g2),
+        )
+        assertEquals(g2, subtreeCovering(split, setOf("v2", "v3")))
+        assertEquals(split, subtreeCovering(split, setOf("v1", "v2", "v3")))
+    }
+
+    @Test
+    fun subtreeCovering_is_null_when_ids_are_not_one_node() {
+        val split = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(
+                LayoutNode.Group("g1", listOf("v1", "v2"), "v1"),
+                LayoutNode.Group("g2", listOf("v3"), "v3"),
+            ),
+        )
+        assertNull(subtreeCovering(split, setOf("v1", "v3")))
+    }
+
+    @Test
+    fun hideClaimed_strips_ids_and_collapses() {
+        val split = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(
+                LayoutNode.Group("g1", listOf("v1"), "v1"),
+                LayoutNode.Group("g2", listOf("v2"), "v2"),
+            ),
+        )
+        assertEquals(LayoutNode.Group("g2", listOf("v2"), "v2"), hideClaimed(split, setOf("v1")))
+        assertNull(hideClaimed(split, setOf("v1", "v2")))
+    }
 }

@@ -212,6 +212,43 @@ fun removeViewFromLayout(node: LayoutNode, viewId: String): LayoutNode? {
     return normalizeLayout(strip(node))
 }
 
+/**
+ * Smallest node whose view ids are exactly [viewIds]. Null when the set is empty,
+ * not fully contained, or not equal to any one node's ids (e.g. a diagonal claim).
+ *
+ * Desktop-only: extra OS windows host a claim-set subtree. No TypeScript counterpart.
+ */
+fun subtreeCovering(node: LayoutNode, viewIds: Set<String>): LayoutNode? {
+    if (viewIds.isEmpty()) return null
+    val here = collectViewIds(node).toSet()
+    if (!here.containsAll(viewIds)) return null
+    if (here != viewIds) {
+        return when (node) {
+            is LayoutNode.Group -> null
+            is LayoutNode.Split -> node.children.firstNotNullOfOrNull { subtreeCovering(it, viewIds) }
+        }
+    }
+    if (node is LayoutNode.Split) {
+        node.children.firstNotNullOfOrNull { subtreeCovering(it, viewIds) }?.let { return it }
+    }
+    return node
+}
+
+/**
+ * Tree minus [claimed] view ids, then [normalizeLayout]. Null when nothing is left.
+ *
+ * What the main canvas draws after other OS windows have claimed subtrees.
+ * Empty [claimed] is a no-op (the empty-claim-means-whole-canvas case lives at the caller).
+ */
+fun hideClaimed(node: LayoutNode, claimed: Set<String>): LayoutNode? {
+    if (claimed.isEmpty()) return node
+    var t: LayoutNode? = node
+    for (id in claimed) {
+        t = t?.let { removeViewFromLayout(it, id) }
+    }
+    return t?.let { normalizeLayout(it) }
+}
+
 /** The id of the first group in document order, or null for a tree with no group. */
 fun firstGroupId(node: LayoutNode): String? = when (node) {
     is LayoutNode.Group -> node.id
