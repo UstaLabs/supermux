@@ -275,4 +275,56 @@ class WindowHostsTest {
         assertNull(r.layoutFor(r.main(), tree()))
         assertEquals(tree(), r.layoutFor(extra, tree()))
     }
+
+    @Test
+    fun dragEndedOutsideIsTrueWhenPointerMissesEveryWindow() {
+        val windows = listOf(
+            WindowBounds(0f, 0f, 100f, 100f),
+            WindowBounds(200f, 0f, 100f, 100f),
+        )
+        assertTrue(dragEndedOutside(150f, 50f, windows))
+        assertTrue(dragEndedOutside(-1f, 0f, emptyList()))
+    }
+
+    @Test
+    fun dragEndedOutsideIsFalseWhenPointerHitsAWindow() {
+        val windows = listOf(
+            WindowBounds(0f, 0f, 100f, 100f),
+            WindowBounds(200f, 0f, 100f, 100f),
+        )
+        assertTrue(!dragEndedOutside(50f, 50f, windows))
+        assertTrue(!dragEndedOutside(200f, 0f, windows))
+        assertTrue(!dragEndedOutside(299.9f, 99.9f, windows))
+    }
+
+    @Test
+    fun transferExtraToMainDropsTheClaim() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = tree()
+        assertNotNull(r.tryClaim("ws", setOf("v3"), bounds, "e", t))
+        assertTrue(r.transfer("v3", r.main().id, t))
+        assertTrue(r.extras("ws").isEmpty())
+        assertEquals(t, r.layoutFor(r.main(), t))
+    }
+
+    @Test
+    fun transferExtraToExtraMovesTheViewClaim() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = tree()
+        assertNotNull(r.tryClaim("ws", setOf("v1", "v2"), bounds, "a", t))
+        assertNotNull(r.tryClaim("ws", setOf("v3"), bounds, "b", t))
+        val next = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(
+                LayoutNode.Group("g1", listOf("v1"), "v1"),
+                LayoutNode.Group("g2", listOf("v3", "v2"), "v3"),
+            ),
+        )
+        assertTrue(r.transfer("v2", "b", next))
+        assertEquals(setOf("v1"), r.extras("ws").first { it.id == "a" }.claimedViewIds)
+        assertEquals(setOf("v3", "v2"), r.extras("ws").first { it.id == "b" }.claimedViewIds)
+    }
 }

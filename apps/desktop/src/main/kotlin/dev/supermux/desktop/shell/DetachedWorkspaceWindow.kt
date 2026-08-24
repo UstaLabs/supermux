@@ -169,6 +169,10 @@ internal fun WorkspacePanes(
             }
         },
         dragState = tabDragState,
+        onDragEndMiss = { viewId -> onTearOutTab(viewId) },
+        onDocked = { viewId ->
+            ui.windowHosts.transfer(viewId, hostId, layoutSync.tree)
+        },
         onMoveToWorkspace = { viewId, toWs ->
             if (toWs != current.id) {
                 app.moveViewToWorkspace(viewId, toWs)

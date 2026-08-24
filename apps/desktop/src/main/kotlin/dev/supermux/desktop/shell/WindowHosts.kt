@@ -10,7 +10,16 @@ import dev.supermux.workspace.hideClaimed
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.subtreeCovering
 
-data class WindowBounds(val x: Float, val y: Float, val width: Float, val height: Float)
+data class WindowBounds(val x: Float, val y: Float, val width: Float, val height: Float) {
+    fun contains(pointerX: Float, pointerY: Float): Boolean =
+        pointerX >= x && pointerX < x + width && pointerY >= y && pointerY < y + height
+}
+
+fun dragEndedOutside(
+    pointerX: Float,
+    pointerY: Float,
+    windows: List<WindowBounds>,
+): Boolean = windows.none { it.contains(pointerX, pointerY) }
 
 /**
  * One OS window hosting a workspace slice.
@@ -139,6 +148,45 @@ class WindowHostRegistry(mainId: String = "main") {
 
     fun setWorkspaceOnMain(workspaceId: String) {
         mainHost = mainHost.copy(workspaceId = workspaceId)
+    }
+
+    /**
+     * Move [viewId] membership from its current extra claim (or main, if unclaimed)
+     * onto [toHostId]. Call after the layout tree already reflects the drop
+     * ([moveViewToGroup] / split) so [subtreeCovering] can validate the new sets.
+     */
+    fun transfer(viewId: String, toHostId: String, tree: LayoutNode): Boolean {
+        val target = liveHost(toHostId) ?: return false
+        val sourceExtra = extras().firstOrNull { viewId in it.claimedViewIds }
+        if (target.isMain) {
+            if (sourceExtra == null) return false
+            applyRemaining(sourceExtra, sourceExtra.claimedViewIds - viewId, tree)
+            bumpExtras()
+            return true
+        }
+        if (target.id == sourceExtra?.id) return false
+        val newTargetClaim = if (target.claimedViewIds.isEmpty()) {
+            emptySet()
+        } else {
+            target.claimedViewIds + viewId
+        }
+        if (newTargetClaim.isNotEmpty() && subtreeCovering(tree, newTargetClaim) == null) {
+            return false
+        }
+        extraHosts[target.id] = target.copy(claimedViewIds = newTargetClaim)
+        if (sourceExtra != null) {
+            applyRemaining(sourceExtra, sourceExtra.claimedViewIds - viewId, tree)
+        }
+        bumpExtras()
+        return true
+    }
+
+    private fun applyRemaining(host: WindowHost, remaining: Set<String>, tree: LayoutNode) {
+        if (remaining.isEmpty() || subtreeCovering(tree, remaining) == null) {
+            extraHosts.remove(host.id)
+        } else {
+            extraHosts[host.id] = host.copy(claimedViewIds = remaining)
+        }
     }
 
     private fun liveHost(id: String): WindowHost? =
