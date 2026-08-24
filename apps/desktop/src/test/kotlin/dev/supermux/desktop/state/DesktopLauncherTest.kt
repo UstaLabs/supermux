@@ -251,6 +251,7 @@ class DesktopLauncherTest {
         assertEquals("src-1", req.inheritFrom)
         assertEquals("feat-x", req.name)
         assertEquals("ws-src", req.workspaceId)
+        assertEquals("pick up here", req.firstMessage)
         assertNull(req.worktree)
     }
 

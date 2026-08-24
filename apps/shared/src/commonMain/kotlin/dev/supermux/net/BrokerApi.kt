@@ -188,6 +188,11 @@ data class SpawnRequest(
      * a name from the workdir basename (often a uuid under ~/.mux/worktrees).
      */
     val inheritFrom: String? = null,
+    /**
+     * First user turn the broker delivers after the session is live (continue
+     * handoff). The client must not also WS-send this text — that raced spawn.
+     */
+    val firstMessage: String? = null,
 )
 
 /** Draft composer payload on POST /sessions (mirrors web draftPayload). */

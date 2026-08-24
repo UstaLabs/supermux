@@ -105,6 +105,18 @@ test("POST /sessions with userStatus:draft → creates draft, does not spawn", a
   expect(spawnCalls).toHaveLength(0)
 })
 
+test("POST /sessions with firstMessage → forwarded to spawn", async () => {
+  const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
+    method: "POST",
+    headers: authed(),
+    body: JSON.stringify({ workdir: "~/project-b/", agent: "claude", inheritFrom: "src-1", firstMessage: "pick up here" }),
+  })
+  expect(res.status).toBe(200)
+  expect(spawnCalls).toHaveLength(1)
+  expect(spawnCalls[0].inheritFrom).toBe("src-1")
+  expect(spawnCalls[0].firstMessage).toBe("pick up here")
+})
+
 test("POST /sessions with userStatus:in_progress → spawns as usual", async () => {
   const res = await fetch(`http://127.0.0.1:${PORT}/sessions`, {
     method: "POST",

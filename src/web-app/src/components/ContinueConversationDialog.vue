@@ -8,7 +8,6 @@ import LauncherModelPicker from "@/components/LauncherModelPicker.vue"
 import LauncherEffortPicker from "@/components/LauncherEffortPicker.vue"
 import { api } from "@/api/client"
 import { useSessions, type Session } from "@/stores/sessions"
-import { usePendingFirstMessage } from "@/stores/pendingFirstMessage"
 import {
   buildHandoffPrefill,
   defaultContinueAgent,
@@ -27,7 +26,6 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const sessions = useSessions()
-const pending = usePendingFirstMessage()
 
 const agent = ref<ContinueAgent>("claude")
 const model = ref("")
@@ -97,6 +95,7 @@ async function start() {
       worktree: false,
       name: source.name,
       inheritFrom: source.id,
+      firstMessage: text,
     })
     sessions.add({
       id: result.id,
@@ -110,7 +109,6 @@ async function start() {
       repo_root: result.repo_root ?? source.repo_root,
       session_branch: result.session_branch ?? source.session_branch,
     })
-    pending.set(result.id, { text, files: [] })
     close()
     await router.push(`/s/${result.id}`)
   } catch (err: unknown) {

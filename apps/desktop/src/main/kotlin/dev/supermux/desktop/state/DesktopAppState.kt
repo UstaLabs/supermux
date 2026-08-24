@@ -1817,6 +1817,8 @@ class DesktopAppState(
         name: String? = null,
         /** Source session id for "Continue in new conversation" (broker inheritFrom). */
         inheritFrom: String? = null,
+        /** Broker delivers this after spawn (continue handoff). Not sent on the client WS. */
+        firstMessage: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
@@ -1839,6 +1841,7 @@ class DesktopAppState(
                 reasoningLevel = reasoningLevel?.ifBlank { null },
                 workspaceId = workspaceId,
                 inheritFrom = inheritFrom?.ifBlank { null },
+                firstMessage = firstMessage?.ifBlank { null },
             ),
         )
         val sessionId = resolveSpawnId(resp, _sessions.value)
@@ -1858,8 +1861,9 @@ class DesktopAppState(
 
     /**
      * "Continue in a new conversation": same workdir as [source], no new worktree, inherit
-     * display/worktree metadata via [SpawnRequest.inheritFrom], then send [message] as the first
-     * turn. [agent]/[model]/[reasoningLevel] come from the continue dialog (web/iOS parity);
+     * display/worktree metadata via [SpawnRequest.inheritFrom], and pass [message] as
+     * [SpawnRequest.firstMessage] so the broker delivers the first turn after spawn.
+     * [agent]/[model]/[reasoningLevel] come from the continue dialog (web/iOS parity);
      * blank [agent] falls back to [dev.supermux.session.HandoffPrefill.defaultAgent].
      * Returns the new session id, or null on failure.
      */
@@ -1887,8 +1891,9 @@ class DesktopAppState(
             workspaceId = workspaceId,
             name = source.name,
             inheritFrom = source.id,
+            firstMessage = text,
         ) ?: return null
-        sendMessage(newId, text, consumeFirstUploads(newId))
+        consumeFirstUploads(newId)
         return newId
     }
 

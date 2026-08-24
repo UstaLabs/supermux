@@ -97,4 +97,10 @@ class WorkspaceApiTest {
         // "make a new workspace", so an accidental null string would be a lie.
         assertEquals(false, json.encodeToString(SpawnRequest(workdir = "/w")).contains("workspaceId"))
     }
+
+    @Test
+    fun spawnRequestCarriesFirstMessageForBrokerDelivery() {
+        val body = SpawnRequest(workdir = "/w", firstMessage = "handoff")
+        assertEquals(true, json.encodeToString(body).contains("\"firstMessage\":\"handoff\""))
+    }
 }

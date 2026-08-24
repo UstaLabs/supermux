@@ -237,11 +237,11 @@ struct ContinueConversationSheet: View {
                 worktree: false,
                 baseBranch: nil,
                 reasoningLevel: reasoningLevel,
-                inheritFrom: source.id
+                inheritFrom: source.id,
+                firstMessage: text
             )
             await MainActor.run {
                 if let id, !id.isEmpty {
-                    broker.send(id, text)
                     onStarted(id)
                 } else {
                     failed = true

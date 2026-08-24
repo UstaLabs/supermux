@@ -1564,6 +1564,16 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             draft_payload: entry.draft_payload,
           },
         })
+        // Continue / spawn first turn: deliver AFTER session_added so the
+        // client already has the row when message_append lands. spawnSession
+        // has already waited for a persistent agent to connect.
+        const first = args.firstMessage?.trim()
+        if (first) {
+          const delivered = await deliverUserMessage(entry.id, first)
+          if (!delivered.ok) {
+            log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
+          }
+        }
       }
       return {
         id: entry?.id ?? r.session_id,
