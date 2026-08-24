@@ -1,5 +1,8 @@
 package dev.supermux.desktop.shell
 
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -96,6 +99,13 @@ internal fun DetachedWorkspaceWindow(
         onCloseCandidate = { closeCandidate = it },
         sessionNames = sessionNames,
         modifier = Modifier.fillMaxSize().testTag("workspace_layout_host_extra"),
+        onTearOutTab = { viewId ->
+            val layoutSync = bind.ws.layoutSync
+            tearOutTabLive(ui.windowHosts, layoutSync.tree, viewId, current.id) { next ->
+                layoutSync.edit { next }
+                layoutSync.tree
+            }
+        },
     )
 }
 
@@ -122,6 +132,7 @@ internal fun WorkspacePanes(
     onCloseCandidate: (ViewDto?) -> Unit,
     sessionNames: Map<String, String>,
     modifier: Modifier,
+    onTearOutTab: (String) -> Unit = {},
 ) {
     val layoutSync = ws.layoutSync
     val viewsById = ws.viewsById
@@ -173,13 +184,21 @@ internal fun WorkspacePanes(
                 ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
                 ?.stateString("path")
             if (filePath == null) {
-                DefaultTabChip(
-                    itemId = itemId,
-                    title = v?.let { viewTitle(it) } ?: "view",
-                    state = tabState,
-                    labelFont = MonoFontFamily,
-                    onClose = { _ -> onCloseCandidate(v) },
-                )
+                ContextMenuArea(
+                    items = {
+                        listOf(ContextMenuItem("Move to New Window") { onTearOutTab(itemId) })
+                    },
+                ) {
+                    Box(Modifier.testTag("tab-move-to-window-$itemId")) {
+                    DefaultTabChip(
+                        itemId = itemId,
+                        title = v?.let { viewTitle(it) } ?: "view",
+                        state = tabState,
+                        labelFont = MonoFontFamily,
+                        onClose = { _ -> onCloseCandidate(v) },
+                    )
+                    }
+                }
             } else {
                 WorkspaceFileTab(
                     itemId = itemId,
@@ -194,6 +213,7 @@ internal fun WorkspacePanes(
                         previewModes[itemId] = previewModes[itemId] != true
                     },
                     onClose = { _ -> onCloseCandidate(v) },
+                    onMoveToNewWindow = { onTearOutTab(itemId) },
                 )
             }
         },

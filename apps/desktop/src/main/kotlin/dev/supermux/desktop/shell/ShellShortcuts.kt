@@ -23,6 +23,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
@@ -36,17 +37,19 @@ import androidx.compose.ui.input.key.type
  * approximate — see mapShellShortcut.
  */
 enum class ShellShortcut {
-    ToggleSidebar, NewSession,
+    ToggleSidebar, NewSession, MoveToNewWindow,
 }
 
 /**
  * Pure key→action mapping (platform-independent, keyed on the letter so it is unit-testable off the
  * device). Returns null when the letter is not a bound shortcut.
+ *
+ * Ctrl/Cmd+Shift+N is MoveToNewWindow; Ctrl/Cmd+N remains NewSession. No collision.
  */
-fun mapShellShortcut(letter: Char): ShellShortcut? =
+fun mapShellShortcut(letter: Char, shift: Boolean = false): ShellShortcut? =
     when (letter.uppercaseChar()) {
         'B' -> ShellShortcut.ToggleSidebar
-        'N' -> ShellShortcut.NewSession
+        'N' -> if (shift) ShellShortcut.MoveToNewWindow else ShellShortcut.NewSession
         else -> null
     }
 
@@ -55,10 +58,12 @@ fun applyShellShortcut(
     shortcut: ShellShortcut,
     ui: ShellUiState,
     onNewSession: () -> Unit,
+    onMoveToNewWindow: () -> Unit = {},
 ) {
     when (shortcut) {
         ShellShortcut.ToggleSidebar -> ui.sidebarCollapsed = !ui.sidebarCollapsed
         ShellShortcut.NewSession -> onNewSession()
+        ShellShortcut.MoveToNewWindow -> onMoveToNewWindow()
     }
 }
 
@@ -77,11 +82,12 @@ private fun Key.shortcutLetter(): Char? = when (this) {
 fun Modifier.shellShortcuts(
     ui: ShellUiState,
     onNewSession: () -> Unit,
+    onMoveToNewWindow: () -> Unit = {},
 ): Modifier = onKeyEvent { event ->
     if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
     if (!event.isCtrlPressed && !event.isMetaPressed) return@onKeyEvent false
     val letter = event.key.shortcutLetter() ?: return@onKeyEvent false
-    val shortcut = mapShellShortcut(letter) ?: return@onKeyEvent false
-    applyShellShortcut(shortcut, ui, onNewSession)
+    val shortcut = mapShellShortcut(letter, shift = event.isShiftPressed) ?: return@onKeyEvent false
+    applyShellShortcut(shortcut, ui, onNewSession, onMoveToNewWindow)
     true
 }

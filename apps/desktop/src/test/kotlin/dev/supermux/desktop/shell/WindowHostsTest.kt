@@ -1,6 +1,7 @@
 package dev.supermux.desktop.shell
 
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.hideClaimed
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.subtreeCovering
@@ -210,5 +211,68 @@ class WindowHostsTest {
     fun planTearOutTabUnknownViewIsNull() {
         val t = LayoutNode.Group("g1", listOf("v1"), "v1")
         assertNull(planTearOutTab(t, "missing", "g-new"))
+    }
+
+    @Test
+    fun tearOutTabTwoTabGroupYieldsExtraHostAndMainKeepsTheOther() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = LayoutNode.Group("g1", listOf("v1", "v2"), "v1")
+        var applied: LayoutNode? = null
+        val extra = tearOutTab(
+            registry = r,
+            tree = t,
+            viewId = "v2",
+            workspaceId = "ws",
+            newGroupId = "g-new",
+            bounds = bounds,
+            hostId = "extra-1",
+            edit = { next -> applied = next; next },
+        )
+        assertNotNull(extra)
+        assertEquals(setOf("v2"), extra.claimedViewIds)
+        val next = applied!!
+        assertEquals(subtreeCovering(next, setOf("v2")), r.layoutFor(extra, next))
+        assertEquals(hideClaimed(next, setOf("v2")), r.layoutFor(r.main(), next))
+        assertEquals(setOf("v1"), collectViewIds(r.layoutFor(r.main(), next)!!).toSet())
+    }
+
+    @Test
+    fun tearOutTabUnknownViewIsNull() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = LayoutNode.Group("g1", listOf("v1"), "v1")
+        assertNull(
+            tearOutTab(r, t, "missing", "ws", "g-new", bounds, "extra-1") { it },
+        )
+        assertTrue(r.extras("ws").isEmpty())
+    }
+
+    @Test
+    fun tearOutGroupClaimsWholeGroup() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = tree()
+        val extra = tearOutGroup(r, t, "g1", "ws", bounds, "extra-g")
+        assertNotNull(extra)
+        assertEquals(setOf("v1", "v2"), extra.claimedViewIds)
+        assertEquals(hideClaimed(t, setOf("v1", "v2")), r.layoutFor(r.main(), t))
+    }
+
+    @Test
+    fun tearOutGroupUnknownIsNull() {
+        val r = WindowHostRegistry()
+        assertNull(tearOutGroup(r, tree(), "missing", "ws", bounds, "x"))
+    }
+
+    @Test
+    fun tearOutCanvasClaimsWholeWorkspace() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val extra = tearOutCanvas(r, "ws", bounds, "canvas")
+        assertNotNull(extra)
+        assertTrue(extra.claimedViewIds.isEmpty())
+        assertNull(r.layoutFor(r.main(), tree()))
+        assertEquals(tree(), r.layoutFor(extra, tree()))
     }
 }

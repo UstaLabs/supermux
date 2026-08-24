@@ -71,6 +71,10 @@ import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.tearOutCanvasLive
+import dev.supermux.desktop.shell.tearOutGroupLive
+import dev.supermux.workspace.collectActiveViewIds
+import dev.supermux.workspace.groupIdOf
 import java.io.File
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
@@ -380,6 +384,23 @@ fun main() {
                     Menu("File", mnemonic = 'F') {
                         Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
                             ui.openLauncher()
+                        }
+                        Item("Move workspace to New Window") {
+                            val bind = ui.panesBind
+                            if (bind != null) {
+                                tearOutCanvasLive(ui.windowHosts, bind.current.id)
+                            }
+                        }
+                        Item("Move group to New Window") {
+                            val bind = ui.panesBind
+                            if (bind != null) {
+                                val tree = bind.ws.layoutSync.tree
+                                val viewId = collectActiveViewIds(tree).firstOrNull()
+                                val gid = viewId?.let { groupIdOf(tree, it) }
+                                if (gid != null) {
+                                    tearOutGroupLive(ui.windowHosts, tree, gid, bind.current.id)
+                                }
+                            }
                         }
                         Item("Archived…") {
                             ui.openArchived()

@@ -171,6 +171,91 @@ fun planTearOutTab(
     return Pair({ n -> splitGroup(n, groupId, viewId, "row", newGroupId) }, claim)
 }
 
+fun defaultTearOutBounds(from: WindowBounds = WindowBounds(0f, 0f, 1440f, 900f)): WindowBounds =
+    WindowBounds(from.x + 80f, from.y + 80f, 800f, 600f)
+
+/**
+ * Split [viewId] into its own group if needed, apply [edit] to the transformed tree, then claim
+ * that view on an extra host. [edit] is typically `{ t -> layoutSync.edit { t }; layoutSync.tree }`
+ * or `{ it }` in unit tests.
+ */
+fun tearOutTab(
+    registry: WindowHostRegistry,
+    tree: LayoutNode,
+    viewId: String,
+    workspaceId: String,
+    newGroupId: String,
+    bounds: WindowBounds,
+    hostId: String,
+    edit: (LayoutNode) -> LayoutNode,
+): WindowHost? {
+    val plan = planTearOutTab(tree, viewId, newGroupId) ?: return null
+    val nextTree = edit(plan.first(tree))
+    return registry.tryClaim(workspaceId, plan.second, bounds, hostId, nextTree)
+}
+
+fun tearOutGroup(
+    registry: WindowHostRegistry,
+    tree: LayoutNode,
+    groupId: String,
+    workspaceId: String,
+    bounds: WindowBounds,
+    hostId: String,
+): WindowHost? {
+    val group = groupById(tree, groupId) ?: return null
+    val claim = group.viewIds.toSet()
+    if (claim.isEmpty()) return null
+    return registry.tryClaim(workspaceId, claim, bounds, hostId, tree)
+}
+
+fun tearOutCanvas(
+    registry: WindowHostRegistry,
+    workspaceId: String,
+    bounds: WindowBounds,
+    hostId: String,
+): WindowHost? = registry.tryClaimCanvas(workspaceId, bounds, hostId)
+
+fun tearOutTabLive(
+    registry: WindowHostRegistry,
+    tree: LayoutNode,
+    viewId: String,
+    workspaceId: String,
+    edit: (LayoutNode) -> LayoutNode,
+): WindowHost? = tearOutTab(
+    registry = registry,
+    tree = tree,
+    viewId = viewId,
+    workspaceId = workspaceId,
+    newGroupId = java.util.UUID.randomUUID().toString(),
+    bounds = defaultTearOutBounds(registry.main().bounds),
+    hostId = java.util.UUID.randomUUID().toString(),
+    edit = edit,
+)
+
+fun tearOutGroupLive(
+    registry: WindowHostRegistry,
+    tree: LayoutNode,
+    groupId: String,
+    workspaceId: String,
+): WindowHost? = tearOutGroup(
+    registry,
+    tree,
+    groupId,
+    workspaceId,
+    defaultTearOutBounds(registry.main().bounds),
+    java.util.UUID.randomUUID().toString(),
+)
+
+fun tearOutCanvasLive(
+    registry: WindowHostRegistry,
+    workspaceId: String,
+): WindowHost? = tearOutCanvas(
+    registry,
+    workspaceId,
+    defaultTearOutBounds(registry.main().bounds),
+    java.util.UUID.randomUUID().toString(),
+)
+
 private fun groupById(node: LayoutNode, groupId: String): LayoutNode.Group? = when (node) {
     is LayoutNode.Group -> node.takeIf { it.id == groupId }
     is LayoutNode.Split -> node.children.firstNotNullOfOrNull { groupById(it, groupId) }

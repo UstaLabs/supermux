@@ -555,6 +555,23 @@ fun AppShell(
     // (which flips ui.launcherOpen directly, since ShellUiState is shared with Main) all reach
     // the SAME overlay via ui.launcherOpen.
     val onNewSession: () -> Unit = { ui.openLauncher() }
+    val onTearOutTab: (String) -> Unit = tearOut@{ viewId ->
+        val bind = ui.panesBind ?: return@tearOut
+        val ws = bind.ws
+        tearOutTabLive(ui.windowHosts, ws.layoutSync.tree, viewId, bind.current.id) { next ->
+            ws.layoutSync.edit { next }
+            ws.layoutSync.tree
+        }
+    }
+    val onTearOutWorkspace: () -> Unit = canvas@{
+        val bind = ui.panesBind ?: return@canvas
+        tearOutCanvasLive(ui.windowHosts, bind.current.id)
+    }
+    val onMoveToNewWindow: () -> Unit = move@{
+        val bind = ui.panesBind ?: return@move
+        val viewId = collectActiveViewIds(bind.ws.layoutSync.tree).firstOrNull() ?: return@move
+        onTearOutTab(viewId)
+    }
 
     // Scope for fire-and-forget overlay actions (e.g. the archived Resume POST) that must outlive
     // the overlay's composition — it closes the instant Resume is tapped.
@@ -692,7 +709,10 @@ fun AppShell(
                 // toggles the user can't see). Each overlay handles its own Escape; Ctrl+N is
                 // idempotent and reopening an already-open launcher is a no-op, so dropping it here
                 // too costs nothing. `ui.overlayOpen` is the single gate for every overlay.
-                .then(if (ui.overlayOpen || addHostOpen) Modifier else Modifier.shellShortcuts(ui, onNewSession)),
+                .then(
+                    if (ui.overlayOpen || addHostOpen) Modifier
+                    else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow),
+                ),
         ) {
             Column(Modifier.fillMaxSize()) {
             AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
@@ -1121,6 +1141,7 @@ fun AppShell(
                                         ui.forceGitMenuFor?.takeIf { it.first == s.id }?.second
                                     },
                                     onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
+                                    onMoveWorkspaceToNewWindow = onTearOutWorkspace,
                                 )
                                 val hostedLayout = ui.windowHosts.layoutFor(ui.windowHosts.main(), localLayout)
                                 if (hostedLayout == null) {
@@ -1148,6 +1169,7 @@ fun AppShell(
                                     onCloseCandidate = { closeCandidate = it },
                                     sessionNames = sessionNames,
                                     modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
+                                    onTearOutTab = onTearOutTab,
                                 )
                                 }
                                 }

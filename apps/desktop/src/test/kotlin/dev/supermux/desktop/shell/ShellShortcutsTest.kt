@@ -14,6 +14,8 @@ class ShellShortcutsTest {
     @Test fun globalShortcutsResolve() {
         assertEquals(ShellShortcut.ToggleSidebar, mapShellShortcut('B'))
         assertEquals(ShellShortcut.NewSession, mapShellShortcut('N'))
+        assertEquals(ShellShortcut.MoveToNewWindow, mapShellShortcut('N', shift = true))
+        assertEquals(ShellShortcut.ToggleSidebar, mapShellShortcut('B', shift = true))
     }
 
     @Test fun theOldPaneChordsAreUnbound() {
@@ -46,7 +48,18 @@ class ShellShortcutsTest {
 
     @Test fun applyNewSessionInvokesCallback() {
         var called = false
-        applyShellShortcut(ShellShortcut.NewSession, ShellUiState()) { called = true }
+        applyShellShortcut(ShellShortcut.NewSession, ShellUiState(), onNewSession = { called = true })
+        assertTrue(called)
+    }
+
+    @Test fun applyMoveToNewWindowInvokesCallback() {
+        var called = false
+        applyShellShortcut(
+            ShellShortcut.MoveToNewWindow,
+            ShellUiState(),
+            onNewSession = {},
+            onMoveToNewWindow = { called = true },
+        )
         assertTrue(called)
     }
 }

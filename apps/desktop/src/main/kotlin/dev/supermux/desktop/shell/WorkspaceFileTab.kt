@@ -1,5 +1,7 @@
 package dev.supermux.desktop.shell
 
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -54,16 +56,25 @@ fun WorkspaceFileTab(
     onSave: () -> Unit,
     onTogglePreview: () -> Unit,
     onClose: (String) -> Unit,
+    onMoveToNewWindow: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
     val fg = if (state.selected) cs.primary else cs.onSurfaceVariant
 
+    ContextMenuArea(
+        items = {
+            listOf(
+                ContextMenuItem("Move to New Window") { onMoveToNewWindow() },
+            )
+        },
+    ) {
     Row(
         Modifier
             .fillMaxHeight()
             .background(bg)
-            .padding(start = 14.dp, end = 8.dp),
+            .padding(start = 14.dp, end = 8.dp)
+            .testTag("tab-move-to-window-$itemId"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -133,5 +144,6 @@ fun WorkspaceFileTab(
                 modifier = Modifier.size(12.dp),
             )
         }
+    }
     }
 }
