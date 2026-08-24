@@ -1499,11 +1499,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       const entry = registry.get(r.session_id)
       // Spec §9.1: a session without a workspaceId gets a fresh workspace.
       // With one, it joins that workspace as a second chat.
+      // Continue-in-new-conversation sends inheritFrom (name/worktree metadata)
+      // but historically omitted workspaceId, so every handoff minted a SECOND
+      // workspace. If the client didn't name a workspace, join the source
+      // session's — same checkout, same workspace.
       // Broadcast workspace_added/changed before session_added (spec §9.1 step 6).
       if (entry) {
-        if (args.workspaceId) {
-          workspaceService.addChatSession(args.workspaceId, entry.id)
-          const dto = wsDto(args.workspaceId)
+        let joinWorkspaceId = args.workspaceId?.trim() || undefined
+        if (!joinWorkspaceId && args.inheritFrom) {
+          const row = db.query("SELECT workspace_id FROM sessions WHERE id = ?").get(args.inheritFrom) as
+            | { workspace_id: string | null }
+            | null
+          joinWorkspaceId = row?.workspace_id || undefined
+        }
+        if (joinWorkspaceId && !registry.workspaces.getById(joinWorkspaceId)) {
+          joinWorkspaceId = undefined
+        }
+        if (joinWorkspaceId) {
+          workspaceService.addChatSession(joinWorkspaceId, entry.id)
+          const dto = wsDto(joinWorkspaceId)
           if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
         } else {
           const ws = workspaceService.createForSession({

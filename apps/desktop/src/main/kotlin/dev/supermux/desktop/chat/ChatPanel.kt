@@ -311,7 +311,18 @@ fun ChatPanel(
                     onRename = { name -> app.rename(session.id, name) },
                     onToggleMute = { muted -> app.setMute(session.id, muted) },
                     onKill = { app.kill(session.id) },
-                    onContinue = { message -> app.continueConversation(session, message) },
+                    onContinue = { handoff ->
+                        app.continueConversation(
+                            session,
+                            handoff.message,
+                            handoff.agent,
+                            handoff.model,
+                            handoff.reasoningLevel,
+                        )
+                    },
+                    loadContinueAgents = { app.launcherAgents() },
+                    loadContinueModels = { app.launcherModels(it) },
+                    loadContinueReasoning = { agent, model -> app.launcherReasoning(agent, model) },
                     onContinued = onSelectSession,
                     showManagementRows = false,
                 )

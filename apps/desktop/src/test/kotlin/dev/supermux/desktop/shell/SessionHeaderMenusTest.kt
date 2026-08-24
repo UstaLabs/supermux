@@ -13,7 +13,10 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
+import dev.supermux.net.ReasoningLevel
+import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
@@ -484,6 +487,68 @@ class SessionHeaderMenusTest {
         assertFalse(killed) // opening the confirm dialog does not kill yet
         onNodeWithTag("overflow_kill_confirm").performClick()
         assertTrue(killed)
+    }
+
+    @Test
+    fun overflowContinuePassesAgentModelAndReasoning() = runComposeUiTest {
+        var received: ContinueHandoff? = null
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                OverflowMenu(
+                    session = baseSession.copy(agent = "claude", model = "sonnet", reasoningLevel = "high"),
+                    onRename = {},
+                    onToggleMute = {},
+                    onKill = {},
+                    onContinue = { handoff -> received = handoff; "new-id" },
+                    loadContinueAgents = { listOf("claude", "grok") },
+                    loadContinueModels = { agent ->
+                        if (agent == "grok") listOf(ModelInfo("grok-4", "Grok 4"))
+                        else listOf(ModelInfo("sonnet", "Sonnet"))
+                    },
+                    loadContinueReasoning = { agent, _ ->
+                        ReasoningResponse(
+                            agent = agent,
+                            levels = listOf(
+                                ReasoningLevel("low", "Low"),
+                                ReasoningLevel("high", "High"),
+                            ),
+                            visible = true,
+                        )
+                    },
+                )
+            }
+        }
+        onNodeWithTag("shell_overflow").performClick()
+        onNodeWithTag("overflow_continue").performClick()
+        waitForIdle()
+        onNodeWithTag("overflow_continue_agent").assertIsDisplayed()
+        onNodeWithTag("overflow_continue_agent").performClick()
+        waitForIdle()
+        onNodeWithTag("overflow_continue_agent_grok").performClick()
+        waitForIdle()
+        onNodeWithTag("overflow_continue_model").performClick()
+        waitForIdle()
+        onNodeWithTag("overflow_continue_model_grok-4").performClick()
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("overflow_continue_reasoning").assertExists()
+                true
+            } catch (_: AssertionError) {
+                false
+            } catch (_: IllegalStateException) {
+                false
+            }
+        }
+        onNodeWithTag("overflow_continue_reasoning").performClick()
+        waitForIdle()
+        onNodeWithTag("overflow_continue_reasoning_low").performClick()
+        onNodeWithTag("overflow_continue_confirm").performClick()
+        waitForIdle()
+        assertEquals("grok", received?.agent)
+        assertEquals("grok-4", received?.model)
+        assertEquals("low", received?.reasoningLevel)
+        assertTrue(received?.message?.isNotBlank() == true)
     }
 
     @Test

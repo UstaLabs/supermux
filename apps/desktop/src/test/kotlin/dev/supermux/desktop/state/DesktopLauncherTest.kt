@@ -7,6 +7,10 @@ import dev.supermux.net.SpawnRequest
 import dev.supermux.net.SpawnResponse
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -197,6 +201,57 @@ class DesktopLauncherTest {
         assertNull(id)
         // Invalid path short-circuits: validate ran, but spawn + uploads never did.
         assertEquals(listOf("/paths/validate"), recorded.map { it.path })
+    }
+
+    @Test fun continue_conversation_spawns_chosen_agent_model_and_inherit_from() = runBlocking {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded)
+        val source = SessionInfo(
+            id = "src-1",
+            name = "feat-x",
+            workdir = "/proj",
+            agent = "claude",
+            model = "sonnet",
+            reasoningLevel = "high",
+        )
+        app.reduce(
+            ServerFrame.Snapshot(
+                workspaces = listOf(
+                    WorkspaceDto(
+                        id = "ws-src",
+                        name = "feat-x",
+                        workdir = "/proj",
+                        views = listOf(
+                            ViewDto(
+                                id = "v-src",
+                                workspaceId = "ws-src",
+                                kind = "chat",
+                                state = JsonObject(mapOf("sessionId" to JsonPrimitive("src-1"))),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val id = app.continueConversation(
+            source = source,
+            message = "pick up here",
+            agent = "grok",
+            model = "grok-4",
+            reasoningLevel = "low",
+        )
+
+        assertEquals("sess-1", id)
+        val req = json.decodeFromString<SpawnRequest>(recorded.first { it.path == "/sessions" }.body)
+        assertEquals("/resolved/dir", req.workdir)
+        assertEquals("grok", req.agent)
+        assertEquals("grok-4", req.model)
+        assertEquals("low", req.reasoningLevel)
+        assertEquals("src-1", req.inheritFrom)
+        assertEquals("feat-x", req.name)
+        assertEquals("ws-src", req.workspaceId)
+        assertNull(req.worktree)
     }
 
     @Test fun create_session_resolves_a_blank_spawn_id_by_name() = runBlocking {

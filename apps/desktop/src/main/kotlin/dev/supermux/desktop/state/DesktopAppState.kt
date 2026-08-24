@@ -83,6 +83,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.workspace.chatSessionIds
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
@@ -1819,28 +1820,44 @@ class DesktopAppState(
     /**
      * "Continue in a new conversation": same workdir as [source], no new worktree, inherit
      * display/worktree metadata via [SpawnRequest.inheritFrom], then send [message] as the first
-     * turn. Returns the new session id, or null on failure.
+     * turn. [agent]/[model]/[reasoningLevel] come from the continue dialog (web/iOS parity);
+     * blank [agent] falls back to [dev.supermux.session.HandoffPrefill.defaultAgent].
+     * Returns the new session id, or null on failure.
      */
-    suspend fun continueConversation(source: SessionInfo, message: String): String? {
+    suspend fun continueConversation(
+        source: SessionInfo,
+        message: String,
+        agent: String? = null,
+        model: String? = null,
+        reasoningLevel: String? = null,
+    ): String? {
         val text = message.trim()
         if (text.isEmpty() || source.workdir.isBlank()) return null
-        val agent = dev.supermux.session.HandoffPrefill.defaultAgent(source.agent)
-        val sameAgent = source.agent.equals(agent, ignoreCase = true)
+        val chosen = agent?.trim()?.ifEmpty { null }
+            ?: dev.supermux.session.HandoffPrefill.defaultAgent(source.agent)
+        val workspaceId = workspaceIdForSession(source.id)
         val newId = createSessionWithFirstMessage(
             workdir = source.workdir,
-            agent = agent,
-            model = if (sameAgent) source.model else null,
-            reasoningLevel = if (sameAgent) source.reasoningLevel else null,
+            agent = chosen,
+            model = model,
+            reasoningLevel = reasoningLevel,
             text = text,
             staged = emptyList(),
             worktree = false,
             baseBranch = null,
+            workspaceId = workspaceId,
             name = source.name,
             inheritFrom = source.id,
         ) ?: return null
         sendMessage(newId, text, consumeFirstUploads(newId))
         return newId
     }
+
+    /** Workspace that currently hosts [sessionId] as a chat view, if any. */
+    internal fun workspaceIdForSession(sessionId: String): String? =
+        _workspaces.value.firstOrNull { w ->
+            w.status != "archived" && w.chatSessionIds().contains(sessionId)
+        }?.id
 
     /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release
      *  the shared HttpClients (WS + HTTP, and the dictation-only long-timeout client). Counterpart

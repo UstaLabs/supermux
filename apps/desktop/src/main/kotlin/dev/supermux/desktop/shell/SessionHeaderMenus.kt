@@ -46,10 +46,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.ui.draw.clip
 import dev.supermux.desktop.ui.AlertDialog
 import dev.supermux.desktop.ui.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -75,11 +80,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.chat.ChatDetailPrefs
+import dev.supermux.desktop.session.AgentLogo
+import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.GitOpResult
+import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
+import dev.supermux.net.ReasoningLevel
+import dev.supermux.net.ReasoningResponse
+import dev.supermux.net.resolveReasoningLevel
+import dev.supermux.net.showReasoningPicker
 import dev.supermux.proto.GitBadge
 import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
@@ -302,6 +315,16 @@ fun SessionLinksMenu(
 
 // ── OverflowMenu ───────────────────────────────────────────────────────────────────────
 
+/** Payload from the continue dialog — agent/model/thinking plus the editable handoff text. */
+data class ContinueHandoff(
+    val message: String,
+    val agent: String,
+    val model: String?,
+    val reasoningLevel: String?,
+)
+
+private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok")
+
 /**
  * The ⋮ overflow on the chat/session header:
  *  - Detail (tool-call level: Low / Medium / High)
@@ -311,9 +334,9 @@ fun SessionLinksMenu(
  *    Editor/LSP are reached from the sidebar footer, the File menu and the Settings hub)
  *
  * [onToggleMute] receives the DESIRED next mute state.
- * [onContinue] when non-null shows the continue item; receives the editable handoff message and
- * returns the new session id (or null). [onContinued] is called with that id so the shell can
- * select it.
+ * [onContinue] when non-null shows the continue item; receives [ContinueHandoff] (message +
+ * agent/model/thinking, web/iOS parity) and returns the new session id (or null).
+ * [onContinued] is called with that id so the shell can select it.
  */
 @Composable
 fun OverflowMenu(
@@ -324,7 +347,10 @@ fun OverflowMenu(
     onUsage: () -> Unit = {},
     onLspSettings: () -> Unit = {},
     /** When non-null, show "Continue in new conversation" and run this to spawn + send handoff. */
-    onContinue: (suspend (message: String) -> String?)? = null,
+    onContinue: (suspend (ContinueHandoff) -> String?)? = null,
+    loadContinueAgents: suspend () -> List<String> = { emptyList() },
+    loadContinueModels: suspend (String) -> List<ModelInfo> = { emptyList() },
+    loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
     onContinued: (String) -> Unit = {},
     /** Hide shell-management rows (Usage / LSP) when this is a slim chat-header menu. */
     showManagementRows: Boolean = true,
@@ -344,6 +370,19 @@ fun OverflowMenu(
     }
     var continueBusy by remember { mutableStateOf(false) }
     var continueFailed by remember { mutableStateOf(false) }
+    var continueAgent by remember(session.id) {
+        mutableStateOf(dev.supermux.session.HandoffPrefill.defaultAgent(session.agent))
+    }
+    var continueModel by remember(session.id) { mutableStateOf<String?>(null) }
+    var continueReasoning by remember(session.id) { mutableStateOf<String?>(null) }
+    var continueAgents by remember { mutableStateOf(CONTINUE_AGENT_FALLBACK) }
+    var continueModels by remember { mutableStateOf(emptyList<ModelInfo>()) }
+    var continueReasoningLevels by remember { mutableStateOf(emptyList<ReasoningLevel>()) }
+    var continueReasoningVisible by remember { mutableStateOf(false) }
+    var continueAgentMenu by remember { mutableStateOf(false) }
+    var continueModelMenu by remember { mutableStateOf(false) }
+    var continueReasoningMenu by remember { mutableStateOf(false) }
+    var continueSeeding by remember { mutableStateOf(false) }
     val muted = session.mute ?: false
     // Close on a session switch so the ⋮ menu never stays bound to the new session's callbacks
     // (a stale open Kill would otherwise target the wrong session).
@@ -354,6 +393,37 @@ fun OverflowMenu(
         continueFailed = false
     }
     LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
+    LaunchedEffect(showContinue, session.id) {
+        if (!showContinue) return@LaunchedEffect
+        continueSeeding = true
+        val installed = loadContinueAgents().map { it.lowercase() }.filter { it.isNotBlank() }
+        continueAgents = installed.ifEmpty { CONTINUE_AGENT_FALLBACK }
+        val next = dev.supermux.session.HandoffPrefill.defaultAgent(session.agent)
+        continueAgent = if (next in continueAgents) next else continueAgents.first()
+        val sameAgent = session.agent.equals(continueAgent, ignoreCase = true)
+        continueModel = if (sameAgent) session.model?.takeIf { it.isNotBlank() } else null
+        continueReasoning = if (sameAgent) session.reasoningLevel?.takeIf { it.isNotBlank() } else null
+        continueSeeding = false
+    }
+    LaunchedEffect(showContinue, continueAgent, continueSeeding) {
+        if (!showContinue || continueSeeding) return@LaunchedEffect
+        continueModels = loadContinueModels(continueAgent)
+        if (continueModel != null && continueModels.none { it.id == continueModel }) {
+            continueModel = null
+        }
+    }
+    LaunchedEffect(showContinue, continueAgent, continueModel, continueSeeding) {
+        if (!showContinue || continueSeeding) return@LaunchedEffect
+        val resp = loadContinueReasoning(continueAgent, continueModel)
+        val levels = resp?.levels.orEmpty()
+        continueReasoningLevels = levels
+        continueReasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
+        continueReasoning = if (continueReasoningVisible) {
+            resolveReasoningLevel(levels, continueReasoning)
+        } else {
+            null
+        }
+    }
 
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("shell_overflow")) {
@@ -493,13 +563,116 @@ fun OverflowMenu(
             onDismissRequest = { if (!continueBusy) showContinue = false },
             title = { Text("Continue in new conversation") },
             text = {
-                Column(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     Text(
                         "Same working directory as ${session.name}. The new agent is told to read this session first. Edit freely before start.",
                         color = cs.onSurfaceVariant,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(bottom = Space.sm),
                     )
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = Space.sm)
+                            .testTag("overflow_continue_pickers"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Box {
+                            ContinuePickerPill(
+                                label = continueAgent.replaceFirstChar { it.uppercase() },
+                                onClick = { continueAgentMenu = true },
+                                testTag = "overflow_continue_agent",
+                                leading = { AgentLogo(continueAgent, size = 12.dp) },
+                            )
+                            DropdownMenu(
+                                expanded = continueAgentMenu,
+                                onDismissRequest = { continueAgentMenu = false },
+                            ) {
+                                continueAgents.forEach { a ->
+                                    DropdownMenuItem(
+                                        text = { Text(a.replaceFirstChar { it.uppercase() }) },
+                                        leadingIcon = { AgentLogo(a, size = 14.dp) },
+                                        modifier = Modifier.testTag("overflow_continue_agent_$a"),
+                                        onClick = {
+                                            if (a != continueAgent) {
+                                                continueAgent = a
+                                                continueModel = null
+                                                continueReasoning = null
+                                            }
+                                            continueAgentMenu = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        Box {
+                            val modelLabel = continueModel?.let { id ->
+                                continueModels.firstOrNull { it.id == id }?.displayName ?: id
+                            } ?: "Default"
+                            ContinuePickerPill(
+                                label = modelLabel,
+                                onClick = { continueModelMenu = true },
+                                testTag = "overflow_continue_model",
+                            )
+                            DropdownMenu(
+                                expanded = continueModelMenu,
+                                onDismissRequest = { continueModelMenu = false },
+                            ) {
+                                val opts = listOf(DEFAULT_MODEL_ID to "Default") +
+                                    continueModels.map { it.id to it.displayName }
+                                opts.forEach { (id, label) ->
+                                    val selected = (continueModel ?: DEFAULT_MODEL_ID) == id
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        trailingIcon = {
+                                            if (selected) {
+                                                Icon(
+                                                    Icons.Filled.Check,
+                                                    null,
+                                                    Modifier.size(16.dp),
+                                                    tint = cs.primary,
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.testTag("overflow_continue_model_$id"),
+                                        onClick = {
+                                            continueModel = if (id == DEFAULT_MODEL_ID) null else id
+                                            continueModelMenu = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        if (continueReasoningVisible) {
+                            Box {
+                                ContinuePickerPill(
+                                    label = continueReasoning?.replaceFirstChar { it.uppercase() } ?: "Default",
+                                    onClick = { continueReasoningMenu = true },
+                                    testTag = "overflow_continue_reasoning",
+                                )
+                                DropdownMenu(
+                                    expanded = continueReasoningMenu,
+                                    onDismissRequest = { continueReasoningMenu = false },
+                                ) {
+                                    continueReasoningLevels.forEach { level ->
+                                        DropdownMenuItem(
+                                            text = { Text(level.id.replaceFirstChar { it.uppercase() }) },
+                                            modifier = Modifier.testTag("overflow_continue_reasoning_${level.id}"),
+                                            onClick = {
+                                                continueReasoning = level.id
+                                                continueReasoningMenu = false
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     OutlinedTextField(
                         value = continueText,
                         onValueChange = { continueText = it; continueFailed = false },
@@ -525,7 +698,14 @@ fun OverflowMenu(
                         scope.launch {
                             continueBusy = true
                             continueFailed = false
-                            val id = onContinue(continueText)
+                            val id = onContinue(
+                                ContinueHandoff(
+                                    message = continueText,
+                                    agent = continueAgent,
+                                    model = continueModel,
+                                    reasoningLevel = continueReasoning,
+                                ),
+                            )
                             continueBusy = false
                             if (id != null) {
                                 showContinue = false
@@ -546,6 +726,39 @@ fun OverflowMenu(
                     modifier = Modifier.testTag("overflow_continue_cancel"),
                 ) { Text("Cancel") }
             },
+        )
+    }
+}
+
+@Composable
+private fun ContinuePickerPill(
+    label: String,
+    onClick: () -> Unit,
+    testTag: String,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(Radii.pill))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 5.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        leading?.invoke()
+        Text(
+            label.take(22),
+            color = cs.onSurfaceVariant,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+        Icon(
+            Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+            tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
+            modifier = Modifier.size(14.dp),
         )
     }
 }
