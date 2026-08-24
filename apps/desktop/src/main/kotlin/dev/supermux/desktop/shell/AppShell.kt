@@ -118,7 +118,8 @@ import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 
 /**
- * macOS title-bar sidebar collapse control — next to the traffic lights, **only while the
+ * macOS title-bar sidebar collapse control — next to the traffic lights (live JBR left
+ * inset, or a small gutter in native fullscreen when the lights hide), **only while the
  * sidebar is expanded**. When collapsed, expand is the rail chevron only (no title-bar toggle).
  */
 @Composable
@@ -130,7 +131,7 @@ private fun MacSidebarToggle(
     Row(
         modifier
             .height(MacTitleBarHeight)
-            .padding(start = MacTrafficLightsWidth)
+            .padding(start = LocalMacTrafficLightsInset.current)
             .testTag("mac_sidebar_toggle"),
         verticalAlignment = Alignment.CenterVertically,
     ) {

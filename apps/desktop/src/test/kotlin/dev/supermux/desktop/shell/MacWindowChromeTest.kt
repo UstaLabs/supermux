@@ -11,12 +11,30 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import dev.supermux.ui.panes.PaneTabStrip
 
 @OptIn(ExperimentalTestApi::class)
 class MacWindowChromeTest {
+
+    @Test
+    fun jbrLeftInsetIsUsedWhenPresent() {
+        assertEquals(72.dp, macTrafficLightsStartPadding(nativeLeftInset = 72f, fullscreen = false))
+        assertEquals(72.dp, macTrafficLightsStartPadding(nativeLeftInset = 72f, fullscreen = true))
+    }
+
+    @Test
+    fun zeroJbrLeftInsetMeansTrafficLightsGone() {
+        assertEquals(8.dp, macTrafficLightsStartPadding(nativeLeftInset = 0f, fullscreen = true))
+    }
+
+    @Test
+    fun withoutJbrFullscreenDropsTheFixedInset() {
+        assertEquals(MacTrafficLightsWidth, macTrafficLightsStartPadding(nativeLeftInset = null, fullscreen = false))
+        assertEquals(8.dp, macTrafficLightsStartPadding(nativeLeftInset = null, fullscreen = true))
+    }
 
     // ── MacChromeRegions decision logic (what the AWT listener feeds to forceHitTest) ──
 

@@ -64,7 +64,9 @@ import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
 import dev.supermux.desktop.shell.LocalMacWindowChrome
+import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
@@ -330,7 +332,7 @@ fun main() {
             // inset under the traffic lights for the sidebar toggle (see MacChrome.kt).
             // No-ops off macOS, but gated anyway to keep it obvious.
             val macChrome = if (isMacOs()) rememberMacWindowChrome(window) else null
-            if (isMacOs() && macChrome == null) {
+            if (isMacOs() && macChrome?.titleBar == null) {
                 LaunchedEffect(window) {
                     window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
                     window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
@@ -1298,7 +1300,12 @@ fun main() {
                     // macChrome (JBR title-bar hit test) scoped to the shell only: the drag-region
                     // modifiers inside AppShell resolve it via LocalMacWindowChrome; overlays and
                     // onboarding have no chrome in the title-bar band. Null provider = no-op.
-                    CompositionLocalProvider(LocalMacWindowChrome provides macChrome) {
+                    CompositionLocalProvider(
+                        LocalMacWindowChrome provides macChrome?.regions,
+                        LocalMacTrafficLightsInset provides (
+                            macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
+                        ),
+                    ) {
                         AppShell(
                             app,
                             ui,

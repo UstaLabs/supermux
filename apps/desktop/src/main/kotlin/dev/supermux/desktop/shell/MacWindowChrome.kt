@@ -21,18 +21,31 @@
 // the band). Everything unregistered stays "client".
 //
 // Runtime gate: `JBR.getWindowDecorations()` returns the real service only on a JetBrains
-// Runtime (`:desktop:hotRun`). On other JVMs (the packaged app currently bundles Corretto) it
-// returns null and [rememberMacWindowChrome] yields null — Main.kt then falls back to the plain
-// fullWindowContent client properties (pre-existing behavior, collision included). Packaging
-// with a JBR makes the fix apply to the shipped app too.
+// Runtime (`:desktop:hotRun`). On other JVMs it is null and [rememberMacWindowChrome] still
+// returns an install (regions=null) so title-bar padding can track fullscreen; Main.kt falls
+// back to the plain fullWindowContent client properties (collision included). Packaging with
+// a JBR makes the drag-arbitration fix apply to the shipped app too.
 package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeWindow
+import androidx.compose.ui.unit.Dp
+import com.jetbrains.WindowDecorations
+import java.awt.Window
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
+import java.awt.event.WindowEvent
+import java.awt.event.WindowStateListener
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -83,13 +96,23 @@ class MacChromeRegions {
 val LocalMacWindowChrome = staticCompositionLocalOf<MacChromeRegions?> { null }
 
 /**
+ * JBR custom title bar (when the runtime has WindowDecorations) plus the live traffic-light
+ * start padding for Compose chrome. [regions] is null on the client-property fallback path.
+ */
+class MacWindowChromeInstall(
+    val regions: MacChromeRegions?,
+    val titleBar: WindowDecorations.CustomTitleBar?,
+    val trafficLightsInset: Dp,
+)
+
+/**
  * Installs the JBR custom title bar on [window] (height = [MacTitleBarHeight], native traffic
- * lights kept) and starts feeding its hit test from window mouse events. Returns the region
- * registry to provide via [LocalMacWindowChrome], or null when the runtime has no
- * WindowDecorations service — caller falls back to the plain client properties.
+ * lights kept) and starts feeding its hit test from window mouse events. Always returns an
+ * install object so callers can still pad title-bar controls from [getLeftInset] / fullscreen
+ * even when WindowDecorations is missing.
  */
 @Composable
-fun rememberMacWindowChrome(window: ComposeWindow): MacChromeRegions? {
+fun rememberMacWindowChrome(window: ComposeWindow): MacWindowChromeInstall {
     val titleBar = remember(window) {
         runCatching {
             val decorations = JBR.getWindowDecorations() ?: return@runCatching null
@@ -105,9 +128,11 @@ fun rememberMacWindowChrome(window: ComposeWindow): MacChromeRegions? {
                 else "[MacWindowChrome] no JBR WindowDecorations — falling back to client properties",
             )
         }
-    } ?: return null
+    }
+    val trafficLightsInset = rememberMacTrafficLightsInset(window, titleBar)
     val regions = remember(window) { MacChromeRegions() }
     DisposableEffect(window, titleBar) {
+        val bar = titleBar ?: return@DisposableEffect onDispose { }
         val listener = object : MouseAdapter() {
             // JBR contract: update the hit test on every mouse event except EXITED/WHEEL;
             // unset events revert to the default heuristic (= client over Compose content).
@@ -120,7 +145,7 @@ fun rememberMacWindowChrome(window: ComposeWindow): MacChromeRegions? {
                     (e.x * (t?.scaleX ?: 1.0)).toFloat(),
                     (e.y * (t?.scaleY ?: 1.0)).toFloat(),
                 )
-                titleBar.forceHitTest(!regions.allowsNativeDrag(p))
+                bar.forceHitTest(!regions.allowsNativeDrag(p))
             }
 
             override fun mousePressed(e: MouseEvent) = update(e)
@@ -136,7 +161,62 @@ fun rememberMacWindowChrome(window: ComposeWindow): MacChromeRegions? {
             window.removeMouseMotionListener(listener)
         }
     }
-    return regions
+    return MacWindowChromeInstall(
+        regions = if (titleBar != null) regions else null,
+        titleBar = titleBar,
+        trafficLightsInset = trafficLightsInset,
+    )
+}
+
+/** Native macOS fullscreen covers the whole screen (menu bar included); zoom does not. */
+internal fun Window.isNativeMacFullscreen(): Boolean {
+    val screen = graphicsConfiguration?.bounds ?: return false
+    return x <= screen.x && y <= screen.y &&
+        width >= screen.width && height >= screen.height
+}
+
+/**
+ * Live start padding for title-bar controls: JBR [CustomTitleBar.getLeftInset] when present
+ * (updates as traffic lights hide in fullscreen), otherwise the windowed 78.dp fallback or
+ * a small gutter when the window is covering the display.
+ */
+@Composable
+fun rememberMacTrafficLightsInset(
+    window: ComposeWindow,
+    titleBar: WindowDecorations.CustomTitleBar?,
+): Dp {
+    fun read(): Dp = macTrafficLightsStartPadding(
+        nativeLeftInset = titleBar?.leftInset,
+        fullscreen = window.isNativeMacFullscreen(),
+    )
+    var inset by remember(window, titleBar) { mutableStateOf(read()) }
+    DisposableEffect(window, titleBar) {
+        val refresh = {
+            val next = read()
+            if (next != inset) inset = next
+        }
+        val stateListener = WindowStateListener { refresh() }
+        val sizeListener = object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent) = refresh()
+            override fun componentMoved(e: ComponentEvent) = refresh()
+        }
+        window.addWindowStateListener(stateListener)
+        window.addComponentListener(sizeListener)
+        refresh()
+        onDispose {
+            window.removeWindowStateListener(stateListener)
+            window.removeComponentListener(sizeListener)
+        }
+    }
+    // JBR can apply the new leftInset a tick after the resize/fullscreen animation.
+    LaunchedEffect(window, titleBar) {
+        while (isActive) {
+            val next = read()
+            if (next != inset) inset = next
+            delay(200)
+        }
+    }
+    return inset
 }
 
 /**

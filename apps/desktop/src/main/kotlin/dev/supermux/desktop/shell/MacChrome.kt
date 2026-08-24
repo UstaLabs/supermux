@@ -3,6 +3,8 @@
 // edge-to-edge; only a LEFT inset under the traffic lights stays free of critical controls.
 package dev.supermux.desktop.shell
 
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -12,7 +14,29 @@ import androidx.compose.ui.unit.dp
 val MacTitleBarHeight = 28.dp
 
 /**
- * Horizontal room reserved for the close / minimize / zoom buttons under full-size content.
- * Toolbar items (sidebar toggle) start after this inset so they never sit under the traffic lights.
+ * Fallback horizontal room for close / minimize / zoom when JBR's [CustomTitleBar.getLeftInset]
+ * is unavailable. Windowed macOS keeps the lights in a ~78pt cluster; native fullscreen hides
+ * them, and [macTrafficLightsStartPadding] drops this to a small gutter.
  */
 val MacTrafficLightsWidth = 78.dp
+
+/** Gutter used when traffic lights are gone (native fullscreen) so the toggle isn't flush. */
+val MacTrafficLightsHiddenGutter = 8.dp
+
+/**
+ * Start padding for title-bar chrome (sidebar collapse). Prefer JBR's live left inset — it
+ * tracks traffic-light size/visibility. Zero inset (fullscreen) and the no-JBR fullscreen
+ * fallback both use [MacTrafficLightsHiddenGutter].
+ */
+fun macTrafficLightsStartPadding(nativeLeftInset: Float?, fullscreen: Boolean): Dp {
+    if (nativeLeftInset != null) {
+        return if (nativeLeftInset <= 0f) MacTrafficLightsHiddenGutter else nativeLeftInset.dp
+    }
+    return if (fullscreen) MacTrafficLightsHiddenGutter else MacTrafficLightsWidth
+}
+
+/**
+ * Live start padding for macOS title-bar controls. Provided from [rememberMacWindowChrome]
+ * while the window is composed; defaults to the windowed fallback.
+ */
+val LocalMacTrafficLightsInset = staticCompositionLocalOf { MacTrafficLightsWidth }
