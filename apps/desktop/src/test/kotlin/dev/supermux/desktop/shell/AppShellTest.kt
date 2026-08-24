@@ -3,6 +3,7 @@ package dev.supermux.desktop.shell
 import dev.supermux.ui.TestIds
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -12,6 +13,8 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.width
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.theme.AppearanceMode
@@ -97,6 +100,62 @@ class AppShellTest {
             apiOverride = api,
         )
     }
+
+    private fun twoWorkspaceApp(sent: MutableList<ClientFrame> = mutableListOf()): DesktopAppState =
+        appFor(sent).also { app ->
+            val workspaceSessions = listOf("w1" to "s1", "w2" to "s2")
+            app.reduce(
+                ServerFrame.Snapshot(
+                    sessions = workspaceSessions.map { (_, sessionId) ->
+                        dev.supermux.proto.SessionInfo(
+                            id = sessionId,
+                            name = "worker-$sessionId",
+                            workdir = "/$sessionId",
+                            agent = "claude",
+                        )
+                    },
+                    workspaces = workspaceSessions.map { (workspaceId, sessionId) ->
+                        dev.supermux.proto.WorkspaceDto(
+                            id = workspaceId,
+                            name = "project-$workspaceId",
+                            workdir = "/$workspaceId",
+                            primarySessionId = sessionId,
+                            layout = singleViewLayout("g-$workspaceId", "v-$workspaceId").toDto(),
+                            views = listOf(
+                                dev.supermux.proto.ViewDto(
+                                    id = "v-$workspaceId",
+                                    workspaceId = workspaceId,
+                                    kind = "chat",
+                                    state = kotlinx.serialization.json.JsonObject(
+                                        mapOf(
+                                            "sessionId" to kotlinx.serialization.json.JsonPrimitive(sessionId),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        )
+                    },
+                ),
+            )
+        }
+
+    private fun viewingSnapshot(
+        workspaceId: String = "w1",
+        sessionId: String = "s1",
+    ) = WorkspaceViewingSnapshot(
+        workspaceId = workspaceId,
+        layout = singleViewLayout("g-$workspaceId", "v-$workspaceId"),
+        views = mapOf(
+            "v-$workspaceId" to dev.supermux.proto.ViewDto(
+                id = "v-$workspaceId",
+                workspaceId = workspaceId,
+                kind = "chat",
+                state = kotlinx.serialization.json.JsonObject(
+                    mapOf("sessionId" to kotlinx.serialization.json.JsonPrimitive(sessionId)),
+                ),
+            ),
+        ),
+    )
 
     @Test fun on_new_session_opens_the_launcher_overlay() = runComposeUiTest {
         val ui = ShellUiState().apply { sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
@@ -309,6 +368,129 @@ class AppShellTest {
     // set. There is no flag and no second shell: the detail pane is the selected session's
     // WORKSPACE, drawn by PaneHost. These two cases pin that, and the "no workspace yet" prompt
     // that replaced the old one-session fallback.
+
+    // `runComposeUiTest` does not guarantee LocalWindowInfo focus, so asserting captured Viewing
+    // frames here would be environment-dependent. These tests call the pure decision helper used
+    // by AppShell's real presence effect and deterministically cover every visibility gate.
+
+    @Test fun matchingVisibleFocusedWorkspaceSnapshotReturnsItsActiveChatIds() {
+        assertEquals(
+            listOf("s1"),
+            visibleWorkspaceChatIds(
+                focused = true,
+                workspaceSurfaceVisible = true,
+                selectedWorkspaceId = "w1",
+                snapshot = viewingSnapshot(),
+            ),
+        )
+    }
+
+    @Test fun launcherCoveredWorkspaceReturnsNoVisibleChatIds() {
+        assertEquals(
+            emptyList(),
+            visibleWorkspaceChatIds(
+                focused = true,
+                workspaceSurfaceVisible = false,
+                selectedWorkspaceId = "w1",
+                snapshot = viewingSnapshot(),
+            ),
+        )
+    }
+
+    @Test fun staleSnapshotFromPreviousWorkspaceReturnsNoVisibleChatIds() {
+        assertEquals(
+            emptyList(),
+            visibleWorkspaceChatIds(
+                focused = true,
+                workspaceSurfaceVisible = true,
+                selectedWorkspaceId = "w2",
+                snapshot = viewingSnapshot(workspaceId = "w1", sessionId = "s1"),
+            ),
+        )
+    }
+
+    @Test fun selectedSessionWithoutWorkspaceSnapshotReturnsNoVisibleChatIds() {
+        assertEquals(
+            emptyList(),
+            visibleWorkspaceChatIds(
+                focused = true,
+                workspaceSurfaceVisible = false,
+                selectedWorkspaceId = null,
+                snapshot = null,
+            ),
+        )
+    }
+
+    @Test fun unfocusedWorkspaceReturnsNoVisibleChatIds() {
+        assertEquals(
+            emptyList(),
+            visibleWorkspaceChatIds(
+                focused = false,
+                workspaceSurfaceVisible = true,
+                selectedWorkspaceId = "w1",
+                snapshot = viewingSnapshot(),
+            ),
+        )
+    }
+
+    @Test fun addHostOverlayHidesWorkspaceLayer() {
+        assertFalse(
+            workspaceLayerVisible(
+                currentRoute = DesktopRoute.Home,
+                launcherOpen = false,
+                addHostOpen = true,
+                selectedSessionAvailable = true,
+                activeWorkspaceAvailable = true,
+            ),
+        )
+    }
+
+    @Test fun switchingWorkspacesKeepsThePreviousWorkspaceLayerMountedAtZeroSize() = runComposeUiTest {
+        val app = twoWorkspaceApp()
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+            }
+        }
+        waitForIdle()
+
+        onNodeWithTag("workspace-layer-w1").assertIsDisplayed()
+
+        ui.selectedId = "s2"
+        waitForIdle()
+
+        assertEquals(0.dp, onNodeWithTag("workspace-layer-w1").getBoundsInRoot().width)
+        onNodeWithTag("workspace-layer-w2").assertIsDisplayed()
+
+        ui.selectedId = "s1"
+        waitForIdle()
+
+        onNodeWithTag("workspace-layer-w1").assertIsDisplayed()
+    }
+
+    @Test fun fullPaneRouteKeepsWorkspaceMountedAtZeroSizeAndRestoresItOnBack() = runComposeUiTest {
+        val app = twoWorkspaceApp()
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+            }
+        }
+        waitForIdle()
+
+        onNodeWithTag("workspace-layer-w1").assertIsDisplayed()
+
+        ui.openAppUpdate()
+        waitForIdle()
+
+        assertEquals(0.dp, onNodeWithTag("workspace-layer-w1").getBoundsInRoot().width)
+
+        ui.goBack()
+        waitForIdle()
+
+        onNodeWithTag("workspace-layer-w1").assertIsDisplayed()
+    }
 
     @Test fun selecting_a_session_draws_its_workspace() = runComposeUiTest {
         val app = appFor(mutableListOf())
