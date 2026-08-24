@@ -30,6 +30,17 @@ fun dragEndedOutside(
 fun emptyHostLayout(fullTree: LayoutNode): LayoutNode =
     LayoutNode.Group(firstGroupId(fullTree) ?: "empty-host", emptyList(), null)
 
+/** Smallest node whose view ids contain [viewIds] (not necessarily equal). */
+fun smallestContaining(node: LayoutNode, viewIds: Set<String>): LayoutNode? {
+    if (viewIds.isEmpty()) return null
+    val here = collectViewIds(node).toSet()
+    if (!here.containsAll(viewIds)) return null
+    if (node is LayoutNode.Split) {
+        node.children.firstNotNullOfOrNull { smallestContaining(it, viewIds) }?.let { return it }
+    }
+    return node
+}
+
 /** Workspaces that must keep a [WorkspaceSession] composed: the selected one plus every extra window. */
 fun workspaceIdsNeedingSession(
     selectedWorkspaceId: String?,
@@ -162,6 +173,28 @@ class WindowHostRegistry(mainId: String = "main") {
         if (host.claimedViewIds.isEmpty()) return false
         if (viewId !in host.claimedViewIds) return false
         applyRemaining(host, host.claimedViewIds - viewId, tree)
+        bumpExtras()
+        return true
+    }
+
+    /**
+     * After a split/add in an extra window, grow that host's claim so the new
+     * view stays in this window instead of appearing on main.
+     */
+    fun expandClaim(hostId: String, addedViewIds: Set<String>, tree: LayoutNode): Boolean {
+        val host = extraHosts[hostId] ?: return false
+        if (host.claimedViewIds.isEmpty()) return true
+        if (addedViewIds.isEmpty()) return true
+        val next = host.claimedViewIds + addedViewIds
+        val cover = smallestContaining(tree, next) ?: return false
+        val ids = collectViewIds(cover).toSet()
+        val others = claimedUnion(host.workspaceId) - host.claimedViewIds
+        val claimed = if (ids.any { it in others }) {
+            collectViewIds(subtreeCovering(tree, next) ?: return false).toSet()
+        } else {
+            ids
+        }
+        extraHosts[hostId] = host.copy(claimedViewIds = claimed)
         bumpExtras()
         return true
     }

@@ -436,6 +436,25 @@ class WindowHostsTest {
     }
 
     @Test
+    fun expandClaimGrowsExtraToCoverASplitOffFile() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val before = LayoutNode.Group("g-tree", listOf("tree"), "tree")
+        assertNotNull(r.tryClaim("ws", setOf("tree"), bounds, "extra", before))
+        val after = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(
+                LayoutNode.Group("g-tree", listOf("tree"), "tree"),
+                LayoutNode.Group("g-file", listOf("f-new"), "f-new"),
+            ),
+        )
+        assertTrue(r.expandClaim("extra", setOf("f-new"), after))
+        assertEquals(setOf("tree", "f-new"), r.extras("ws").single().claimedViewIds)
+        assertEquals(after, r.layoutFor(r.extras("ws").single(), after))
+    }
+
+    @Test
     fun workspaceIdsNeedingSessionKeepExtrasWhenSelectionChanges() {
         assertEquals(setOf("ws-a", "ws-b"), workspaceIdsNeedingSession("ws-b", listOf("ws-a")))
         assertEquals(setOf("ws-a"), workspaceIdsNeedingSession(null, listOf("ws-a")))

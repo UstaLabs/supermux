@@ -77,17 +77,23 @@ internal fun planFileOpen(
     views: Map<String, ViewDto>,
     path: String,
     sourceViewId: String?,
+    /**
+     * The window that asked for the open. Placement (join-files / split-from-source) is
+     * decided only inside this subtree so a pop-out explorer does not dump tabs into
+     * the main canvas. Defaults to [tree] (the whole workspace).
+     */
+    scope: LayoutNode = tree,
 ): FileOpenPlan {
     val existing = views.fileViewFor(path)
     if (existing != null) {
-        val group = groupIdOf(tree, existing.id)
-        // A view the layout does not hold is not really open — fall through and place a new one.
-        if (group != null) return FileOpenPlan.Activate(existing.id, group)
+        val groupInScope = groupIdOf(scope, existing.id)
+        // Already open in THIS window: select it. Open in another window: place here.
+        if (groupInScope != null) return FileOpenPlan.Activate(existing.id, groupInScope)
     }
-    firstGroupWithFileView(tree, views)?.let { return FileOpenPlan.AddToGroup(it) }
-    val source = sourceViewId?.let { groupIdOf(tree, it) } ?: firstGroupId(tree) ?: return FileOpenPlan.Nowhere
+    firstGroupWithFileView(scope, views)?.let { return FileOpenPlan.AddToGroup(it) }
+    val source = sourceViewId?.let { groupIdOf(scope, it) } ?: firstGroupId(scope) ?: return FileOpenPlan.Nowhere
     // Nothing to split AWAY from: an empty group is already the file's own pane.
-    return if (viewIdsOfGroup(tree, source).isEmpty()) FileOpenPlan.AddToGroup(source)
+    return if (viewIdsOfGroup(scope, source).isEmpty()) FileOpenPlan.AddToGroup(source)
     else FileOpenPlan.SplitFrom(source)
 }
 
@@ -151,7 +157,14 @@ internal class WorkspaceFileOpener(
      * fails (the rollback) — never held longer, or a genuine re-open would stop working.
      */
     private val placing = mutableMapOf<String, String>()
-    fun open(path: String, line: Int? = null, endLine: Int? = null, sourceViewId: String? = null) {
+    fun open(
+        path: String,
+        line: Int? = null,
+        endLine: Int? = null,
+        sourceViewId: String? = null,
+        scope: LayoutNode? = null,
+        onPlaced: (viewId: String) -> Unit = {},
+    ) {
         // The document first, always: the pane reads it out of the store, and a re-open of an
         // already-open file is only ever about the reveal.
         reveal(path, line, endLine)
@@ -169,16 +182,21 @@ internal class WorkspaceFileOpener(
             }
         }
 
-        when (val plan = planFileOpen(treeOf(), views, path, sourceViewId)) {
+        when (val plan = planFileOpen(treeOf(), views, path, sourceViewId, scope = scope ?: treeOf())) {
             is FileOpenPlan.Activate -> edit { setActiveViewInGroup(it, plan.groupId, plan.viewId) }
-            is FileOpenPlan.AddToGroup -> place(path, plan.groupId, split = false)
-            is FileOpenPlan.SplitFrom -> place(path, plan.groupId, split = true)
+            is FileOpenPlan.AddToGroup -> place(path, plan.groupId, split = false, onPlaced = onPlaced)
+            is FileOpenPlan.SplitFrom -> place(path, plan.groupId, split = true, onPlaced = onPlaced)
             FileOpenPlan.Nowhere ->
                 println("[WorkspaceFileOpener] no group to open '$path' into — layout is empty")
         }
     }
 
-    private fun place(path: String, groupId: String, split: Boolean) {
+    private fun place(
+        path: String,
+        groupId: String,
+        split: Boolean,
+        onPlaced: (viewId: String) -> Unit,
+    ) {
         val id = newId()
         val state = fileViewState(path)
         provisional[id] = ViewDto(id = id, workspaceId = workspaceId, kind = "editor", state = state)
@@ -211,6 +229,7 @@ internal class WorkspaceFileOpener(
         } else {
             edit { tree -> addViewToGroup(tree, groupId, id) }
         }
+        onPlaced(id)
 
         scope.launch {
             val created = post(id, state, groupId)

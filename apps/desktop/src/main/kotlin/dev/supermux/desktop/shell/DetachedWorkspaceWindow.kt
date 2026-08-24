@@ -224,7 +224,7 @@ internal fun WorkspacePanes(
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
             WorkspaceAddButton { kind, placement ->
-                val open = openSingletonView(localLayout, viewsById, kind)
+                val open = openSingletonView(layout, viewsById, kind)
                 if (open != null) {
                     val (viewId, ownerGroup) = open
                     layoutSync.edit { setActiveViewInGroup(it, ownerGroup, viewId) }
@@ -241,6 +241,7 @@ internal fun WorkspacePanes(
                             }
                         }
                     }
+                    ui.windowHosts.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
                 }
             }
         },
@@ -320,7 +321,14 @@ internal fun WorkspacePanes(
                     drafts = drafts,
                     documents = documents,
                     onOpenFile = { p, line, endLine ->
-                        fileOpener.open(p, line, endLine, sourceViewId = viewId)
+                        fileOpener.open(
+                            p, line, endLine,
+                            sourceViewId = viewId,
+                            scope = layout,
+                            onPlaced = { newId ->
+                                ui.windowHosts.expandClaim(hostId, setOf(newId), layoutSync.tree)
+                            },
+                        )
                     },
                     onCloseView = { onCloseCandidate(v) },
                     primarySessionId = current.primarySessionId,
