@@ -69,4 +69,23 @@ class WindowHostPaneTest {
         onNodeWithTag("body-v2").assertDoesNotExist()
         onNodeWithTag("layout-empty").assertDoesNotExist()
     }
+
+    @Test
+    fun canvasClaimShowsEmptyHintOnMainAsDropSurface() = runComposeUiTest {
+        val registry = WindowHostRegistry()
+        registry.setWorkspaceOnMain("ws")
+        val t = tree()
+        assertNotNull(registry.tryClaimCanvas("ws", bounds, "canvas"))
+        val mainLayout = registry.layoutFor(registry.main(), t) ?: emptyHostLayout(t)
+        setContent {
+            PaneHost(
+                layout = mainLayout,
+                onLayoutChange = {},
+                modifier = Modifier.size(400.dp).testTag("window-host-main"),
+                emptyGroupSlot = { WorkspaceEmptyHint() },
+            ) { id -> Text("body-$id", modifier = Modifier.testTag("body-$id")) }
+        }
+        onNodeWithTag("layout-empty").assertIsDisplayed()
+        onNodeWithTag("body-v1").assertDoesNotExist()
+    }
 }

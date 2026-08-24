@@ -409,8 +409,20 @@ private fun GroupHost(
 ) {
     if (group.viewIds.isEmpty()) {
         // A workspace whose last view just closed. Valid, not an error (spec §9.3
-        // answer 3: the workspace stays open).
-        Box(modifier.fillMaxSize().testTag("layout-empty"), contentAlignment = Alignment.Center) {
+        // answer 3: the workspace stays open). Register pane bounds so a tab can
+        // dock back onto this empty canvas (main after canvas tear-out).
+        DisposableEffect(group.id) {
+            onDispose { dragState.unregisterGroup(group.id) }
+        }
+        Box(
+            modifier
+                .fillMaxSize()
+                .testTag("layout-empty")
+                .onGloballyPositioned { coords ->
+                    dragState.registerPane(group.id, coords.boundsInRoot())
+                },
+            contentAlignment = Alignment.Center,
+        ) {
             emptyGroupSlot?.invoke()
         }
         return

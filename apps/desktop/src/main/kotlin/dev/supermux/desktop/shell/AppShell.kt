@@ -1144,14 +1144,7 @@ fun AppShell(
                                     onMoveWorkspaceToNewWindow = onTearOutWorkspace,
                                 )
                                 val hostedLayout = ui.windowHosts.layoutFor(ui.windowHosts.main(), localLayout)
-                                if (hostedLayout == null) {
-                                Box(
-                                    Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    WorkspaceEmptyHint()
-                                }
-                                } else {
+                                    ?: emptyHostLayout(localLayout)
                                 WorkspacePanes(
                                     hostId = ui.windowHosts.main().id,
                                     layout = hostedLayout,
@@ -1171,7 +1164,6 @@ fun AppShell(
                                     modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
                                     onTearOutTab = onTearOutTab,
                                 )
-                                }
                                 }
                             }
                         }

@@ -24,6 +24,7 @@ import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
@@ -31,8 +32,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
+ * Extra OS window caption: workspace name plus the active view on this host.
+ */
+internal fun extraWindowTitle(
+    workspaceName: String,
+    hosted: LayoutNode?,
+    viewsById: Map<String, ViewDto>,
+): String {
+    val activeId = hosted?.let { collectActiveViewIds(it).firstOrNull() }
+    val viewPart = activeId?.let { viewsById[it] }?.let { viewTitle(it) }
+    return if (viewPart.isNullOrBlank()) workspaceName else "$workspaceName — $viewPart"
+}
+
+/**
  * Shared objects for extra windows of the *selected* workspace.
- * Extra windows for another workspace are not composed (deferred).
+ * Extra windows for another workspace are not composed (Task 5 / Task 8
+ * deferral — they need a separate [WorkspaceSession] / DocumentStore).
  */
 internal class WorkspacePanesBind(
     current: WorkspaceDto,
@@ -73,14 +88,10 @@ internal fun DetachedWorkspaceWindow(
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
     val hosted = ui.windowHosts.layoutFor(host, layoutSync.tree)
+        ?: emptyHostLayout(layoutSync.tree)
     val tabDragState = remember(host.id) { PaneDragController() }
     var closeCandidate by remember(host.id) { mutableStateOf<ViewDto?>(null) }
     val sessionNames = remember(current) { emptyMap<String, String>() }
-
-    if (hosted == null) {
-        WorkspaceEmptyHint()
-        return
-    }
 
     WorkspacePanes(
         hostId = host.id,

@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectViewIds
+import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.hideClaimed
 import dev.supermux.workspace.splitGroup
@@ -20,6 +21,14 @@ fun dragEndedOutside(
     pointerY: Float,
     windows: List<WindowBounds>,
 ): Boolean = windows.none { it.contains(pointerX, pointerY) }
+
+/**
+ * Placeholder group when [WindowHostRegistry.layoutFor] is null (canvas claimed).
+ * Keeps the empty [WorkspaceEmptyHint] inside [PaneHost] so it is a drop target
+ * addressed at the first real group of [fullTree].
+ */
+fun emptyHostLayout(fullTree: LayoutNode): LayoutNode =
+    LayoutNode.Group(firstGroupId(fullTree) ?: "empty-host", emptyList(), null)
 
 /**
  * One OS window hosting a workspace slice.

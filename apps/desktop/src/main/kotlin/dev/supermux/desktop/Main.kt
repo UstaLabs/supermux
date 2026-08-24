@@ -67,6 +67,7 @@ import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
+import dev.supermux.desktop.shell.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
@@ -1409,7 +1410,11 @@ fun main() {
                 )
                 Window(
                     onCloseRequest = { ui.windowHosts.unclaim(host.id) },
-                    title = if (isMacOs()) "" else "supermux",
+                    title = extraWindowTitle(
+                        extraBind.current.name,
+                        ui.windowHosts.layoutFor(host, extraBind.ws.layoutSync.tree),
+                        extraBind.ws.viewsById,
+                    ),
                     state = extraState,
                 ) {
                     val extraModal = remember { ModalPresence() }

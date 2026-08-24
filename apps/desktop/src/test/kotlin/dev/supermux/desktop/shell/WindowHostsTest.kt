@@ -1,7 +1,9 @@
 package dev.supermux.desktop.shell
 
+import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectViewIds
+import dev.supermux.workspace.firstGroupId
 import dev.supermux.workspace.hideClaimed
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.subtreeCovering
@@ -326,5 +328,23 @@ class WindowHostsTest {
         assertTrue(r.transfer("v2", "b", next))
         assertEquals(setOf("v1"), r.extras("ws").first { it.id == "a" }.claimedViewIds)
         assertEquals(setOf("v3", "v2"), r.extras("ws").first { it.id == "b" }.claimedViewIds)
+    }
+
+    @Test
+    fun emptyHostLayoutAddressesFirstGroup() {
+        val t = tree()
+        val placeholder = emptyHostLayout(t)
+        assertEquals(LayoutNode.Group(firstGroupId(t)!!, emptyList(), null), placeholder)
+    }
+
+    @Test
+    fun extraWindowTitleUsesWorkspaceAndActiveView() {
+        val hosted = LayoutNode.Group("g1", listOf("v1", "v2"), "v2")
+        val views = mapOf(
+            "v1" to ViewDto("v1", "ws", "chat", title = "Chat A"),
+            "v2" to ViewDto("v2", "ws", "editor", title = "Main.kt"),
+        )
+        assertEquals("Alpha — Main.kt", extraWindowTitle("Alpha", hosted, views))
+        assertEquals("Alpha", extraWindowTitle("Alpha", null, views))
     }
 }
