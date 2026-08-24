@@ -206,6 +206,43 @@ class ShellUiState {
     var appearance by mutableStateOf(AppearanceMode.DARK)
 
     /**
+     * Extra OS windows hosting slices of a workspace layout. Persist via
+     * [windowHosts.extras] → [PersistedWindowHost]; hydrate by [tryRestoreWindowHosts]
+     * once a workspace tree is on screen.
+     */
+    val windowHosts = WindowHostRegistry()
+
+    /** Persisted extras not yet claimed (waiting for a matching workspace tree). */
+    internal var pendingWindowHosts by mutableStateOf<List<PersistedWindowHost>>(emptyList())
+
+    /**
+     * Bind for extra [androidx.compose.ui.window.Window]s in Main.kt: the selected
+     * workspace's [WorkspaceSession] (shared DocumentStore). Extra windows for a
+     * *different* workspace are deferred until that workspace is selected.
+     */
+    internal var panesBind by mutableStateOf<WorkspacePanesBind?>(null)
+
+    fun tryRestoreWindowHosts(workspaceId: String, tree: LayoutNode) {
+        if (pendingWindowHosts.isEmpty()) return
+        val leftover = mutableListOf<PersistedWindowHost>()
+        for (p in pendingWindowHosts) {
+            if (p.workspaceId != workspaceId) {
+                leftover += p
+                continue
+            }
+            if (windowHosts.extras().any { it.id == p.id }) continue
+            val bounds = WindowBounds(p.x, p.y, p.width, p.height)
+            val claimed = if (p.claimedViewIds.isEmpty()) {
+                windowHosts.tryClaimCanvas(p.workspaceId, bounds, p.id)
+            } else {
+                windowHosts.tryClaim(p.workspaceId, p.claimedViewIds.toSet(), bounds, p.id, tree)
+            }
+            if (claimed == null) leftover += p
+        }
+        pendingWindowHosts = leftover
+    }
+
+    /**
      * Whether the New-Session launcher is showing in the **detail pane** (sidebar stays mounted).
      * Not a [DesktopRoute]: it is a side panel inside [DesktopRoute.Home], not a full-pane push.
      */
@@ -625,6 +662,7 @@ fun AppShell(
                 layout = ui.snapshot(),
                 selectedId = ui.selectedId,
                 appearance = ui.appearance.name,
+                windows = ui.windowHosts.extras().map { it.toPersisted() },
             )
         }
             .collectLatest {
@@ -970,6 +1008,36 @@ fun AppShell(
                                 val ws = rememberWorkspaceSession(current, wsApp, overlayScope)
                                 val layoutSync = ws.layoutSync
                                 val localLayout = layoutSync.tree
+                                ui.windowHosts.setWorkspaceOnMain(current.id)
+                                val panesBind = ui.panesBind ?: WorkspacePanesBind(
+                                    current = current,
+                                    session = session,
+                                    ws = ws,
+                                    app = app,
+                                    appFor = appFor,
+                                    drafts = drafts,
+                                    overlayScope = overlayScope,
+                                    launcherPane = launcherPane,
+                                ).also { ui.panesBind = it }
+                                panesBind.current = current
+                                panesBind.session = session
+                                panesBind.ws = ws
+                                panesBind.app = app
+                                panesBind.appFor = appFor
+                                panesBind.drafts = drafts
+                                panesBind.overlayScope = overlayScope
+                                panesBind.launcherPane = launcherPane
+                                DisposableEffect(current.id) {
+                                    onDispose {
+                                        if (ui.panesBind === panesBind && ui.panesBind?.current?.id == current.id) {
+                                            ui.panesBind = null
+                                        }
+                                    }
+                                }
+                                LaunchedEffect(current.id, localLayout) {
+                                    ui.windowHosts.rebase(current.id, localLayout)
+                                    ui.tryRestoreWindowHosts(current.id, localLayout)
+                                }
                                 val viewsById = ws.viewsById
                                 val documents = ws.documents
                                 val previewModes = ws.previewModes
@@ -1054,183 +1122,34 @@ fun AppShell(
                                     },
                                     onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
                                 )
-                                PaneHost(
-                                    layout = localLayout,
-                                    titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
-                                    onCloseView = { closeCandidate = viewsById[it] },
-                                    // The EDIT, not the resulting tree: only a function can be
-                                    // replayed over a workspace_changed frame that lands mid-edit.
-                                    onEdit = { edit -> layoutSync.edit(edit) },
-                                    // "+" on the tab strip → pick a kind → it opens as a new tab in
-                                    // THAT group. A chat needs an agent, so it goes through the
-                                    // launcher (spec §9.2); the other kinds are pure views and are
-                                    // created straight away.
-                                    addSlot = { groupId ->
-                                        WorkspaceAddButton { kind, placement ->
-                                            // Files and Changes are one per workspace: a second one is
-                                            // the same pane twice. Picking an open one reveals it —
-                                            // which, when it is already the visible tab, is the no-op
-                                            // it looks like.
-                                            val open = openSingletonView(localLayout, viewsById, kind)
-                                            if (open != null) {
-                                                val (viewId, ownerGroup) = open
-                                                layoutSync.edit { setActiveViewInGroup(it, ownerGroup, viewId) }
-                                                return@WorkspaceAddButton
-                                            }
-                                            // Every kind, chat included, becomes a TAB. A chat tab starts
-                                            // as the new-session composer and binds to its session on
-                                            // first send — the pane is never replaced.
-                                            //
-                                            // A SPLIT placement pre-splits the tree so the new view lands
-                                            // in a fresh group beside this one. This is the only route to
-                                            // a second pane from a single view: drag-to-split can only
-                                            // divide existing tabs, and one view has nothing to divide.
-                                            app.addWorkspaceView(current.id, kind, groupId) { newViewId ->
-                                                if (placement != NewViewPlacement.HERE) {
-                                                    // The broker has already added it to `groupId`, so this
-                                                    // only has to move it out. splitGroup refuses a group
-                                                    // with fewer than two views and an empty group would
-                                                    // fail validateLayout, so splitting an existing view
-                                                    // out is the only way to make a second pane.
-                                                    val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
-                                                    // Minted OUTSIDE the transform: a replay must land on
-                                                    // the SAME group id rather than invent one per pass.
-                                                    val newGroupId = java.util.UUID.randomUUID().toString()
-                                                    layoutSync.edit { tree ->
-                                                        // Address the view's CURRENT group — this transform
-                                                        // is replayed over every workspace_changed frame,
-                                                        // and the split's whole job is to move the view out
-                                                        // of `groupId` (same trap WorkspaceFileOpener hit).
-                                                        when (val owner = groupIdOf(tree, newViewId)) {
-                                                            newGroupId, null -> tree // already split out, or not placed yet
-                                                            else -> splitGroup(tree, owner, newViewId, dir, newGroupId)
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    },
-                                    dragState = tabDragState,
-                                    onMoveToWorkspace = { viewId, toWs ->
-                                        if (toWs != current.id) {
-                                            app.moveViewToWorkspace(viewId, toWs)
-                                        }
-                                    },
+                                val hostedLayout = ui.windowHosts.layoutFor(ui.windowHosts.main(), localLayout)
+                                if (hostedLayout == null) {
+                                Box(
+                                    Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    WorkspaceEmptyHint()
+                                }
+                                } else {
+                                WorkspacePanes(
+                                    hostId = ui.windowHosts.main().id,
+                                    layout = hostedLayout,
+                                    current = current,
+                                    session = session,
+                                    ws = ws,
+                                    app = app,
+                                    appFor = appFor,
+                                    ui = ui,
+                                    drafts = drafts,
+                                    overlayScope = overlayScope,
+                                    launcherPane = launcherPane,
+                                    tabDragState = tabDragState,
+                                    closeCandidate = closeCandidate,
+                                    onCloseCandidate = { closeCandidate = it },
+                                    sessionNames = sessionNames,
                                     modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
-                                    chrome = DesktopStripChrome,
-                                    // "view" and "workspace" are content vocabulary, so the
-                                    // wording lives here rather than in the pane layer.
-                                    emptyGroupSlot = { WorkspaceEmptyHint() },
-                                    labelFont = MonoFontFamily,
-                                    // A file tab carries its own save + preview controls, which is
-                                    // why the pane layer takes a slot instead of drawing tabs itself.
-                                    tabSlot = { itemId, tabState ->
-                                        val v = viewsById[itemId]
-                                        val filePath = v
-                                            ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
-                                            ?.stateString("path")
-                                        if (filePath == null) {
-                                            DefaultTabChip(
-                                                itemId = itemId,
-                                                title = v?.let { viewTitle(it) } ?: "view",
-                                                state = tabState,
-                                                labelFont = MonoFontFamily,
-                                                onClose = { _ -> closeCandidate = v },
-                                            )
-                                        } else {
-                                            WorkspaceFileTab(
-                                                itemId = itemId,
-                                                title = filePath.substringAfterLast('/'),
-                                                path = filePath,
-                                                state = tabState,
-                                                dirty = documents.isDirty(filePath),
-                                                saving = documents.saving,
-                                                previewMode = previewModes[itemId] == true,
-                                                onSave = { documents.get(filePath)?.let { documents.save(it) } },
-                                                onTogglePreview = {
-                                                    previewModes[itemId] = previewModes[itemId] != true
-                                                },
-                                                onClose = { _ -> closeCandidate = v },
-                                            )
-                                        }
-                                    },
-                                ) { viewId ->
-                                    val v = viewsById[viewId]
-                                    if (v != null && v.kind == "chat" && v.chatSessionId() == null) {
-                                        // A chat tab with no session yet: render the SAME new-session
-                                        // composer the full-pane launcher uses, inside this tab. The
-                                        // pane and sidebar do not move. On send we create the session
-                                        // in THIS workspace and bind the view to it, so the very same
-                                        // tab becomes the conversation.
-                                        launcherPane(
-                                            { app.closeWorkspaceView(current.id, v.id) },
-                                            { newId ->
-                                                app.bindChatView(current.id, v.id, newId)
-                                                ui.selectedId = newId
-                                            },
-                                            current.id,
-                                            current.workdir,
-                                        )
-                                    } else if (v != null) {
-                                        ViewHost(
-                                            previewModeFor = { previewModes[it] == true },
-                                            view = v,
-                                            workspaceId = current.id,
-                                            workdir = current.workdir,
-                                            app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
-                                            drafts = drafts,
-                                            documents = documents,
-                                            // The tree, a search hit and a file path in a transcript
-                                            // all open the same way; the view asking is only used to
-                                            // decide which group to split when there is no file pane
-                                            // to join.
-                                            onOpenFile = { p, line, endLine ->
-                                                fileOpener.open(p, line, endLine, sourceViewId = viewId)
-                                            },
-                                            onCloseView = { closeCandidate = v },
-                                            primarySessionId = current.primarySessionId,
-                                            onSelectSession = { ui.selectSession(it) },
-                                            // SM_LINKS_MENU: the globe menu now lives on the chat
-                                            // view's header, so the one-shot lands on the chat view
-                                            // whose session matches.
-                                            forceLinksMenuFor = ui.forceLinksMenuFor,
-                                            onForceLinksMenuConsumed = { ui.forceLinksMenuFor = null },
-                                            // One-shot composer requests, each addressed to ONE
-                                            // session (Edit > Paste image targets the SELECTED one),
-                                            // so a workspace showing two chats never doubles them.
-                                            externalAttach = ui.externalAttach,
-                                            onExternalAttachConsumed = { ui.externalAttach = null },
-                                            externalDictate = ui.externalDictate,
-                                            onExternalDictateConsumed = { ui.externalDictate = null },
-                                            pasteImageFor = ui.selectedId,
-                                            pasteImageRequestNonce = ui.pasteImageRequestNonce,
-                                            onPasteImageRequestConsumed = { ui.pasteImageRequestNonce = 0L },
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
-                                    }
+                                )
                                 }
-                                }
-                                // Spec §9.3: a close that ends work asks first. Editor skips the dialog.
-                                // NOT the Finish flow — one question, two buttons (Close / Cancel).
-                                closeCandidate?.let { v ->
-                                    if (!v.closeNeedsConfirmation()) {
-                                        LaunchedEffect(v.id) {
-                                            runCatching { app.api.closeView(v.workspaceId, v.id) }
-                                            closeCandidate = null
-                                        }
-                                    } else {
-                                        CloseViewDialog(
-                                            view = v,
-                                            sessionNames = sessionNames,
-                                            onDismiss = { closeCandidate = null },
-                                            onConfirm = {
-                                                overlayScope.launch {
-                                                    runCatching { app.api.closeView(v.workspaceId, v.id) }
-                                                    closeCandidate = null
-                                                }
-                                            },
-                                        )
-                                    }
                                 }
                             }
                         }

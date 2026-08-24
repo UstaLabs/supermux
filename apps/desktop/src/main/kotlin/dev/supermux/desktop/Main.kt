@@ -19,6 +19,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
@@ -64,6 +66,7 @@ import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
@@ -278,6 +281,18 @@ fun main() {
         // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
+        val uiStore = remember { ShellStateStore() }
+        val persistedUi = remember { uiStore.load() }
+        val ui = remember {
+            ShellUiState().apply {
+                persistedUi.layout?.let { restore(it) }
+                selectedId = persistedUi.selectedId
+                appearance = persistedUi.appearance
+                    ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
+                    ?: AppearanceMode.DARK
+                pendingWindowHosts = persistedUi.windows
+            }
+        }
         val notificationController = remember {
             NotificationController(TrayNotificationManager(trayState))
         }
@@ -343,20 +358,7 @@ fun main() {
             // Paired once the fleet holds a host (legacy single-host users were migrated to
             // PairedHost[0] above; onboarding seeds it via the same migration on success).
             var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
-            val uiStore = remember { ShellStateStore() }
             val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
-            // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
-            // against live sessions inside AppShell once the first snapshot lands).
-            val persistedUi = remember { uiStore.load() }
-            val ui = remember {
-                ShellUiState().apply {
-                    persistedUi.layout?.let { restore(it) }
-                    selectedId = persistedUi.selectedId
-                    appearance = persistedUi.appearance
-                        ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
-                        ?: AppearanceMode.DARK
-                }
-            }
             // M5-3: publish this pairing's ShellUiState up to the tray icon's onAction
             // handler (declared above, outside Window) so a click can select the last-notified
             // session. Cleared on dispose (unpair / window teardown) so a stale ui never lingers.
@@ -1369,6 +1371,33 @@ fun main() {
             val mdImageSrc = System.getenv("SM_MD_IMAGE")?.takeIf { it.isNotBlank() }
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
+            }
+        }
+
+        // Extra claimed layout windows. Close unclaims only — never exitApplication.
+        // Other-workspace extras persist but stay uncomposed until that workspace is selected
+        // (they share rememberWorkspaceSession / DocumentStore with the selected workspace).
+        val extraBind = ui.panesBind
+        for (host in ui.windowHosts.extras()) {
+            if (extraBind == null || host.workspaceId != extraBind.current.id) continue
+            key(host.id) {
+                val extraState = rememberWindowState(
+                    position = WindowPosition(host.bounds.x.dp, host.bounds.y.dp),
+                    width = host.bounds.width.dp.coerceAtLeast(200.dp),
+                    height = host.bounds.height.dp.coerceAtLeast(200.dp),
+                )
+                Window(
+                    onCloseRequest = { ui.windowHosts.unclaim(host.id) },
+                    title = if (isMacOs()) "" else "supermux",
+                    state = extraState,
+                ) {
+                    val extraModal = remember { ModalPresence() }
+                    CompositionLocalProvider(LocalModalPresence provides extraModal) {
+                        SupermuxTheme(appearance = ui.appearance) {
+                            DetachedWorkspaceWindow(host, extraBind, ui)
+                        }
+                    }
+                }
             }
         }
         }

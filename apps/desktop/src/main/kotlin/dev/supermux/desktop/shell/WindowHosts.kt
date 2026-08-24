@@ -1,5 +1,8 @@
 package dev.supermux.desktop.shell
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.groupIdOf
@@ -24,21 +27,28 @@ data class WindowHost(
 )
 
 class WindowHostRegistry(mainId: String = "main") {
-    private var mainHost = WindowHost(
-        id = mainId,
-        workspaceId = "",
-        claimedViewIds = emptySet(),
-        bounds = WindowBounds(0f, 0f, 1440f, 900f),
-        isMain = true,
+    private var mainHost by mutableStateOf(
+        WindowHost(
+            id = mainId,
+            workspaceId = "",
+            claimedViewIds = emptySet(),
+            bounds = WindowBounds(0f, 0f, 1440f, 900f),
+            isMain = true,
+        ),
     )
     private val extraHosts = linkedMapOf<String, WindowHost>()
+    /** Compose / snapshotFlow subscription tick — [extraHosts] is not a snapshot collection. */
+    private var extraGeneration by mutableStateOf(0)
 
     fun main(): WindowHost = mainHost
 
-    fun extras(): List<WindowHost> = extraHosts.values.toList()
+    fun extras(): List<WindowHost> {
+        extraGeneration
+        return extraHosts.values.toList()
+    }
 
     fun extras(workspaceId: String): List<WindowHost> =
-        extraHosts.values.filter { it.workspaceId == workspaceId }
+        extras().filter { it.workspaceId == workspaceId }
 
     fun claimedUnion(workspaceId: String): Set<String> =
         extras(workspaceId).flatMap { it.claimedViewIds }.toSet()
@@ -81,6 +91,7 @@ class WindowHostRegistry(mainId: String = "main") {
             isMain = false,
         )
         extraHosts[id] = host
+        bumpExtras()
         return host
     }
 
@@ -95,28 +106,35 @@ class WindowHostRegistry(mainId: String = "main") {
             isMain = false,
         )
         extraHosts[id] = host
+        bumpExtras()
         return host
     }
 
     fun unclaim(hostId: String) {
         if (hostId == mainHost.id) return
-        extraHosts.remove(hostId)
+        if (extraHosts.remove(hostId) != null) bumpExtras()
     }
 
     fun rebase(workspaceId: String, tree: LayoutNode) {
         val live = collectViewIds(tree).toSet()
         val taken = mutableSetOf<String>()
         val snapshot = extras(workspaceId)
+        var changed = false
         for (host in snapshot) {
             if (host.claimedViewIds.isEmpty()) continue
             val remaining = host.claimedViewIds.filter { it in live && it !in taken }.toSet()
             if (remaining.isEmpty() || subtreeCovering(tree, remaining) == null) {
                 extraHosts.remove(host.id)
+                changed = true
                 continue
             }
-            extraHosts[host.id] = host.copy(claimedViewIds = remaining)
+            if (remaining != host.claimedViewIds) {
+                extraHosts[host.id] = host.copy(claimedViewIds = remaining)
+                changed = true
+            }
             taken += remaining
         }
+        if (changed) bumpExtras()
     }
 
     fun setWorkspaceOnMain(workspaceId: String) {
@@ -125,7 +143,21 @@ class WindowHostRegistry(mainId: String = "main") {
 
     private fun liveHost(id: String): WindowHost? =
         if (id == mainHost.id) mainHost else extraHosts[id]
+
+    private fun bumpExtras() {
+        extraGeneration++
+    }
 }
+
+fun WindowHost.toPersisted(): PersistedWindowHost = PersistedWindowHost(
+    id = id,
+    workspaceId = workspaceId,
+    claimedViewIds = claimedViewIds.toList(),
+    x = bounds.x,
+    y = bounds.y,
+    width = bounds.width,
+    height = bounds.height,
+)
 
 fun planTearOutTab(
     tree: LayoutNode,
