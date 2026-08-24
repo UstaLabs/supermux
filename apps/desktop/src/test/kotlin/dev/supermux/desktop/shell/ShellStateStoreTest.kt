@@ -93,6 +93,65 @@ class ShellStateStoreTest {
         assertEquals(400.dp, restored.sidebarWidth)
     }
 
+    @Test fun oldFileWithoutWindowsKeyLoadsEmptyWindows() {
+        val dir = Files.createTempDirectory("smx-ui-state")
+        val path = dir.resolve("ui-state.json")
+        Files.writeString(
+            path,
+            """{"layout":{"sidebarCollapsed":false,"sidebarWidthDp":320.0},"selectedId":"s1"}""",
+        )
+        val loaded = ShellStateStore(path).load()
+        assertEquals("s1", loaded.selectedId)
+        assertTrue(loaded.windows.isEmpty())
+    }
+
+    @Test fun extrasRoundTripIncludingEmptyAndTwoIdClaims() {
+        val store = tempStore()
+        store.save(
+            PersistedUiState(
+                selectedId = "s1",
+                windows = listOf(
+                    PersistedWindowHost(
+                        id = "canvas-1",
+                        workspaceId = "ws-a",
+                        claimedViewIds = emptyList(),
+                        x = 10f,
+                        y = 20f,
+                        width = 800f,
+                        height = 600f,
+                    ),
+                    PersistedWindowHost(
+                        id = "extra-1",
+                        workspaceId = "ws-b",
+                        claimedViewIds = listOf("v1", "v2"),
+                        x = 100f,
+                        y = 40f,
+                        width = 640f,
+                        height = 480f,
+                    ),
+                ),
+            ),
+        )
+        val loaded = store.load()
+        assertEquals(2, loaded.windows.size)
+        val canvas = loaded.windows[0]
+        assertEquals("canvas-1", canvas.id)
+        assertEquals("ws-a", canvas.workspaceId)
+        assertTrue(canvas.claimedViewIds.isEmpty())
+        assertEquals(10f, canvas.x)
+        assertEquals(20f, canvas.y)
+        assertEquals(800f, canvas.width)
+        assertEquals(600f, canvas.height)
+        val extra = loaded.windows[1]
+        assertEquals("extra-1", extra.id)
+        assertEquals("ws-b", extra.workspaceId)
+        assertEquals(listOf("v1", "v2"), extra.claimedViewIds)
+        assertEquals(100f, extra.x)
+        assertEquals(40f, extra.y)
+        assertEquals(640f, extra.width)
+        assertEquals(480f, extra.height)
+    }
+
     @Test fun sidebarWidthClampsToRange() {
         val ui = ShellUiState()
         ui.setSidebarWidth(50.dp)
