@@ -66,8 +66,7 @@ class WindowHostsTest {
         val canvas = r2.extras("ws").single()
         val t = tree()
         assertEquals(t, r2.layoutFor(canvas, t))
-        // Empty claim set → claimedUnion is empty → hideClaimed is a no-op.
-        assertEquals(t, r2.layoutFor(r2.main(), t))
+        assertNull(r2.layoutFor(r2.main(), t))
     }
 
     @Test

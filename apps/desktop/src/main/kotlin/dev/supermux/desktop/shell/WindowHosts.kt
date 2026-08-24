@@ -36,7 +36,10 @@ class WindowHostRegistry(mainId: String = "main") {
         extras(workspaceId).flatMap { it.claimedViewIds }.toSet()
 
     fun layoutFor(host: WindowHost, tree: LayoutNode): LayoutNode? {
-        if (host.isMain) return hideClaimed(tree, claimedUnion(host.workspaceId))
+        if (host.isMain) {
+            if (extras(host.workspaceId).any { it.claimedViewIds.isEmpty() }) return null
+            return hideClaimed(tree, claimedUnion(host.workspaceId))
+        }
         if (host.claimedViewIds.isEmpty()) return tree
         return subtreeCovering(tree, host.claimedViewIds)
     }
