@@ -1,7 +1,6 @@
 package dev.supermux.desktop.shell
 
 import dev.supermux.workspace.LayoutNode
-import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.hideClaimed
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.subtreeCovering
@@ -24,28 +23,53 @@ class WindowHostsTest {
     )
 
     @Test
+    fun claimPartialGroupRejected() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        assertNull(r.tryClaim("ws", setOf("v2"), bounds, "extra-1", tree()))
+        assertTrue(r.extras("ws").isEmpty())
+    }
+
+    @Test
     fun claimSucceedsAndPartitionsLayout() {
         val r = WindowHostRegistry()
         r.setWorkspaceOnMain("ws")
-        val extra = r.tryClaim("ws", setOf("v2"), bounds, "extra-1")
+        val t = tree()
+        val extra = r.tryClaim("ws", setOf("v1", "v2"), bounds, "extra-1", t)
+        assertNotNull(extra)
+        assertEquals(setOf("v1", "v2"), extra.claimedViewIds)
+        assertEquals(setOf("v1", "v2"), r.claimedUnion("ws"))
+        assertEquals(listOf(extra), r.extras("ws"))
+        assertEquals(listOf(extra), r.extras())
+
+        val mainLayout = r.layoutFor(r.main(), t)
+        assertEquals(hideClaimed(t, setOf("v1", "v2")), mainLayout)
+        assertEquals(subtreeCovering(t, setOf("v1", "v2")), r.layoutFor(extra, t))
+    }
+
+    @Test
+    fun claimAfterPlanTearOutTab() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = tree()
+        val plan = planTearOutTab(t, "v2", "g-new")
+        assertNotNull(plan)
+        val next = plan.first(t)
+        val extra = r.tryClaim("ws", plan.second, bounds, "extra-1", next)
         assertNotNull(extra)
         assertEquals(setOf("v2"), extra.claimedViewIds)
-        assertEquals(setOf("v2"), r.claimedUnion("ws"))
-        assertEquals(listOf(extra), r.extras("ws"))
-
-        val t = tree()
-        val mainLayout = r.layoutFor(r.main(), t)
-        assertEquals(hideClaimed(t, setOf("v2")), mainLayout)
-        assertEquals(subtreeCovering(t, setOf("v2")), r.layoutFor(extra, t))
+        assertEquals(subtreeCovering(next, setOf("v2")), r.layoutFor(extra, next))
+        assertEquals(hideClaimed(next, setOf("v2")), r.layoutFor(r.main(), next))
     }
 
     @Test
     fun overlappingClaimRejectedRegistryUnchanged() {
         val r = WindowHostRegistry()
         r.setWorkspaceOnMain("ws")
-        assertNotNull(r.tryClaim("ws", setOf("v1", "v2"), bounds, "a"))
+        val t = tree()
+        assertNotNull(r.tryClaim("ws", setOf("v1", "v2"), bounds, "a", t))
         val before = r.claimedUnion("ws")
-        assertNull(r.tryClaim("ws", setOf("v2", "v3"), bounds, "b"))
+        assertNull(r.tryClaim("ws", setOf("v2", "v3"), bounds, "b", t))
         assertEquals(before, r.claimedUnion("ws"))
         assertEquals(1, r.extras("ws").size)
     }
@@ -54,13 +78,13 @@ class WindowHostsTest {
     fun wholeCanvasAndExtrasAreMutuallyExclusive() {
         val r = WindowHostRegistry()
         r.setWorkspaceOnMain("ws")
-        assertNotNull(r.tryClaim("ws", setOf("v1"), bounds, "e1"))
+        assertNotNull(r.tryClaim("ws", setOf("v3"), bounds, "e1", tree()))
         assertNull(r.tryClaimCanvas("ws", bounds, "canvas"))
 
         val r2 = WindowHostRegistry()
         r2.setWorkspaceOnMain("ws")
         assertNotNull(r2.tryClaimCanvas("ws", bounds, "canvas"))
-        assertNull(r2.tryClaim("ws", setOf("v1"), bounds, "e1"))
+        assertNull(r2.tryClaim("ws", setOf("v3"), bounds, "e1", tree()))
         assertNull(r2.tryClaimCanvas("ws", bounds, "canvas-2"))
         assertEquals(1, r2.extras("ws").size)
         val canvas = r2.extras("ws").single()
@@ -72,14 +96,14 @@ class WindowHostsTest {
     @Test
     fun tryClaimRejectsEmptyViewIds() {
         val r = WindowHostRegistry()
-        assertNull(r.tryClaim("ws", emptySet(), bounds, "x"))
+        assertNull(r.tryClaim("ws", emptySet(), bounds, "x", tree()))
     }
 
     @Test
     fun rebaseDropsMissingIdsClosesEmptyAndUnclaimsDisconnected() {
         val r = WindowHostRegistry()
         r.setWorkspaceOnMain("ws")
-        val extra = r.tryClaim("ws", setOf("v1", "v2"), bounds, "e")
+        val extra = r.tryClaim("ws", setOf("v1", "v2"), bounds, "e", tree())
         assertNotNull(extra)
 
         val onlyV1 = LayoutNode.Group("g1", listOf("v1"), "v1")
@@ -91,18 +115,67 @@ class WindowHostsTest {
 
         val r2 = WindowHostRegistry()
         r2.setWorkspaceOnMain("ws")
-        // Diagonal claim: v1 and v3 live in different children, no covering subtree.
-        val diagonal = r2.tryClaim("ws", setOf("v1", "v3"), bounds, "diag")
-        assertNotNull(diagonal)
-        r2.rebase("ws", tree())
+        assertNotNull(r2.tryClaim("ws", setOf("v1", "v2"), bounds, "diag", tree()))
+        // Both ids still live but sit on a diagonal of a larger tree — no covering node.
+        r2.rebase(
+            "ws",
+            LayoutNode.Split(
+                "row",
+                listOf(0.5, 0.5),
+                listOf(
+                    LayoutNode.Group("g1", listOf("v1"), "v1"),
+                    LayoutNode.Split(
+                        "column",
+                        listOf(0.5, 0.5),
+                        listOf(
+                            LayoutNode.Group("g2", listOf("v2"), "v2"),
+                            LayoutNode.Group("g3", listOf("v3"), "v3"),
+                        ),
+                    ),
+                ),
+            ),
+        )
         assertTrue(r2.extras("ws").isEmpty())
+    }
+
+    @Test
+    fun rebaseOverlappingExtrasFirstKeepsLaterDrops() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = tree()
+        assertNotNull(r.tryClaim("ws", setOf("v1", "v2"), bounds, "first", t))
+        assertNotNull(r.tryClaim("ws", setOf("v3"), bounds, "second", t))
+        // Both extras still hold live ids that now sit in one group together with
+        // each other — remaining sets overlap on v1 after the tree collapses.
+        r.rebase("ws", LayoutNode.Group("g", listOf("v1"), "v1"))
+        val extras = r.extras("ws")
+        assertEquals(listOf("first"), extras.map { it.id })
+        assertEquals(setOf("v1"), extras.single().claimedViewIds)
+    }
+
+    @Test
+    fun layoutForMainDoesNotHideOrphanClaims() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val t = tree()
+        assertNotNull(r.tryClaim("ws", setOf("v1", "v2"), bounds, "e", t))
+        val other = LayoutNode.Group("g1", listOf("v1", "v3"), "v1")
+        assertEquals(other, r.layoutFor(r.main(), other))
+    }
+
+    @Test
+    fun layoutForUnknownHostIsNull() {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val ghost = WindowHost("ghost", "ws", setOf("v3"), bounds, isMain = false)
+        assertNull(r.layoutFor(ghost, tree()))
     }
 
     @Test
     fun unclaimReturnsIdsToMain() {
         val r = WindowHostRegistry()
         r.setWorkspaceOnMain("ws")
-        val extra = r.tryClaim("ws", setOf("v2"), bounds, "e")
+        val extra = r.tryClaim("ws", setOf("v3"), bounds, "e", tree())
         assertNotNull(extra)
         r.unclaim(extra.id)
         assertTrue(r.extras("ws").isEmpty())

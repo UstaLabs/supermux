@@ -9,6 +9,12 @@ import dev.supermux.workspace.subtreeCovering
 
 data class WindowBounds(val x: Float, val y: Float, val width: Float, val height: Float)
 
+/**
+ * One OS window hosting a workspace slice.
+ *
+ * [claimedViewIds] empty on an extra host means the extra owns the whole canvas
+ * (the workspace root). Main ignores its own claim set.
+ */
 data class WindowHost(
     val id: String,
     val workspaceId: String,
@@ -22,12 +28,14 @@ class WindowHostRegistry(mainId: String = "main") {
         id = mainId,
         workspaceId = "",
         claimedViewIds = emptySet(),
-        bounds = WindowBounds(0f, 0f, 0f, 0f),
+        bounds = WindowBounds(0f, 0f, 1440f, 900f),
         isMain = true,
     )
     private val extraHosts = linkedMapOf<String, WindowHost>()
 
     fun main(): WindowHost = mainHost
+
+    fun extras(): List<WindowHost> = extraHosts.values.toList()
 
     fun extras(workspaceId: String): List<WindowHost> =
         extraHosts.values.filter { it.workspaceId == workspaceId }
@@ -36,12 +44,18 @@ class WindowHostRegistry(mainId: String = "main") {
         extras(workspaceId).flatMap { it.claimedViewIds }.toSet()
 
     fun layoutFor(host: WindowHost, tree: LayoutNode): LayoutNode? {
-        if (host.isMain) {
-            if (extras(host.workspaceId).any { it.claimedViewIds.isEmpty() }) return null
-            return hideClaimed(tree, claimedUnion(host.workspaceId))
+        val live = liveHost(host.id) ?: return null
+        if (live.isMain) {
+            val extras = extras(live.workspaceId)
+            if (extras.any { it.claimedViewIds.isEmpty() }) return null
+            val hide = extras
+                .filter { subtreeCovering(tree, it.claimedViewIds) != null }
+                .flatMap { it.claimedViewIds }
+                .toSet()
+            return hideClaimed(tree, hide)
         }
-        if (host.claimedViewIds.isEmpty()) return tree
-        return subtreeCovering(tree, host.claimedViewIds)
+        if (live.claimedViewIds.isEmpty()) return tree
+        return subtreeCovering(tree, live.claimedViewIds)
     }
 
     fun tryClaim(
@@ -49,17 +63,20 @@ class WindowHostRegistry(mainId: String = "main") {
         viewIds: Set<String>,
         bounds: WindowBounds,
         id: String,
+        tree: LayoutNode,
     ): WindowHost? {
-        if (viewIds.isEmpty()) return null
+        val claim = viewIds.toSet()
+        if (claim.isEmpty()) return null
         if (id == mainHost.id || extraHosts.containsKey(id)) return null
+        if (subtreeCovering(tree, claim) == null) return null
         val existing = extras(workspaceId)
         if (existing.any { it.claimedViewIds.isEmpty() }) return null
         val union = claimedUnion(workspaceId)
-        if (viewIds.any { it in union }) return null
+        if (claim.any { it in union }) return null
         val host = WindowHost(
             id = id,
             workspaceId = workspaceId,
-            claimedViewIds = viewIds,
+            claimedViewIds = claim,
             bounds = bounds,
             isMain = false,
         )
@@ -88,26 +105,26 @@ class WindowHostRegistry(mainId: String = "main") {
 
     fun rebase(workspaceId: String, tree: LayoutNode) {
         val live = collectViewIds(tree).toSet()
+        val taken = mutableSetOf<String>()
         val snapshot = extras(workspaceId)
         for (host in snapshot) {
             if (host.claimedViewIds.isEmpty()) continue
-            val remaining = host.claimedViewIds.filter { it in live }.toSet()
-            if (remaining.isEmpty()) {
-                extraHosts.remove(host.id)
-                continue
-            }
-            val covering = subtreeCovering(tree, remaining)
-            if (covering == null) {
+            val remaining = host.claimedViewIds.filter { it in live && it !in taken }.toSet()
+            if (remaining.isEmpty() || subtreeCovering(tree, remaining) == null) {
                 extraHosts.remove(host.id)
                 continue
             }
             extraHosts[host.id] = host.copy(claimedViewIds = remaining)
+            taken += remaining
         }
     }
 
     fun setWorkspaceOnMain(workspaceId: String) {
         mainHost = mainHost.copy(workspaceId = workspaceId)
     }
+
+    private fun liveHost(id: String): WindowHost? =
+        if (id == mainHost.id) mainHost else extraHosts[id]
 }
 
 fun planTearOutTab(
