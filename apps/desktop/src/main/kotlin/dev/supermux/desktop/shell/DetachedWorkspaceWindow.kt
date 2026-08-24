@@ -122,7 +122,14 @@ internal fun KeepWorkspacePanesBinds(
             bind.launcherPane = launcherPane
             ui.panesBinds[wid] = bind
             DisposableEffect(wid) {
-                onDispose { ui.panesBinds.remove(wid) }
+                onDispose {
+                    // Switching the selected workspace drops this key for a frame if the
+                    // workspace DTO is missing from the list — keep the bind while a pop-out
+                    // still claims it so the extra Window is not disposed.
+                    if (ui.windowHosts.extras().none { it.workspaceId == wid }) {
+                        ui.panesBinds.remove(wid)
+                    }
+                }
             }
             LaunchedEffect(wid, ws.layoutSync.tree) {
                 ui.windowHosts.rebase(wid, ws.layoutSync.tree)

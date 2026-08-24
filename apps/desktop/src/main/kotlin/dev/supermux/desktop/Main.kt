@@ -1402,7 +1402,10 @@ fun main() {
         // Each extra uses the bind for ITS workspace so switching sessions does not
         // dispose pop-outs of another workspace.
         for (host in ui.windowHosts.extras()) {
-            val extraBind = ui.panesBindFor(host.workspaceId) ?: continue
+            // Always compose the Window while the claim exists. Gating on panesBindFor
+            // skipped a frame on workspace switch, Compose disposed the Window, and
+            // onCloseRequest unclaimed it — the pop-out stayed gone.
+            val extraBind = ui.panesBindFor(host.workspaceId)
             key(host.id) {
                 val extraState = rememberWindowState(
                     position = WindowPosition(host.bounds.x.dp, host.bounds.y.dp),
@@ -1428,17 +1431,21 @@ fun main() {
                 }
                 Window(
                     onCloseRequest = { ui.windowHosts.unclaim(host.id) },
-                    title = extraWindowTitle(
-                        extraBind.current.name,
-                        ui.windowHosts.layoutFor(host, extraBind.ws.layoutSync.tree),
-                        extraBind.ws.viewsById,
-                    ),
+                    title = extraBind?.let {
+                        extraWindowTitle(
+                            it.current.name,
+                            ui.windowHosts.layoutFor(host, it.ws.layoutSync.tree),
+                            it.ws.viewsById,
+                        )
+                    } ?: "supermux",
                     state = extraState,
                 ) {
                     val extraModal = remember { ModalPresence() }
                     CompositionLocalProvider(LocalModalPresence provides extraModal) {
                         SupermuxTheme(appearance = ui.appearance) {
-                            DetachedWorkspaceWindow(host, extraBind, ui)
+                            if (extraBind != null) {
+                                DetachedWorkspaceWindow(host, extraBind, ui)
+                            }
                         }
                     }
                 }

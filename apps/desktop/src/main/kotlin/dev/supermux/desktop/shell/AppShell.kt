@@ -592,6 +592,19 @@ fun AppShell(
     // In-memory only for M1 — broker-side draft sync is M4.
     val drafts = remember { mutableStateMapOf<String, String>() }
 
+    // Extra-window sessions must live outside NavDisplay/Home: switching the
+    // selected workspace must not dispose another workspace's pop-out Window.
+    KeepWorkspacePanesBinds(
+        ui = ui,
+        workspaces = workspaces,
+        sessions = sessions,
+        app = app,
+        appFor = appFor,
+        drafts = drafts,
+        overlayScope = overlayScope,
+        launcherPane = { _, _, _, _ -> },
+    )
+
     // Headless-verification hook (no input injection on CI boxes); harmless in production (off by
     // default). With SM_AUTOSELECT=1 we auto-select a session so the workspace renders under Xvfb
     // without a pointer: the SM_SMOKE_SEND target if one is set, otherwise the most-recently-active
@@ -964,16 +977,6 @@ fun AppShell(
                         createForge = { cid, name -> hostApp.createForge(cid, name) },
                     )
         }
-                    KeepWorkspacePanesBinds(
-                        ui = ui,
-                        workspaces = workspaces,
-                        sessions = sessions,
-                        app = app,
-                        appFor = appFor,
-                        drafts = drafts,
-                        overlayScope = overlayScope,
-                        launcherPane = launcherPane,
-                    )
                     when {
                         ui.selectedArchivedWorkspaceId != null -> {
                             val archived = archivedWorkspaces.firstOrNull { it.id == ui.selectedArchivedWorkspaceId }
