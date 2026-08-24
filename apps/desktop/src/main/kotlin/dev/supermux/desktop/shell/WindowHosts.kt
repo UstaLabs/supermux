@@ -30,6 +30,15 @@ fun dragEndedOutside(
 fun emptyHostLayout(fullTree: LayoutNode): LayoutNode =
     LayoutNode.Group(firstGroupId(fullTree) ?: "empty-host", emptyList(), null)
 
+/** Workspaces that must keep a [WorkspaceSession] composed: the selected one plus every extra window. */
+fun workspaceIdsNeedingSession(
+    selectedWorkspaceId: String?,
+    extraWorkspaceIds: Collection<String>,
+): Set<String> = buildSet {
+    if (!selectedWorkspaceId.isNullOrEmpty()) add(selectedWorkspaceId)
+    addAll(extraWorkspaceIds)
+}
+
 /**
  * One OS window hosting a workspace slice.
  *

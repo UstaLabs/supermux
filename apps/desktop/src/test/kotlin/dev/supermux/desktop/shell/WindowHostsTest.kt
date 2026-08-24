@@ -434,4 +434,12 @@ class WindowHostsTest {
         assertEquals("Alpha — Main.kt", extraWindowTitle("Alpha", hosted, views))
         assertEquals("Alpha", extraWindowTitle("Alpha", null, views))
     }
+
+    @Test
+    fun workspaceIdsNeedingSessionKeepExtrasWhenSelectionChanges() {
+        assertEquals(setOf("ws-a", "ws-b"), workspaceIdsNeedingSession("ws-b", listOf("ws-a")))
+        assertEquals(setOf("ws-a"), workspaceIdsNeedingSession(null, listOf("ws-a")))
+        assertEquals(setOf("ws-b"), workspaceIdsNeedingSession("ws-b", emptyList()))
+        assertEquals(emptySet(), workspaceIdsNeedingSession(null, emptyList()))
+    }
 }

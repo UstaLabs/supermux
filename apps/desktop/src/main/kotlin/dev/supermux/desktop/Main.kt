@@ -1399,11 +1399,10 @@ fun main() {
         }
 
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
-        // Other-workspace extras persist but stay uncomposed until that workspace is selected
-        // (they share rememberWorkspaceSession / DocumentStore with the selected workspace).
-        val extraBind = ui.panesBind
+        // Each extra uses the bind for ITS workspace so switching sessions does not
+        // dispose pop-outs of another workspace.
         for (host in ui.windowHosts.extras()) {
-            if (extraBind == null || host.workspaceId != extraBind.current.id) continue
+            val extraBind = ui.panesBindFor(host.workspaceId) ?: continue
             key(host.id) {
                 val extraState = rememberWindowState(
                     position = WindowPosition(host.bounds.x.dp, host.bounds.y.dp),

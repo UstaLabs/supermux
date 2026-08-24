@@ -5,6 +5,8 @@ import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +21,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
+import dev.supermux.workspace.chatSessionIds
 import dev.supermux.proto.stateString
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
@@ -45,9 +48,7 @@ internal fun extraWindowTitle(
 }
 
 /**
- * Shared objects for extra windows of the *selected* workspace.
- * Extra windows for another workspace are not composed (Task 5 / Task 8
- * deferral — they need a separate [WorkspaceSession] / DocumentStore).
+ * Shared objects for extra windows of one workspace (selected or not).
  */
 internal class WorkspacePanesBind(
     current: WorkspaceDto,
@@ -72,6 +73,63 @@ internal class WorkspacePanesBind(
     var drafts by mutableStateOf(drafts)
     var overlayScope by mutableStateOf(overlayScope)
     var launcherPane by mutableStateOf(launcherPane)
+}
+
+/**
+ * Keep a [WorkspaceSession] (and thus extra OS windows) alive for the selected
+ * workspace and every workspace that still has a pop-out.
+ */
+@Composable
+internal fun KeepWorkspacePanesBinds(
+    ui: ShellUiState,
+    workspaces: List<WorkspaceDto>,
+    sessions: List<SessionInfo>,
+    app: DesktopAppState,
+    appFor: (String) -> DesktopAppState,
+    drafts: SnapshotStateMap<String, String>,
+    overlayScope: CoroutineScope,
+    launcherPane: @Composable (
+        onBack: () -> Unit,
+        onCreated: (String) -> Unit,
+        joinWorkspaceId: String?,
+        seedWorkdir: String?,
+    ) -> Unit,
+) {
+    val selectedId = ui.selectedId
+    val selectedWsId = workspaces.firstOrNull { w ->
+        selectedId != null && (w.id == selectedId || w.chatSessionIds().contains(selectedId))
+    }?.id
+    val needed = workspaceIdsNeedingSession(
+        selectedWsId,
+        ui.windowHosts.extras().map { it.workspaceId },
+    )
+    for (wid in needed) {
+        val w = workspaces.firstOrNull { it.id == wid } ?: continue
+        key(wid) {
+            val wsApp = appFor(w.primarySessionId ?: "")
+            val ws = rememberWorkspaceSession(w, wsApp, overlayScope)
+            val sess = sessions.firstOrNull { it.id == w.primarySessionId }
+            val bind = remember(wid) {
+                WorkspacePanesBind(w, sess, ws, app, appFor, drafts, overlayScope, launcherPane)
+            }
+            bind.current = w
+            bind.session = sess
+            bind.ws = ws
+            bind.app = app
+            bind.appFor = appFor
+            bind.drafts = drafts
+            bind.overlayScope = overlayScope
+            bind.launcherPane = launcherPane
+            ui.panesBinds[wid] = bind
+            DisposableEffect(wid) {
+                onDispose { ui.panesBinds.remove(wid) }
+            }
+            LaunchedEffect(wid, ws.layoutSync.tree) {
+                ui.windowHosts.rebase(wid, ws.layoutSync.tree)
+                ui.tryRestoreWindowHosts(wid, ws.layoutSync.tree)
+            }
+        }
+    }
 }
 
 @Composable

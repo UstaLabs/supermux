@@ -48,6 +48,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -216,11 +217,21 @@ class ShellUiState {
     internal var pendingWindowHosts by mutableStateOf<List<PersistedWindowHost>>(emptyList())
 
     /**
-     * Bind for extra [androidx.compose.ui.window.Window]s in Main.kt: the selected
-     * workspace's [WorkspaceSession] (shared DocumentStore). Extra windows for a
-     * *different* workspace are deferred until that workspace is selected.
+     * Per-workspace bind for extra OS windows. Kept for every workspace that has
+     * a pop-out, not only the selected one — switching sessions must not dispose
+     * another workspace's extra [androidx.compose.ui.window.Window].
      */
-    internal var panesBind by mutableStateOf<WorkspacePanesBind?>(null)
+    internal val panesBinds = mutableStateMapOf<String, WorkspacePanesBind>()
+
+    /** Selected (or last-known main) workspace bind — shortcuts / File menu. */
+    internal val panesBind: WorkspacePanesBind?
+        get() {
+            val id = windowHosts.main().workspaceId
+            if (id.isNotEmpty()) panesBinds[id]?.let { return it }
+            return panesBinds.values.firstOrNull()
+        }
+
+    internal fun panesBindFor(workspaceId: String): WorkspacePanesBind? = panesBinds[workspaceId]
 
     fun tryRestoreWindowHosts(workspaceId: String, tree: LayoutNode) {
         if (pendingWindowHosts.isEmpty()) return
@@ -953,6 +964,16 @@ fun AppShell(
                         createForge = { cid, name -> hostApp.createForge(cid, name) },
                     )
         }
+                    KeepWorkspacePanesBinds(
+                        ui = ui,
+                        workspaces = workspaces,
+                        sessions = sessions,
+                        app = app,
+                        appFor = appFor,
+                        drafts = drafts,
+                        overlayScope = overlayScope,
+                        launcherPane = launcherPane,
+                    )
                     when {
                         ui.selectedArchivedWorkspaceId != null -> {
                             val archived = archivedWorkspaces.firstOrNull { it.id == ui.selectedArchivedWorkspaceId }
@@ -1025,11 +1046,12 @@ fun AppShell(
                             } else {
                                 val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
                                 val wsApp = appFor(current.primarySessionId ?: session?.id ?: "")
-                                val ws = rememberWorkspaceSession(current, wsApp, overlayScope)
+                                val held = ui.panesBindFor(current.id)
+                                val ws = held?.ws ?: rememberWorkspaceSession(current, wsApp, overlayScope)
                                 val layoutSync = ws.layoutSync
                                 val localLayout = layoutSync.tree
                                 ui.windowHosts.setWorkspaceOnMain(current.id)
-                                val panesBind = ui.panesBind ?: WorkspacePanesBind(
+                                val panesBind = held ?: WorkspacePanesBind(
                                     current = current,
                                     session = session,
                                     ws = ws,
@@ -1038,7 +1060,7 @@ fun AppShell(
                                     drafts = drafts,
                                     overlayScope = overlayScope,
                                     launcherPane = launcherPane,
-                                ).also { ui.panesBind = it }
+                                ).also { ui.panesBinds[current.id] = it }
                                 panesBind.current = current
                                 panesBind.session = session
                                 panesBind.ws = ws
@@ -1047,13 +1069,7 @@ fun AppShell(
                                 panesBind.drafts = drafts
                                 panesBind.overlayScope = overlayScope
                                 panesBind.launcherPane = launcherPane
-                                DisposableEffect(current.id) {
-                                    onDispose {
-                                        if (ui.panesBind === panesBind && ui.panesBind?.current?.id == current.id) {
-                                            ui.panesBind = null
-                                        }
-                                    }
-                                }
+                                ui.panesBinds[current.id] = panesBind
                                 LaunchedEffect(current.id, localLayout) {
                                     ui.windowHosts.rebase(current.id, localLayout)
                                     ui.tryRestoreWindowHosts(current.id, localLayout)
