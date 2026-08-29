@@ -33,6 +33,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.showReasoningPicker
+import dev.supermux.android.session.spawnFailureMessage
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.HandoffPrefill
 import kotlinx.coroutines.launch
@@ -169,7 +170,7 @@ fun ContinueConversationSheet(
                                     ),
                                 )
                             }.getOrElse { e ->
-                                error = e.message ?: "Couldn't start"
+                                error = spawnFailureMessage(e)
                                 null
                             }
                             busy = false

@@ -66,6 +66,7 @@ import dev.supermux.android.host.HostView
 import dev.supermux.android.host.WorkspaceHostState
 import dev.supermux.android.host.reduceWorkspaceFrame
 import dev.supermux.android.session.LauncherDraft
+import dev.supermux.android.session.remapSpawnFailure
 import dev.supermux.android.session.LauncherPrefs
 import dev.supermux.android.session.SidebarReorderKind
 import dev.supermux.android.session.applyArchiveWorkspace
@@ -1207,20 +1208,24 @@ class AppViewModel(
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
             throw IllegalArgumentException(validation.error ?: "Invalid working directory")
         }
-        val resp = api.spawn(
-            SpawnRequest(
-                workdir = resolvedPath,
-                name = name?.ifBlank { null },
-                agent = agent,
-                model = model?.ifBlank { null },
-                worktree = if (worktree) true else null,
-                baseBranch = baseBranch?.ifBlank { null },
-                reasoningLevel = reasoningLevel?.ifBlank { null },
-                workspaceId = workspaceId,
-                inheritFrom = inheritFrom?.ifBlank { null },
-                firstMessage = firstMessage?.ifBlank { null },
-            ),
-        )
+        val resp = try {
+            api.spawn(
+                SpawnRequest(
+                    workdir = resolvedPath,
+                    name = name?.ifBlank { null },
+                    agent = agent,
+                    model = model?.ifBlank { null },
+                    worktree = if (worktree) true else null,
+                    baseBranch = baseBranch?.ifBlank { null },
+                    reasoningLevel = reasoningLevel?.ifBlank { null },
+                    workspaceId = workspaceId,
+                    inheritFrom = inheritFrom?.ifBlank { null },
+                    firstMessage = firstMessage?.ifBlank { null },
+                ),
+            )
+        } catch (t: Throwable) {
+            remapSpawnFailure(t)
+        }
         val sessionId = resp.id.ifBlank {
             _sessions.value.firstOrNull { it.name == resp.name }?.id
                 ?: throw IllegalStateException("Session created but id not available yet")
@@ -1312,7 +1317,11 @@ class AppViewModel(
         val resolvedAgent = agent?.trim()?.takeIf { it.isNotEmpty() }
             ?: HandoffPrefill.defaultAgent(primaryAgent)
         val req = newChatHereRequest(workspaceId, resolvedPath, resolvedAgent, model)
-        val resp = api.spawn(req)
+        val resp = try {
+            api.spawn(req)
+        } catch (t: Throwable) {
+            remapSpawnFailure(t)
+        }
         val sessionId = resp.id.ifBlank {
             _sessions.value.firstOrNull { it.name == resp.name }?.id
                 ?: throw IllegalStateException("Session created but id not available yet")
