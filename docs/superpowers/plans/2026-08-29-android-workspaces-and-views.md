@@ -54,18 +54,18 @@ Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layou
 - [x] Tests: one reducer test per frame, plus the contract test pattern from `test(shared): cover sessions_reordered frame in contract test` (`d42d91e0`) for the 8 frames.
 - [x] Commit: `feat(android): hold broker workspaces and views in AppViewModel`.
 
-### Phase 2 — Sidebar shows workspaces (spec §13.6)
+### Phase 2 — Sidebar shows workspaces (spec §13.6) — DONE `8e8d3ec1`, `33179b7e` (2026-08-29)
 
 **Files:** `session/SessionListScreen.kt`, `session/SessionListRail*`, `session/SwipeActionRow.kt`, `settings/MoreScreens.kt` (Archived), `nav/Routes.kt`, tests `SessionListRailUiContract`, `SessionListInteractions`, new `WorkspaceListTest`.
 
-- [ ] Replace `groupSessions()` with shared `groupWorkspaces()` (already pins Personal Assistants, `745e41be`). Row = workspace name · `formatWorkdir` · branch + git status (reuse `GitBadge`; broker sends workspace-scoped git as of `bda1eb23`) · busiest chat state via `workspaceActivity()` · multi-agent mark via `isMultiAgent()`.
-- [ ] Children: when a workspace has ≥2 chat views, list its chat sessions under the row behind a disclosure; tapping a child selects that session inside the workspace.
-- [ ] Selection model: `selectedWorkspaceId` + `selectedSessionId` (the chat view in focus). ⚠ A workspace id must never enter the session `Viewing` frame (desktop bug `992b7602`) — `ClientFrame.Viewing(session, visible, sessions)` gets the chat session ids of the visible group only.
-- [ ] Reorder: drag calls `BrokerApi.reorderWorkspaces` instead of `PATCH /sessions/reorder`; apply `WorkspacesReordered` optimistically like sessions today.
-- [ ] Swipe actions: archive → `BrokerApi.archiveWorkspace(id)`; keep mute/rename on the primary session.
-- [ ] Archived screen lists `archivedWorkspaces` (`groupArchivedWorkspaces()`), Restore → `BrokerApi.restoreWorkspace(id)`; drop the session-level `onResume` path.
-- [ ] Update `SessionListRailUiContract` test-id vocabulary (shared across web/Android/iOS/desktop, `9868a02e`) — add workspace-row ids in lockstep with desktop's.
-- [ ] Commit: `feat(android): workspace sidebar with grouping, reorder, archive and restore`.
+- [x] Replace `groupSessions()` with shared `groupWorkspaces()` (already pins Personal Assistants, `745e41be`). Row = workspace name · `formatWorkdir` · branch + git status (reuse `GitBadge`; broker sends workspace-scoped git as of `bda1eb23`) · busiest chat state via `workspaceActivity()` · multi-agent mark via `isMultiAgent()`.
+- [x] Children: when a workspace has ≥2 chat views, list its chat sessions under the row behind a disclosure; tapping a child selects that session inside the workspace.
+- [x] Selection model: `selectedWorkspaceId` + `selectedSessionId` (the chat view in focus). ⚠ A workspace id must never enter the session `Viewing` frame (desktop bug `992b7602`) — `ClientFrame.Viewing(session, visible, sessions)` gets the chat session ids of the visible group only.
+- [x] Reorder: drag calls `BrokerApi.reorderWorkspaces` instead of `PATCH /sessions/reorder`; apply `WorkspacesReordered` optimistically like sessions today.
+- [x] Swipe actions: archive → `BrokerApi.archiveWorkspace(id)`; keep mute/rename on the primary session.
+- [x] Archived screen lists `archivedWorkspaces` (`groupArchivedWorkspaces()`), Restore → `BrokerApi.restoreWorkspace(id)`; drop the session-level `onResume` path.
+- [x] Update `SessionListRailUiContract` test-id vocabulary (shared across web/Android/iOS/desktop, `9868a02e`) — add workspace-row ids in lockstep with desktop's.
+- [x] Commit: `feat(android): workspace sidebar with grouping, reorder, archive and restore`.
 
 ### Phase 3 — Hoist generic view logic out of `apps/desktop` and make `:ui` multiplatform
 
