@@ -80,7 +80,10 @@ import dev.supermux.android.workspace.SidebarDivider
 import dev.supermux.android.workspace.SidebarState
 import dev.supermux.proto.chatSessionId
 import dev.supermux.android.workspace.isWorkspaceWidth
+import dev.supermux.android.workspace.addViewState
 import dev.supermux.android.workspace.workspaceShortcuts
+import dev.supermux.workspace.openSingletonView
+import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
@@ -225,7 +228,7 @@ class MainActivity : ComponentActivity() {
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
                 // Shared multi-pane layout for wide screens — one instance across all sessions,
                 // saved across config-change/process-death, pruned when the broker drops a session.
-                val workspaceLayout = rememberSaveable(saver = SidebarState.Saver) { SidebarState() }
+                val sidebarState = rememberSaveable(saver = SidebarState.Saver) { SidebarState() }
                 // A session resumed from archive arrives via `session_added` (no history), so its
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
@@ -319,9 +322,9 @@ class MainActivity : ComponentActivity() {
                             // Suppress the collapse/expand width spring while the divider is being
                             // dragged (otherwise the spring chases the finger and feels laggy).
                             var resizing by remember { mutableStateOf(false) }
-                            val collapsed = workspaceLayout.sidebarCollapsed
+                            val collapsed = sidebarState.sidebarCollapsed
                             val sidebarWidth by animateDpAsState(
-                                targetValue = if (collapsed) 64.dp else workspaceLayout.sidebarWidth,
+                                targetValue = if (collapsed) 64.dp else sidebarState.sidebarWidth,
                                 animationSpec = if (resizing) snap() else spring(stiffness = Spring.StiffnessMediumLow),
                                 label = "sidebarWidth",
                             )
@@ -330,9 +333,26 @@ class MainActivity : ComponentActivity() {
                                     .fillMaxSize()
                                     .focusRequester(focusRequester)
                                     .workspaceShortcuts(
-                                        sidebar = workspaceLayout,
+                                        sidebar = sidebarState,
                                         selectedId = selected,
                                         onNewSession = { navController.navigate(NewSession()) },
+                                        onAddKind = { kind ->
+                                            val sid = selected ?: return@workspaceShortcuts
+                                            val hostId = sessionHost[sid] ?: vm.activeHost.value ?: return@workspaceShortcuts
+                                            val ws = vm.workspaceForSession(hostId, sid) ?: return@workspaceShortcuts
+                                            val tree = ws.layout.toDomainOrNull()
+                                            val views = ws.views.associateBy { it.id }
+                                            val open = tree?.let { openSingletonView(it, views, kind) }
+                                            if (open != null) {
+                                                vm.setActiveView(ws.id, open.first)
+                                            } else {
+                                                vm.addWorkspaceView(
+                                                    ws.id,
+                                                    kind.wire,
+                                                    addViewState(kind, System.currentTimeMillis()),
+                                                )
+                                            }
+                                        },
                                     )
                                     .focusable(),
                             ) {
@@ -352,7 +372,7 @@ class MainActivity : ComponentActivity() {
                                             selectedId = selected,
                                             agentState = agentState,
                                             onSelect = { selected = it },
-                                            onExpand = { workspaceLayout.sidebarCollapsed = false },
+                                            onExpand = { sidebarState.sidebarCollapsed = false },
                                             onNewSession = { navController.navigate(NewSession()) },
                                             lastBySession = lastBySession,
                                             lastRead = lastRead,
@@ -360,7 +380,7 @@ class MainActivity : ComponentActivity() {
                                     } else {
                                         // requiredWidth keeps the list at its full width while the
                                         // narrower animating parent clips it during the reveal.
-                                        Box(Modifier.requiredWidth(workspaceLayout.sidebarWidth).fillMaxHeight()) {
+                                        Box(Modifier.requiredWidth(sidebarState.sidebarWidth).fillMaxHeight()) {
                                             SessionListScreen(
                                                 sessions = sessions,
                                                 home = DevConfig.HOME,
@@ -442,9 +462,9 @@ class MainActivity : ComponentActivity() {
                                   SidebarDivider(
                                       modifier = Modifier.offset(x = sidebarWidth - 7.dp),
                                       onDragDelta = { d ->
-                                          workspaceLayout.setSidebarWidth(workspaceLayout.sidebarWidth + d)
+                                          sidebarState.setSidebarWidth(sidebarState.sidebarWidth + d)
                                       },
-                                      onCollapse = { workspaceLayout.sidebarCollapsed = true },
+                                      onCollapse = { sidebarState.sidebarCollapsed = true },
                                       onStartDrag = { resizing = true },
                                       onEndDrag = { resizing = false },
                                   )

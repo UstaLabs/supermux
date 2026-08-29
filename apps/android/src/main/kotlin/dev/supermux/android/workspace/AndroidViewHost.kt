@@ -1,11 +1,11 @@
 package dev.supermux.android.workspace
 
-import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,6 +31,7 @@ import dev.supermux.android.editor.DiffView
 import dev.supermux.android.editor.FileTree
 import dev.supermux.android.editor.WebCodeEditor
 import dev.supermux.android.editor.rememberEditorEngine
+import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.theme.Space
 import dev.supermux.net.AddCommentBody
@@ -56,12 +57,13 @@ fun AndroidViewHost(
     session: WorkspaceSession,
     vm: AppViewModel,
     modifier: Modifier = Modifier,
+    wide: Boolean = false,
 ) {
     when (view.kind) {
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatViewPane(sessionId, workspace, session, vm, modifier)
+            else ChatViewPane(sessionId, workspace, session, vm, modifier, wide)
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
@@ -104,6 +106,7 @@ private fun ChatViewPane(
     wsSession: WorkspaceSession,
     vm: AppViewModel,
     modifier: Modifier,
+    wide: Boolean,
 ) {
     val sessions by vm.sessions.collectAsState()
     val messages by vm.messages.collectAsState()
@@ -113,51 +116,103 @@ private fun ChatViewPane(
     val commands by vm.commands.collectAsState()
     val commandsResolved by vm.commandsResolved.collectAsState()
     val bgTasksAll by vm.bgTasks.collectAsState()
+    val finishJobs by vm.finishJobs.collectAsState()
     val session = sessions.firstOrNull { it.id == sessionId }
     if (session == null) {
         UnknownViewHint("chat", modifier)
         return
     }
     val context = LocalContext.current
-    ChatPanel(
-        session = session,
-        messages = messages[sessionId] ?: emptyList(),
-        activity = activity[sessionId] ?: emptyList(),
-        agent = agentState[sessionId],
-        bgTasks = bgTasksAll[sessionId] ?: emptyList(),
-        sending = pendingSend.contains(sessionId),
-        activePanel = SessionPanel.Chat,
-        onSendWith = { text, atts -> vm.sendWith(sessionId, text, atts) },
-        onInterrupt = { vm.interrupt(sessionId) },
-        commands = commands[sessionId] ?: emptyList(),
-        commandsResolved = commandsResolved[sessionId] ?: false,
-        onUpload = { source, name, mime, kind, onProgress ->
-            vm.uploadResumable(sessionId, source, name, mime, kind, onProgress)
-        },
-        loadBytes = { vm.fileBytes(it) },
-        transcribeAudio = { bytes, name -> vm.transcribeAudio(sessionId, bytes, name) },
-        transcribeDraft = { draft -> vm.transcribeDraft(sessionId, draft) },
-        loadGlossary = { vm.fetchGlossary() },
-        vmModels = { vm.fetchModels(it) },
-        vmReasoning = { vm.fetchReasoning(it) },
-        onPickModel = { vm.switchModel(sessionId, it) },
-        onPickEffort = { vm.switchReasoning(sessionId, it) },
-        loadDraft = { vm.loadDraft(it) },
-        saveDraft = { id, t -> vm.saveDraft(id, t) },
-        consumePendingFirst = { vm.consumePendingFirst(it) },
-        onOpenFile = { ref ->
-            val rel = toWorkdirRelativePath(ref.path, workspace.workdir, inferHomeDir(workspace.workdir))
-            if (rel == null) {
-                Toast.makeText(context, "File is outside this workspace", Toast.LENGTH_SHORT).show()
-            } else {
-                wsSession.fileOpener.open(rel)
+    var nativeView by remember(sessionId) { mutableStateOf(false) }
+    var sessionLinks by remember(sessionId) { mutableStateOf<List<dev.supermux.net.ProxyDto>>(emptyList()) }
+    LaunchedEffect(sessionId, session.name) {
+        sessionLinks = vm.proxies().filter { it.sessionName == session.name }
+    }
+    val chatBody: @Composable (Modifier) -> Unit = { paneMod ->
+        ChatPanel(
+            session = session,
+            messages = messages[sessionId] ?: emptyList(),
+            activity = activity[sessionId] ?: emptyList(),
+            agent = agentState[sessionId],
+            bgTasks = bgTasksAll[sessionId] ?: emptyList(),
+            sending = pendingSend.contains(sessionId),
+            activePanel = if (nativeView) SessionPanel.Native else SessionPanel.Chat,
+            onSendWith = { text, atts -> vm.sendWith(sessionId, text, atts) },
+            onInterrupt = { vm.interrupt(sessionId) },
+            commands = commands[sessionId] ?: emptyList(),
+            commandsResolved = commandsResolved[sessionId] ?: false,
+            onUpload = { source, name, mime, kind, onProgress ->
+                vm.uploadResumable(sessionId, source, name, mime, kind, onProgress)
+            },
+            loadBytes = { vm.fileBytes(it) },
+            transcribeAudio = { bytes, name -> vm.transcribeAudio(sessionId, bytes, name) },
+            transcribeDraft = { draft -> vm.transcribeDraft(sessionId, draft) },
+            loadGlossary = { vm.fetchGlossary() },
+            vmModels = { vm.fetchModels(it) },
+            vmReasoning = { vm.fetchReasoning(it) },
+            onPickModel = { vm.switchModel(sessionId, it) },
+            onPickEffort = { vm.switchReasoning(sessionId, it) },
+            loadDraft = { vm.loadDraft(it) },
+            saveDraft = { id, t -> vm.saveDraft(id, t) },
+            consumePendingFirst = { vm.consumePendingFirst(it) },
+            onOpenFile = { ref ->
+                val rel = toWorkdirRelativePath(ref.path, workspace.workdir, inferHomeDir(workspace.workdir))
+                if (rel == null) {
+                    Toast.makeText(context, "File is outside this workspace", Toast.LENGTH_SHORT).show()
+                } else {
+                    wsSession.fileOpener.open(rel)
+                }
+            },
+            onRequestRename = {},
+            onRequestMute = {},
+            onRequestKill = {},
+            modifier = paneMod.fillMaxSize().testTag("view_chat"),
+        )
+    }
+    if (!wide) {
+        chatBody(modifier)
+        return
+    }
+    Column(modifier.fillMaxSize()) {
+        ChatViewHeader(
+            session = session,
+            working = agentState[sessionId]?.working == true,
+            nativeView = nativeView,
+            onSetNative = { nativeView = it },
+            sessionLinks = sessionLinks,
+            finishJob = finishJobs[sessionId],
+            onFinishReadiness = { vm.finishReadiness(sessionId) },
+            onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                vm.finish(sessionId, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+            },
+            onClearFinishJob = { vm.clearFinishJob(sessionId) },
+            onVerifySuggest = { vm.verifySuggest(sessionId) },
+            onVerifySave = { vm.verifySave(sessionId, it) },
+            onSendToAgent = { vm.sendMessage(sessionId, it) },
+            onGitOp = { op ->
+                val cb: (dev.supermux.net.GitOpResult?) -> Unit = { toastGitOp(context, it) }
+                when (op) {
+                    "fetch" -> vm.gitFetch(sessionId, cb)
+                    "pull" -> vm.gitPull(sessionId, cb)
+                    "push" -> vm.gitPush(sessionId, cb)
+                    "publish" -> vm.gitPublish(sessionId, cb)
+                }
+            },
+        )
+        Box(Modifier.weight(1f).fillMaxSize()) {
+            Box(Modifier.keepAlivePanel(!nativeView)) { chatBody(Modifier) }
+            if (session.agent == "claude") {
+                Box(Modifier.keepAlivePanel(nativeView)) {
+                    TerminalPanel(
+                        connect = { vm.connectAgentTerminal(sessionId) },
+                        modifier = Modifier.fillMaxSize(),
+                        active = nativeView,
+                        onExit = { nativeView = false },
+                    )
+                }
             }
-        },
-        onRequestRename = {},
-        onRequestMute = {},
-        onRequestKill = {},
-        modifier = modifier.fillMaxSize().testTag("view_chat"),
-    )
+        }
+    }
 }
 
 @Composable
@@ -207,11 +262,10 @@ private fun FileViewPane(
     val documents = session.documents
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
+    val editorPrefs = vm.editorPrefs
     val engine = rememberEditorEngine(
-        lineWrap = prefs.getBoolean("lineWrap", true),
-        fontSize = prefs.getInt("fontSize", 13),
+        lineWrap = editorPrefs.lineWrap,
+        fontSize = editorPrefs.fontSize,
         onChange = { content -> documents.update(path, content) },
         onSave = { documents.get(path)?.let { documents.save(it) } },
     )
@@ -225,7 +279,7 @@ private fun FileViewPane(
         engine = engine,
         content = doc.content,
         filename = path.substringAfterLast('/'),
-        fontSize = prefs.getInt("fontSize", 13),
+        fontSize = editorPrefs.fontSize,
         scrollTop = doc.scrollTop,
         revealLine = doc.revealLine,
         onChange = { documents.update(path, it) },
@@ -300,12 +354,7 @@ private fun DisplayViewPane(
         !displayId.isNullOrBlank() -> live.firstOrNull { it.id == displayId }
         else -> live.firstOrNull { it.status == "running" }
     }
-    val sessionName = stream?.sessionName
-        ?: workspace.primarySessionId?.let { pid ->
-            // Fall back to workspace name so Start Display still has a session key.
-            workspace.name
-        }
-        ?: workspace.name
+    val sessionName = stream?.sessionName ?: workspace.name
     DisplayPanel(
         sessionName = sessionName,
         displays = vm.displays,
