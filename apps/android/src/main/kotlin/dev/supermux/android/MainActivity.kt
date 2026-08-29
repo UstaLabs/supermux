@@ -4,8 +4,6 @@ import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -321,7 +319,14 @@ class MainActivity : ComponentActivity() {
                 // response to WorkspaceChanged (that frame is the broker acknowledging a
                 // user tab switch). Cold start retries while workspaces are still empty.
                 var lastActivatedSelection by rememberSaveable { mutableStateOf<String?>(null) }
-                LaunchedEffect(selected, workspaces) {
+                var handledPushSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+                LaunchedEffect(selected) {
+                    if (selected == null) {
+                        lastActivatedSelection = null
+                        handledPushSessionId = null
+                    }
+                }
+                LaunchedEffect(selected, workspaces, sessionHost) {
                     val sid = selected ?: return@LaunchedEffect
                     val hostId = sessionHost[sid] ?: vm.activeHost.value
                     val ws = hostId?.let { h -> vm.workspaceForSession(h, sid) }
@@ -339,7 +344,6 @@ class MainActivity : ComponentActivity() {
                 // activate that chat view without PATCHing layout. Old broker / no workspace →
                 // session-only screen, same as before. Consume the extra once workspaces are
                 // ready so later workspaces/sessionHost updates cannot yank the user back.
-                var handledPushSessionId by rememberSaveable { mutableStateOf<String?>(null) }
                 LaunchedEffect(currentIntent, workspaces) {
                     val extra = currentIntent
                         ?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)

@@ -121,6 +121,24 @@ class WorkspaceScreenModelTest {
         )
     }
 
+    @Test fun chatActivationReselectAfterBackActivates() {
+        val chat = ViewDto(id = "chat", workspaceId = "w1", kind = "chat")
+        val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat), activeViewId = "editor")
+        assertEquals(
+            ChatActivationHandle.ApplyConsume,
+            chatActivationDecision("s1", lastActivated = null, ws, chat),
+        )
+        assertEquals(
+            ChatActivationHandle.Skip,
+            chatActivationDecision("s1", lastActivated = "s1", ws, chat),
+        )
+        // BACK clears selected; MainActivity resets lastActivatedSelection to null.
+        assertEquals(
+            ChatActivationHandle.ApplyConsume,
+            chatActivationDecision("s1", lastActivated = null, ws, chat),
+        )
+    }
+
     @Test fun chatActivationNewSelectionActivates() {
         val chat = ViewDto(id = "chat", workspaceId = "w1", kind = "chat")
         val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat), activeViewId = "editor")

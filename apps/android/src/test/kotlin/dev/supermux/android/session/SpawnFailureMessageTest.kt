@@ -13,10 +13,19 @@ class SpawnFailureMessageTest {
         )
     }
 
-    @Test fun httpCodeInMessageIsSurfaced() {
+    @Test fun jsonErrorFromRealBrokerMessageIsShownVerbatim() {
+        val body = """{"error":"tmux created window 'x' but did not report its id"}"""
+        val msg = "BrokerApi request unavailable: HTTP 500 $body"
+        assertEquals(
+            "tmux created window 'x' but did not report its id",
+            spawnFailureMessage(CancellationException(msg)),
+        )
+    }
+
+    @Test fun httpStatusWithoutJsonErrorIsSurfaced() {
         assertEquals(
             "Broker refused to start the session (HTTP 500)",
-            spawnFailureMessage(CancellationException("HTTP 500")),
+            spawnFailureMessage(CancellationException("BrokerApi request unavailable: HTTP 500 Internal Server Error")),
         )
     }
 
@@ -40,5 +49,20 @@ class SpawnFailureMessageTest {
             remapSpawnFailure(CancellationException("BrokerApi request unavailable"))
         }
         assertEquals("Broker refused to start the session", e.message)
+    }
+
+    @Test fun remapTurnsHttpUnavailableIntoIllegalState() {
+        val raw = "BrokerApi request unavailable: HTTP 409 {\"error\":\"busy\"}"
+        val e = assertFailsWith<IllegalStateException> {
+            remapSpawnFailure(CancellationException(raw))
+        }
+        assertEquals("busy", e.message)
+    }
+
+    @Test fun networkFailureBranchBecomesRefusal() {
+        assertEquals(
+            "Broker refused to start the session",
+            spawnFailureMessage(CancellationException("BrokerApi request unavailable: Connection refused")),
+        )
     }
 }

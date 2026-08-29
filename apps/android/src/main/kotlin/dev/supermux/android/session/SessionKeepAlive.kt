@@ -373,8 +373,10 @@ private fun PhoneWorkspaceBackLayer(
     var gestureProgress by remember { mutableFloatStateOf(0f) }
     if (visible) {
         val imeVisible = WindowInsets.isImeVisible
-        // Editor panes inside the workspace register their own BackHandler; that consumes first
-        // so we do not pass editorConsumesBack here.
+        // Editor panes register their own BackHandler later in composition
+        // (EditorScreen.kt searchOpen ~244, treeDrawerOpen ~249). Compose dispatches to the
+        // innermost enabled handler first, so those consume BACK before this layer. Do not
+        // pass editorConsumesBack here.
         val backAction = phoneLayerBackAction(
             wide = false,
             editorConsumesBack = false,
