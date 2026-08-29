@@ -204,6 +204,18 @@ class ViewingPresenceTest {
     }
 
     @Test
+    fun secondTapOnSameSessionAfterLeavingAppliesAgain() {
+        assertEquals(
+            PushTapHandle.Skip,
+            pushTapHandleDecision("s1", handledSessionId = "s1", workspacesReady = true),
+        )
+        assertEquals(
+            PushTapHandle.ApplyConsume,
+            pushTapHandleDecision("s1", handledSessionId = null, workspacesReady = true),
+        )
+    }
+
+    @Test
     fun previousHostClearUsesPreviousSnapshotFirstIdOnWorkspaceSwitch() {
         val hostA = WorkspaceViewingSnapshot("w-a", listOf("s-a"), appForeground = true)
         val hostB = WorkspaceViewingSnapshot("w-b", listOf("s-b"), appForeground = true)

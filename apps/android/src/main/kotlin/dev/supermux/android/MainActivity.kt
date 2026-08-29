@@ -320,6 +320,8 @@ class MainActivity : ComponentActivity() {
                 // user tab switch). Cold start retries while workspaces are still empty.
                 var lastActivatedSelection by rememberSaveable { mutableStateOf<String?>(null) }
                 var handledPushSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+                // Reset must stay declared BEFORE the activation effect: Compose runs
+                // LaunchedEffects in declaration order, so null→A clears handled ids first.
                 LaunchedEffect(selected) {
                     if (selected == null) {
                         lastActivatedSelection = null

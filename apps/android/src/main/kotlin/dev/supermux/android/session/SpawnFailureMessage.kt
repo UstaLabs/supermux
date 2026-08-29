@@ -27,6 +27,9 @@ fun spawnFailureMessage(t: Throwable): String {
             return "Broker refused to start the session (HTTP $status)"
         }
         HTTP_CODE.find(msg)?.let { m ->
+            // Skip generic-prefixed BrokerApi messages; those are handled by HTTP_UNAVAILABLE
+            // (JSON error / HTTP status) or the display fallback below. Matching HTTP in the
+            // prefix would otherwise steal a network-failure suffix like "HTTP 400 …".
             if (!msg.startsWith(GENERIC_UNAVAILABLE)) {
                 return "Broker refused to start the session (HTTP ${m.groupValues[1]})"
             }
@@ -41,13 +44,22 @@ fun spawnFailureMessage(t: Throwable): String {
 
 /** Remap the SKIE-safe spawn cancel into an [IllegalStateException] callers can show. */
 fun remapSpawnFailure(t: Throwable): Nothing {
-    if (t is CancellationException && !isBrokerUnavailableMessage(t.message)) throw t
+    if (t is CancellationException && !isBrokerUnavailableCancellation(t.message)) throw t
     throw IllegalStateException(spawnFailureMessage(t), t)
+}
+
+/**
+ * True only for the SKIE-safe BrokerApi cancel shape. Empty/null is *not* a match:
+ * a bare [CancellationException] (viewModelScope teardown) must propagate unchanged.
+ */
+private fun isBrokerUnavailableCancellation(msg: String?): Boolean {
+    val m = msg?.trim().orEmpty()
+    return m == GENERIC_UNAVAILABLE || m.startsWith("$GENERIC_UNAVAILABLE:")
 }
 
 internal fun isBrokerUnavailableMessage(msg: String?): Boolean {
     val m = msg?.trim().orEmpty()
-    return m.isEmpty() || m == GENERIC_UNAVAILABLE || m.startsWith("$GENERIC_UNAVAILABLE:")
+    return m.isEmpty() || isBrokerUnavailableCancellation(msg)
 }
 
 /** Best-effort `"error":"..."` from a JSON object body. */

@@ -44,6 +44,15 @@ class SpawnFailureMessageTest {
         }
     }
 
+    @Test fun remapRethrowsBareCancellationUnchanged() {
+        val bare = CancellationException()
+        val thrown = assertFailsWith<CancellationException> { remapSpawnFailure(bare) }
+        assertEquals(bare, thrown)
+        val blank = CancellationException("")
+        val thrownBlank = assertFailsWith<CancellationException> { remapSpawnFailure(blank) }
+        assertEquals(blank, thrownBlank)
+    }
+
     @Test fun remapTurnsUnavailableIntoIllegalState() {
         val e = assertFailsWith<IllegalStateException> {
             remapSpawnFailure(CancellationException("BrokerApi request unavailable"))

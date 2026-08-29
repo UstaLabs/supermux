@@ -183,9 +183,9 @@ class WorkspaceLayoutSyncTest {
                 push = { next ->
                     if (collectViewIds(next).any { it !in owned }) {
                         refusals++
-                        // How the real transport reports a 400, byte for byte: a
-                        // CancellationException, thrown on a job nobody cancelled.
-                        throw CancellationException("BrokerApi request unavailable")
+                        // How the real transport reports a 400: CancellationException
+                        // with "BrokerApi request unavailable: HTTP 400 …".
+                        throw CancellationException("BrokerApi request unavailable: HTTP 400 bad request")
                     }
                     withContext(NonCancellable) { server = next.toDto() }
                 },
