@@ -11,12 +11,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +40,18 @@ import kotlinx.coroutines.launch
 private const val DEFAULT_MODEL_ID = "__default__"
 private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok")
 
+@Composable
+fun ContinueMenuItem(onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text("Continue in new conversation") },
+        modifier = Modifier.testTag(ChatOverflowTestIds.CONTINUE),
+        onClick = onClick,
+    )
+}
+
+@Composable
+fun rememberContinueSheetState(): MutableState<Boolean> = remember { mutableStateOf(false) }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContinueConversationSheet(
@@ -51,10 +65,10 @@ fun ContinueConversationSheet(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var text by remember {
+    var text by remember(session.id) {
         mutableStateOf(HandoffPrefill.build(session.name, session.id))
     }
-    var agent by remember { mutableStateOf(HandoffPrefill.defaultAgent(session.agent)) }
+    var agent by remember(session.id) { mutableStateOf(HandoffPrefill.defaultAgent(session.agent)) }
     var agents by remember { mutableStateOf(CONTINUE_AGENT_FALLBACK) }
     var model by remember { mutableStateOf<String?>(null) }
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
@@ -135,8 +149,8 @@ fun ContinueConversationSheet(
                 minLines = 8,
                 maxLines = 14,
             )
-            if (error != null) {
-                Text(error!!, color = cs.error, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+            error?.let { err ->
+                Text(err, color = cs.error, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }

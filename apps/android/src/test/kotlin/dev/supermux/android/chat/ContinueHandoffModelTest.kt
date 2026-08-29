@@ -3,7 +3,6 @@ package dev.supermux.android.chat
 import dev.supermux.session.HandoffPrefill
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -34,7 +33,7 @@ class ContinueHandoffModelTest {
         assertEquals("gpt-5", body.model)
         assertEquals("high", body.reasoningLevel)
         assertEquals("fix auth", body.name)
-        assertFalse(continueQueuesClientSend(body))
+        assertTrue(brokerDeliversFirstMessage(body))
     }
 
     @Test
@@ -56,7 +55,7 @@ class ContinueHandoffModelTest {
         assertEquals("s-old", body.inheritFrom)
         assertEquals("go", body.firstMessage)
         assertEquals(HandoffPrefill.defaultAgent("mystery"), body.agent)
-        assertFalse(continueQueuesClientSend(body))
+        assertTrue(brokerDeliversFirstMessage(body))
     }
 
     @Test
@@ -74,7 +73,7 @@ class ContinueHandoffModelTest {
     }
 
     @Test
-    fun continuePathNeverQueuesClientSend() {
+    fun continuePathBrokerDeliversFirstMessage() {
         val body = continueSpawnRequest(
             sourceWorkdir = "/r",
             sourceSessionId = "s1",
@@ -84,14 +83,14 @@ class ContinueHandoffModelTest {
             handoff = ContinueHandoff("handoff text", "claude", null, null),
         )
         assertTrue(!body.firstMessage.isNullOrBlank())
-        assertFalse(
-            continueQueuesClientSend(body),
+        assertTrue(
+            brokerDeliversFirstMessage(body),
             "broker delivers firstMessage; AppViewModel must not setPendingFirst / ClientFrame.Send",
         )
     }
 
     @Test
     fun overflowContinueTestIdMatchesContract() {
-        assertEquals("chat_overflow_continue", ChatOverflowTestIds.CONTINUE)
+        assertEquals("overflow_continue", ChatOverflowTestIds.CONTINUE)
     }
 }

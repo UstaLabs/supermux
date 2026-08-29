@@ -42,8 +42,8 @@ fun continueSpawnRequest(
     )
 }
 
-/** Broker-delivered first turn: never queue a client WS Send for this spawn. */
-fun continueQueuesClientSend(request: SpawnRequest): Boolean = request.firstMessage.isNullOrBlank()
+/** True when the broker will deliver [SpawnRequest.firstMessage] — do not also queue a WS Send. */
+fun brokerDeliversFirstMessage(request: SpawnRequest): Boolean = !request.firstMessage.isNullOrBlank()
 
 /**
  * Spec §9.1: a chat started in a workspace joins it and starts in its workdir.
@@ -66,7 +66,7 @@ fun newChatHereRequest(
 )
 
 object ChatOverflowTestIds {
-    const val CONTINUE = "chat_overflow_continue"
+    const val CONTINUE = "overflow_continue"
     const val CONTINUE_FIELD = "overflow_continue_field"
     const val CONTINUE_CONFIRM = "overflow_continue_confirm"
 }

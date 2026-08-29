@@ -171,6 +171,10 @@ private fun ChatViewPane(
             modifier = paneMod.fillMaxSize().testTag("view_chat"),
         )
     }
+    if (!wide) {
+        chatBody(modifier)
+        return
+    }
     Column(modifier.fillMaxSize()) {
         ChatViewHeader(
             session = session,

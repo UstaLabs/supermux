@@ -226,7 +226,7 @@ fun ChatScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(session.name) }
     var showKillDialog by remember { mutableStateOf(false) }
-    var showContinueSheet by remember { mutableStateOf(false) }
+    val showContinueSheet = rememberContinueSheetState()
     var headerMenuExpanded by remember { mutableStateOf(false) }
     var activePanel by remember { mutableStateOf(SessionPanel.Chat) }
 
@@ -477,14 +477,10 @@ fun ChatScreen(
                             },
                         )
                         if (onContinue != null) {
-                            DropdownMenuItem(
-                                text = { Text("Continue in new conversation") },
-                                modifier = Modifier.testTag(ChatOverflowTestIds.CONTINUE),
-                                onClick = {
-                                    headerMenuExpanded = false
-                                    showContinueSheet = true
-                                },
-                            )
+                            ContinueMenuItem {
+                                headerMenuExpanded = false
+                                showContinueSheet.value = true
+                            }
                         }
                         val isMuted = session.mute ?: false
                         DropdownMenuItem(
@@ -781,7 +777,7 @@ fun ChatScreen(
         )
     }
 
-    if (showContinueSheet && onContinue != null) {
+    if (showContinueSheet.value && onContinue != null) {
         ContinueConversationSheet(
             session = session,
             onContinue = onContinue,
@@ -789,7 +785,7 @@ fun ChatScreen(
             loadAgents = loadContinueAgents,
             loadModels = loadContinueModels,
             loadReasoning = loadContinueReasoning,
-            onDismiss = { showContinueSheet = false },
+            onDismiss = { showContinueSheet.value = false },
         )
     }
 

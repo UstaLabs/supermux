@@ -31,11 +31,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.supermux.android.AppViewModel
 import dev.supermux.android.R
 import dev.supermux.android.chat.ChatDetailPrefs
-import dev.supermux.android.chat.ChatOverflowTestIds
 import dev.supermux.android.chat.ContinueConversationSheet
 import dev.supermux.android.chat.ContinueHandoff
+import dev.supermux.android.chat.ContinueMenuItem
+import dev.supermux.android.chat.rememberContinueSheetState
 import dev.supermux.android.chat.FinishButton
 import dev.supermux.android.chat.FinishSheet
 import dev.supermux.net.ModelInfo
@@ -208,7 +210,7 @@ fun SessionLinksMenu(sessionLinks: List<ProxyDto>) {
 }
 
 @Composable
-private fun ChatOverflowMenu(
+internal fun ChatOverflowMenu(
     session: SessionInfo,
     onGitOp: (String) -> Unit,
     onContinue: (suspend (ContinueHandoff) -> String?)? = null,
@@ -223,7 +225,7 @@ private fun ChatOverflowMenu(
     val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
     var showOverflow by remember { mutableStateOf(false) }
     var detailSubmenu by remember { mutableStateOf(false) }
-    var showContinue by remember { mutableStateOf(false) }
+    val showContinue = rememberContinueSheetState()
     Box {
         IconButton(
             onClick = { showOverflow = true },
@@ -258,14 +260,10 @@ private fun ChatOverflowMenu(
                 onClick = { detailSubmenu = true },
             )
             if (onContinue != null) {
-                DropdownMenuItem(
-                    text = { Text("Continue in new conversation") },
-                    modifier = Modifier.testTag(ChatOverflowTestIds.CONTINUE),
-                    onClick = {
-                        showOverflow = false
-                        showContinue = true
-                    },
-                )
+                ContinueMenuItem {
+                    showOverflow = false
+                    showContinue.value = true
+                }
             }
             if (session.git != null) {
                 DropdownMenuItem(
@@ -323,7 +321,7 @@ private fun ChatOverflowMenu(
             }
         }
     }
-    if (showContinue && onContinue != null) {
+    if (showContinue.value && onContinue != null) {
         ContinueConversationSheet(
             session = session,
             onContinue = onContinue,
@@ -331,9 +329,45 @@ private fun ChatOverflowMenu(
             loadAgents = loadContinueAgents,
             loadModels = loadContinueModels,
             loadReasoning = loadContinueReasoning,
-            onDismiss = { showContinue = false },
+            onDismiss = { showContinue.value = false },
         )
     }
+}
+
+/**
+ * Phone workspace chat panes skip [ChatViewHeader] (no duplicate chrome under the tab row).
+ * Continue / git overflow lives in the tab row's trailing slot instead.
+ */
+@Composable
+internal fun PhoneTabChatOverflow(
+    sessionId: String,
+    vm: AppViewModel,
+    onSelectSession: (String) -> Unit,
+) {
+    val sessions by vm.sessions.collectAsState()
+    val session = sessions.firstOrNull { it.id == sessionId } ?: return
+    val context = LocalContext.current
+    ChatOverflowMenu(
+        session = session,
+        onGitOp = { op ->
+            val cb: (GitOpResult?) -> Unit = { toastGitOp(context, it) }
+            when (op) {
+                "fetch" -> vm.gitFetch(sessionId, cb)
+                "pull" -> vm.gitPull(sessionId, cb)
+                "push" -> vm.gitPush(sessionId, cb)
+                "publish" -> vm.gitPublish(sessionId, cb)
+            }
+        },
+        onContinue = { handoff ->
+            val recordId = vm.sessionHost.value[sessionId] ?: vm.activeHost.value
+                ?: throw IllegalStateException("No host")
+            vm.continueInNewConversation(recordId, sessionId, handoff)
+        },
+        loadContinueAgents = { vm.agentStatuses().filter { it.installed }.map { it.kind } },
+        loadContinueModels = { vm.launcherModels(it) },
+        loadContinueReasoning = { ag, md -> vm.launcherReasoning(ag, md) },
+        onContinued = onSelectSession,
+    )
 }
 
 fun toastGitOp(context: android.content.Context, result: GitOpResult?) {

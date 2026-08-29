@@ -98,9 +98,10 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.android.chat.ContinueHandoff
-import dev.supermux.android.chat.continueQueuesClientSend
 import dev.supermux.android.chat.continueSpawnRequest
 import dev.supermux.android.chat.newChatHereRequest
+import dev.supermux.android.workspace.awaitChatViewForSession
+import dev.supermux.session.HandoffPrefill
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
@@ -1240,9 +1241,6 @@ class AppViewModel(
             workspaceId = workspaceId,
             handoff = handoff,
         )
-        check(!continueQueuesClientSend(req)) {
-            "continue spawn must put firstMessage on the body (broker delivers; no ClientFrame.Send)"
-        }
         val newId = createSessionWithFirstMessage(
             workdir = req.workdir,
             agent = req.agent ?: "claude",
@@ -1267,13 +1265,30 @@ class AppViewModel(
         recordId: String,
         workspaceId: String,
         workdir: String,
-        agent: String = "claude",
+        agent: String? = null,
         model: String? = null,
     ): String {
         setActiveHost(recordId)
         val api = hostConns.api(recordId) ?: activeApi()
             ?: throw IllegalStateException("No host connected")
-        val req = newChatHereRequest(workspaceId, workdir, agent, model)
+        if (workdir.isBlank()) {
+            throw IllegalArgumentException("Need a working directory")
+        }
+        val validation = runCatching { api.validatePath(workdir) }.getOrNull()
+            ?: throw IllegalArgumentException("Could not validate path")
+        val resolvedPath = validation.path
+        if (!validation.ok || resolvedPath.isNullOrBlank()) {
+            throw IllegalArgumentException(validation.error ?: "Invalid working directory")
+        }
+        val workspace = workspacesByHost[recordId]?.workspaces?.firstOrNull { it.id == workspaceId }
+            ?: _workspaces.value.firstOrNull { it.id == workspaceId }
+        val primaryAgent = workspace?.primarySessionId?.let { sid ->
+            sessionsByHost[recordId]?.firstOrNull { it.id == sid }?.agent
+                ?: _sessions.value.firstOrNull { it.id == sid }?.agent
+        }
+        val resolvedAgent = agent?.trim()?.takeIf { it.isNotEmpty() }
+            ?: HandoffPrefill.defaultAgent(primaryAgent)
+        val req = newChatHereRequest(workspaceId, resolvedPath, resolvedAgent, model)
         val resp = api.spawn(req)
         val sessionId = resp.id.ifBlank {
             _sessions.value.firstOrNull { it.name == resp.name }?.id
@@ -1284,15 +1299,9 @@ class AppViewModel(
     }
 
     private suspend fun activateChatView(recordId: String, sessionId: String) {
-        repeat(30) {
-            val ws = workspaceForSession(recordId, sessionId)
-            val view = ws?.views?.firstOrNull { it.chatSessionId() == sessionId }
-            if (ws != null && view != null) {
-                setActiveView(ws.id, view.id)
-                return
-            }
-            delay(50)
-        }
+        val target = awaitChatViewForSession(workspaces, sessionId)
+            ?: throw IllegalStateException("Chat view didn't appear in the workspace ($recordId)")
+        setActiveView(target.workspaceId, target.viewId)
     }
 
     // ── Settings / Usage / Devices / Archived (active host) ────────────────────────

@@ -2,6 +2,7 @@ package dev.supermux.android.workspace
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
@@ -32,6 +33,7 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.proto.chatSessionId
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.workspace.WorkspaceSession
@@ -93,31 +95,39 @@ private fun PhoneWorkspace(
     Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
         if (tabs.viewIds.isNotEmpty()) {
             val selectedIndex = tabs.viewIds.indexOf(tabs.selectedId).coerceAtLeast(0)
-            ScrollableTabRow(selectedTabIndex = selectedIndex) {
-                tabs.viewIds.forEach { id ->
-                    val view = viewsById[id]
-                    val title = view?.let { viewTitle(it) } ?: "view"
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                ScrollableTabRow(
+                    selectedTabIndex = selectedIndex,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    tabs.viewIds.forEach { id ->
+                        val view = viewsById[id]
+                        val title = view?.let { viewTitle(it) } ?: "view"
+                        Tab(
+                            selected = id == tabs.selectedId,
+                            onClick = { vm.setActiveView(workspace.id, id) },
+                            text = {
+                                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                            icon = {
+                                IconButton(onClick = {
+                                    val v = view ?: return@IconButton
+                                    closeOrConfirm(v)
+                                }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Close $title")
+                                }
+                            },
+                        )
+                    }
                     Tab(
-                        selected = id == tabs.selectedId,
-                        onClick = { vm.setActiveView(workspace.id, id) },
-                        text = {
-                            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        },
-                        icon = {
-                            IconButton(onClick = {
-                                val v = view ?: return@IconButton
-                                closeOrConfirm(v)
-                            }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Close $title")
-                            }
-                        },
+                        selected = false,
+                        onClick = { showAdd = true },
+                        icon = { Icon(Icons.Filled.Add, contentDescription = "Add view") },
                     )
                 }
-                Tab(
-                    selected = false,
-                    onClick = { showAdd = true },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = "Add view") },
-                )
+                viewsById[tabs.selectedId]?.chatSessionId()?.let { sid ->
+                    PhoneTabChatOverflow(sid, vm, onSelectSession)
+                }
             }
         }
         val liveIds = tabs.viewIds.toSet()
