@@ -5,16 +5,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.workspace.WorkspaceLayoutState
 import dev.supermux.ui.workspace.rememberWorkspaceLayout
+import dev.supermux.workspace.WorkspaceFileOpener
 import dev.supermux.net.AddViewBody
 import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.toDto
 import kotlinx.coroutines.CoroutineScope
+import java.util.UUID
 
 /**
  * Per-workspace UI objects that must be shared across windows of the same
@@ -119,6 +121,7 @@ internal fun rememberWorkspaceSession(
                 .getOrNull()?.id
         },
         scope = overlayScope,
+        newId = { UUID.randomUUID().toString() },
     )
     return WorkspaceSession(
         workspaceId = workspace.id,

@@ -13,7 +13,7 @@
 // anyone about yet, so `titleFor` would say "view" and ViewHost would draw nothing. The caller
 // therefore keeps a PROVISIONAL ViewDto until the real one lands — see [WorkspaceFileOpener]'s
 // `provisional` map and AppShell's merge (the broker always wins on a collision).
-package dev.supermux.desktop.shell
+package dev.supermux.workspace
 
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.stateString
@@ -29,13 +29,12 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import java.util.UUID
 
 /** True when [this] is a `file` pane — an editor view whose mode names one document. */
-internal fun ViewDto.isFileView(): Boolean = kind == "editor" && stateString("mode") == "file"
+fun ViewDto.isFileView(): Boolean = kind == "editor" && stateString("mode") == "file"
 
 /** The `file` pane already showing [path], anywhere in the workspace. */
-internal fun Map<String, ViewDto>.fileViewFor(path: String): ViewDto? =
+fun Map<String, ViewDto>.fileViewFor(path: String): ViewDto? =
     values.firstOrNull { it.isFileView() && it.stateString("path") == path }
 
 /**
@@ -43,13 +42,13 @@ internal fun Map<String, ViewDto>.fileViewFor(path: String): ViewDto? =
  * Document order, not "the group I came from": a second file opened from the tree must join the
  * files it belongs with, however the user has since rearranged the panes.
  */
-internal fun firstGroupWithFileView(node: LayoutNode, views: Map<String, ViewDto>): String? = when (node) {
+fun firstGroupWithFileView(node: LayoutNode, views: Map<String, ViewDto>): String? = when (node) {
     is LayoutNode.Group -> node.id.takeIf { node.viewIds.any { id -> views[id]?.isFileView() == true } }
     is LayoutNode.Split -> node.children.firstNotNullOfOrNull { firstGroupWithFileView(it, views) }
 }
 
 /** What an open of one path should do to the layout. Pure, so the rules are testable on their own. */
-internal sealed interface FileOpenPlan {
+sealed interface FileOpenPlan {
     /** A pane already shows the path: select it. Never open a second one. */
     data class Activate(val viewId: String, val groupId: String) : FileOpenPlan
 
@@ -72,7 +71,7 @@ internal sealed interface FileOpenPlan {
  * [sourceViewId] is the view the request came FROM (the explorer that was clicked, the chat whose
  * transcript was tapped) — used only when there is nowhere to join, to pick which group to split.
  */
-internal fun planFileOpen(
+fun planFileOpen(
     tree: LayoutNode,
     views: Map<String, ViewDto>,
     path: String,
@@ -106,7 +105,7 @@ private fun viewIdsOfGroup(node: LayoutNode, groupId: String): List<String> = wh
 }
 
 /** The view state of a `file` pane. */
-internal fun fileViewState(path: String): JsonObject = buildJsonObject {
+fun fileViewState(path: String): JsonObject = buildJsonObject {
     put("mode", JsonPrimitive("file"))
     put("path", JsonPrimitive(path))
 }
@@ -118,7 +117,7 @@ internal fun fileViewState(path: String): JsonObject = buildJsonObject {
  * — is testable without Compose or a broker. AppShell builds one of these per composition (it holds
  * no state of its own; the provisional map and the layout live outside it).
  */
-internal class WorkspaceFileOpener(
+class WorkspaceFileOpener(
     private val workspaceId: String,
     /** The layout as it stands right now. Read at call time — never captured. */
     private val treeOf: () -> LayoutNode,
@@ -141,7 +140,7 @@ internal class WorkspaceFileOpener(
      */
     private val post: suspend (id: String, state: JsonObject, groupId: String) -> String?,
     private val scope: CoroutineScope,
-    private val newId: () -> String = { UUID.randomUUID().toString() },
+    private val newId: () -> String,
 ) {
     /**
      * Paths this opener has placed but has not seen come back through [viewsOf] yet.

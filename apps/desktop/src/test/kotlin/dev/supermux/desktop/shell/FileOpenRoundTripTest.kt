@@ -17,6 +17,8 @@ package dev.supermux.desktop.shell
 
 import dev.supermux.ui.workspace.WorkspaceLayoutState
 import dev.supermux.ui.workspace.rememberWorkspaceLayout
+import dev.supermux.workspace.WorkspaceFileOpener
+import java.util.UUID
 
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -127,6 +129,7 @@ class FileOpenRoundTripTest {
                         real
                     },
                     scope = rememberCoroutineScope(),
+                    newId = { UUID.randomUUID().toString() },
                 )
 
                 val t = sync.tree
@@ -196,6 +199,7 @@ class FileOpenRoundTripTest {
                         id
                     },
                     scope = rememberCoroutineScope(),
+                    newId = { UUID.randomUUID().toString() },
                 )
                 val t = s.tree
                 SideEffect { if (drawn.lastOrNull() != t) drawn += t }
