@@ -1,5 +1,6 @@
 package dev.supermux.android.workspace
 
+import dev.supermux.android.host.workspaceForSession
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.LayoutNode
@@ -44,8 +45,8 @@ class WorkspaceScreenModelTest {
         assertNull(model.selectedId)
     }
 
-    @Test fun phonePatchBodyNeverContainsLayout() {
-        val body = phonePatchBody("v1")
+    @Test fun activeViewPatchBodyNeverContainsLayout() {
+        val body = activeViewPatchBody("v1")
         assertNull(body.layout)
         assertEquals("v1", body.activeViewId)
         assertNull(body.name)
@@ -68,17 +69,24 @@ class WorkspaceScreenModelTest {
         )
     }
 
-    @Test fun closeNeedsConfirmForTerminalAndDisplay() {
+    @Test fun closeNeedsConfirmTerminal() {
         assertTrue(closeNeedsConfirm("terminal"))
-        assertTrue(closeNeedsConfirm("display"))
-        assertFalse(closeNeedsConfirm("chat"))
-        assertFalse(closeNeedsConfirm("editor"))
-        assertTrue(closeNeedsConfirm(ViewDto(id = "t", workspaceId = "w", kind = "terminal")))
     }
 
-    @Test fun foldUnfoldRules() {
-        assertTrue(foldKeepsActiveViewId())
-        assertFalse(unfoldShouldPatchLayout())
+    @Test fun closeNeedsConfirmDisplay() {
+        assertTrue(closeNeedsConfirm("display"))
+    }
+
+    @Test fun closeNeedsConfirmChatFalse() {
+        assertFalse(closeNeedsConfirm("chat"))
+    }
+
+    @Test fun closeNeedsConfirmEditorFalse() {
+        assertFalse(closeNeedsConfirm("editor"))
+    }
+
+    @Test fun closeNeedsConfirmViewDtoUsesKind() {
+        assertTrue(closeNeedsConfirm(ViewDto(id = "t", workspaceId = "w", kind = "terminal")))
     }
 
     @Test fun keepAliveIsKeyedByWorkspaceAndIncludesActive() {
@@ -95,7 +103,7 @@ class WorkspaceScreenModelTest {
         assertTrue("w5" in switched)
     }
 
-    @Test fun resolveWorkspaceForPushAndDeeplink() {
+    @Test fun workspaceForSessionFindsChatOwner() {
         val chat = ViewDto(
             id = "v1",
             workspaceId = "w1",
@@ -105,7 +113,7 @@ class WorkspaceScreenModelTest {
             },
         )
         val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat))
-        assertEquals("w1", resolveWorkspaceForSession(listOf(ws), "s1")?.id)
-        assertNull(resolveWorkspaceForSession(listOf(ws), "s-missing"))
+        assertEquals("w1", workspaceForSession(listOf(ws), "s1")?.id)
+        assertNull(workspaceForSession(listOf(ws), "s-missing"))
     }
 }

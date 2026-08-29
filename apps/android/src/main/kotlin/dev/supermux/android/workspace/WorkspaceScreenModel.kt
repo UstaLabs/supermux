@@ -2,8 +2,6 @@ package dev.supermux.android.workspace
 
 import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.ViewDto
-import dev.supermux.proto.WorkspaceDto
-import dev.supermux.android.host.workspaceForSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.WorkspaceKeepAliveCache
@@ -27,8 +25,8 @@ fun phoneTabModel(layout: LayoutNode?, activeViewId: String?): PhoneTabModel {
     return PhoneTabModel(ids, selected)
 }
 
-/** Phone PATCH must never include a layout tree (D2). */
-fun phonePatchBody(activeViewId: String?): PatchWorkspaceBody =
+/** PATCH used by [dev.supermux.android.AppViewModel.setActiveView] — never includes a layout. */
+fun activeViewPatchBody(activeViewId: String): PatchWorkspaceBody =
     PatchWorkspaceBody(name = null, layout = null, activeViewId = activeViewId)
 
 fun phoneAddKinds(): List<NewViewKind> = listOf(
@@ -53,18 +51,8 @@ fun closeNeedsConfirm(kind: String): Boolean = kind == "terminal" || kind == "di
 
 fun closeNeedsConfirm(view: ViewDto): Boolean = closeNeedsConfirm(view.kind)
 
-/** Fold (tree→tabs) keeps activeViewId; unfold (tabs→tree) must not PATCH layout. */
-fun unfoldShouldPatchLayout(): Boolean = false
-
-fun foldKeepsActiveViewId(): Boolean = true
-
 fun keepAliveWorkspaceIds(
     cache: WorkspaceKeepAliveCache,
     activeWorkspaceId: String?,
     liveWorkspaceIds: Set<String>,
 ): List<String> = cache.update(activeWorkspaceId, liveWorkspaceIds)
-
-fun resolveWorkspaceForSession(
-    workspaces: List<WorkspaceDto>,
-    sessionId: String,
-): WorkspaceDto? = workspaceForSession(workspaces, sessionId)

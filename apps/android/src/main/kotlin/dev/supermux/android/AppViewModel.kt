@@ -73,7 +73,9 @@ import dev.supermux.android.session.applyRestoreWorkspace
 import dev.supermux.android.session.applyWorkspaceReorder
 import dev.supermux.android.session.sidebarReorderKind
 import dev.supermux.android.session.StagedUpload
+import dev.supermux.android.editor.EditorPrefs
 import dev.supermux.android.settings.AddCustomLspArgs
+import dev.supermux.android.workspace.activeViewPatchBody
 import dev.supermux.host.HostSnapshotStore
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -143,6 +145,7 @@ class AppViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
     private val appContext: Context = application.applicationContext
+    val editorPrefs = EditorPrefs(appContext)
 
     companion object {
         /** Factory so the VM can be Activity-scoped via viewModel(factory = …) and survive config changes. */
@@ -1278,6 +1281,7 @@ class AppViewModel(
         }
         viewModelScope.launch {
             runCatching { activeApi()?.reorderWorkspaces(orderedIds) }
+                .onFailure { android.util.Log.e("AppViewModel", "reorderWorkspaces failed", it) }
         }
     }
 
@@ -1514,13 +1518,21 @@ class AppViewModel(
         publishWorkspaces()
         viewModelScope.launch {
             runCatching {
-                activeApi()?.patchWorkspace(workspaceId, PatchWorkspaceBody(activeViewId = viewId))
-            }
+                activeApi()?.patchWorkspace(workspaceId, activeViewPatchBody(viewId))
+            }.onFailure { android.util.Log.e("AppViewModel", "setActiveView failed", it) }
         }
     }
 
-    fun addWorkspaceView(workspaceId: String, kind: String, state: kotlinx.serialization.json.JsonObject, id: String? = null) {
-        viewModelScope.launch { addView(workspaceId, AddViewBody(kind = kind, state = state, id = id)) }
+    fun addWorkspaceView(
+        workspaceId: String,
+        kind: String,
+        state: kotlinx.serialization.json.JsonObject,
+        id: String? = null,
+        groupId: String? = null,
+    ) {
+        viewModelScope.launch {
+            addView(workspaceId, AddViewBody(kind = kind, state = state, id = id, groupId = groupId))
+        }
     }
 
     suspend fun addView(workspaceId: String, body: AddViewBody): dev.supermux.proto.ViewDto? =
@@ -1529,11 +1541,13 @@ class AppViewModel(
     fun closeWorkspaceView(workspaceId: String, viewId: String) {
         viewModelScope.launch {
             runCatching { activeApi()?.closeView(workspaceId, viewId) }
+                .onFailure { android.util.Log.e("AppViewModel", "closeWorkspaceView failed", it) }
         }
     }
 
     suspend fun patchWorkspaceLayout(workspaceId: String, layout: dev.supermux.proto.LayoutNodeDto) {
         runCatching { activeApi()?.patchWorkspace(workspaceId, PatchWorkspaceBody(layout = layout)) }
+            .onFailure { android.util.Log.e("AppViewModel", "patchWorkspaceLayout failed", it) }
     }
 
     suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
