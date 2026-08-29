@@ -231,8 +231,9 @@ private fun TreeNodeRow(
         )
     }
 
-    if (isDir && isOpen && node.children != null) {
-        node.children.forEach { child ->
+    val children = node.children
+    if (isDir && isOpen && children != null) {
+        children.forEach { child ->
             TreeNodeRow(
                 node = child,
                 depth = depth + 1,

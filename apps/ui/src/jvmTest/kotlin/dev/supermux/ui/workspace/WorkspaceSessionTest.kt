@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.workspace
 
 import dev.supermux.proto.ViewDto
 import kotlin.test.Test

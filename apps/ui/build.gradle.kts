@@ -28,6 +28,7 @@ kotlin {
             api(project(":shared"))
             api(compose.runtime)
             implementation(libs.coroutines.core)
+            implementation(libs.serialization.json)
             api(compose.foundation)
             api(compose.material3)
             api(compose.ui)

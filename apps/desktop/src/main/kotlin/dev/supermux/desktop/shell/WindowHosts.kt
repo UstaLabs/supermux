@@ -3,6 +3,7 @@ package dev.supermux.desktop.shell
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId

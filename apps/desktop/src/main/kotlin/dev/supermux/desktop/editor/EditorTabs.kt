@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.LocalPanes
+import dev.supermux.ui.editor.Document
 import dev.supermux.desktop.theme.MonoFontFamily
 
 @Composable

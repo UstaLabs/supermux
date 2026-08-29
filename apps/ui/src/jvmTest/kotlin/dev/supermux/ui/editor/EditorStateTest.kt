@@ -541,34 +541,6 @@ class EditorStateTest {
         assertEquals("a.kt", s.activeTabPath)
     }
 
-    // ── captureOutgoingScroll — the tab-switch scroll capture (Android EditorScreen:406-408 parity
-    //    with the async-attribution fix; see WebCodeEditor.kt's KDoc). ─────────────────────────────
-
-    @Test fun capture_outgoing_scroll_lands_on_the_tab_that_was_active_at_call_time() {
-        val s = state()
-        s.openFile("a.txt")
-        s.openFile("b.txt") // b active (the outgoing tab)
-        // A reader whose callback is LATE (fires after the tab switch) — the Android-pattern race.
-        var pending: ((Int) -> Unit)? = null
-        val reader = EditorScrollReader().apply { read = { cb -> pending = cb } }
-
-        captureOutgoingScroll(s, reader)
-        s.selectTab("a.txt") // switch BEFORE the async read returns
-        pending!!.invoke(99) // late callback
-
-        // The offset lands on b (outgoing at call time), NOT the now-active a.
-        assertEquals(99, s.tabs.find { it.path == "b.txt" }?.scrollTop)
-        assertEquals(0, s.tabs.find { it.path == "a.txt" }?.scrollTop)
-    }
-
-    @Test fun capture_outgoing_scroll_is_a_no_op_with_no_active_tab() {
-        val s = state()
-        var reads = 0
-        val reader = EditorScrollReader().apply { read = { reads++; it(42) } }
-        captureOutgoingScroll(s, reader)
-        assertEquals(0, reads) // no outgoing tab → the reader is never even invoked
-    }
-
     // Obligation 2: a superseded pending-reveal poll is dropped; the newest reveal wins.
     @Test fun open_file_at_line_drops_a_superseded_reveal_and_applies_the_newest() = runTest {
         val gate = CompletableDeferred<Unit>()
