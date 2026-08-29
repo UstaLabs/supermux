@@ -123,6 +123,14 @@ Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layou
 
 ### Phase 7 — Verification & release
 
+**Phase 7 log (2026-08-29, pixel_api35_b, hermetic broker fixture):**
+- Maestro `pair-and-converse` PASS (selectors moved to `workspaces_list` / `workspace_row_.*`, `c3c9bf39` adds the shared `chat-view` tag on the workspace chat pane).
+- PASS: workspace list rows; "+" adds Terminal/Files/Changes (DB views correct); force-stop+relaunch restores workspace+tabs, old pref wiped; row ⋮ Rename/New chat here; swipe→Archive confirm→fold→Restore.
+- App-side OK, fixture-limited: Continue-in-new + New chat here reach the broker; the fixture's stub tmux returns HTTP 500 → real spawn/resume must be checked on a live broker.
+- 🔴 Bugs found only on device: tab switch reverted by the activation effect (`02e57eda`); BACK from the phone workspace screen exits the app (fix in progress).
+- 🟠 Findings: legacy "Show N settled" fold renders next to "Show N archived" after archiving; generic "request unavailable" error instead of the server message; cosmetics (tab chip ✕ stacked above label, strip card width, terminal tab titled by id, update banner over status bar).
+- Env notes: `-gpu host` needs a display session (fails headless); swiftshader needs `hide_error_dialogs=1`, 540×1200@200dpi, animations off; Gboard autocorrect mangles `adb input text` — disable the IME; `MUX_TEST_KEEP_FIXTURE` keeps the dir not the broker — run `test-broker.sh sh -c 'sleep …'` for a live fixture.
+
 - [ ] Emulator e2e on `pixel_api35` (phone tabs, never PATCHes layout — assert with broker log grep for `PATCH /workspaces/.*layout`) and `workspace_fold` unfolded (4 live panes, drag-merge → tab strip, survive force-stop + relaunch, fold/unfold live). Reuse the `/tmp/e2e-shots` recipe.
 - [ ] Cross-client check: arrange a 3-pane layout on desktop, open on phone → tabs match; move a view on tablet → desktop updates live.
 - [ ] Bump `versionCode`/name in `apps/android/build.gradle.kts`, run `play-store/RELEASE-CHECKLIST.md`, sideload APK to supermux-apk.ustalabs.com, then Play closed test.
