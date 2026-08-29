@@ -119,11 +119,25 @@ class ViewingPresenceTest {
     }
 
     @Test
-    fun tabletVisibleIdsAreEveryChatInTheTree() {
+    fun tabletVisibleIdsAreActiveTabsOnlyAndExcludeBackgroundChat() {
+        val layout = LayoutNode.Split(
+            direction = "row",
+            sizes = listOf(0.5, 0.5),
+            children = listOf(
+                LayoutNode.Group("g1", listOf("v-chat-a", "v-chat-bg"), "v-chat-a"),
+                LayoutNode.Group("g2", listOf("v-chat-b"), "v-chat-b"),
+            ),
+        )
+        val views = listOf(
+            chatView("v-chat-a", "s1"),
+            chatView("v-chat-bg", "s-bg"),
+            termView("v-term"),
+            chatView("v-chat-b", "s2"),
+        )
         val ids = visibleChatIdsForAndroid(
             tablet = true,
-            layout = splitTwoChats(),
-            views = viewsTwoChats(),
+            layout = layout,
+            views = views,
             activeViewId = "v-chat-a",
         )
         assertEquals(listOf("s1", "s2"), ids)
@@ -154,10 +168,49 @@ class ViewingPresenceTest {
     }
 
     @Test
-    fun notificationCancelSetIsVisibleChatIds() {
-        assertEquals(listOf("s1", "s2"), notificationCancelSessionIds(listOf("s1", "s2")))
-        assertEquals(listOf("s1"), notificationCancelSessionIds(listOf("s1")))
-        assertEquals(emptyList(), notificationCancelSessionIds(emptyList()))
+    fun notificationCancelSetDedupsVisiblePlusSelected() {
+        assertEquals(listOf("s1", "s2"), notificationCancelSessionIds(listOf("s1", "s2"), "s1"))
+        assertEquals(listOf("s1", "s2"), notificationCancelSessionIds(listOf("s1"), "s2"))
+        assertEquals(listOf("s1"), notificationCancelSessionIds(emptyList(), "s1"))
+        assertEquals(emptyList(), notificationCancelSessionIds(emptyList(), null))
+    }
+
+    @Test
+    fun pushTapHandleSkipsWhenAlreadyConsumed() {
+        assertEquals(
+            PushTapHandle.Skip,
+            pushTapHandleDecision("s1", handledSessionId = "s1", workspacesReady = true),
+        )
+        assertEquals(
+            PushTapHandle.Skip,
+            pushTapHandleDecision(null, handledSessionId = null, workspacesReady = true),
+        )
+        assertEquals(
+            PushTapHandle.Skip,
+            pushTapHandleDecision("", handledSessionId = null, workspacesReady = true),
+        )
+    }
+
+    @Test
+    fun pushTapHandleRetriesWhenWorkspacesEmptyThenConsumes() {
+        assertEquals(
+            PushTapHandle.ApplyRetry,
+            pushTapHandleDecision("s1", handledSessionId = null, workspacesReady = false),
+        )
+        assertEquals(
+            PushTapHandle.ApplyConsume,
+            pushTapHandleDecision("s1", handledSessionId = null, workspacesReady = true),
+        )
+    }
+
+    @Test
+    fun previousHostClearUsesPreviousSnapshotFirstIdOnWorkspaceSwitch() {
+        val hostA = WorkspaceViewingSnapshot("w-a", listOf("s-a"), appForeground = true)
+        val hostB = WorkspaceViewingSnapshot("w-b", listOf("s-b"), appForeground = true)
+        assertEquals("s-a", previousHostClearSessionId(hostA, hostB))
+        assertNull(previousHostClearSessionId(hostA, hostA.copy(visibleChatSessionIds = listOf("s-a2"))))
+        assertNull(previousHostClearSessionId(null, hostB))
+        assertNull(previousHostClearSessionId(hostA, null))
     }
 
     @Test

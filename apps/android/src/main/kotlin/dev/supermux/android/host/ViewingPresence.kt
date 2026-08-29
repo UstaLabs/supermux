@@ -6,11 +6,16 @@ import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.workspace.LayoutNode
-import dev.supermux.workspace.collectViewIds
+import dev.supermux.workspace.collectActiveViewIds
 
 /**
  * Atomic viewing snapshot for one workspace. Carries its own [workspaceId] so a
  * workspace switch cannot pair the new selection with the previous tree.
+ *
+ * An overlay over a workspace (settings, new-session, etc.) yields
+ * [ClientFrame.Viewing] `(null, false)` — the same as desktop — rather than
+ * reporting the underlying selected chat as still visible. Deliberate: the
+ * chats are not on screen while the overlay is up (spec §11).
  */
 data class WorkspaceViewingSnapshot(
     val workspaceId: String,
@@ -50,7 +55,8 @@ fun visibleWorkspaceChatIds(
 
 /**
  * Phone: only the active tab's chat (if that tab is a chat).
- * Tablet: every chat view in the rendered tree (`collectViewIds` ∩ chat views).
+ * Tablet: every **on-screen** chat (`collectActiveViewIds` ∩ chat views).
+ * A chat sitting in a background tab is not on screen (spec §11).
  */
 fun visibleChatIdsForAndroid(
     tablet: Boolean,
@@ -60,7 +66,7 @@ fun visibleChatIdsForAndroid(
 ): List<String> {
     val byId = views.associateBy { it.id }
     if (tablet) {
-        val ids = layout?.let { collectViewIds(it) } ?: views.map { it.id }
+        val ids = layout?.let { collectActiveViewIds(it) } ?: views.map { it.id }
         return ids.mapNotNull { id -> byId[id]?.chatSessionId() }.distinct()
     }
     val selected = phoneTabModel(layout, activeViewId).selectedId
@@ -113,5 +119,40 @@ fun resolvePushTap(sessionId: String, workspaces: List<WorkspaceDto>): PushTapRe
     )
 }
 
-fun notificationCancelSessionIds(visibleChatSessionIds: List<String>): List<String> =
-    visibleChatSessionIds
+/** Visible chats plus [selectedSessionId], de-duplicated, for notification cancel. */
+fun notificationCancelSessionIds(
+    visibleChatSessionIds: List<String>,
+    selectedSessionId: String? = null,
+): List<String> =
+    (visibleChatSessionIds + listOfNotNull(selectedSessionId)).distinct()
+
+/**
+ * Whether a push-tap extra should run. [handledSessionId] is the last extra we
+ * fully resolved (workspaces were ready). Empty workspaces still apply so the
+ * chat opens on cold start, but do not consume — one retry when the list lands.
+ */
+fun pushTapHandleDecision(
+    extraSessionId: String?,
+    handledSessionId: String?,
+    workspacesReady: Boolean,
+): PushTapHandle {
+    val sid = extraSessionId?.takeIf { it.isNotBlank() } ?: return PushTapHandle.Skip
+    if (sid == handledSessionId) return PushTapHandle.Skip
+    return if (workspacesReady) PushTapHandle.ApplyConsume else PushTapHandle.ApplyRetry
+}
+
+enum class PushTapHandle { Skip, ApplyRetry, ApplyConsume }
+
+/**
+ * Session id whose host should receive `Viewing(null, false)` when switching
+ * workspaces. Null when there is no previous snapshot or the workspace did not
+ * change — the next send can target the new snapshot's first id / active client.
+ */
+fun previousHostClearSessionId(
+    previous: WorkspaceViewingSnapshot?,
+    next: WorkspaceViewingSnapshot?,
+): String? {
+    if (previous == null || next == null) return null
+    if (previous.workspaceId == next.workspaceId) return null
+    return previous.visibleChatSessionIds.firstOrNull()
+}

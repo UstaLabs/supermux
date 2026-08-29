@@ -67,7 +67,9 @@ import dev.supermux.android.host.HostScopePicker
 import dev.supermux.android.host.HostView
 import dev.supermux.android.host.ViewingSurface
 import dev.supermux.android.host.WorkspaceViewingSnapshot
+import dev.supermux.android.host.PushTapHandle
 import dev.supermux.android.host.notificationCancelSessionIds
+import dev.supermux.android.host.pushTapHandleDecision
 import dev.supermux.android.host.resolvePushTap
 import dev.supermux.android.host.viewingSurfaceVisible
 import dev.supermux.android.host.visibleChatIdsForAndroid
@@ -278,41 +280,6 @@ class MainActivity : ComponentActivity() {
                 val homeRoute = navEntry?.destination?.hasRoute<Home>() == true
                 val overlayOpen = navEntry != null && !homeRoute
 
-                LaunchedEffect(selected, workspaces, wide) {
-                    selected?.let {
-                        sessionHost[it]?.let(vm::setActiveHost)
-                        vm.ensureMessagesLoaded(it)
-                        val hostId = sessionHost[it] ?: vm.activeHost.value
-                        val ws = hostId?.let { h -> vm.workspaceForSession(h, it) }
-                        val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == it }
-                        if (ws != null && chatView != null) vm.setActiveView(ws.id, chatView.id)
-                        val layout = ws?.layout?.toDomainOrNull()
-                        val visibleIds = if (ws != null) {
-                            visibleChatIdsForAndroid(wide, ws, layout)
-                        } else {
-                            listOf(it)
-                        }
-                        for (id in notificationCancelSessionIds(visibleIds.ifEmpty { listOf(it) })) {
-                            SupermuxMessagingService.cancelForSession(applicationContext, id)
-                        }
-                    }
-                }
-                // A tapped push carries the chat id. Resolve the owning workspace (Phase 4) and
-                // activate that chat view without PATCHing layout. Old broker / no workspace →
-                // session-only screen, same as before.
-                LaunchedEffect(currentIntent, workspaces, sessionHost) {
-                    val sid = currentIntent
-                        ?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
-                        ?.takeIf { it.isNotBlank() }
-                        ?: return@LaunchedEffect
-                    val hostId = sessionHost[sid] ?: vm.activeHost.value
-                    val owned = hostId?.let { vm.workspaceForSession(it, sid) }
-                    val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
-                    selected = sid
-                    if (tap.workspaceId != null && tap.activeViewId != null) {
-                        vm.setActiveView(tap.workspaceId, tap.activeViewId)
-                    }
-                }
                 // Report which chats are foreground so the broker suppresses a push (spec §11).
                 val lifecycleOwner = LocalLifecycleOwner.current
                 var appVisible by remember {
@@ -328,6 +295,50 @@ class MainActivity : ComponentActivity() {
                     }
                     lifecycleOwner.lifecycle.addObserver(obs)
                     onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+                }
+
+                LaunchedEffect(selected, workspaces, wide, appVisible, overlayOpen, homeRoute) {
+                    if (!appVisible || overlayOpen || !homeRoute) return@LaunchedEffect
+                    selected?.let {
+                        sessionHost[it]?.let(vm::setActiveHost)
+                        vm.ensureMessagesLoaded(it)
+                        val hostId = sessionHost[it] ?: vm.activeHost.value
+                        val ws = hostId?.let { h -> vm.workspaceForSession(h, it) }
+                        val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == it }
+                        if (ws != null && chatView != null) vm.setActiveView(ws.id, chatView.id)
+                        val layout = ws?.layout?.toDomainOrNull()
+                        val visibleIds = if (ws != null) {
+                            visibleChatIdsForAndroid(wide, ws, layout)
+                        } else {
+                            emptyList()
+                        }
+                        for (id in notificationCancelSessionIds(visibleIds, it)) {
+                            SupermuxMessagingService.cancelForSession(applicationContext, id)
+                        }
+                    }
+                }
+                // A tapped push carries the chat id. Resolve the owning workspace (Phase 4) and
+                // activate that chat view without PATCHing layout. Old broker / no workspace →
+                // session-only screen, same as before. Consume the extra once workspaces are
+                // ready so later workspaces/sessionHost updates cannot yank the user back.
+                var handledPushSessionId by rememberSaveable { mutableStateOf<String?>(null) }
+                LaunchedEffect(currentIntent, workspaces) {
+                    val extra = currentIntent
+                        ?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
+                    val decision = pushTapHandleDecision(extra, handledPushSessionId, workspaces.isNotEmpty())
+                    if (decision == PushTapHandle.Skip) return@LaunchedEffect
+                    val sid = extra!!
+                    val hostId = sessionHost[sid] ?: vm.activeHost.value
+                    val owned = hostId?.let { vm.workspaceForSession(it, sid) }
+                    val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
+                    selected = sid
+                    if (tap.workspaceId != null && tap.activeViewId != null) {
+                        vm.setActiveView(tap.workspaceId, tap.activeViewId)
+                    }
+                    if (decision == PushTapHandle.ApplyConsume) {
+                        handledPushSessionId = sid
+                        currentIntent?.removeExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
+                    }
                 }
                 val selectedWorkspace = selected?.let { sid ->
                     val hostId = sessionHost[sid] ?: vm.activeHost.value

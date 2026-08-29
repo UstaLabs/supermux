@@ -855,14 +855,23 @@ class AppViewModel(
 
     /**
      * Report the workspace viewing snapshot (or null = not looking at a workspace).
-     * A workspace switch publishes a non-visible frame first so the previous set
-     * cannot linger. Visible chat ids are marked read optimistically.
+     * A workspace switch publishes a non-visible frame to the host that owned
+     * the previous snapshot's ids first so that host's tracker cannot linger
+     * after switching to a workspace on another host. Visible chat ids are
+     * marked read optimistically.
      */
     fun updateViewing(snapshot: dev.supermux.android.host.WorkspaceViewingSnapshot?) {
-        val prevWorkspace = viewingSnapshot?.workspaceId
-        if (prevWorkspace != null && snapshot != null && prevWorkspace != snapshot.workspaceId) {
-            viewingSnapshot = null
-            sendViewingIfChanged()
+        val previous = viewingSnapshot
+        val clearOn = dev.supermux.android.host.previousHostClearSessionId(previous, snapshot)
+        if (clearOn != null || (previous != null && snapshot != null && previous.workspaceId != snapshot.workspaceId)) {
+            val target = clearOn?.let { clientFor(it) } ?: activeClient()
+            val clear = dev.supermux.android.host.framesForSnapshot(null)
+            viewModelScope.launch {
+                for (frame in clear) {
+                    runCatching { target?.send(frame) }
+                }
+            }
+            lastSentViewing = null
         }
         viewingSnapshot = snapshot
         val ids = snapshot?.takeIf { it.appForeground }?.visibleChatSessionIds.orEmpty()
