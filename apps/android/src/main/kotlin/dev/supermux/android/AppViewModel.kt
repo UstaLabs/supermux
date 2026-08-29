@@ -61,6 +61,9 @@ import dev.supermux.net.VncClient
 import dev.supermux.android.host.HostConnections
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.host.HostView
+import dev.supermux.android.host.WorkspaceHostState
+import dev.supermux.android.host.reduceWorkspaceFrame
+import dev.supermux.android.host.workspaceForSession as findWorkspaceForSession
 import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
 import dev.supermux.android.session.StagedUpload
@@ -84,6 +87,7 @@ import dev.supermux.proto.SendArgs
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.proto.WorkspaceDto
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
@@ -165,6 +169,8 @@ class AppViewModel(
     // derived from these buckets in store order.
     private val sessionsByHost = LinkedHashMap<String, List<SessionInfo>>()
     private val onlineHosts = HashMap<String, Boolean>()
+    /** Per-host workspace lists; published for the active host like [archivedSessions]. */
+    private val workspacesByHost = LinkedHashMap<String, WorkspaceHostState>()
 
     // ── Host-qualified per-session state (spec §5/§9: identity is (recordId, sessionId)) ──────────
     // Source of truth for the per-session maps, keyed by SessionKey "recordId␟sessionId" so two hosts
@@ -190,6 +196,13 @@ class AppViewModel(
     /** Archived sessions for the active host — folded into Settled on the task list. */
     private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
     val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions
+
+    /** Live workspaces for the active host (broker order / WorkspacesReordered). */
+    private val _workspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
+    val workspaces: StateFlow<List<WorkspaceDto>> = _workspaces
+    /** Archived workspaces for the active host. */
+    private val _archivedWorkspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
+    val archivedWorkspaces: StateFlow<List<WorkspaceDto>> = _archivedWorkspaces
 
     /** sessionId → owning host recordId (drives per-row badges + per-session routing). */
     private val _sessionHost = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -478,8 +491,22 @@ class AppViewModel(
             is ServerFrame.SessionGit -> patchSessionIn(recordId, f.session) { it.copy(git = f.git) }
             else -> {}
         }
+        reduceWorkspaceFrame(workspacesByHost[recordId] ?: WorkspaceHostState(), f)?.let { next ->
+            workspacesByHost[recordId] = next
+            if (recordId == _activeHost.value) publishWorkspaces()
+        }
         if (dirty) publishSessionState()
     }
+
+    private fun publishWorkspaces() {
+        val st = workspacesByHost[_activeHost.value] ?: WorkspaceHostState()
+        _workspaces.value = st.workspaces
+        _archivedWorkspaces.value = st.archivedWorkspaces
+    }
+
+    /** Workspace on the active host that currently hosts [sessionId] as a chat view. */
+    fun workspaceForSession(sessionId: String): WorkspaceDto? =
+        findWorkspaceForSession(_workspaces.value, sessionId)
 
     /** Composite key "recordId␟sessionId" for a frame from [recordId]. */
     private fun keyFor(recordId: String, sessionId: String): String = SessionKey.key(recordId, sessionId)
@@ -622,7 +649,10 @@ class AppViewModel(
 
     /** Route host-global operations (settings/agents/spawn/launcher pickers) to a chosen host —
      *  the launcher's host picker and opening a chat both call this. */
-    fun setActiveHost(recordId: String) { _activeHost.value = recordId }
+    fun setActiveHost(recordId: String) {
+        _activeHost.value = recordId
+        publishWorkspaces()
+    }
 
     // ── Add host (spec §3.4 / §5) ──────────────────────────────────────────────────
 
@@ -760,12 +790,14 @@ class AppViewModel(
     fun forgetHost(recordId: String) {
         store.remove(recordId)
         sessionsByHost.remove(recordId)
+        workspacesByHost.remove(recordId)
         onlineHosts.remove(recordId)
         snapshotStore.remove(recordId)   // spec §5: the cache is dropped when a host is forgotten
         dropHostState(recordId)          // and its host-qualified per-session state
         if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
         onHostsChanged()
         rebuildSessions()
+        publishWorkspaces()
         publishSessionState()
     }
 
