@@ -67,17 +67,17 @@ Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layou
 - [x] Update `SessionListRailUiContract` test-id vocabulary (shared across web/Android/iOS/desktop, `9868a02e`) — add workspace-row ids in lockstep with desktop's.
 - [x] Commit: `feat(android): workspace sidebar with grouping, reorder, archive and restore`.
 
-### Phase 3 — Hoist generic view logic out of `apps/desktop` and make `:ui` multiplatform
+### Phase 3 — Hoist generic view logic out of `apps/desktop` and make `:ui` multiplatform — DONE `35afa52c`, `949a4791`…`5572adf6` (2026-08-29)
 
 **Files:** `apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/{WorkspaceLayoutState,WorkspaceSession,WorkspaceFileOpen,WorkspaceSingletonView,WorkspaceKeepAlive,ViewHost(viewTitle only),DocumentStore,ExplorerState,DiffState,EditorState}.kt` → `apps/shared/src/commonMain/kotlin/dev/supermux/workspace/…` (pure state) and `apps/ui/src/commonMain/…` (composables). Desktop keeps thin imports. Android does not touch any of this yet; it consumes it in Phase 4.
 
-- [ ] **3a. `:ui` goes multiplatform.** `apps/ui/build.gradle.kts`: `kotlin.multiplatform` + `android.library`, `jvm()` + `androidTarget()`, move `src/main` → `src/commonMain`, `src/test` → `src/jvmTest`. Add `:ui:testDebugUnitTest` to `ci.yml` (the digest records CI silently not running `:ui:jvmTest` once — check the lane). `SplitSeam.kt`: `expect val ColResizeIcon: PointerIcon` / `RowResizeIcon`; jvm actual = current AWT cursors; android actual = `PointerIcon.Default`. `PaneHost.kt:621`: replace `java.util.UUID` with the shared id minter desktop uses for client-minted view ids (`3bfb400c`). Commit: `build(ui): add androidTarget and drop AWT/UUID from the pane layer`.
-- [ ] Move `WorkspaceLayoutState` (pending-edit rebase onto `workspace_changed`, 300 ms debounce, drop-on-refuse). Its tests move with it into `:shared` commonTest.
-- [ ] Move `WorkspaceKeepAliveCache` (LRU of 10 ids incl. active) + `WorkspaceKeepAliveHost`; Android's `SessionKeepAlive` becomes a caller.
-- [ ] Move `DocumentStore` (per-workspace, dirty tracking), `ExplorerState`, `DiffState`. (Android binds to them in Phase 4 and deletes `apps/android/.../editor/EditorState.kt` then.)
-- [ ] Move `viewTitle(view)` and `WorkspaceFileOpener` (transcript file-path → editor view, `55e2a15b`).
-- [ ] Desktop must be byte-for-byte behaviour-identical: run `:desktop:test` and the desktop hot-run smoke on the Mac (`./gradlew :desktop:hotRun --auto`).
-- [ ] Commit per moved unit: `refactor(shared): hoist WorkspaceLayoutState from desktop`, etc.
+- [x] **3a. `:ui` goes multiplatform.** `apps/ui/build.gradle.kts`: `kotlin.multiplatform` + `android.library`, `jvm()` + `androidTarget()`, move `src/main` → `src/commonMain`, `src/test` → `src/jvmTest`. Add `:ui:testDebugUnitTest` to `ci.yml` (the digest records CI silently not running `:ui:jvmTest` once — check the lane). `SplitSeam.kt`: `expect val ColResizeIcon: PointerIcon` / `RowResizeIcon`; jvm actual = current AWT cursors; android actual = `PointerIcon.Default`. `PaneHost.kt:621`: replace `java.util.UUID` with the shared id minter desktop uses for client-minted view ids (`3bfb400c`). Commit: `build(ui): add androidTarget and drop AWT/UUID from the pane layer`.
+- [x] Move `WorkspaceLayoutState` (pending-edit rebase onto `workspace_changed`, 300 ms debounce, drop-on-refuse). Its tests move with it into `:shared` commonTest.
+- [x] Move `WorkspaceKeepAliveCache` (LRU of 10 ids incl. active) + `WorkspaceKeepAliveHost`; Android's `SessionKeepAlive` becomes a caller.
+- [x] Move `DocumentStore` (per-workspace, dirty tracking), `ExplorerState`, `DiffState`. (Android binds to them in Phase 4 and deletes `apps/android/.../editor/EditorState.kt` then.)
+- [x] Move `viewTitle(view)` and `WorkspaceFileOpener` (transcript file-path → editor view, `55e2a15b`).
+- [x] Desktop must be byte-for-byte behaviour-identical: run `:desktop:test` and the desktop hot-run smoke on the Mac (`./gradlew :desktop:hotRun --auto`).
+- [x] Commit per moved unit: `refactor(shared): hoist WorkspaceLayoutState from desktop`, etc.
 
 ### Phase 4 — Views and the layout tree replace `PaneVisibility`
 
@@ -134,6 +134,10 @@ Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layou
 3. Split groups on a phone: **flatten** into one tab row (b).
 4. Tablet editor: **one WebView per editor pane** (a).
 5. Ordering: **hoist first** (a) — Phase 3 before Phase 4.
+
+## 3b. Follow-ups noted during execution
+- `apps/shared/.../workspace/NewViewKind.kt` carries user-facing labels ("Files", "In this pane") and desktop test tags in a Compose-free module. Keep `wire`/`placement`/`singleton` shared; move `label`/`tag` to each client's menu. (Phase 3b review, minor.)
+- Workspace rename on every client still renames the primary chat session (spec §9.5 rules 1-4); rule 5 (`patchWorkspace(name)` + `name_locked`) is implemented nowhere. Cross-platform follow-up.
 
 ## 4. Risks
 
