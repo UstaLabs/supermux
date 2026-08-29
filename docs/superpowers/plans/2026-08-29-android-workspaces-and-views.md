@@ -43,16 +43,16 @@ Keep untouched (Android-only assets that must survive): FCM push (`push/`), `sup
 
 Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layout → 5 continue → 6 presence → 7 verify. Each phase ends green on `:android:testDebugUnitTest` + `:android:assembleDebug` + `:shared:allTests` + `:ui:jvmTest` (and `:ui:testDebugUnitTest` once Android target exists), and is verified on the `pixel_api35` (phone) and `workspace_fold` (tablet, unfolded 2076×2152) emulators per the e2e recipe in `~/.mux/domains/claudemux.digest.md` ("e2e verdicts").
 
-### Phase 1 — Workspace state in `AppViewModel` (no UI change)
+### Phase 1 — Workspace state in `AppViewModel` (no UI change) — DONE `cc509b8b`…`a7baf560` (2026-08-29)
 
 **Files:** `apps/android/src/main/kotlin/dev/supermux/android/AppViewModel.kt`, `host/HostStores.kt`, `host/FleetModel.kt`, new `apps/android/src/test/kotlin/dev/supermux/android/WorkspaceReducerTest.kt`.
 
-- [ ] Add `workspaces: Map<String, WorkspaceDto>`, `archivedWorkspaces: Map<String, WorkspaceDto>`, `workspaceOrder: List<String>` to the per-host store (mirror the exact shape desktop uses in `DesktopAppState` — it was ported from this ViewModel, so the diff is small).
-- [ ] Seed from `ServerFrame.Snapshot.workspaces` / `.archivedWorkspaces`.
-- [ ] Reduce `WorkspaceAdded`, `WorkspaceChanged` (full replacement), `WorkspaceRemoved`, `WorkspacesReordered` (index = sort_order, same contract as `SessionsReordered`), `ViewAdded`, `ViewChanged`, `ViewRemoved`, `ViewMoved`.
-- [ ] Derive `workspaceForSession(sessionId)` (via `chatSessionIds` in `WorkspaceGrouping.kt`) so existing session-scoped screens can find their workspace without changing yet.
-- [ ] Tests: one reducer test per frame, plus the contract test pattern from `test(shared): cover sessions_reordered frame in contract test` (`d42d91e0`) for the 8 frames.
-- [ ] Commit: `feat(android): hold broker workspaces and views in AppViewModel`.
+- [x] Add `workspaces: Map<String, WorkspaceDto>`, `archivedWorkspaces: Map<String, WorkspaceDto>`, `workspaceOrder: List<String>` to the per-host store (mirror the exact shape desktop uses in `DesktopAppState` — it was ported from this ViewModel, so the diff is small).
+- [x] Seed from `ServerFrame.Snapshot.workspaces` / `.archivedWorkspaces`.
+- [x] Reduce `WorkspaceAdded`, `WorkspaceChanged` (full replacement), `WorkspaceRemoved`, `WorkspacesReordered` (index = sort_order, same contract as `SessionsReordered`), `ViewAdded`, `ViewChanged`, `ViewRemoved`, `ViewMoved`.
+- [x] Derive `workspaceForSession(sessionId)` (via `chatSessionIds` in `WorkspaceGrouping.kt`) so existing session-scoped screens can find their workspace without changing yet.
+- [x] Tests: one reducer test per frame, plus the contract test pattern from `test(shared): cover sessions_reordered frame in contract test` (`d42d91e0`) for the 8 frames.
+- [x] Commit: `feat(android): hold broker workspaces and views in AppViewModel`.
 
 ### Phase 2 — Sidebar shows workspaces (spec §13.6)
 
