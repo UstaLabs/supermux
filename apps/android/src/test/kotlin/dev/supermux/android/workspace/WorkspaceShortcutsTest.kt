@@ -34,29 +34,22 @@ class WorkspaceShortcutsTest {
     }
 
     @Test fun applyToggleSidebarFlipsCollapsed() {
-        val layout = WorkspaceLayout()
-        assertEquals(false, layout.sidebarCollapsed)
-        applyWorkspaceShortcut(WorkspaceShortcut.ToggleSidebar, layout, selectedId = null, onNewSession = {})
-        assertTrue(layout.sidebarCollapsed)
+        val sidebar = SidebarState()
+        assertEquals(false, sidebar.sidebarCollapsed)
+        applyWorkspaceShortcut(WorkspaceShortcut.ToggleSidebar, sidebar, selectedId = null, onNewSession = {})
+        assertTrue(sidebar.sidebarCollapsed)
     }
 
     @Test fun applyNewSessionInvokesCallback() {
         var called = false
-        applyWorkspaceShortcut(WorkspaceShortcut.NewSession, WorkspaceLayout(), selectedId = null) { called = true }
+        applyWorkspaceShortcut(WorkspaceShortcut.NewSession, SidebarState(), selectedId = null, onNewSession = { called = true })
         assertTrue(called)
     }
 
-    @Test fun applyPaneToggleUsesSelectedId() {
-        val layout = WorkspaceLayout()
-        applyWorkspaceShortcut(WorkspaceShortcut.ToggleEditor, layout, selectedId = "s1", onNewSession = {})
-        assertTrue(layout.panesFor("s1").editor)
-        assertFalse(layout.panesFor("s2").editor)
-    }
-
-    @Test fun applyPaneToggleNoOpsWithoutSelection() {
-        val layout = WorkspaceLayout()
-        // Should not throw and should not touch any session's panes.
-        applyWorkspaceShortcut(WorkspaceShortcut.ToggleEditor, layout, selectedId = null, onNewSession = {})
-        assertFalse(layout.panesFor("s1").editor)
+    @Test fun applyToggleSidebarTwiceRestores() {
+        val sidebar = SidebarState()
+        applyWorkspaceShortcut(WorkspaceShortcut.ToggleSidebar, sidebar, selectedId = null, onNewSession = {})
+        applyWorkspaceShortcut(WorkspaceShortcut.ToggleSidebar, sidebar, selectedId = null, onNewSession = {})
+        assertFalse(sidebar.sidebarCollapsed)
     }
 }
