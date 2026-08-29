@@ -1,6 +1,6 @@
 // File-tree / search UI state, split out of EditorState.kt (which still delegates to it, so every
 // call site is unchanged). Pure state — the loading itself lives in FileTree.kt.
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf

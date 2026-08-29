@@ -26,7 +26,7 @@
 //     constructor-injected one (iOS's `reload(path)` has no such parameter) — every Android call
 //     site happens to pass the same closure the state was built with, so the extra parameter is
 //     redundant there too; preserved here for exact parity, not because it's good API shape.
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf

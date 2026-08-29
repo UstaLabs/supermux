@@ -5,7 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import dev.supermux.desktop.editor.DocumentStore
+import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.ui.workspace.WorkspaceLayoutState
 import dev.supermux.ui.workspace.rememberWorkspaceLayout

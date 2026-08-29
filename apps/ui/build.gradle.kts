@@ -27,6 +27,7 @@ kotlin {
             // declaring the same dependencies itself.
             api(project(":shared"))
             api(compose.runtime)
+            implementation(libs.coroutines.core)
             api(compose.foundation)
             api(compose.material3)
             api(compose.ui)
@@ -38,6 +39,7 @@ kotlin {
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))
+            implementation(libs.coroutines.test)
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
             implementation(compose.desktop.currentOs)

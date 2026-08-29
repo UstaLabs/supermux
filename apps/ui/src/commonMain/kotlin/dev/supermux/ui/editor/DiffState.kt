@@ -2,7 +2,7 @@
 // every call site is unchanged). Landed in M4g-2 as a verbatim port of Android
 // EditorState.kt:44-47,138-155 (itself EditorState.swift:61-77) — keep in sync until a shared UI
 // module exists.
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf

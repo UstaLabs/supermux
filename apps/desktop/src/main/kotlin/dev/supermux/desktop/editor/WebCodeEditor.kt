@@ -60,6 +60,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.ui.editor.EditorState
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield

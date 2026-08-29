@@ -30,14 +30,14 @@ import dev.supermux.desktop.chat.ComposerExternalAttach
 import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
 import dev.supermux.desktop.editor.DiffPane
-import dev.supermux.desktop.editor.DiffState
-import dev.supermux.desktop.editor.DocumentStore
 import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.ExplorerPane
-import dev.supermux.desktop.editor.ExplorerState
 import dev.supermux.desktop.editor.FilePane
 import dev.supermux.desktop.editor.JcefRuntime
 import dev.supermux.desktop.editor.JcefState
+import dev.supermux.ui.editor.DiffState
+import dev.supermux.ui.editor.DocumentStore
+import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.desktop.theme.MonoFontFamily

@@ -50,15 +50,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.net.FsEntry
+import dev.supermux.ui.editor.ExplorerState
+import dev.supermux.ui.editor.TreeNode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-
-data class TreeNode(
-    val entry: FsEntry,
-    val path: String,
-    val children: MutableList<TreeNode>? = null,
-    var loaded: Boolean = false,
-)
 
 internal fun childPath(parent: String, name: String): String =
     if (parent == ".") name else "$parent/$name"

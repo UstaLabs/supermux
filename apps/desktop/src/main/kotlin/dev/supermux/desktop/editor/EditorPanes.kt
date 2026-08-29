@@ -64,6 +64,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.LocalPanes
+import dev.supermux.ui.editor.DiffState
+import dev.supermux.ui.editor.DocumentStore
+import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.desktop.theme.Space
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
