@@ -42,31 +42,18 @@ import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ChatScreen
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.host.workspaceForSession
+import dev.supermux.android.workspace.AndroidWorkspaceKeepAliveHost
 import dev.supermux.android.workspace.WorkspaceScreen
 import dev.supermux.android.workspace.rememberVisitedWorkspaces
 import dev.supermux.net.ArchivedDto
-import dev.supermux.net.GitOpResult
 import dev.supermux.net.ProxyDto
+import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.asSettledSession
-
-/** Short human text for a git-op result (parity with iOS SessionChrome.gitResultText). */
-private fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
-    null -> "Failed"
-    "pushed" -> "Pushed"
-    "up_to_date" -> "Up to date"
-    "clean" -> "Pulled"
-    "rejected_non_ff" -> "Push rejected — pull first"
-    "conflict" -> "Conflict in ${r.files.size} file(s)"
-    "dirty" -> "Uncommitted changes block the pull"
-    "auth_failed" -> "Auth failed"
-    "error" -> r.message ?: "Error"
-    else -> r.status
-}
 
 /**
  * Tracks session ids the user has opened; pruned when the broker removes a live session.
@@ -144,27 +131,28 @@ fun SessionKeepAlivePhoneHost(
     val selectedWorkspace = selected?.let { workspaceForSession(workspaces, it) }
     val liveWorkspaceIds = remember(workspaces) { workspaces.map { it.id }.toSet() }
     val retainedWorkspaces = rememberVisitedWorkspaces(selectedWorkspace?.id, liveWorkspaceIds)
-    val recordId = vm.activeHost.collectAsState().value.orEmpty()
+    val workspaceBySession = remember(workspaces) {
+        workspaces.flatMap { ws ->
+            ws.views.mapNotNull { v -> v.chatSessionId()?.let { it to ws } }
+        }.toMap()
+    }
 
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
-            retainedWorkspaces.forEach { workspaceId ->
-                val ws = workspaces.firstOrNull { it.id == workspaceId } ?: return@forEach
-                val visible = workspaceId == selectedWorkspace?.id
-                key(workspaceId) {
-                    Box(Modifier.keepAlivePanel(visible)) {
-                        WorkspaceScreen(
-                            workspace = ws,
-                            vm = vm,
-                            recordId = recordId,
-                            isWorkspaceWidth = false,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                }
+            AndroidWorkspaceKeepAliveHost(
+                activeWorkspaceId = selectedWorkspace?.id,
+                retainedIds = retainedWorkspaces,
+                workspaces = workspaces,
+            ) { ws, _ ->
+                WorkspaceScreen(
+                    workspace = ws,
+                    vm = vm,
+                    isWorkspaceWidth = false,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             visited.forEach { sessionId ->
-                if (workspaceForSession(workspaces, sessionId) != null) return@forEach
+                if (workspaceBySession[sessionId] != null) return@forEach
                 val session = resolveSession(sessionId, sessions, archived) ?: return@forEach
                 val visible = sessionId == selected && selectedWorkspace == null
                 key(sessionId) {
@@ -295,28 +283,29 @@ fun SessionKeepAliveTabletHost(
     val selectedWorkspace = selected?.let { workspaceForSession(workspaces, it) }
     val liveWorkspaceIds = remember(workspaces) { workspaces.map { it.id }.toSet() }
     val retainedWorkspaces = rememberVisitedWorkspaces(selectedWorkspace?.id, liveWorkspaceIds)
-    val recordId = vm.activeHost.collectAsState().value.orEmpty()
+    val workspaceBySession = remember(workspaces) {
+        workspaces.flatMap { ws ->
+            ws.views.mapNotNull { v -> v.chatSessionId()?.let { it to ws } }
+        }.toMap()
+    }
     Box(modifier.fillMaxSize()) {
         if (visited.isEmpty() && selected == null && retainedWorkspaces.isEmpty()) {
             return@Box
         }
-        retainedWorkspaces.forEach { workspaceId ->
-            val ws = workspaces.firstOrNull { it.id == workspaceId } ?: return@forEach
-            val visible = workspaceId == selectedWorkspace?.id
-            key(workspaceId) {
-                Box(Modifier.keepAlivePanel(visible)) {
-                    WorkspaceScreen(
-                        workspace = ws,
-                        vm = vm,
-                        recordId = recordId,
-                        isWorkspaceWidth = wide,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            }
+        AndroidWorkspaceKeepAliveHost(
+            activeWorkspaceId = selectedWorkspace?.id,
+            retainedIds = retainedWorkspaces,
+            workspaces = workspaces,
+        ) { ws, _ ->
+            WorkspaceScreen(
+                workspace = ws,
+                vm = vm,
+                isWorkspaceWidth = wide,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
         visited.forEach { sessionId ->
-            if (workspaceForSession(workspaces, sessionId) != null) return@forEach
+            if (workspaceBySession[sessionId] != null) return@forEach
             val session = resolveSession(sessionId, sessions, archived) ?: return@forEach
             val visible = sessionId == selected && selectedWorkspace == null
             key(sessionId) {

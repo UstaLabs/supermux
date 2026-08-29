@@ -3,14 +3,12 @@ package dev.supermux.android.workspace
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.supermux.android.ui.keepAlivePanel
+import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.WorkspaceKeepAliveCache
 
 @Composable
@@ -19,19 +17,30 @@ fun rememberVisitedWorkspaces(
     liveWorkspaceIds: Set<String>,
     cache: WorkspaceKeepAliveCache = remember { WorkspaceKeepAliveCache() },
 ): Set<String> {
-    var retained by remember { mutableStateOf(setOf<String>()) }
-    LaunchedEffect(selected, liveWorkspaceIds) {
-        retained = keepAliveWorkspaceIds(cache, selected, liveWorkspaceIds).toSet()
-    }
-    return retained
+    val liveSnapshot = liveWorkspaceIds.toSet()
+    val retained = cache.preview(selected, liveSnapshot)
+    SideEffect { cache.commit(retained) }
+    return retained.toSet()
+}
+
+@Composable
+fun rememberVisitedViews(
+    selected: String?,
+    liveViewIds: Set<String>,
+    cache: WorkspaceKeepAliveCache = remember { WorkspaceKeepAliveCache(maxSize = 3) },
+): Set<String> {
+    val liveSnapshot = liveViewIds.toSet()
+    val retained = cache.preview(selected, liveSnapshot)
+    SideEffect { cache.commit(retained) }
+    return retained.toSet()
 }
 
 @Composable
 fun AndroidWorkspaceKeepAliveHost(
     activeWorkspaceId: String?,
     retainedIds: Set<String>,
-    workspaces: List<dev.supermux.proto.WorkspaceDto>,
-    content: @Composable (workspace: dev.supermux.proto.WorkspaceDto, visible: Boolean) -> Unit,
+    workspaces: List<WorkspaceDto>,
+    content: @Composable (workspace: WorkspaceDto, visible: Boolean) -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         retainedIds.forEach { id ->

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,19 +29,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import dev.supermux.android.AppViewModel
-import dev.supermux.net.AddViewBody
+import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.workspace.WorkspaceSession
-import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
+import dev.supermux.workspace.NewViewPlacement
+import dev.supermux.workspace.addViewToGroup
+import dev.supermux.workspace.firstGroupId
+import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.setActiveViewInGroup
+import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.workspace.viewTitle
-import kotlinx.coroutines.launch
+import java.util.UUID
 
 /**
  * Broker-driven workspace body. Phone flattens every view to a tab row and never PATCHes
@@ -50,16 +55,16 @@ import kotlinx.coroutines.launch
 fun WorkspaceScreen(
     workspace: WorkspaceDto,
     vm: AppViewModel,
-    recordId: String,
     isWorkspaceWidth: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val session = rememberWorkspaceSession(workspace, vm, recordId, scope)
+    val newId = remember { { UUID.randomUUID().toString() } }
+    val session = rememberWorkspaceSession(workspace, vm, isWorkspaceWidth, scope, newId)
     if (isWorkspaceWidth) {
-        TabletWorkspace(workspace, session, vm, modifier)
+        TabletWorkspace(workspace, session, vm, newId, modifier)
     } else {
-        PhoneWorkspace(workspace, session, vm, modifier)
+        PhoneWorkspace(workspace, session, vm, newId, modifier)
     }
 }
 
@@ -69,6 +74,7 @@ private fun PhoneWorkspace(
     workspace: WorkspaceDto,
     session: WorkspaceSession,
     vm: AppViewModel,
+    newId: () -> String,
     modifier: Modifier,
 ) {
     val layout = workspace.layout.toDomainOrNull() ?: session.layoutSync.tree
@@ -76,6 +82,11 @@ private fun PhoneWorkspace(
     val viewsById = session.viewsById
     var showAdd by remember { mutableStateOf(false) }
     var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+
+    fun closeOrConfirm(view: ViewDto) {
+        if (closeNeedsConfirm(view)) closeCandidate = view
+        else vm.closeWorkspaceView(workspace.id, view.id)
+    }
 
     Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
         if (tabs.viewIds.isNotEmpty()) {
@@ -93,8 +104,7 @@ private fun PhoneWorkspace(
                         icon = {
                             IconButton(onClick = {
                                 val v = view ?: return@IconButton
-                                if (closeNeedsConfirm(v)) closeCandidate = v
-                                else vm.closeWorkspaceView(workspace.id, id)
+                                closeOrConfirm(v)
                             }) {
                                 Icon(Icons.Filled.Close, contentDescription = "Close $title")
                             }
@@ -108,19 +118,30 @@ private fun PhoneWorkspace(
                 )
             }
         }
-        val selected = tabs.selectedId?.let { viewsById[it] }
+        val liveIds = tabs.viewIds.toSet()
+        // Keep the last 3 visited views composed (hidden) so WebView/terminal PTY survive tab
+        // switches. Evict LRU beyond 3 — more would pin too many WebViews on a phone.
+        val retained = rememberVisitedViews(tabs.selectedId, liveIds)
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (selected != null) {
-                AndroidViewHost(
-                    workspace = workspace,
-                    view = selected,
-                    session = session,
-                    vm = vm,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
+            if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("No views", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                retained.forEach { id ->
+                    val view = viewsById[id] ?: return@forEach
+                    key(view.id) {
+                        Box(Modifier.keepAlivePanel(id == tabs.selectedId)) {
+                            AndroidViewHost(
+                                workspace = workspace,
+                                view = view,
+                                session = session,
+                                vm = vm,
+                                wide = false,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -132,29 +153,21 @@ private fun PhoneWorkspace(
                 TextButton(
                     onClick = {
                         showAdd = false
-                        addPhoneView(workspace, session, vm, kind)
+                        addPhoneView(workspace, session, vm, kind, newId)
                     },
                     modifier = Modifier.fillMaxWidth().testTag("tab-add-view-${kind.tag}"),
                 ) { Text(kind.label) }
             }
         }
     }
-    closeCandidate?.let { view ->
-        AlertDialog(
-            onDismissRequest = { closeCandidate = null },
-            title = { Text("Close ${viewTitle(view)}?") },
-            text = { Text("This ends the work behind this view.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.closeWorkspaceView(workspace.id, view.id)
-                    closeCandidate = null
-                }) { Text("Close") }
-            },
-            dismissButton = {
-                TextButton(onClick = { closeCandidate = null }) { Text("Cancel") }
-            },
-        )
-    }
+    CloseViewDialog(
+        view = closeCandidate,
+        onDismiss = { closeCandidate = null },
+        onConfirm = { view ->
+            vm.closeWorkspaceView(workspace.id, view.id)
+            closeCandidate = null
+        },
+    )
 }
 
 private fun addPhoneView(
@@ -162,6 +175,7 @@ private fun addPhoneView(
     session: WorkspaceSession,
     vm: AppViewModel,
     kind: NewViewKind,
+    newId: () -> String,
 ) {
     val tree = workspace.layout.toDomainOrNull() ?: session.layoutSync.tree
     val open = openSingletonView(tree, session.viewsById, kind)
@@ -169,7 +183,13 @@ private fun addPhoneView(
         vm.setActiveView(workspace.id, open.first)
         return
     }
-    val id = java.util.UUID.randomUUID().toString()
+    val id = newId()
+    session.provisionalViews[id] = ViewDto(
+        id = id,
+        workspaceId = workspace.id,
+        kind = kind.wire,
+        state = addViewState(kind, System.currentTimeMillis()),
+    )
     vm.addWorkspaceView(workspace.id, kind.wire, addViewState(kind, System.currentTimeMillis()), id)
 }
 
@@ -178,19 +198,25 @@ private fun TabletWorkspace(
     workspace: WorkspaceDto,
     session: WorkspaceSession,
     vm: AppViewModel,
+    newId: () -> String,
     modifier: Modifier,
 ) {
     val layoutSync = session.layoutSync
     val viewsById = session.viewsById
     var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
+
+    fun closeOrConfirm(view: ViewDto) {
+        if (closeNeedsConfirm(view)) closeCandidate = view
+        else vm.closeWorkspaceView(workspace.id, view.id)
+    }
+
     PaneHost(
         layout = layoutSync.tree,
         onEdit = layoutSync::edit,
         titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
         onCloseView = { id ->
             val v = viewsById[id] ?: return@PaneHost
-            if (closeNeedsConfirm(v)) closeCandidate = v
-            else vm.closeWorkspaceView(workspace.id, id)
+            closeOrConfirm(v)
         },
         tabSlot = { itemId, state ->
             DefaultTabChip(
@@ -200,20 +226,15 @@ private fun TabletWorkspace(
                 labelFont = androidx.compose.ui.text.font.FontFamily.Monospace,
                 onClose = { id ->
                     val v = viewsById[id] ?: return@DefaultTabChip
-                    if (closeNeedsConfirm(v)) closeCandidate = v
-                    else vm.closeWorkspaceView(workspace.id, id)
+                    closeOrConfirm(v)
                 },
             )
         },
         addSlot = { groupId ->
             PhoneAddChip(
-                onPick = { kind ->
-                    val open = openSingletonView(layoutSync.tree, viewsById, kind)
-                    if (open != null) {
-                        layoutSync.edit { setActiveViewInGroup(it, open.second, open.first) }
-                    } else {
-                        vm.addWorkspaceView(workspace.id, kind.wire, addViewState(kind, System.currentTimeMillis()))
-                    }
+                wide = true,
+                onPick = { kind, placement ->
+                    addTabletView(workspace, session, vm, kind, placement, groupId, newId)
                 },
             )
         },
@@ -224,44 +245,122 @@ private fun TabletWorkspace(
         content = { viewId ->
             val view = viewsById[viewId]
             if (view == null) UnknownViewHint("view")
-            else AndroidViewHost(workspace, view, session, vm, Modifier.fillMaxSize())
+            else key(view.id) {
+                AndroidViewHost(workspace, view, session, vm, Modifier.fillMaxSize(), wide = true)
+            }
         },
     )
-    closeCandidate?.let { view ->
-        AlertDialog(
-            onDismissRequest = { closeCandidate = null },
-            title = { Text("Close ${viewTitle(view)}?") },
-            text = { Text("This ends the work behind this view.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.closeWorkspaceView(workspace.id, view.id)
-                    closeCandidate = null
-                }) { Text("Close") }
-            },
-            dismissButton = {
-                TextButton(onClick = { closeCandidate = null }) { Text("Cancel") }
-            },
-        )
+    CloseViewDialog(
+        view = closeCandidate,
+        onDismiss = { closeCandidate = null },
+        onConfirm = { view ->
+            vm.closeWorkspaceView(workspace.id, view.id)
+            closeCandidate = null
+        },
+    )
+}
+
+internal fun addTabletView(
+    workspace: WorkspaceDto,
+    session: WorkspaceSession,
+    vm: AppViewModel,
+    kind: NewViewKind,
+    placement: NewViewPlacement,
+    groupId: String,
+    newId: () -> String,
+) {
+    val layoutSync = session.layoutSync
+    val viewsById = session.viewsById
+    val open = openSingletonView(layoutSync.tree, viewsById, kind)
+    if (open != null) {
+        layoutSync.edit { setActiveViewInGroup(it, open.second, open.first) }
+        return
     }
+    val id = newId()
+    val state = addViewState(kind, System.currentTimeMillis())
+    session.provisionalViews[id] = ViewDto(
+        id = id,
+        workspaceId = workspace.id,
+        kind = kind.wire,
+        state = state,
+    )
+    vm.addWorkspaceView(workspace.id, kind.wire, state, id, groupId)
+    if (placement != NewViewPlacement.HERE) {
+        val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
+        val newGroupId = newId()
+        layoutSync.edit { tree ->
+            when (val owner = groupIdOf(tree, id) ?: firstGroupId(tree)) {
+                newGroupId, null -> tree
+                else -> {
+                    val withView = if (groupIdOf(tree, id) == null) addViewToGroup(tree, owner, id) else tree
+                    splitGroup(withView, owner, id, dir, newGroupId)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloseViewDialog(
+    view: ViewDto?,
+    onDismiss: () -> Unit,
+    onConfirm: (ViewDto) -> Unit,
+) {
+    view ?: return
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Close ${viewTitle(view)}?") },
+        text = { Text("This ends the work behind this view.") },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(view) }) { Text("Close") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PhoneAddChip(onPick: (NewViewKind) -> Unit) {
+private fun PhoneAddChip(
+    wide: Boolean = false,
+    onPick: (NewViewKind, NewViewPlacement) -> Unit,
+) {
     var show by remember { mutableStateOf(false) }
+    var pendingKind by remember { mutableStateOf<NewViewKind?>(null) }
     IconButton(onClick = { show = true }, modifier = Modifier.testTag("tab-add")) {
         Icon(Icons.Filled.Add, contentDescription = "Add view")
     }
     if (show) {
-        ModalBottomSheet(onDismissRequest = { show = false }) {
-            phoneAddKinds().forEach { kind ->
-                TextButton(
-                    onClick = {
-                        show = false
-                        onPick(kind)
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("tab-add-view-${kind.tag}"),
-                ) { Text(kind.label) }
+        ModalBottomSheet(onDismissRequest = { show = false; pendingKind = null }) {
+            val kind = pendingKind
+            if (wide && kind != null) {
+                NewViewPlacement.entries.forEach { placement ->
+                    TextButton(
+                        onClick = {
+                            show = false
+                            pendingKind = null
+                            onPick(kind, placement)
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag(
+                            "tab-add-view-${kind.tag}-${placement.name.lowercase()}",
+                        ),
+                    ) { Text(placement.label) }
+                }
+            } else {
+                phoneAddKinds().forEach { k ->
+                    TextButton(
+                        onClick = {
+                            if (wide) {
+                                pendingKind = k
+                            } else {
+                                show = false
+                                onPick(k, NewViewPlacement.HERE)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("tab-add-view-${k.tag}"),
+                    ) { Text(k.label) }
+                }
             }
         }
     }
