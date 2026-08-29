@@ -30,14 +30,9 @@ import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.FsEntry
+import dev.supermux.ui.editor.ExplorerState
+import dev.supermux.workspace.TreeNode
 import kotlinx.coroutines.launch
-
-data class TreeNode(
-    val entry: FsEntry,
-    val path: String,
-    val children: MutableList<TreeNode>? = null,
-    var loaded: Boolean = false,
-)
 
 internal fun childPath(parent: String, name: String): String =
     if (parent == ".") name else "$parent/$name"
@@ -51,7 +46,7 @@ internal fun List<FsEntry>.sortedForTree(): List<FsEntry> =
 @Composable
 fun FileTree(
     fsList: suspend (String) -> List<FsEntry>,
-    editor: EditorState,
+    explorer: ExplorerState,
     onOpenFile: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -67,31 +62,31 @@ fun FileTree(
         }
 
     LaunchedEffect(Unit) {
-        if (!editor.treeRootLoaded) {
-            editor.treeRoot.clear()
-            editor.treeRoot.addAll(loadDir("."))
-            editor.treeRootLoaded = true
+        if (!explorer.treeRootLoaded) {
+            explorer.treeRoot.clear()
+            explorer.treeRoot.addAll(loadDir("."))
+            explorer.treeRootLoaded = true
         }
     }
 
     fun toggleDir(node: TreeNode) {
-        if (editor.expandedPaths.contains(node.path)) {
-            editor.expandedPaths = editor.expandedPaths - node.path
+        if (explorer.expandedPaths.contains(node.path)) {
+            explorer.expandedPaths = explorer.expandedPaths - node.path
             return
         }
         if (!node.loaded && node.children != null) {
-            editor.treeLoadingPaths = editor.treeLoadingPaths + node.path
+            explorer.treeLoadingPaths = explorer.treeLoadingPaths + node.path
             scope.launch {
                 try {
                     node.children!!.clear()
                     node.children!!.addAll(loadDir(node.path))
                     node.loaded = true
                 } finally {
-                    editor.treeLoadingPaths = editor.treeLoadingPaths - node.path
+                    explorer.treeLoadingPaths = explorer.treeLoadingPaths - node.path
                 }
             }
         }
-        editor.expandedPaths = editor.expandedPaths + node.path
+        explorer.expandedPaths = explorer.expandedPaths + node.path
     }
 
     fun onNodeClick(node: TreeNode) {
@@ -99,12 +94,12 @@ fun FileTree(
     }
 
     LazyColumn(modifier.fillMaxSize()) {
-        items(editor.treeRoot, key = { it.path }) { node ->
+        items(explorer.treeRoot, key = { it.path }) { node ->
             TreeNodeRow(
                 node = node,
                 depth = 0,
-                expanded = editor.expandedPaths,
-                loading = editor.treeLoadingPaths,
+                expanded = explorer.expandedPaths,
+                loading = explorer.treeLoadingPaths,
                 onClick = { onNodeClick(it) },
             )
         }
@@ -171,8 +166,9 @@ private fun TreeNodeRow(
         )
     }
 
-    if (isDir && isOpen && node.children != null) {
-        node.children.forEach { child ->
+    val children = node.children
+    if (isDir && isOpen && children != null) {
+        children.forEach { child ->
             TreeNodeRow(
                 node = child,
                 depth = depth + 1,

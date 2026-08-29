@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.first
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AddCommentBody
+import dev.supermux.net.AddViewBody
+import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -1500,6 +1502,57 @@ class AppViewModel(
     }
 
     // ── Editor filesystem ──────────────────────────────────────────────────────
+
+    fun setActiveView(workspaceId: String, viewId: String) {
+        val recordId = _activeHost.value ?: return
+        val st = workspacesByHost[recordId] ?: return
+        workspacesByHost[recordId] = st.copy(
+            workspaces = st.workspaces.map { w ->
+                if (w.id == workspaceId) w.copy(activeViewId = viewId) else w
+            },
+        )
+        publishWorkspaces()
+        viewModelScope.launch {
+            runCatching {
+                activeApi()?.patchWorkspace(workspaceId, PatchWorkspaceBody(activeViewId = viewId))
+            }
+        }
+    }
+
+    fun addWorkspaceView(workspaceId: String, kind: String, state: kotlinx.serialization.json.JsonObject, id: String? = null) {
+        viewModelScope.launch { addView(workspaceId, AddViewBody(kind = kind, state = state, id = id)) }
+    }
+
+    suspend fun addView(workspaceId: String, body: AddViewBody): dev.supermux.proto.ViewDto? =
+        runCatching { activeApi()?.addView(workspaceId, body) }.getOrNull()
+
+    fun closeWorkspaceView(workspaceId: String, viewId: String) {
+        viewModelScope.launch {
+            runCatching { activeApi()?.closeView(workspaceId, viewId) }
+        }
+    }
+
+    suspend fun patchWorkspaceLayout(workspaceId: String, layout: dev.supermux.proto.LayoutNodeDto) {
+        runCatching { activeApi()?.patchWorkspace(workspaceId, PatchWorkspaceBody(layout = layout)) }
+    }
+
+    suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
+        runCatching { activeApi()?.workspaceFsList(workspaceId, path) }.getOrNull() ?: emptyList()
+    suspend fun workspaceFsRead(workspaceId: String, path: String): Result<String> =
+        runCatching { activeApi()?.workspaceFsRead(workspaceId, path) ?: error("host offline") }
+    suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean =
+        runCatching { activeApi()?.workspaceFsWrite(workspaceId, path, content) ?: false }.getOrDefault(false)
+    suspend fun workspaceFsSearch(workspaceId: String, q: String): List<FsSearchResult> =
+        runCatching { activeApi()?.workspaceFsSearch(workspaceId, q) }.getOrNull() ?: emptyList()
+    suspend fun workspaceFsDiff(workspaceId: String, base: String? = null): FsDiffResult? =
+        runCatching { activeApi()?.workspaceFsDiff(workspaceId, base) }.getOrNull()
+    suspend fun workspaceFsRefs(workspaceId: String): FsRefsResult? =
+        runCatching { activeApi()?.workspaceFsRefs(workspaceId) }.getOrNull()
+
+    fun connectWorkspaceTerminal(workspaceId: String, terminalId: String): TerminalClient {
+        val c = activeConn()
+        return TerminalClient(c?.baseUrl ?: "", c?.token ?: "", http, sessionId = "", terminalId = terminalId, workspaceId = workspaceId)
+    }
 
     suspend fun fsList(sessionId: String, path: String): List<FsEntry> =
         runCatching { apiFor(sessionId)?.fsList(sessionId, path) }.getOrNull() ?: emptyList()

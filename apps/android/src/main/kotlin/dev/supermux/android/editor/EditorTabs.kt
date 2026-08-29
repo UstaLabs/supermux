@@ -30,10 +30,11 @@ import dev.supermux.android.theme.LocalPanes
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.editor.Document
 
 @Composable
 fun EditorTabs(
-    tabs: List<EditorTab>,
+    tabs: List<Document>,
     activeTabPath: String?,
     loadingPath: String? = null,
     isDirty: (String) -> Boolean,

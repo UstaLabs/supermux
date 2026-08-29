@@ -125,7 +125,7 @@ fun EditorPanel(
     // edit on each pulse. fsRead/fsWrite only ever call vm.<fs>(session.id, …) and session.id
     // is invariant for a given sessionId, so capturing the first instances stays correct.
     val editor = remember(sessionId) {
-        EditorState(fsRead, fsWrite, scope)
+        dev.supermux.ui.editor.EditorState(fsRead, fsWrite, scope)
     }
 
     if (editor.treeVisible == null) {
@@ -393,7 +393,7 @@ fun EditorPanel(
                                 .fillMaxHeight()
                                 .background(cs.surfaceContainerHigh),
                         ) {
-                            FileTree(fsList = fsList, editor = editor, onOpenFile = { revealFile(it) })
+                            FileTree(fsList = fsList, explorer = editor.explorer, onOpenFile = { revealFile(it) })
                         }
                         Box(
                             Modifier
@@ -558,7 +558,7 @@ fun EditorPanel(
                                 .width(280.dp)
                                 .background(cs.surfaceContainerHigh),
                         ) {
-                            FileTree(fsList = fsList, editor = editor, onOpenFile = { revealFile(it) })
+                            FileTree(fsList = fsList, explorer = editor.explorer, onOpenFile = { revealFile(it) })
                         }
                     }
                 }

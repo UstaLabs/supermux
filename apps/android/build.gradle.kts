@@ -93,6 +93,7 @@ kotlin {
 }
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":ui"))
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.androidx.security.crypto)
