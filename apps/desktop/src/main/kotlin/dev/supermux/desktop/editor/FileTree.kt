@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.net.FsEntry
 import dev.supermux.ui.editor.ExplorerState
-import dev.supermux.ui.editor.TreeNode
+import dev.supermux.workspace.TreeNode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 

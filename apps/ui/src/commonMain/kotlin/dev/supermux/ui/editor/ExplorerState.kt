@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.supermux.workspace.TreeNode
 
 /** File tree UI state — survives panel / session switches while composed. */
 class ExplorerState {

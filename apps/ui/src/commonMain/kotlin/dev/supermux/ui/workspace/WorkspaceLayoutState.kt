@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import dev.supermux.proto.LayoutNodeDto
+import dev.supermux.ui.panes.PaneHost
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.normalizeLayout

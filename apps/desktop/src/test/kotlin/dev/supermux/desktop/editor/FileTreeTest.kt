@@ -2,7 +2,7 @@ package dev.supermux.desktop.editor
 
 import dev.supermux.net.FsEntry
 import dev.supermux.ui.editor.EditorState
-import dev.supermux.ui.editor.TreeNode
+import dev.supermux.workspace.TreeNode
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test

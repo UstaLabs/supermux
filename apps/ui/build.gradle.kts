@@ -27,8 +27,8 @@ kotlin {
             // declaring the same dependencies itself.
             api(project(":shared"))
             api(compose.runtime)
-            implementation(libs.coroutines.core)
-            implementation(libs.serialization.json)
+            api(libs.coroutines.core)
+            api(libs.serialization.json)
             api(compose.foundation)
             api(compose.material3)
             api(compose.ui)

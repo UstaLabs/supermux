@@ -1,4 +1,4 @@
-package dev.supermux.ui.editor
+package dev.supermux.workspace
 
 import dev.supermux.net.FsEntry
 
