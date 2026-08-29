@@ -145,7 +145,7 @@ fun SessionKeepAlivePhoneHost(
                 val id = vm.newChatInWorkspace(recordId, w.id, w.workdir)
                 onSelect(id)
             }.onFailure {
-                Toast.makeText(context, it.message ?: "Failed to create session", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, spawnFailureMessage(it), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -162,14 +162,16 @@ fun SessionKeepAlivePhoneHost(
                 activeWorkspaceId = selectedWorkspace?.id,
                 retainedIds = retainedWorkspaces,
                 workspaces = workspaces,
-            ) { ws, _ ->
-                WorkspaceScreen(
-                    workspace = ws,
-                    vm = vm,
-                    isWorkspaceWidth = false,
-                    modifier = Modifier.fillMaxSize(),
-                    onSelectSession = onSelect,
-                )
+            ) { ws, visible ->
+                PhoneWorkspaceBackLayer(visible = visible, onBack = onClearSelected) {
+                    WorkspaceScreen(
+                        workspace = ws,
+                        vm = vm,
+                        isWorkspaceWidth = false,
+                        modifier = Modifier.fillMaxSize(),
+                        onSelectSession = onSelect,
+                    )
+                }
             }
             visited.forEach { sessionId ->
                 if (workspaceBySession[sessionId] != null) return@forEach
@@ -361,6 +363,53 @@ fun SessionKeepAliveTabletHost(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PhoneWorkspaceBackLayer(
+    visible: Boolean,
+    onBack: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    var gestureProgress by remember { mutableFloatStateOf(0f) }
+    if (visible) {
+        val imeVisible = WindowInsets.isImeVisible
+        // Editor panes inside the workspace register their own BackHandler; that consumes first
+        // so we do not pass editorConsumesBack here.
+        val backAction = phoneLayerBackAction(
+            wide = false,
+            editorConsumesBack = false,
+            imeVisible = imeVisible,
+        )
+        val focusManager = LocalFocusManager.current
+        val keyboardController = LocalSoftwareKeyboardController.current
+        BackHandler(enabled = backAction == PhoneLayerBackAction.HideIme) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+        BackHandler(enabled = backAction == PhoneLayerBackAction.ClearSelection) { onBack() }
+        PredictiveBackHandler(enabled = backAction == PhoneLayerBackAction.ClearSelection) { backEvents ->
+            try {
+                backEvents.collect { event -> gestureProgress = event.progress }
+                onBack()
+            } catch (_: Exception) {
+            }
+            gestureProgress = 0f
+        }
+    }
+    Box(
+        Modifier.graphicsLayer {
+            if (visible) {
+                val scale = 1f - gestureProgress * 0.05f
+                scaleX = scale
+                scaleY = scale
+                alpha = 1f - gestureProgress * 0.3f
+            }
+        },
+    ) {
+        content()
+    }
+}
+
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun SessionChatLayer(
@@ -409,17 +458,18 @@ private fun SessionChatLayer(
         // showSoftKeyboard path (TerminalPanel watches isImeVisible → clears wantKeyboard).
         // Predictive exit gesture stays disabled while the IME is up so Back never animates out.
         val imeVisible = WindowInsets.isImeVisible
+        val backAction = phoneLayerBackAction(wide, editorConsumesBack, imeVisible)
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
-        BackHandler(enabled = !editorConsumesBack && !wide && imeVisible) {
+        BackHandler(enabled = backAction == PhoneLayerBackAction.HideIme) {
             focusManager.clearFocus(force = true)
             keyboardController?.hide()
         }
         // Phone: Back returns to the session list (onBack). On the wide/tablet path onBack is a
         // no-op (the list is always on-screen), so DON'T consume Back there — let it background the
         // app. The editor pane keeps its own Back-consume via its own BackHandler + editorConsumesBack.
-        BackHandler(enabled = !editorConsumesBack && !wide && !imeVisible) { onBack() }
-        PredictiveBackHandler(enabled = !editorConsumesBack && !wide && !imeVisible) { backEvents ->
+        BackHandler(enabled = backAction == PhoneLayerBackAction.ClearSelection) { onBack() }
+        PredictiveBackHandler(enabled = backAction == PhoneLayerBackAction.ClearSelection) { backEvents ->
             try {
                 backEvents.collect { event -> gestureProgress = event.progress }
                 onBack()
