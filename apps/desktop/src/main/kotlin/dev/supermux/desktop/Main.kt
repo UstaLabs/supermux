@@ -18,7 +18,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
@@ -64,12 +67,19 @@ import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
+import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
+import dev.supermux.desktop.shell.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.WindowBounds
+import dev.supermux.desktop.shell.tearOutCanvasLive
+import dev.supermux.desktop.shell.tearOutGroupLive
+import dev.supermux.workspace.collectActiveViewIds
+import dev.supermux.workspace.groupIdOf
 import java.io.File
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
@@ -280,6 +290,18 @@ fun main() {
         // and after unpair, when there is no shell to select into — the click handler
         // no-ops in that case (see onAction below).
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
+        val uiStore = remember { ShellStateStore() }
+        val persistedUi = remember { uiStore.load() }
+        val ui = remember {
+            ShellUiState().apply {
+                persistedUi.layout?.let { restore(it) }
+                selectedId = persistedUi.selectedId
+                appearance = persistedUi.appearance
+                    ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
+                    ?: AppearanceMode.DARK
+                pendingWindowHosts = persistedUi.windows
+            }
+        }
         val notificationController = remember {
             NotificationController(TrayNotificationManager(trayState))
         }
@@ -345,20 +367,7 @@ fun main() {
             // Paired once the fleet holds a host (legacy single-host users were migrated to
             // PairedHost[0] above; onboarding seeds it via the same migration on success).
             var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
-            val uiStore = remember { ShellStateStore() }
             val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
-            // Hydrate the layout + last selection from ui-state.json (the selection is re-validated
-            // against live sessions inside AppShell once the first snapshot lands).
-            val persistedUi = remember { uiStore.load() }
-            val ui = remember {
-                ShellUiState().apply {
-                    persistedUi.layout?.let { restore(it) }
-                    selectedId = persistedUi.selectedId
-                    appearance = persistedUi.appearance
-                        ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
-                        ?: AppearanceMode.DARK
-                }
-            }
             // M5-3: publish this pairing's ShellUiState up to the tray icon's onAction
             // handler (declared above, outside Window) so a click can select the last-notified
             // session. Cleared on dispose (unpair / window teardown) so a stale ui never lingers.
@@ -380,6 +389,23 @@ fun main() {
                     Menu("File", mnemonic = 'F') {
                         Item("New Session", shortcut = KeyShortcut(Key.N, ctrl = true)) {
                             ui.openLauncher()
+                        }
+                        Item("Move workspace to New Window") {
+                            val bind = ui.panesBind
+                            if (bind != null) {
+                                tearOutCanvasLive(ui.windowHosts, bind.current.id)
+                            }
+                        }
+                        Item("Move group to New Window") {
+                            val bind = ui.panesBind
+                            if (bind != null) {
+                                val tree = bind.ws.layoutSync.tree
+                                val viewId = collectActiveViewIds(tree).firstOrNull()
+                                val gid = viewId?.let { groupIdOf(tree, it) }
+                                if (gid != null) {
+                                    tearOutGroupLive(ui.windowHosts, tree, gid, bind.current.id)
+                                }
+                            }
                         }
                         Item("Archived…") {
                             ui.openArchived()
@@ -1376,6 +1402,60 @@ fun main() {
             val mdImageSrc = System.getenv("SM_MD_IMAGE")?.takeIf { it.isNotBlank() }
             if (mdImageSrc != null) {
                 MdImageVerifyOverlay(source = mdImageSrc)
+            }
+        }
+
+        // Extra claimed layout windows. Close unclaims only — never exitApplication.
+        // Each extra uses the bind for ITS workspace so switching sessions does not
+        // dispose pop-outs of another workspace.
+        for (host in ui.windowHosts.extras()) {
+            // Always compose the Window while the claim exists. Gating on panesBindFor
+            // skipped a frame on workspace switch, Compose disposed the Window, and
+            // onCloseRequest unclaimed it — the pop-out stayed gone.
+            val extraBind = ui.panesBindFor(host.workspaceId)
+            key(host.id) {
+                val extraState = rememberWindowState(
+                    position = WindowPosition(host.bounds.x.dp, host.bounds.y.dp),
+                    width = host.bounds.width.dp.coerceAtLeast(200.dp),
+                    height = host.bounds.height.dp.coerceAtLeast(200.dp),
+                )
+                LaunchedEffect(host.id) {
+                    snapshotFlow {
+                        extraState.position to extraState.size
+                    }.collect { (pos, size) ->
+                        if (pos is WindowPosition.Absolute) {
+                            ui.windowHosts.updateBounds(
+                                host.id,
+                                WindowBounds(
+                                    x = pos.x.value,
+                                    y = pos.y.value,
+                                    width = size.width.value,
+                                    height = size.height.value,
+                                ),
+                            )
+                        }
+                    }
+                }
+                Window(
+                    onCloseRequest = { ui.windowHosts.unclaim(host.id) },
+                    title = extraBind?.let {
+                        extraWindowTitle(
+                            it.current.name,
+                            ui.windowHosts.layoutFor(host, it.ws.layoutSync.tree),
+                            it.ws.viewsById,
+                        )
+                    } ?: "supermux",
+                    state = extraState,
+                ) {
+                    val extraModal = remember { ModalPresence() }
+                    CompositionLocalProvider(LocalModalPresence provides extraModal) {
+                        SupermuxTheme(appearance = ui.appearance) {
+                            if (extraBind != null) {
+                                DetachedWorkspaceWindow(host, extraBind, ui)
+                            }
+                        }
+                    }
+                }
             }
         }
         }

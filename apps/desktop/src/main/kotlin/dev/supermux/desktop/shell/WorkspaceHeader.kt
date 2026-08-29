@@ -14,6 +14,8 @@
 // at all rather than an empty bar.
 package dev.supermux.desktop.shell
 
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,9 +50,16 @@ fun WorkspaceHeader(
     modifier: Modifier = Modifier,
     forceGitMenu: GitMenuForceOp? = null,
     onForceGitMenuConsumed: () -> Unit = {},
+    onMoveWorkspaceToNewWindow: (() -> Unit)? = null,
 ) {
     if (gitSession == null || gitBadge(gitSession.git) == null) return
     val cs = MaterialTheme.colorScheme
+    ContextMenuArea(
+        items = {
+            if (onMoveWorkspaceToNewWindow == null) emptyList()
+            else listOf(ContextMenuItem("Move workspace to New Window") { onMoveWorkspaceToNewWindow() })
+        },
+    ) {
     Row(
         modifier
             .fillMaxWidth()
@@ -69,5 +78,6 @@ fun WorkspaceHeader(
             forceOp = forceGitMenu,
             onForceOpConsumed = onForceGitMenuConsumed,
         )
+    }
     }
 }

@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 private class WorkspaceProbe {
     var mounts = 0
@@ -66,6 +67,17 @@ class WorkspaceKeepAliveTest {
         cache.update("w2", setOf("w1", "w2"))
 
         assertEquals(listOf("w2"), cache.update("w2", setOf("w2")))
+    }
+
+    @Test
+    fun extraRetainIdsAreNotEvictedByAnEleventhVisit() {
+        val cache = WorkspaceKeepAliveCache(maxSize = 10)
+        val live = (1..11).map { "w$it" }.toSet()
+        (1..10).forEach { cache.update("w$it", live) }
+        val kept = cache.preview("w11", live, extraIds = setOf("w1"))
+        assertTrue("w1" in kept)
+        assertTrue("w11" in kept)
+        assertEquals(10, kept.size)
     }
 
     @Test

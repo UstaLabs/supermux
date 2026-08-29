@@ -148,6 +148,16 @@ fun PaneHost(
     onMoveToWorkspace: ((viewId: String, toWorkspaceId: String) -> Unit)? = null,
     /** Per-strip platform window chrome (drag regions, etc.); defaults to none. */
     chrome: PaneStripChrome = PaneStripChrome.None,
+    /**
+     * Drag ended past threshold with no drop target (pointer missed every pane).
+     * Desktop uses this to tear the tab into a new window.
+     */
+    onDragEndMiss: (viewId: String) -> Unit = {},
+    /**
+     * After a successful in-tree drop (reorder / move / split). Desktop transfers
+     * host claims so the tab docks into this window's extra/main slice.
+     */
+    onDocked: (viewId: String) -> Unit = {},
     content: @Composable (viewId: String) -> Unit,
 ) {
     val ownedDrag = remember { PaneDragController() }
@@ -156,6 +166,8 @@ fun PaneHost(
     val onLayoutChangeState = rememberUpdatedState(onLayoutChange)
     val onEditState = rememberUpdatedState(onEdit)
     val onMoveToWorkspaceState = rememberUpdatedState(onMoveToWorkspace)
+    val onDragEndMissState = rememberUpdatedState(onDragEndMiss)
+    val onDockedState = rememberUpdatedState(onDocked)
 
     // EVERY edit goes through here, and every edit is a function of the CURRENT
     // tree — never of a node captured when this composition ran.
@@ -221,6 +233,15 @@ fun PaneHost(
                 is PaneDropTarget.MoveToWorkspace -> tree // handled above
             }
         }
+        if (target !is PaneDropTarget.MoveToWorkspace) {
+            val viewId = when (target) {
+                is PaneDropTarget.Reorder -> target.viewId
+                is PaneDropTarget.MoveToGroup -> target.viewId
+                is PaneDropTarget.Split -> target.viewId
+                is PaneDropTarget.MoveToWorkspace -> return
+            }
+            onDockedState.value(viewId)
+        }
     }
 
     // Root box owns the floating drag ghost (session-list style). Ghost coords are
@@ -236,6 +257,7 @@ fun PaneHost(
             applyEdit = { applyEdit(it) },
             dragState = drag,
             onDrop = { applyDrop(it) },
+            onDragEndMiss = { onDragEndMissState.value(it) },
             modifier = Modifier.fillMaxSize(),
             titleFor = titleFor,
             onCloseView = onCloseView,
@@ -345,6 +367,7 @@ private fun PaneHostNode(
     applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
     dragState: PaneDragController,
     onDrop: (PaneDropTarget) -> Unit,
+    onDragEndMiss: (String) -> Unit,
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
@@ -357,11 +380,11 @@ private fun PaneHostNode(
 ) {
     when (layout) {
         is LayoutNode.Group -> GroupHost(
-            layout, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, addSlot,
+            layout, applyEdit, dragState, onDrop, onDragEndMiss, modifier, titleFor, onCloseView, addSlot,
             emptyGroupSlot, tabSlot, labelFont, chrome, content,
         )
         is LayoutNode.Split -> SplitHost(
-            layout, path, applyEdit, dragState, onDrop, modifier, titleFor, onCloseView, addSlot,
+            layout, path, applyEdit, dragState, onDrop, onDragEndMiss, modifier, titleFor, onCloseView, addSlot,
             emptyGroupSlot, tabSlot, labelFont, chrome, content,
         )
     }
@@ -373,6 +396,7 @@ private fun GroupHost(
     applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
     dragState: PaneDragController,
     onDrop: (PaneDropTarget) -> Unit,
+    onDragEndMiss: (String) -> Unit,
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
@@ -385,8 +409,20 @@ private fun GroupHost(
 ) {
     if (group.viewIds.isEmpty()) {
         // A workspace whose last view just closed. Valid, not an error (spec §9.3
-        // answer 3: the workspace stays open).
-        Box(modifier.fillMaxSize().testTag("layout-empty"), contentAlignment = Alignment.Center) {
+        // answer 3: the workspace stays open). Register pane bounds so a tab can
+        // dock back onto this empty canvas (main after canvas tear-out).
+        DisposableEffect(group.id) {
+            onDispose { dragState.unregisterGroup(group.id) }
+        }
+        Box(
+            modifier
+                .fillMaxSize()
+                .testTag("layout-empty")
+                .onGloballyPositioned { coords ->
+                    dragState.registerPane(group.id, coords.boundsInRoot())
+                },
+            contentAlignment = Alignment.Center,
+        ) {
             emptyGroupSlot?.invoke()
         }
         return
@@ -403,6 +439,7 @@ private fun GroupHost(
             onSelect = { viewId -> applyEdit { setActiveViewInGroup(it, group.id, viewId) } },
             dragState = dragState,
             onDrop = onDrop,
+            onDragEndMiss = onDragEndMiss,
             addSlot = addSlot?.let { slot -> { slot(group.id) } },
             chrome = chrome,
             tabSlot = tabSlot ?: { itemId, state ->
@@ -467,6 +504,7 @@ private fun SplitHost(
     applyEdit: ((LayoutNode) -> LayoutNode) -> Unit,
     dragState: PaneDragController,
     onDrop: (PaneDropTarget) -> Unit,
+    onDragEndMiss: (String) -> Unit,
     modifier: Modifier,
     titleFor: (String) -> String,
     onCloseView: (String) -> Unit,
@@ -498,6 +536,7 @@ private fun SplitHost(
             applyEdit = applyEdit,
             dragState = dragState,
             onDrop = onDrop,
+            onDragEndMiss = onDragEndMiss,
             titleFor = titleFor,
             onCloseView = onCloseView,
             addSlot = addSlot,
@@ -569,6 +608,7 @@ fun PaneTabStrip(
     onSelect: (String) -> Unit,
     dragState: PaneDragController?,
     onDrop: (PaneDropTarget) -> Unit,
+    onDragEndMiss: (String) -> Unit = {},
     chrome: PaneStripChrome,
     tabSlot: @Composable (itemId: String, state: TabSlotState) -> Unit,
     modifier: Modifier = Modifier,
@@ -693,6 +733,7 @@ fun PaneTabStrip(
                                             dragState = dragState,
                                             onSelect = onSelect,
                                             onDrop = onDrop,
+                                            onDragEndMiss = onDragEndMiss,
                                         )
                                     } else {
                                         Modifier.clickable { onSelect(id) }
@@ -781,6 +822,7 @@ private fun Modifier.tabDragGestures(
     dragState: PaneDragController,
     onSelect: (String) -> Unit,
     onDrop: (PaneDropTarget) -> Unit,
+    onDragEndMiss: (String) -> Unit = {},
 ): Modifier = this
     // performClick() uses the semantics onClick action, not a real pointer stream.
     .semantics {
@@ -825,6 +867,7 @@ private fun Modifier.tabDragGestures(
                     } else {
                         val target = dragState.finish()
                         if (target != null) onDrop(target)
+                        else onDragEndMiss(viewId)
                     }
                     break
                 }

@@ -29,6 +29,21 @@ data class SidebarSnapshot(
     val collapsedProjectPaths: List<String> = emptyList(),
 )
 
+/**
+ * One detached (non-main) window host. Separate from [WindowHost] so kotlinx.serialization
+ * stays on this store file — [WindowBounds] is not `@Serializable`.
+ */
+@Serializable
+data class PersistedWindowHost(
+    val id: String,
+    val workspaceId: String,
+    val claimedViewIds: List<String> = emptyList(),
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+)
+
 /** The persisted UI state: the sidebar snapshot + the last-selected session id. */
 @Serializable
 data class PersistedUiState(
@@ -40,6 +55,8 @@ data class PersistedUiState(
      * Null on files written before this field existed; hydrate as DARK.
      */
     val appearance: String? = null,
+    /** Detached extra windows. Missing on older ui-state.json → empty list. */
+    val windows: List<PersistedWindowHost> = emptyList(),
 )
 
 class ShellStateStore(val path: Path = defaultPath()) {
