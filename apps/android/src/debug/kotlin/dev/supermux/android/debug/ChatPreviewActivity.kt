@@ -17,10 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
-import dev.supermux.chat.TimelineItem
-import dev.supermux.chat.ToolStatus
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.SupermuxTheme
+import dev.supermux.chat.TimelineItem
+import dev.supermux.chat.ToolStatus
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.LogEntry
 import java.time.Instant

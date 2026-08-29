@@ -101,13 +101,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
-import dev.supermux.chat.TimelineItem
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily
 import dev.supermux.android.theme.Radii
 import dev.supermux.android.theme.Space
 import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.chat.TimelineItem
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse

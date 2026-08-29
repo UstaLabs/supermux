@@ -168,4 +168,48 @@ class WorkspaceReducerTest {
         assertEquals("w1", workspaceForSession(listOf(w1, w2), "s-chat")?.id)
         assertNull(workspaceForSession(listOf(w1, w2), "missing"))
     }
+
+    @Test
+    fun workspaceForSessionIgnoresArchivedWorkspace() {
+        val archived = ws("w1", views = listOf(chatView("v1", "w1", "s-chat"))).copy(status = "archived")
+        assertNull(workspaceForSession(listOf(archived), "s-chat"))
+    }
+
+    @Test
+    fun workspaceRemovedAlreadyArchivedDoesNotDuplicate() {
+        val seeded = reduce(
+            WorkspaceHostState(),
+            ServerFrame.Snapshot(archivedWorkspaces = listOf(ws("w1").copy(status = "archived"))),
+        )
+        val next = reduce(seeded, ServerFrame.WorkspaceRemoved("w1"))
+        assertEquals(listOf("w1"), next.archivedWorkspaces.map { it.id })
+        assertEquals(1, next.archivedWorkspaces.size)
+    }
+
+    @Test
+    fun viewMovedUnknownViewLeavesBothWorkspacesUnchanged() {
+        val seeded = reduce(
+            WorkspaceHostState(),
+            ServerFrame.Snapshot(
+                workspaces = listOf(
+                    ws("w1", views = listOf(view("v1", "w1"))),
+                    ws("w2", views = listOf(view("v2", "w2"))),
+                ),
+            ),
+        )
+        val next = reduce(seeded, ServerFrame.ViewMoved("missing", "w1", "w2"))
+        val byId = next.workspaces.associateBy { it.id }
+        assertEquals(listOf("v1"), byId["w1"]!!.views.map { it.id })
+        assertEquals(listOf("v2"), byId["w2"]!!.views.map { it.id })
+    }
+
+    @Test
+    fun reduceWorkspaceFrameReturnsNullForUnrelatedFrames() {
+        assertNull(
+            reduceWorkspaceFrame(
+                WorkspaceHostState(),
+                ServerFrame.SessionRenamed(id = "s1", old = "a", newName = "b"),
+            ),
+        )
+    }
 }

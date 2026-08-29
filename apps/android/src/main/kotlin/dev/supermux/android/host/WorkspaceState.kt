@@ -22,6 +22,8 @@ fun reduceWorkspaceFrame(state: WorkspaceHostState, frame: ServerFrame): Workspa
         archivedWorkspaces = frame.archivedWorkspaces,
     )
     is ServerFrame.WorkspaceAdded -> {
+        // The broker re-broadcasts the same workspace (early add on spawn, then the
+        // authoritative one carrying repo_root / branch). Replace, never duplicate.
         val id = frame.workspace.id
         val archived = state.archivedWorkspaces.filter { it.id != id }
         val live = if (state.workspaces.none { it.id == id }) {
@@ -31,11 +33,15 @@ fun reduceWorkspaceFrame(state: WorkspaceHostState, frame: ServerFrame): Workspa
         }
         state.copy(workspaces = live, archivedWorkspaces = archived)
     }
-    is ServerFrame.WorkspaceChanged -> state.copy(
-        workspaces = state.workspaces.map {
-            if (it.id == frame.workspace.id) frame.workspace else it
-        },
-    )
+    is ServerFrame.WorkspaceChanged -> {
+        // Unknown id: a workspace this client never saw added. Ignore rather than
+        // append: appending would put it at the end, out of sort order.
+        state.copy(
+            workspaces = state.workspaces.map {
+                if (it.id == frame.workspace.id) frame.workspace else it
+            },
+        )
+    }
     is ServerFrame.WorkspaceRemoved -> {
         val moving = state.workspaces.find { it.id == frame.id }
         val live = state.workspaces.filter { it.id != frame.id }
@@ -66,23 +72,7 @@ fun reduceWorkspaceFrame(state: WorkspaceHostState, frame: ServerFrame): Workspa
     is ServerFrame.ViewChanged -> updateViews(state, frame.workspaceId) { vs ->
         vs.map { if (it.id == frame.view.id) frame.view else it }
     }
-    is ServerFrame.ViewMoved -> {
-        var moved: ViewDto? = null
-        val stripped = state.workspaces.map { w ->
-            if (w.id != frame.fromWorkspaceId) w
-            else {
-                moved = w.views.firstOrNull { it.id == frame.viewId }
-                w.copy(views = w.views.filter { it.id != frame.viewId })
-            }
-        }
-        val v = moved ?: return state.copy(workspaces = stripped)
-        state.copy(
-            workspaces = stripped.map { w ->
-                if (w.id != frame.toWorkspaceId) w
-                else w.copy(views = w.views + v.copy(workspaceId = frame.toWorkspaceId))
-            },
-        )
-    }
+    is ServerFrame.ViewMoved -> moveView(state, frame)
     else -> null
 }
 
@@ -91,6 +81,26 @@ fun workspaceForSession(workspaces: List<WorkspaceDto>, sessionId: String): Work
     workspaces.firstOrNull { w ->
         w.status != "archived" && w.chatSessionIds().contains(sessionId)
     }
+
+/** Do NOT rebuild either workspace's layout. The broker sends workspace_changed
+ *  for both workspaces right after view_moved, carrying the authoritative trees. */
+private fun moveView(state: WorkspaceHostState, frame: ServerFrame.ViewMoved): WorkspaceHostState {
+    var moved: ViewDto? = null
+    val stripped = state.workspaces.map { w ->
+        if (w.id != frame.fromWorkspaceId) w
+        else {
+            moved = w.views.firstOrNull { it.id == frame.viewId }
+            w.copy(views = w.views.filter { it.id != frame.viewId })
+        }
+    }
+    val v = moved ?: return state.copy(workspaces = stripped)
+    return state.copy(
+        workspaces = stripped.map { w ->
+            if (w.id != frame.toWorkspaceId) w
+            else w.copy(views = w.views + v.copy(workspaceId = frame.toWorkspaceId))
+        },
+    )
+}
 
 private fun updateViews(
     state: WorkspaceHostState,

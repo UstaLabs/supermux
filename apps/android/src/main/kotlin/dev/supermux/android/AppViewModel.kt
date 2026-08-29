@@ -63,7 +63,6 @@ import dev.supermux.android.host.HostStores
 import dev.supermux.android.host.HostView
 import dev.supermux.android.host.WorkspaceHostState
 import dev.supermux.android.host.reduceWorkspaceFrame
-import dev.supermux.android.host.workspaceForSession as findWorkspaceForSession
 import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
 import dev.supermux.android.session.StagedUpload
@@ -113,6 +112,8 @@ private val Context.draftDataStore by preferencesDataStore(name = "chat_drafts")
  *  chat_drafts (a different concept/lifecycle: pre-session, not per-session). Also holds the
  *  merged-list host-filter selection (a UI pref, same lifecycle as launcher prefs). */
 private val Context.launcherDataStore by preferencesDataStore(name = "launcher_state")
+
+private val EMPTY_WORKSPACE_STATE = WorkspaceHostState()
 
 /** Outcome of an add-host attempt (spec §3.4 / §5). */
 sealed interface AddHostResult {
@@ -491,7 +492,7 @@ class AppViewModel(
             is ServerFrame.SessionGit -> patchSessionIn(recordId, f.session) { it.copy(git = f.git) }
             else -> {}
         }
-        reduceWorkspaceFrame(workspacesByHost[recordId] ?: WorkspaceHostState(), f)?.let { next ->
+        reduceWorkspaceFrame(workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE, f)?.let { next ->
             workspacesByHost[recordId] = next
             if (recordId == _activeHost.value) publishWorkspaces()
         }
@@ -499,14 +500,17 @@ class AppViewModel(
     }
 
     private fun publishWorkspaces() {
-        val st = workspacesByHost[_activeHost.value] ?: WorkspaceHostState()
+        val st = workspacesByHost[_activeHost.value] ?: EMPTY_WORKSPACE_STATE
         _workspaces.value = st.workspaces
         _archivedWorkspaces.value = st.archivedWorkspaces
     }
 
-    /** Workspace on the active host that currently hosts [sessionId] as a chat view. */
-    fun workspaceForSession(sessionId: String): WorkspaceDto? =
-        findWorkspaceForSession(_workspaces.value, sessionId)
+    /** Workspace on host [recordId] that currently hosts [sessionId] as a chat view. */
+    fun workspaceForSession(recordId: String, sessionId: String): WorkspaceDto? =
+        dev.supermux.android.host.workspaceForSession(
+            workspacesByHost[recordId]?.workspaces.orEmpty(),
+            sessionId,
+        )
 
     /** Composite key "recordId␟sessionId" for a frame from [recordId]. */
     private fun keyFor(recordId: String, sessionId: String): String = SessionKey.key(recordId, sessionId)
