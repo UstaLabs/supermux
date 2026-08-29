@@ -1262,6 +1262,46 @@ class AppViewModel(
         }
     }
 
+    fun reorderWorkspaces(orderedIds: List<String>) {
+        val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+        if (order.isEmpty()) return
+        val recordId = _activeHost.value
+        if (recordId != null) {
+            val st = workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE
+            workspacesByHost[recordId] = st.copy(
+                workspaces = st.workspaces.map { w ->
+                    order[w.id]?.let { w.copy(sortOrder = it) } ?: w
+                },
+            )
+            publishWorkspaces()
+        }
+        viewModelScope.launch {
+            runCatching { activeApi()?.reorderWorkspaces(orderedIds) }
+        }
+    }
+
+    fun archiveWorkspace(id: String) {
+        val recordId = _activeHost.value ?: return
+        val st = workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE
+        val next = dev.supermux.android.session.applyArchiveWorkspace(st.workspaces, st.archivedWorkspaces, id)
+        workspacesByHost[recordId] = st.copy(workspaces = next.live, archivedWorkspaces = next.archived)
+        publishWorkspaces()
+        viewModelScope.launch {
+            runCatching { activeApi()?.archiveWorkspace(id) }
+        }
+    }
+
+    fun restoreWorkspace(id: String) {
+        val recordId = _activeHost.value ?: return
+        val st = workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE
+        val next = dev.supermux.android.session.applyRestoreWorkspace(st.workspaces, st.archivedWorkspaces, id)
+        workspacesByHost[recordId] = st.copy(workspaces = next.live, archivedWorkspaces = next.archived)
+        publishWorkspaces()
+        viewModelScope.launch {
+            runCatching { activeApi()?.restoreWorkspace(id) }
+        }
+    }
+
     fun reorderSessions(orderedIds: List<String>) {
         // Batch sortOrder updates in one rebuild so drag recompose sees a single consistent order
         // (library requires list mutation to finish before onMove returns).

@@ -67,6 +67,11 @@ import dev.supermux.session.buildTaskSections
 import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.session.SectionKey
 import dev.supermux.net.ArchivedDto
+import dev.supermux.proto.WorkspaceDto
+import dev.supermux.session.PA_GROUP_KEY
+import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.groupArchivedWorkspaces
+import dev.supermux.workspace.groupWorkspaces
 
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
@@ -495,6 +500,10 @@ fun SessionListScreen(
     onResume: (String) -> Unit = {},
     onOpenDraft: (String) -> Unit = {},
     onReorder: (List<String>) -> Unit = {},
+    workspaces: List<WorkspaceDto> = emptyList(),
+    archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+    onArchiveWorkspace: (String) -> Unit = {},
+    onRestoreWorkspace: (String) -> Unit = {},
     // ── Multi-host (spec §5). All default-empty so single-host callers render exactly as before. ──
     hosts: List<dev.supermux.android.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
@@ -572,6 +581,27 @@ fun SessionListScreen(
     }
     var settledExpanded by remember { mutableStateOf(setOf<String>()) }
     var flatSettledExpanded by remember { mutableStateOf(false) }
+    val useWorkspaces = workspaces.isNotEmpty()
+    val sessionById = remember(sessions) { sessions.associateBy { it.id } }
+    val agentTyped = remember(agentState) {
+        agentState.mapNotNull { (k, v) -> v?.let { k to it } }.toMap()
+    }
+    val wsHome = inferHomeDir(workspaces.firstOrNull()?.workdir) ?: effectiveHome
+    val wsGroups = remember(workspaces, sessions, wsHome) {
+        groupWorkspaces(workspaces, wsHome) { w ->
+            val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+            sid != null && sessionById[sid]?.role == "personal_assistant"
+        }
+    }
+    val archivedWsGroups = remember(archivedWorkspaces, wsHome) {
+        groupArchivedWorkspaces(archivedWorkspaces, wsHome)
+    }
+    val wsWorkingOrders = remember { mutableStateMapOf<String, List<String>>() }
+    val wsDragState = remember { WorkspaceDragWorkingState() }
+    var expandedChildren by remember { mutableStateOf(setOf<String>()) }
+    var archivedFoldOpen by remember { mutableStateOf(false) }
+    var archiveWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
+    var renameWorkspaceTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
 
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
@@ -593,7 +623,40 @@ fun SessionListScreen(
         haptic(HapticKind.Tick)
     }
 
+    fun wsRowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
+        WORKSPACE_FLAT_SCOPE -> wsGroups
+            .filter { it.key != PA_GROUP_KEY }
+            .flatMap { it.workspaces }
+            .sortedWith(compareBy({ it.sortOrder }, { it.id }))
+        else -> wsGroups.firstOrNull { it.key == scopeKey }?.workspaces.orEmpty()
+    }
+
+    fun wsScopeOf(workspaceId: String): String? {
+        if (!groupByProject) {
+            val restIds = wsRowsForScope(WORKSPACE_FLAT_SCOPE).map { it.id }
+            return if (workspaceId in restIds) WORKSPACE_FLAT_SCOPE else null
+        }
+        return wsGroups.firstOrNull { g ->
+            g.key != PA_GROUP_KEY && g.workspaces.any { it.id == workspaceId }
+        }?.key
+    }
+
+    fun beginWorkspaceDrag(w: WorkspaceDto) {
+        val scopeKey = wsScopeOf(w.id) ?: return
+        val orderedIds = wsWorkingOrders[scopeKey] ?: wsRowsForScope(scopeKey).map { it.id }
+        wsDragState.begin(WorkspaceReorderScope(scopeKey), orderedIds)
+        openSwipeRowId = null
+        haptic(HapticKind.Tick)
+    }
+
     fun finishDrag() {
+        if (useWorkspaces) {
+            wsDragState.finish(commit = true)?.let { move ->
+                onReorder(move.orderedIds)
+                wsWorkingOrders.remove(move.scope.key)
+            }
+            return
+        }
         val finished = dragWorkingState.finish(commit = true)
         finished?.let { move ->
             onReorder(move.orderedIds)
@@ -608,6 +671,28 @@ fun SessionListScreen(
     val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
         val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
         val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+        if (useWorkspaces) {
+            if (!fromKey.startsWith("ws:") || !toKey.startsWith("ws:")) {
+                return@rememberReorderableLazyListState
+            }
+            val fromId = fromKey.removePrefix("ws:")
+            val toId = toKey.removePrefix("ws:")
+            val scopeKey = wsScopeOf(fromId) ?: return@rememberReorderableLazyListState
+            if (wsScopeOf(toId) != scopeKey) return@rememberReorderableLazyListState
+            val rows = wsRowsForScope(scopeKey)
+            val move = moveWorkspaceWithinScope(
+                rows = rows,
+                workingOrders = wsWorkingOrders,
+                scopeKey = scopeKey,
+                fromId = fromId,
+                toId = toId,
+            ) ?: return@rememberReorderableLazyListState
+            val originalIds = wsWorkingOrders[scopeKey] ?: rows.map { it.id }
+            wsDragState.beginIfIdle(move.scope, originalIds)
+            wsWorkingOrders[scopeKey] = move.orderedIds
+            wsDragState.move(move.orderedIds)
+            return@rememberReorderableLazyListState
+        }
         if (!fromKey.startsWith("task:") || !toKey.startsWith("task:")) {
             return@rememberReorderableLazyListState
         }
@@ -809,7 +894,7 @@ fun SessionListScreen(
         LazyColumn(
             state = listState,
                         modifier = Modifier
-                .testTag(TestIds.SESSION_LIST)
+                .testTag(if (useWorkspaces) WorkspaceListTestIds.LIST else TestIds.SESSION_LIST)
                 .fillMaxSize()
                 .background(cs.surfaceContainerHigh),
         ) {
@@ -882,7 +967,176 @@ fun SessionListScreen(
                 }
             }
 
-            if (!groupByProject) {
+            if (useWorkspaces) {
+                val pas = wsGroups.firstOrNull { it.key == PA_GROUP_KEY }?.workspaces.orEmpty()
+                fun ordered(scopeKey: String, list: List<WorkspaceDto>) =
+                    applyWorkspaceWorkingOrder(list, wsWorkingOrders[scopeKey])
+
+                if (!groupByProject) {
+                    if (pas.isNotEmpty()) {
+                        item(key = "flat:pa_hdr") {
+                            Text(
+                                "PERSONAL ASSISTANTS",
+                                color = cs.onSurfaceVariant,
+                                fontFamily = MonoFontFamily,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        itemsIndexed(pas, key = { _, w -> "ws:${w.id}" }) { _, w ->
+                            WorkspaceReorderableRow(
+                                w = w,
+                                grouped = false,
+                                first = true,
+                                last = true,
+                                reorderableState = reorderableState,
+                                sessionById = sessionById,
+                                agentTyped = agentTyped,
+                                lastBySession = lastBySession,
+                                lastRead = lastRead,
+                                wsHome = wsHome,
+                                activeId = activeId,
+                                showRowHostBadge = showRowHostBadge,
+                                hostByRecord = hostByRecord,
+                                sessionHost = sessionHost,
+                                openSwipeRowId = openSwipeRowId,
+                                onOpenSwipeRowChange = { openSwipeRowId = it },
+                                expandedChildren = expandedChildren,
+                                onToggleChildren = { id ->
+                                    expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
+                                },
+                                onOpen = onOpen,
+                                onMute = onMute,
+                                onBeginDrag = { beginWorkspaceDrag(it) },
+                                onFinishDrag = { finishDrag() },
+                                onRenameWs = { renameWorkspaceTarget = it; renameText = it.name },
+                                onArchiveWs = { archiveWorkspaceTarget = it },
+                            )
+                        }
+                    }
+                    val rest = ordered(
+                        WORKSPACE_FLAT_SCOPE,
+                        wsGroups.filter { it.key != PA_GROUP_KEY }.flatMap { it.workspaces }
+                            .sortedWith(compareBy({ it.sortOrder }, { it.id })),
+                    )
+                    itemsIndexed(rest, key = { _, w -> "ws:${w.id}" }) { _, w ->
+                        WorkspaceReorderableRow(
+                            w = w,
+                            grouped = false,
+                            first = true,
+                            last = true,
+                            reorderableState = reorderableState,
+                            sessionById = sessionById,
+                            agentTyped = agentTyped,
+                            lastBySession = lastBySession,
+                            lastRead = lastRead,
+                            wsHome = wsHome,
+                            activeId = activeId,
+                            showRowHostBadge = showRowHostBadge,
+                            hostByRecord = hostByRecord,
+                            sessionHost = sessionHost,
+                            openSwipeRowId = openSwipeRowId,
+                            onOpenSwipeRowChange = { openSwipeRowId = it },
+                            expandedChildren = expandedChildren,
+                            onToggleChildren = { id ->
+                                expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
+                            },
+                            onOpen = onOpen,
+                            onMute = onMute,
+                            onBeginDrag = { beginWorkspaceDrag(it) },
+                            onFinishDrag = { finishDrag() },
+                            onRenameWs = { renameWorkspaceTarget = it; renameText = it.name },
+                            onArchiveWs = { archiveWorkspaceTarget = it },
+                        )
+                    }
+                } else {
+                    wsGroups.forEach { g ->
+                        val isCollapsed = collapsedPaths.contains(g.key)
+                        val rows = if (g.key == PA_GROUP_KEY) g.workspaces else ordered(g.key, g.workspaces)
+                        item(key = "group:header:${g.key}") {
+                            Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                                PathGroupHeader(
+                                    label = g.label,
+                                    count = rows.size,
+                                    collapsed = isCollapsed,
+                                    onToggle = {
+                                        openSwipeRowId = null
+                                        collapsedPaths = if (isCollapsed) {
+                                            collapsedPaths - g.key
+                                        } else {
+                                            collapsedPaths + g.key
+                                        }
+                                        saveCollapsedPaths(ctx, collapsedPaths)
+                                    },
+                                )
+                            }
+                        }
+                        if (!isCollapsed) {
+                            itemsIndexed(rows, key = { _, w -> "ws:${w.id}" }) { index, w ->
+                                WorkspaceReorderableRow(
+                                    w = w,
+                                    grouped = true,
+                                    first = index == 0,
+                                    last = index == rows.lastIndex,
+                                    reorderableState = reorderableState,
+                                    sessionById = sessionById,
+                                    agentTyped = agentTyped,
+                                    lastBySession = lastBySession,
+                                    lastRead = lastRead,
+                                    wsHome = wsHome,
+                                    activeId = activeId,
+                                    showRowHostBadge = showRowHostBadge,
+                                    hostByRecord = hostByRecord,
+                                    sessionHost = sessionHost,
+                                    openSwipeRowId = openSwipeRowId,
+                                    onOpenSwipeRowChange = { openSwipeRowId = it },
+                                    expandedChildren = expandedChildren,
+                                    onToggleChildren = { id ->
+                                        expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
+                                    },
+                                    onOpen = onOpen,
+                                    onMute = onMute,
+                                    onBeginDrag = { beginWorkspaceDrag(it) },
+                                    onFinishDrag = { finishDrag() },
+                                    onRenameWs = { renameWorkspaceTarget = it; renameText = it.name },
+                                    onArchiveWs = { archiveWorkspaceTarget = it },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (archivedWorkspaces.isNotEmpty()) {
+                    item(key = "archived_fold") {
+                        ArchivedFoldButton(
+                            count = archivedWorkspaces.size,
+                            expanded = archivedFoldOpen,
+                            onClick = { archivedFoldOpen = !archivedFoldOpen },
+                        )
+                    }
+                    if (archivedFoldOpen) {
+                        archivedWsGroups.forEach { g ->
+                            item(key = "arch:hdr:${g.key}") {
+                                Text(
+                                    g.label,
+                                    color = cs.onSurfaceVariant,
+                                    fontFamily = MonoFontFamily,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                )
+                            }
+                            items(g.workspaces, key = { "arch:${it.id}" }) { w ->
+                                ArchivedWorkspaceRow(
+                                    model = deriveArchivedWorkspaceRow(w, wsHome),
+                                    onSelect = { resolveWorkspaceOpenSessionId(w)?.let(onOpen) },
+                                    onRestore = { onRestoreWorkspace(w.id) },
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (!groupByProject) {
                 // PA pin (web flat list) — not part of task sections.
                 // User sortOrder only; new messages must not reshuffle.
                 val pas = sessionsByUserOrder(onlineSessions.filter { it.role == "personal_assistant" })
@@ -1208,6 +1462,35 @@ fun SessionListScreen(
             dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
         )
     }
+    renameWorkspaceTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameWorkspaceTarget = null },
+            title = { Text("Rename workspace") },
+            text = { OutlinedTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val sid = target.primarySessionId ?: target.chatSessionIds().firstOrNull()
+                    if (sid != null) onRename(sid, renameText.trim())
+                    renameWorkspaceTarget = null
+                }) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { renameWorkspaceTarget = null }) { Text("Cancel") } },
+        )
+    }
+    archiveWorkspaceTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { archiveWorkspaceTarget = null },
+            title = { Text("Archive workspace?") },
+            text = { Text("This archives \"${target.name}\" and ends its agents.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onArchiveWorkspace(target.id)
+                    archiveWorkspaceTarget = null
+                }) { Text("Archive", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { archiveWorkspaceTarget = null }) { Text("Cancel") } },
+        )
+    }
     killTarget?.let { target ->
         val discard = target.sectionKey() == SectionKey.DRAFT
         AlertDialog(
@@ -1261,6 +1544,82 @@ private fun OfflineHostHeader(host: dev.supermux.android.host.HostView) {
             fontFamily = MonoFontFamily,
             fontSize = 10.sp,
             maxLines = 1,
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun androidx.compose.foundation.lazy.LazyItemScope.WorkspaceReorderableRow(
+    w: WorkspaceDto,
+    grouped: Boolean,
+    first: Boolean,
+    last: Boolean,
+    reorderableState: sh.calvin.reorderable.ReorderableLazyListState,
+    sessionById: Map<String, SessionInfo>,
+    agentTyped: Map<String, dev.supermux.proto.AgentStatus>,
+    lastBySession: Map<String, LogEntry?>,
+    lastRead: Map<String, String>,
+    wsHome: String,
+    activeId: String?,
+    showRowHostBadge: Boolean,
+    hostByRecord: Map<String, dev.supermux.android.host.HostView>,
+    sessionHost: Map<String, String>,
+    openSwipeRowId: String?,
+    onOpenSwipeRowChange: (String?) -> Unit,
+    expandedChildren: Set<String>,
+    onToggleChildren: (String) -> Unit,
+    onOpen: (String) -> Unit,
+    onMute: (String, Boolean) -> Unit,
+    onBeginDrag: (WorkspaceDto) -> Unit,
+    onFinishDrag: () -> Unit,
+    onRenameWs: (WorkspaceDto) -> Unit,
+    onArchiveWs: (WorkspaceDto) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val model = deriveWorkspaceRow(
+        w = w,
+        sessionsById = sessionById,
+        agentState = agentTyped,
+        lastBySession = lastBySession,
+        lastRead = lastRead,
+        home = wsHome,
+        selectedSessionId = activeId,
+    )
+    val primary = model.primarySessionId?.let { sessionById[it] }
+    val openSid = model.openSessionId
+    val isActive = openSid != null && openSid == activeId
+    ReorderableItem(reorderableState, key = "ws:${w.id}") { isDragging ->
+        val rowInteraction = remember { MutableInteractionSource() }
+        WorkspaceRow(
+            model = model,
+            active = isActive,
+            hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[openSid ?: ""]] else null,
+            isDragging = isDragging,
+            interactionSource = rowInteraction,
+            dragModifier = Modifier.longPressDraggableHandle(
+                interactionSource = rowInteraction,
+                onDragStarted = { onBeginDrag(w) },
+                onDragStopped = { onFinishDrag() },
+            ),
+            openSwipeRowId = openSwipeRowId,
+            onOpenSwipeRowChange = onOpenSwipeRowChange,
+            rowShape = if (grouped) groupedRowShape(first, last) else RoundedCornerShape(Radii.md),
+            outerPadding = if (grouped) PaddingValues(horizontal = 12.dp) else PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            rowColor = if (grouped) {
+                if (isActive) cs.surfaceContainer else cs.surfaceContainerLow
+            } else null,
+            childrenExpanded = w.id in expandedChildren,
+            onToggleChildren = { onToggleChildren(w.id) },
+            mute = primary?.mute == true,
+            onClick = { openSid?.let(onOpen) },
+            onRename = { onRenameWs(w) },
+            onKill = { onArchiveWs(w) },
+            onToggleMute = {
+                val sid = model.primarySessionId ?: return@WorkspaceRow
+                onMute(sid, !(primary?.mute ?: false))
+            },
+            onChildClick = onOpen,
         )
     }
 }

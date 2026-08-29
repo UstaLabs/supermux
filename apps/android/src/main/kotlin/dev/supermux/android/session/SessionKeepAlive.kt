@@ -132,6 +132,8 @@ fun SessionKeepAlivePhoneHost(
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
+    workspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
+    archivedWorkspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
 ) {
     // Phone AnimatedContent disposes SessionListScreen while a chat is open. Keep scroll
     // state here (survives that dispose + process death) so back returns to the same offset.
@@ -219,7 +221,14 @@ fun SessionKeepAlivePhoneHost(
                         archived = archived,
                         onResume = { id -> vm.resume(id) },
                         onOpenDraft = onOpenDraft,
-                        onReorder = { ids -> vm.reorderSessions(ids) },
+                        onReorder = { ids ->
+                            if (workspaces.isEmpty()) vm.reorderSessions(ids)
+                            else vm.reorderWorkspaces(ids)
+                        },
+                        workspaces = workspaces,
+                        archivedWorkspaces = archivedWorkspaces,
+                        onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
+                        onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
                         hosts = hosts,
                         sessionHost = sessionHost,
                         hostFilter = hostFilter,

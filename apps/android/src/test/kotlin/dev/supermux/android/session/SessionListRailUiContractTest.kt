@@ -72,4 +72,14 @@ class SessionListRailUiContractTest {
             ),
         )
     }
+
+    @Test
+    fun workspace_row_test_ids_match_desktop() {
+        assertEquals("workspace_row_abc", WorkspaceListTestIds.row("abc"))
+        assertEquals("workspace-children-abc", WorkspaceListTestIds.children("abc"))
+        assertEquals("workspace-multiagent-abc", WorkspaceListTestIds.multiAgent("abc"))
+        assertEquals("archived_workspace_abc", WorkspaceListTestIds.archived("abc"))
+        assertEquals("archived_fold", WorkspaceListTestIds.ARCHIVED_FOLD)
+        assertEquals("workspaces_list", WorkspaceListTestIds.LIST)
+    }
 }

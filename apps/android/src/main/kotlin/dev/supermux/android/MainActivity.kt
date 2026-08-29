@@ -193,6 +193,8 @@ class MainActivity : ComponentActivity() {
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
                 val sessions by vm.sessions.collectAsStateWithLifecycle()
                 val archivedSessions by vm.archivedSessions.collectAsStateWithLifecycle()
+                val workspaces by vm.workspaces.collectAsStateWithLifecycle()
+                val archivedWorkspaces by vm.archivedWorkspaces.collectAsStateWithLifecycle()
                 val messages by vm.messages.collectAsStateWithLifecycle()
                 val activity by vm.activity.collectAsStateWithLifecycle()
                 val agentState by vm.agentState.collectAsStateWithLifecycle()
@@ -371,7 +373,14 @@ class MainActivity : ComponentActivity() {
                                                 archived = archivedSessions,
                                                 onResume = { id -> vm.resume(id) },
                                                 onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                                onReorder = { ids -> vm.reorderSessions(ids) },
+                                                onReorder = { ids ->
+                                                    if (workspaces.isEmpty()) vm.reorderSessions(ids)
+                                                    else vm.reorderWorkspaces(ids)
+                                                },
+                                                workspaces = workspaces,
+                                                archivedWorkspaces = archivedWorkspaces,
+                                                onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
+                                                onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
                                                 hosts = hostViews,
                                                 sessionHost = sessionHost,
                                                 hostFilter = hostFilter,
@@ -464,6 +473,8 @@ class MainActivity : ComponentActivity() {
                                 hostFilter = hostFilter,
                                 onHostFilter = setHostFilter,
                                 onAddHost = { navController.navigate(AddHost) },
+                                workspaces = workspaces,
+                                archivedWorkspaces = archivedWorkspaces,
                             )
                         }
                     }
@@ -493,7 +504,14 @@ class MainActivity : ComponentActivity() {
                                         archived = archivedSessions,
                                         onResume = { id -> vm.resume(id) },
                                         onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                        onReorder = { ids -> vm.reorderSessions(ids) },
+                                        onReorder = { ids ->
+                                            if (workspaces.isEmpty()) vm.reorderSessions(ids)
+                                            else vm.reorderWorkspaces(ids)
+                                        },
+                                        workspaces = workspaces,
+                                        archivedWorkspaces = archivedWorkspaces,
+                                        onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
+                                        onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
                                         hosts = hostViews,
                                         sessionHost = sessionHost,
                                         hostFilter = hostFilter,
@@ -678,10 +696,9 @@ class MainActivity : ComponentActivity() {
                     composable<Archived> {
                         HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { ArchivedScreen(
                             onBack = { navController.popBackStack() },
-                            onLoad = { vm.archived() },
-                            onResume = { vm.resume(it) },
+                            workspaces = archivedWorkspaces,
+                            onRestore = { vm.restoreWorkspace(it) },
                             home = DevConfig.HOME,
-                            loadLogs = { vm.archivedLogs(it) },
                         ) } }
                     }
                     composable<Proxies> {
@@ -776,6 +793,8 @@ private fun PhoneNavHost(
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
+    workspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
+    archivedWorkspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
 ) {
     SessionKeepAlivePhoneHost(
         selected = selected,
@@ -802,5 +821,7 @@ private fun PhoneNavHost(
         hostFilter = hostFilter,
         onHostFilter = onHostFilter,
         onAddHost = onAddHost,
+        workspaces = workspaces,
+        archivedWorkspaces = archivedWorkspaces,
     )
 }

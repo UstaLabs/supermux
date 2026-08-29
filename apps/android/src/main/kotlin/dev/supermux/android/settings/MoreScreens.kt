@@ -68,10 +68,13 @@ import dev.supermux.net.showReasoningPicker
 import dev.supermux.android.chat.EffortPill
 import dev.supermux.android.chat.ModelPill
 import dev.supermux.android.chat.PickerSheet
+import dev.supermux.android.session.deriveArchivedWorkspaceRow
 import dev.supermux.android.session.relTime
+import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.archivedProjects
 import dev.supermux.session.filterArchivedByProject
 import dev.supermux.session.formatWorkdir
+import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -1888,46 +1891,19 @@ private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
 @Composable
 fun ArchivedScreen(
     onBack: () -> Unit,
-    onLoad: suspend () -> List<ArchivedDto>,
-    onResume: (String) -> Unit,
+    workspaces: List<WorkspaceDto>,
+    onRestore: (String) -> Unit,
     home: String,
-    loadLogs: suspend (String) -> List<LogEntry> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
-    var sessions by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var resumedIds by remember { mutableStateOf(setOf<String>()) }
-    // Internal nav: tapping a row opens a read-only chat view of that session.
-    var openedId by remember { mutableStateOf<String?>(null) }
+    var restoredIds by remember { mutableStateOf(setOf<String>()) }
     var selectedProject by remember { mutableStateOf<String?>(null) }
     var filterOpen by remember { mutableStateOf(false) }
-    val projects = remember(sessions, home) { archivedProjects(sessions, home) }
-    // Clear the filter if the selected project no longer has any archived sessions.
-    LaunchedEffect(projects) {
-        if (selectedProject != null && projects.none { it.key == selectedProject }) {
+    val groups = remember(workspaces, home) { groupArchivedWorkspaces(workspaces, home) }
+    LaunchedEffect(groups) {
+        if (selectedProject != null && groups.none { it.key == selectedProject }) {
             selectedProject = null
         }
-    }
-
-    LaunchedEffect(Unit) {
-        sessions = onLoad()
-        loading = false
-    }
-
-    val opened = openedId?.let { id -> sessions.firstOrNull { it.id == id } }
-    if (opened != null) {
-        ArchivedChatScreen(
-            sessionId = opened.id,
-            name = opened.name,
-            resumed = opened.id in resumedIds,
-            onBack = { openedId = null },
-            onResume = {
-                onResume(opened.id)
-                resumedIds = resumedIds + opened.id
-            },
-            loadLogs = loadLogs,
-        )
-        return
     }
 
     Scaffold(
@@ -1944,7 +1920,7 @@ fun ArchivedScreen(
                     }
                 },
                 actions = {
-                    if (sessions.isNotEmpty()) {
+                    if (groups.isNotEmpty()) {
                         Box {
                             IconButton(onClick = { filterOpen = true }) {
                                 Icon(
@@ -1961,11 +1937,11 @@ fun ArchivedScreen(
                                         { Icon(Icons.Default.Check, contentDescription = null) }
                                     } else null,
                                 )
-                                projects.forEach { p ->
+                                groups.forEach { g ->
                                     DropdownMenuItem(
-                                        text = { Text("${p.label}  (${p.count})") },
-                                        onClick = { selectedProject = p.key; filterOpen = false },
-                                        trailingIcon = if (selectedProject == p.key) {
+                                        text = { Text("${g.label}  (${g.workspaces.size})") },
+                                        onClick = { selectedProject = g.key; filterOpen = false },
+                                        trailingIcon = if (selectedProject == g.key) {
                                             { Icon(Icons.Default.Check, contentDescription = null) }
                                         } else null,
                                     )
@@ -1983,30 +1959,63 @@ fun ArchivedScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
-                loading -> CircularProgressIndicator(
-                    color = cs.primary,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                sessions.isEmpty() -> Text(
-                    "No archived sessions.",
+                workspaces.isEmpty() -> Text(
+                    "No archived workspaces.",
                     color = cs.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Center),
                 )
                 else -> {
-                    val visible = remember(sessions, selectedProject) { filterArchivedByProject(sessions, selectedProject) }
+                    val visible = groups.filter { selectedProject == null || it.key == selectedProject }
                     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                        items(visible, key = { it.id }) { session ->
-                            ArchivedRow(
-                                session = session,
-                                home = home,
-                                resumed = session.id in resumedIds,
-                                onOpen = { openedId = session.id },
-                                onResume = {
-                                    onResume(session.id)
-                                    resumedIds = resumedIds + session.id
-                                },
-                            )
-                            HorizontalDivider(color = cs.outlineVariant)
+                        visible.forEach { g ->
+                            item(key = "hdr:${g.key}") {
+                                Text(
+                                    g.label,
+                                    color = cs.onSurfaceVariant,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                )
+                            }
+                            items(g.workspaces, key = { it.id }) { w ->
+                                val row = deriveArchivedWorkspaceRow(w, home)
+                                val restored = w.id in restoredIds
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(row.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                                        Text(
+                                            row.pathLabel,
+                                            color = cs.onSurfaceVariant,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            maxLines = 1,
+                                        )
+                                        val ended = relTime(row.archivedAt)
+                                        if (ended.isNotEmpty()) {
+                                            Text("Archived $ended", color = cs.onSurfaceVariant, fontSize = 10.sp)
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            onRestore(w.id)
+                                            restoredIds = restoredIds + w.id
+                                        },
+                                        enabled = !restored,
+                                    ) {
+                                        Text(
+                                            if (restored) "Restored" else "Restore",
+                                            color = if (restored) cs.onSurfaceVariant else cs.primary,
+                                            fontSize = 13.sp,
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(color = cs.outlineVariant)
+                            }
                         }
                     }
                 }
