@@ -73,6 +73,7 @@ jobs:
               - 'apps/android/**'
             desktop:
               - 'apps/desktop/**'
+              - 'apps/ui/**'
             ios:
               - 'apps/iosApp/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
