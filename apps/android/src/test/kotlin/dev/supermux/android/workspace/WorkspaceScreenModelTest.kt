@@ -103,6 +103,47 @@ class WorkspaceScreenModelTest {
         assertTrue("w5" in switched)
     }
 
+    @Test fun chatActivationFirstSelectionActivates() {
+        val chat = ViewDto(id = "chat", workspaceId = "w1", kind = "chat")
+        val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat), activeViewId = "editor")
+        assertEquals(
+            ChatActivationHandle.ApplyConsume,
+            chatActivationDecision("s1", lastActivated = null, ws, chat),
+        )
+    }
+
+    @Test fun chatActivationSameSelectionAfterWorkspaceChangeDoesNotActivate() {
+        val chat = ViewDto(id = "chat", workspaceId = "w1", kind = "chat")
+        val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat), activeViewId = "editor")
+        assertEquals(
+            ChatActivationHandle.Skip,
+            chatActivationDecision("s1", lastActivated = "s1", ws, chat),
+        )
+    }
+
+    @Test fun chatActivationNewSelectionActivates() {
+        val chat = ViewDto(id = "chat", workspaceId = "w1", kind = "chat")
+        val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat), activeViewId = "editor")
+        assertEquals(
+            ChatActivationHandle.ApplyConsume,
+            chatActivationDecision("s2", lastActivated = "s1", ws, chat),
+        )
+    }
+
+    @Test fun chatActivationRetriesWhenWorkspacesEmpty() {
+        assertEquals(
+            ChatActivationHandle.ApplyRetry,
+            chatActivationDecision("s1", lastActivated = null, ws = null, chatView = null),
+        )
+    }
+
+    @Test fun chatActivationSkipsBlankSelection() {
+        val chat = ViewDto(id = "chat", workspaceId = "w1", kind = "chat")
+        val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat))
+        assertEquals(ChatActivationHandle.Skip, chatActivationDecision(null, null, ws, chat))
+        assertEquals(ChatActivationHandle.Skip, chatActivationDecision("", null, ws, chat))
+    }
+
     @Test fun workspaceForSessionFindsChatOwner() {
         val chat = ViewDto(
             id = "v1",

@@ -2,6 +2,7 @@ package dev.supermux.android.workspace
 
 import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectViewIds
@@ -27,6 +28,29 @@ fun phoneTabModel(layout: LayoutNode?, activeViewId: String?): PhoneTabModel {
 /** PATCH used by [dev.supermux.android.AppViewModel.setActiveView] — never includes a layout. */
 fun activeViewPatchBody(activeViewId: String): PatchWorkspaceBody =
     PatchWorkspaceBody(name = null, layout = null, activeViewId = activeViewId)
+
+/**
+ * Whether opening a session should PATCH the workspace's chat view active.
+ *
+ * Runs once per [selected] change ([lastActivated] is the last selection we
+ * fully resolved). Empty workspaces still retry so cold start can activate
+ * once the list lands — a later [WorkspaceChanged] for the same selection
+ * must not re-activate (that frame is the broker acknowledging a tab switch).
+ */
+fun chatActivationDecision(
+    selected: String?,
+    lastActivated: String?,
+    ws: WorkspaceDto?,
+    chatView: ViewDto?,
+): ChatActivationHandle {
+    val sid = selected?.takeIf { it.isNotBlank() } ?: return ChatActivationHandle.Skip
+    if (sid == lastActivated) return ChatActivationHandle.Skip
+    if (ws == null) return ChatActivationHandle.ApplyRetry
+    if (chatView == null) return ChatActivationHandle.Skip
+    return ChatActivationHandle.ApplyConsume
+}
+
+enum class ChatActivationHandle { Skip, ApplyRetry, ApplyConsume }
 
 fun phoneAddKinds(): List<NewViewKind> = listOf(
     NewViewKind.TERMINAL,

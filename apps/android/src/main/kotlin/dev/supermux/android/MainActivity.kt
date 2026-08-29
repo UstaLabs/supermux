@@ -88,6 +88,8 @@ import dev.supermux.android.nav.Usage
 import dev.supermux.android.session.SessionKeepAlivePhoneHost
 import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
+import dev.supermux.android.workspace.ChatActivationHandle
+import dev.supermux.android.workspace.chatActivationDecision
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
 import dev.supermux.android.workspace.SessionsRail
@@ -304,8 +306,6 @@ class MainActivity : ComponentActivity() {
                         vm.ensureMessagesLoaded(it)
                         val hostId = sessionHost[it] ?: vm.activeHost.value
                         val ws = hostId?.let { h -> vm.workspaceForSession(h, it) }
-                        val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == it }
-                        if (ws != null && chatView != null) vm.setActiveView(ws.id, chatView.id)
                         val layout = ws?.layout?.toDomainOrNull()
                         val visibleIds = if (ws != null) {
                             visibleChatIdsForAndroid(wide, ws, layout)
@@ -315,6 +315,24 @@ class MainActivity : ComponentActivity() {
                         for (id in notificationCancelSessionIds(visibleIds, it)) {
                             SupermuxMessagingService.cancelForSession(applicationContext, id)
                         }
+                    }
+                }
+                // Activate the opened session's chat view once per selection — never in
+                // response to WorkspaceChanged (that frame is the broker acknowledging a
+                // user tab switch). Cold start retries while workspaces are still empty.
+                var lastActivatedSelection by rememberSaveable { mutableStateOf<String?>(null) }
+                LaunchedEffect(selected, workspaces) {
+                    val sid = selected ?: return@LaunchedEffect
+                    val hostId = sessionHost[sid] ?: vm.activeHost.value
+                    val ws = hostId?.let { h -> vm.workspaceForSession(h, sid) }
+                    val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == sid }
+                    val decision = chatActivationDecision(sid, lastActivatedSelection, ws, chatView)
+                    if (decision == ChatActivationHandle.Skip) return@LaunchedEffect
+                    if (decision == ChatActivationHandle.ApplyConsume) {
+                        if (ws != null && chatView != null && ws.activeViewId != chatView.id) {
+                            vm.setActiveView(ws.id, chatView.id)
+                        }
+                        lastActivatedSelection = sid
                     }
                 }
                 // A tapped push carries the chat id. Resolve the owning workspace (Phase 4) and
