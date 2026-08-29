@@ -105,14 +105,14 @@ Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layou
 - [x] Keep `Breakpoint.kt`, `SessionsRail.kt`, `WorkspaceShortcuts` (keyboard on tablets).
 - [x] Commit: `refactor(android): drop the client-local pane layout`.
 
-### Phase 5 — Continue-in-new-conversation and chat header parity
+### Phase 5 — Continue-in-new-conversation and chat header parity — DONE `ef3edb4a`…`ab71a250` (2026-08-29)
 
 **Files:** `chat/ChatScreen.kt` header, `session/SessionLauncherScreen.kt`, `chat/Pickers.kt`.
 
-- [ ] Chat header ⋮ menu: detail level / rename / mute / **continue** (desktop `4f7526e1`).
-- [ ] Continue: `BrokerApi.spawn(SpawnBody(workspaceId = current, inheritFrom = sessionId, firstMessage = prefill))`; do **not** fire a WS `Send` after spawn — broker delivers `firstMessage` after `session_added` (`9c78b06e`). Reuse shared `HandoffPrefill`.
-- [ ] "New chat in this workspace" from the workspace row joins the workspace and starts in its workdir (`55c4552d`-style: pass `workspaceId` on `POST /sessions`).
-- [ ] Commit: `feat(android): continue in new conversation inside the same workspace`.
+- [x] Chat header ⋮ menu: detail level / rename / mute / **continue** (desktop `4f7526e1`).
+- [x] Continue: `BrokerApi.spawn(SpawnBody(workspaceId = current, inheritFrom = sessionId, firstMessage = prefill))`; do **not** fire a WS `Send` after spawn — broker delivers `firstMessage` after `session_added` (`9c78b06e`). Reuse shared `HandoffPrefill`.
+- [x] "New chat in this workspace" from the workspace row joins the workspace and starts in its workdir (`55c4552d`-style: pass `workspaceId` on `POST /sessions`).
+- [x] Commit: `feat(android): continue in new conversation inside the same workspace`.
 
 ### Phase 6 — Presence, unread, notifications on the workspace model
 
