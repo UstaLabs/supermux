@@ -27,6 +27,8 @@ import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.NewViewPlacement
+import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.viewTitle
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf

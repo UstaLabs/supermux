@@ -3,7 +3,7 @@
 //
 // Pure lookup, no Compose: the "+" hands a kind to [openSingletonView] and either reveals what it
 // finds or creates a view.
-package dev.supermux.desktop.shell
+package dev.supermux.workspace
 
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.LayoutNode

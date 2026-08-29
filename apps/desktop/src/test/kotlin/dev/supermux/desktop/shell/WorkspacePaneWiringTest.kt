@@ -22,6 +22,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.NewViewKind
+import dev.supermux.workspace.NewViewPlacement
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import dev.supermux.ui.panes.PaneHost

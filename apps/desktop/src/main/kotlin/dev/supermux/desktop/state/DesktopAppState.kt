@@ -1207,25 +1207,25 @@ class DesktopAppState(
      */
     fun addWorkspaceView(
         workspaceId: String,
-        kind: dev.supermux.desktop.shell.NewViewKind,
+        kind: dev.supermux.workspace.NewViewKind,
         groupId: String,
         /** Called with the new view id once the broker has created it. */
         onCreated: (String) -> Unit = {},
     ) {
         val state: JsonObject = when (kind) {
-            dev.supermux.desktop.shell.NewViewKind.TERMINAL -> buildJsonObject {
+            dev.supermux.workspace.NewViewKind.TERMINAL -> buildJsonObject {
                 put("scope", JsonPrimitive("workspace"))
                 // Unique per tab so two terminals in one workspace are two shells.
                 put("terminalId", JsonPrimitive("t" + Instant.now().toEpochMilli().toString().takeLast(6)))
             }
-            dev.supermux.desktop.shell.NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
+            dev.supermux.workspace.NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
             // Same `editor` kind, different mode — a diff pane. No `diffBase`: the pane defaults to
             // the working tree and the base picker writes one when the user chooses another.
-            dev.supermux.desktop.shell.NewViewKind.DIFF -> buildJsonObject { put("mode", JsonPrimitive("diff")) }
-            dev.supermux.desktop.shell.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
+            dev.supermux.workspace.NewViewKind.DIFF -> buildJsonObject { put("mode", JsonPrimitive("diff")) }
+            dev.supermux.workspace.NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
             // A pending chat: no sessionId yet. The tab renders the new-session
             // composer, and binds to a real session on first send (bindChatView).
-            dev.supermux.desktop.shell.NewViewKind.CHAT -> buildJsonObject { }
+            dev.supermux.workspace.NewViewKind.CHAT -> buildJsonObject { }
         }
         stateScope.launch {
             runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
