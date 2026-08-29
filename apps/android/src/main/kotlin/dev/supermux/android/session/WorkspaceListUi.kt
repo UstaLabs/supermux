@@ -194,6 +194,29 @@ fun WorkspaceRow(
                                     Spacer(Modifier.width(Space.sm))
                                     dev.supermux.android.host.HostBadge(hostBadge)
                                 }
+                                Box {
+                                    var menu by remember { mutableStateOf(false) }
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_more_vert),
+                                        contentDescription = "More",
+                                        tint = cs.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clickable {
+                                                haptic(HapticKind.Tick)
+                                                menu = true
+                                            },
+                                    )
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Rename") },
+                                            onClick = {
+                                                menu = false
+                                                onRename()
+                                            },
+                                        )
+                                    }
+                                }
                             }
                             Text(
                                 model.pathLabel,
@@ -228,7 +251,7 @@ fun WorkspaceRow(
                             .fillMaxWidth()
                             .clickable {
                                 haptic(HapticKind.Tick)
-                                onChildClick(resolveWorkspaceChildOpenSessionId(w.id, child.sessionId))
+                                onChildClick(child.sessionId)
                             }
                             .padding(horizontal = 8.dp, vertical = 6.dp),
                     )

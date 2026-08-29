@@ -1,15 +1,13 @@
 package dev.supermux.android.session
 
+import dev.supermux.android.host.WorkspaceHostState
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
-import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.formatWorkdir
 import dev.supermux.workspace.WorkspaceActivity
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,18 +16,10 @@ import kotlin.test.assertTrue
 
 class WorkspaceListTest {
 
-    private fun chatView(id: String, sessionId: String, workspaceId: String = "w") = ViewDto(
-        id = id,
-        workspaceId = workspaceId,
-        kind = "chat",
-        state = JsonObject(mapOf("sessionId" to JsonPrimitive(sessionId))),
-    )
+    private fun chatView(id: String, sessionId: String, workspaceId: String = "w") =
+        workspaceChatView(id, sessionId, workspaceId)
 
-    private fun termView(id: String, workspaceId: String = "w") = ViewDto(
-        id = id,
-        workspaceId = workspaceId,
-        kind = "terminal",
-    )
+    private fun termView(id: String, workspaceId: String = "w") = workspaceTermView(id, workspaceId)
 
     private fun ws(
         id: String = "w1",
@@ -41,16 +31,18 @@ class WorkspaceListTest {
         primarySessionId: String? = null,
         status: String = "active",
         archivedAt: String? = null,
-    ) = WorkspaceDto(
+        sortOrder: Int = 0,
+    ) = workspaceDto(
         id = id,
         name = name,
-        status = status,
         workdir = workdir,
         repoRoot = repoRoot,
+        views = views,
         activeViewId = activeViewId,
         primarySessionId = primarySessionId,
+        status = status,
         archivedAt = archivedAt,
-        views = views,
+        sortOrder = sortOrder,
     )
 
     private fun session(
@@ -135,7 +127,7 @@ class WorkspaceListTest {
         assertEquals(git, row.git)
         assertEquals(WorkspaceActivity.WORKING, row.activity)
         assertTrue(row.multiAgent)
-        assertTrue(row.unread)
+        assertFalse(row.unread)
         assertEquals(listOf("s1", "s2"), row.children.map { it.sessionId })
         assertEquals(listOf("Agent A", "Agent B"), row.children.map { it.name })
         assertEquals("s1", row.primarySessionId)
@@ -175,6 +167,48 @@ class WorkspaceListTest {
             emptyMap(), last, lastRead, "/home/u", selectedSessionId = "s1",
         )
         assertTrue(row.unread)
+    }
+
+    @Test
+    fun unread_isFalseWhenThatChatIsWorking() {
+        val w = ws(
+            views = listOf(chatView("v1", "s1"), chatView("v2", "s2")),
+            primarySessionId = "s1",
+        )
+        val last = mapOf(
+            "s2" to LogEntry(id = "m", ts = "2026-08-01T12:00:00.000Z", direction = "out"),
+        )
+        val lastRead = mapOf("s2" to "2026-08-01T11:00:00.000Z")
+        val agent = mapOf("s2" to AgentStatus(phase = "running", working = true))
+        val row = deriveWorkspaceRow(
+            w, mapOf("s1" to session("s1"), "s2" to session("s2")),
+            agent, last, lastRead, "/home/u", selectedSessionId = null,
+        )
+        assertFalse(row.unread)
+    }
+
+    @Test
+    fun archivedFold_isIndependentOfLiveWorkspaces() {
+        assertFalse(sessionListShowsArchivedWorkspaceFold(emptyList()))
+        assertTrue(sessionListShowsArchivedWorkspaceFold(listOf(ws(id = "arch", status = "archived"))))
+    }
+
+    @Test
+    fun sidebarReorderKind_emptyLiveWorkspacesUsesSessions() {
+        assertEquals(SidebarReorderKind.SESSIONS, sidebarReorderKind(emptyList()))
+        assertEquals(SidebarReorderKind.WORKSPACES, sidebarReorderKind(listOf(ws())))
+    }
+
+    @Test
+    fun applyWorkspaceReorder_updatesTheHostBucketThatHoldsTheIds() {
+        val hostA = WorkspaceHostState(workspaces = listOf(ws(id = "wa", sortOrder = 0), ws(id = "wb", sortOrder = 1)))
+        val hostB = WorkspaceHostState(workspaces = listOf(ws(id = "wc", sortOrder = 0)))
+        val next = applyWorkspaceReorder(
+            mapOf("a" to hostA, "b" to hostB),
+            orderedIds = listOf("wb", "wa"),
+        )
+        assertEquals(listOf(1, 0), next.getValue("a").workspaces.map { it.sortOrder })
+        assertEquals(listOf(0), next.getValue("b").workspaces.map { it.sortOrder })
     }
 
     @Test

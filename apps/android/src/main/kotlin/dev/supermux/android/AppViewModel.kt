@@ -65,6 +65,11 @@ import dev.supermux.android.host.WorkspaceHostState
 import dev.supermux.android.host.reduceWorkspaceFrame
 import dev.supermux.android.session.LauncherDraft
 import dev.supermux.android.session.LauncherPrefs
+import dev.supermux.android.session.SidebarReorderKind
+import dev.supermux.android.session.applyArchiveWorkspace
+import dev.supermux.android.session.applyRestoreWorkspace
+import dev.supermux.android.session.applyWorkspaceReorder
+import dev.supermux.android.session.sidebarReorderKind
 import dev.supermux.android.session.StagedUpload
 import dev.supermux.android.settings.AddCustomLspArgs
 import dev.supermux.host.HostSnapshotStore
@@ -1263,16 +1268,10 @@ class AppViewModel(
     }
 
     fun reorderWorkspaces(orderedIds: List<String>) {
-        val order = orderedIds.withIndex().associate { (i, id) -> id to i }
-        if (order.isEmpty()) return
-        val recordId = _activeHost.value
-        if (recordId != null) {
-            val st = workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE
-            workspacesByHost[recordId] = st.copy(
-                workspaces = st.workspaces.map { w ->
-                    order[w.id]?.let { w.copy(sortOrder = it) } ?: w
-                },
-            )
+        val next = applyWorkspaceReorder(workspacesByHost, orderedIds)
+        if (next !== workspacesByHost) {
+            workspacesByHost.clear()
+            workspacesByHost.putAll(next)
             publishWorkspaces()
         }
         viewModelScope.launch {
@@ -1280,10 +1279,20 @@ class AppViewModel(
         }
     }
 
+    /** Active-host live workspaces decide session vs workspace reorder (one branch for all hosts). */
+    fun reorderRows(orderedIds: List<String>) {
+        val live = workspacesByHost[_activeHost.value]?.workspaces.orEmpty()
+        if (sidebarReorderKind(live) == SidebarReorderKind.SESSIONS) {
+            reorderSessions(orderedIds)
+        } else {
+            reorderWorkspaces(orderedIds)
+        }
+    }
+
     fun archiveWorkspace(id: String) {
         val recordId = _activeHost.value ?: return
         val st = workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE
-        val next = dev.supermux.android.session.applyArchiveWorkspace(st.workspaces, st.archivedWorkspaces, id)
+        val next = applyArchiveWorkspace(st.workspaces, st.archivedWorkspaces, id)
         workspacesByHost[recordId] = st.copy(workspaces = next.live, archivedWorkspaces = next.archived)
         publishWorkspaces()
         viewModelScope.launch {
@@ -1294,7 +1303,7 @@ class AppViewModel(
     fun restoreWorkspace(id: String) {
         val recordId = _activeHost.value ?: return
         val st = workspacesByHost[recordId] ?: EMPTY_WORKSPACE_STATE
-        val next = dev.supermux.android.session.applyRestoreWorkspace(st.workspaces, st.archivedWorkspaces, id)
+        val next = applyRestoreWorkspace(st.workspaces, st.archivedWorkspaces, id)
         workspacesByHost[recordId] = st.copy(workspaces = next.live, archivedWorkspaces = next.archived)
         publishWorkspaces()
         viewModelScope.launch {

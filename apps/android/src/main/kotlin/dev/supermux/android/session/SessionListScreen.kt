@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -586,7 +587,7 @@ fun SessionListScreen(
     val agentTyped = remember(agentState) {
         agentState.mapNotNull { (k, v) -> v?.let { k to it } }.toMap()
     }
-    val wsHome = inferHomeDir(workspaces.firstOrNull()?.workdir) ?: effectiveHome
+    val wsHome = remember(workspaces) { inferHomeDir(workspaces.firstOrNull()?.workdir) } ?: effectiveHome
     val wsGroups = remember(workspaces, sessions, wsHome) {
         groupWorkspaces(workspaces, wsHome) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
@@ -623,18 +624,22 @@ fun SessionListScreen(
         haptic(HapticKind.Tick)
     }
 
-    fun wsRowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
-        WORKSPACE_FLAT_SCOPE -> wsGroups
+    val wsFlatRows = remember(wsGroups) {
+        wsGroups
             .filter { it.key != PA_GROUP_KEY }
             .flatMap { it.workspaces }
             .sortedWith(compareBy({ it.sortOrder }, { it.id }))
+    }
+    val wsFlatIds = remember(wsFlatRows) { wsFlatRows.map { it.id }.toSet() }
+
+    fun wsRowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
+        WORKSPACE_FLAT_SCOPE -> wsFlatRows
         else -> wsGroups.firstOrNull { it.key == scopeKey }?.workspaces.orEmpty()
     }
 
     fun wsScopeOf(workspaceId: String): String? {
         if (!groupByProject) {
-            val restIds = wsRowsForScope(WORKSPACE_FLAT_SCOPE).map { it.id }
-            return if (workspaceId in restIds) WORKSPACE_FLAT_SCOPE else null
+            return if (workspaceId in wsFlatIds) WORKSPACE_FLAT_SCOPE else null
         }
         return wsGroups.firstOrNull { g ->
             g.key != PA_GROUP_KEY && g.workspaces.any { it.id == workspaceId }
@@ -665,6 +670,21 @@ fun SessionListScreen(
             workingOrders.remove(move.scope)
         }
     }
+
+    val onToggleWsChildren: (String) -> Unit = remember {
+        { id ->
+            expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
+        }
+    }
+    val onOpenSwipeRowChangeWs: (String?) -> Unit = remember { { openSwipeRowId = it } }
+    val onOpenLatest = rememberUpdatedState(onOpen)
+    val onMuteLatest = rememberUpdatedState(onMute)
+    val onOpenWs: (String) -> Unit = remember { { id -> onOpenLatest.value(id) } }
+    val onMuteWs: (String, Boolean) -> Unit = remember { { id, mute -> onMuteLatest.value(id, mute) } }
+    val onBeginWsDrag: (WorkspaceDto) -> Unit = { beginWorkspaceDrag(it) }
+    val onFinishWsDrag: () -> Unit = { finishDrag() }
+    val onRenameWs: (WorkspaceDto) -> Unit = { renameWorkspaceTarget = it; renameText = it.name }
+    val onArchiveWs: (WorkspaceDto) -> Unit = { archiveWorkspaceTarget = it }
 
     // Native Compose reorder (sh.calvin.reorderable) — elevates the item, auto-scrolls,
     // animates neighbors. Used by production apps (Pocket Casts, ProtonVPN, etc.).
@@ -973,6 +993,8 @@ fun SessionListScreen(
                     applyWorkspaceWorkingOrder(list, wsWorkingOrders[scopeKey])
 
                 if (!groupByProject) {
+                    val rest = ordered(WORKSPACE_FLAT_SCOPE, wsFlatRows)
+                    val flatRows = if (pas.isNotEmpty()) pas + rest else rest
                     if (pas.isNotEmpty()) {
                         item(key = "flat:pa_hdr") {
                             Text(
@@ -984,43 +1006,8 @@ fun SessionListScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             )
                         }
-                        itemsIndexed(pas, key = { _, w -> "ws:${w.id}" }) { _, w ->
-                            WorkspaceReorderableRow(
-                                w = w,
-                                grouped = false,
-                                first = true,
-                                last = true,
-                                reorderableState = reorderableState,
-                                sessionById = sessionById,
-                                agentTyped = agentTyped,
-                                lastBySession = lastBySession,
-                                lastRead = lastRead,
-                                wsHome = wsHome,
-                                activeId = activeId,
-                                showRowHostBadge = showRowHostBadge,
-                                hostByRecord = hostByRecord,
-                                sessionHost = sessionHost,
-                                openSwipeRowId = openSwipeRowId,
-                                onOpenSwipeRowChange = { openSwipeRowId = it },
-                                expandedChildren = expandedChildren,
-                                onToggleChildren = { id ->
-                                    expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
-                                },
-                                onOpen = onOpen,
-                                onMute = onMute,
-                                onBeginDrag = { beginWorkspaceDrag(it) },
-                                onFinishDrag = { finishDrag() },
-                                onRenameWs = { renameWorkspaceTarget = it; renameText = it.name },
-                                onArchiveWs = { archiveWorkspaceTarget = it },
-                            )
-                        }
                     }
-                    val rest = ordered(
-                        WORKSPACE_FLAT_SCOPE,
-                        wsGroups.filter { it.key != PA_GROUP_KEY }.flatMap { it.workspaces }
-                            .sortedWith(compareBy({ it.sortOrder }, { it.id })),
-                    )
-                    itemsIndexed(rest, key = { _, w -> "ws:${w.id}" }) { _, w ->
+                    itemsIndexed(flatRows, key = { _, w -> "ws:${w.id}" }) { _, w ->
                         WorkspaceReorderableRow(
                             w = w,
                             grouped = false,
@@ -1037,17 +1024,15 @@ fun SessionListScreen(
                             hostByRecord = hostByRecord,
                             sessionHost = sessionHost,
                             openSwipeRowId = openSwipeRowId,
-                            onOpenSwipeRowChange = { openSwipeRowId = it },
+                            onOpenSwipeRowChange = onOpenSwipeRowChangeWs,
                             expandedChildren = expandedChildren,
-                            onToggleChildren = { id ->
-                                expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
-                            },
-                            onOpen = onOpen,
-                            onMute = onMute,
-                            onBeginDrag = { beginWorkspaceDrag(it) },
-                            onFinishDrag = { finishDrag() },
-                            onRenameWs = { renameWorkspaceTarget = it; renameText = it.name },
-                            onArchiveWs = { archiveWorkspaceTarget = it },
+                            onToggleChildren = onToggleWsChildren,
+                            onOpen = onOpenWs,
+                            onMute = onMuteWs,
+                            onBeginDrag = onBeginWsDrag,
+                            onFinishDrag = onFinishWsDrag,
+                            onRenameWs = onRenameWs,
+                            onArchiveWs = onArchiveWs,
                         )
                     }
                 } else {
@@ -1090,47 +1075,15 @@ fun SessionListScreen(
                                     hostByRecord = hostByRecord,
                                     sessionHost = sessionHost,
                                     openSwipeRowId = openSwipeRowId,
-                                    onOpenSwipeRowChange = { openSwipeRowId = it },
+                                    onOpenSwipeRowChange = onOpenSwipeRowChangeWs,
                                     expandedChildren = expandedChildren,
-                                    onToggleChildren = { id ->
-                                        expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id
-                                    },
-                                    onOpen = onOpen,
-                                    onMute = onMute,
-                                    onBeginDrag = { beginWorkspaceDrag(it) },
-                                    onFinishDrag = { finishDrag() },
-                                    onRenameWs = { renameWorkspaceTarget = it; renameText = it.name },
-                                    onArchiveWs = { archiveWorkspaceTarget = it },
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (archivedWorkspaces.isNotEmpty()) {
-                    item(key = "archived_fold") {
-                        ArchivedFoldButton(
-                            count = archivedWorkspaces.size,
-                            expanded = archivedFoldOpen,
-                            onClick = { archivedFoldOpen = !archivedFoldOpen },
-                        )
-                    }
-                    if (archivedFoldOpen) {
-                        archivedWsGroups.forEach { g ->
-                            item(key = "arch:hdr:${g.key}") {
-                                Text(
-                                    g.label,
-                                    color = cs.onSurfaceVariant,
-                                    fontFamily = MonoFontFamily,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                                )
-                            }
-                            items(g.workspaces, key = { "arch:${it.id}" }) { w ->
-                                ArchivedWorkspaceRow(
-                                    model = deriveArchivedWorkspaceRow(w, wsHome),
-                                    onSelect = { resolveWorkspaceOpenSessionId(w)?.let(onOpen) },
-                                    onRestore = { onRestoreWorkspace(w.id) },
+                                    onToggleChildren = onToggleWsChildren,
+                                    onOpen = onOpenWs,
+                                    onMute = onMuteWs,
+                                    onBeginDrag = onBeginWsDrag,
+                                    onFinishDrag = onFinishWsDrag,
+                                    onRenameWs = onRenameWs,
+                                    onArchiveWs = onArchiveWs,
                                 )
                             }
                         }
@@ -1444,6 +1397,35 @@ fun SessionListScreen(
                     }
                 }
             }
+            if (sessionListShowsArchivedWorkspaceFold(archivedWorkspaces)) {
+                item(key = "archived_fold") {
+                    ArchivedFoldButton(
+                        count = archivedWorkspaces.size,
+                        expanded = archivedFoldOpen,
+                        onClick = { archivedFoldOpen = !archivedFoldOpen },
+                    )
+                }
+                if (archivedFoldOpen) {
+                    archivedWsGroups.forEach { g ->
+                        item(key = "arch:hdr:${g.key}") {
+                            Text(
+                                g.label,
+                                color = cs.onSurfaceVariant,
+                                fontFamily = MonoFontFamily,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                            )
+                        }
+                        items(g.workspaces, key = { "arch:${it.id}" }) { w ->
+                            ArchivedWorkspaceRow(
+                                model = deriveArchivedWorkspaceRow(w, wsHome),
+                                onSelect = { resolveWorkspaceOpenSessionId(w)?.let(onOpenWs) },
+                                onRestore = { onRestoreWorkspace(w.id) },
+                            )
+                        }
+                    }
+                }
+            }
             // Bottom padding so the FAB doesn't cover the last item
             item(key = "bottom_spacer") { Spacer(Modifier.height(88.dp)) }
         } // LazyColumn
@@ -1550,7 +1532,7 @@ private fun OfflineHostHeader(host: dev.supermux.android.host.HostView) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun androidx.compose.foundation.lazy.LazyItemScope.WorkspaceReorderableRow(
+private fun LazyItemScope.WorkspaceReorderableRow(
     w: WorkspaceDto,
     grouped: Boolean,
     first: Boolean,
@@ -1577,15 +1559,17 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.WorkspaceReorderableR
     onArchiveWs: (WorkspaceDto) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val model = deriveWorkspaceRow(
-        w = w,
-        sessionsById = sessionById,
-        agentState = agentTyped,
-        lastBySession = lastBySession,
-        lastRead = lastRead,
-        home = wsHome,
-        selectedSessionId = activeId,
-    )
+    val model = remember(w, sessionById, agentTyped, lastBySession, lastRead, wsHome, activeId) {
+        deriveWorkspaceRow(
+            w = w,
+            sessionsById = sessionById,
+            agentState = agentTyped,
+            lastBySession = lastBySession,
+            lastRead = lastRead,
+            home = wsHome,
+            selectedSessionId = activeId,
+        )
+    }
     val primary = model.primarySessionId?.let { sessionById[it] }
     val openSid = model.openSessionId
     val isActive = openSid != null && openSid == activeId

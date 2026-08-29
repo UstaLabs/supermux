@@ -221,10 +221,7 @@ fun SessionKeepAlivePhoneHost(
                         archived = archived,
                         onResume = { id -> vm.resume(id) },
                         onOpenDraft = onOpenDraft,
-                        onReorder = { ids ->
-                            if (workspaces.isEmpty()) vm.reorderSessions(ids)
-                            else vm.reorderWorkspaces(ids)
-                        },
+                        onReorder = { ids -> vm.reorderRows(ids) },
                         workspaces = workspaces,
                         archivedWorkspaces = archivedWorkspaces,
                         onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },

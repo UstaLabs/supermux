@@ -373,10 +373,7 @@ class MainActivity : ComponentActivity() {
                                                 archived = archivedSessions,
                                                 onResume = { id -> vm.resume(id) },
                                                 onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                                onReorder = { ids ->
-                                                    if (workspaces.isEmpty()) vm.reorderSessions(ids)
-                                                    else vm.reorderWorkspaces(ids)
-                                                },
+                                                onReorder = { ids -> vm.reorderRows(ids) },
                                                 workspaces = workspaces,
                                                 archivedWorkspaces = archivedWorkspaces,
                                                 onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
@@ -504,10 +501,7 @@ class MainActivity : ComponentActivity() {
                                         archived = archivedSessions,
                                         onResume = { id -> vm.resume(id) },
                                         onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                        onReorder = { ids ->
-                                            if (workspaces.isEmpty()) vm.reorderSessions(ids)
-                                            else vm.reorderWorkspaces(ids)
-                                        },
+                                        onReorder = { ids -> vm.reorderRows(ids) },
                                         workspaces = workspaces,
                                         archivedWorkspaces = archivedWorkspaces,
                                         onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
@@ -699,6 +693,10 @@ class MainActivity : ComponentActivity() {
                             workspaces = archivedWorkspaces,
                             onRestore = { vm.restoreWorkspace(it) },
                             home = DevConfig.HOME,
+                            useWorkspaces = workspaces.isNotEmpty(),
+                            loadArchivedSessions = { vm.archived() },
+                            onResumeSession = { vm.resume(it) },
+                            loadLogs = { vm.archivedLogs(it) },
                         ) } }
                     }
                     composable<Proxies> {

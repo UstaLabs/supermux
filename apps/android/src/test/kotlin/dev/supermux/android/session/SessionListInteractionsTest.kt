@@ -1,11 +1,7 @@
 package dev.supermux.android.session
 
 import dev.supermux.proto.SessionInfo
-import dev.supermux.proto.ViewDto
-import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.SectionKey
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -133,73 +129,11 @@ class SessionListInteractionsTest {
         assertEquals(SessionReorderMove(scope, listOf("b", "a")), state.finish(commit = true))
     }
 
-    private fun chatView(id: String, sessionId: String) = ViewDto(
-        id = id,
-        workspaceId = "w",
-        kind = "chat",
-        state = JsonObject(mapOf("sessionId" to JsonPrimitive(sessionId))),
-    )
-
-    private fun workspace(
-        id: String,
-        views: List<ViewDto>,
-        activeViewId: String? = null,
-        primarySessionId: String? = null,
-        workdir: String = "/p",
-    ) = WorkspaceDto(
-        id = id,
-        name = id,
-        workdir = workdir,
-        activeViewId = activeViewId,
-        primarySessionId = primarySessionId,
-        views = views,
-    )
-
-    @Test
-    fun tapWorkspace_opensActiveChatViewSession() {
-        val w = workspace(
-            "w1",
-            views = listOf(chatView("v1", "s1"), chatView("v2", "s2")),
-            activeViewId = "v2",
-            primarySessionId = "s1",
-        )
-        assertEquals("s2", resolveWorkspaceOpenSessionId(w))
-    }
-
-    @Test
-    fun tapWorkspace_nonChatActiveView_opensFirstChat() {
-        val w = workspace(
-            "w1",
-            views = listOf(
-                ViewDto(id = "term", workspaceId = "w1", kind = "terminal"),
-                chatView("v1", "s1"),
-            ),
-            activeViewId = "term",
-            primarySessionId = "primary",
-        )
-        assertEquals("s1", resolveWorkspaceOpenSessionId(w))
-    }
-
-    @Test
-    fun tapWorkspace_noChatView_opensPrimarySession() {
-        val w = workspace(
-            "w1",
-            views = emptyList(),
-            primarySessionId = "primary",
-        )
-        assertEquals("primary", resolveWorkspaceOpenSessionId(w))
-    }
-
-    @Test
-    fun tapChild_opensThatSessionId() {
-        assertEquals("s2", resolveWorkspaceChildOpenSessionId(workspaceId = "w1", sessionId = "s2"))
-    }
-
     @Test
     fun reorderWorkspaces_emitsWorkspaceIds() {
-        val a = workspace("wa", emptyList())
-        val b = workspace("wb", emptyList())
-        val c = workspace("wc", emptyList())
+        val a = workspaceDto("wa", workdir = "/p")
+        val b = workspaceDto("wb", workdir = "/p")
+        val c = workspaceDto("wc", workdir = "/p")
         val move = moveWorkspaceWithinScope(
             rows = listOf(a, b, c),
             workingOrders = emptyMap(),

@@ -1,5 +1,6 @@
 package dev.supermux.android.session
 
+import dev.supermux.android.host.WorkspaceHostState
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LogEntry
@@ -36,8 +37,45 @@ fun resolveWorkspaceOpenSessionId(w: WorkspaceDto): String? {
     return w.primarySessionId
 }
 
-/** Child tap always opens that session — never the workspace id. */
-fun resolveWorkspaceChildOpenSessionId(workspaceId: String, sessionId: String): String = sessionId
+/** Sidebar archived-workspace fold is independent of whether live workspaces exist. */
+fun sessionListShowsArchivedWorkspaceFold(archivedWorkspaces: List<WorkspaceDto>): Boolean =
+    archivedWorkspaces.isNotEmpty()
+
+enum class SidebarReorderKind { SESSIONS, WORKSPACES }
+
+/** Same rule as the sidebar: empty live workspaces → session reorder, else workspace reorder. */
+fun sidebarReorderKind(liveWorkspaces: List<WorkspaceDto>): SidebarReorderKind =
+    if (liveWorkspaces.isEmpty()) SidebarReorderKind.SESSIONS else SidebarReorderKind.WORKSPACES
+
+/**
+ * Optimistic workspace reorder across every host bucket that contains any of [orderedIds],
+ * matching [AppViewModel.reorderSessions] host-scan behavior.
+ */
+fun applyWorkspaceReorder(
+    buckets: Map<String, WorkspaceHostState>,
+    orderedIds: List<String>,
+): Map<String, WorkspaceHostState> {
+    val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+    if (order.isEmpty()) return buckets
+    var changed = false
+    val next = buckets.mapValues { (_, st) ->
+        var hostChanged = false
+        val workspaces = st.workspaces.map { w ->
+            val so = order[w.id] ?: return@map w
+            if (w.sortOrder == so) w else {
+                hostChanged = true
+                w.copy(sortOrder = so)
+            }
+        }
+        if (hostChanged) {
+            changed = true
+            st.copy(workspaces = workspaces)
+        } else {
+            st
+        }
+    }
+    return if (changed) next else buckets
+}
 
 data class WorkspaceChildRowModel(
     val sessionId: String,
@@ -85,7 +123,7 @@ fun deriveWorkspaceRow(
     val unread = chatIds.any { sid ->
         sessionListShowsUnread(
             active = sid == selectedSessionId,
-            working = false,
+            working = agentState[sid]?.working == true,
             lastMessageTs = lastBySession[sid]?.ts,
             lastReadAt = lastRead[sid],
         )

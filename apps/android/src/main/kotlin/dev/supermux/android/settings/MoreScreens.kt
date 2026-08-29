@@ -1894,16 +1894,49 @@ fun ArchivedScreen(
     workspaces: List<WorkspaceDto>,
     onRestore: (String) -> Unit,
     home: String,
+    /** Same rule as the sidebar: empty live workspaces → session-archive fallback. */
+    useWorkspaces: Boolean = true,
+    loadArchivedSessions: suspend () -> List<ArchivedDto> = { emptyList() },
+    onResumeSession: (String) -> Unit = {},
+    loadLogs: suspend (String) -> List<LogEntry> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
     var restoredIds by remember { mutableStateOf(setOf<String>()) }
     var selectedProject by remember { mutableStateOf<String?>(null) }
     var filterOpen by remember { mutableStateOf(false) }
     val groups = remember(workspaces, home) { groupArchivedWorkspaces(workspaces, home) }
-    LaunchedEffect(groups) {
-        if (selectedProject != null && groups.none { it.key == selectedProject }) {
+    var sessionArchive by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
+    var sessionLoading by remember { mutableStateOf(false) }
+    var resumedIds by remember { mutableStateOf(setOf<String>()) }
+    var openedSession by remember { mutableStateOf<ArchivedDto?>(null) }
+    val useSessionFallback = !useWorkspaces
+    LaunchedEffect(useSessionFallback) {
+        if (useSessionFallback) {
+            sessionLoading = true
+            sessionArchive = loadArchivedSessions()
+            sessionLoading = false
+        }
+    }
+    val sessionProjects = remember(sessionArchive, home) { archivedProjects(sessionArchive, home) }
+    LaunchedEffect(groups, sessionProjects, useSessionFallback) {
+        val keys = if (useSessionFallback) sessionProjects.map { it.key } else groups.map { it.key }
+        if (selectedProject != null && keys.none { it == selectedProject }) {
             selectedProject = null
         }
+    }
+    openedSession?.let { session ->
+        ArchivedChatScreen(
+            sessionId = session.id,
+            name = session.name,
+            resumed = session.id in resumedIds,
+            onBack = { openedSession = null },
+            onResume = {
+                onResumeSession(session.id)
+                resumedIds = resumedIds + session.id
+            },
+            loadLogs = loadLogs,
+        )
+        return
     }
 
     Scaffold(
@@ -1920,7 +1953,8 @@ fun ArchivedScreen(
                     }
                 },
                 actions = {
-                    if (groups.isNotEmpty()) {
+                    val filterReady = if (useSessionFallback) sessionProjects.isNotEmpty() else groups.isNotEmpty()
+                    if (filterReady) {
                         Box {
                             IconButton(onClick = { filterOpen = true }) {
                                 Icon(
@@ -1937,14 +1971,26 @@ fun ArchivedScreen(
                                         { Icon(Icons.Default.Check, contentDescription = null) }
                                     } else null,
                                 )
-                                groups.forEach { g ->
-                                    DropdownMenuItem(
-                                        text = { Text("${g.label}  (${g.workspaces.size})") },
-                                        onClick = { selectedProject = g.key; filterOpen = false },
-                                        trailingIcon = if (selectedProject == g.key) {
-                                            { Icon(Icons.Default.Check, contentDescription = null) }
-                                        } else null,
-                                    )
+                                if (useSessionFallback) {
+                                    sessionProjects.forEach { p ->
+                                        DropdownMenuItem(
+                                            text = { Text("${p.label}  (${p.count})") },
+                                            onClick = { selectedProject = p.key; filterOpen = false },
+                                            trailingIcon = if (selectedProject == p.key) {
+                                                { Icon(Icons.Default.Check, contentDescription = null) }
+                                            } else null,
+                                        )
+                                    }
+                                } else {
+                                    groups.forEach { g ->
+                                        DropdownMenuItem(
+                                            text = { Text("${g.label}  (${g.workspaces.size})") },
+                                            onClick = { selectedProject = g.key; filterOpen = false },
+                                            trailingIcon = if (selectedProject == g.key) {
+                                                { Icon(Icons.Default.Check, contentDescription = null) }
+                                            } else null,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1959,6 +2005,33 @@ fun ArchivedScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
+                useSessionFallback && sessionLoading -> CircularProgressIndicator(
+                    color = cs.primary,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                useSessionFallback && sessionArchive.isEmpty() -> Text(
+                    "No archived sessions.",
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                useSessionFallback -> {
+                    val visible = filterArchivedByProject(sessionArchive, selectedProject)
+                    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                        items(visible, key = { it.id }) { session ->
+                            ArchivedRow(
+                                session = session,
+                                home = home,
+                                resumed = session.id in resumedIds,
+                                onOpen = { openedSession = session },
+                                onResume = {
+                                    onResumeSession(session.id)
+                                    resumedIds = resumedIds + session.id
+                                },
+                            )
+                            HorizontalDivider(color = cs.outlineVariant)
+                        }
+                    }
+                }
                 workspaces.isEmpty() -> Text(
                     "No archived workspaces.",
                     color = cs.onSurfaceVariant,
