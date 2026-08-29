@@ -192,7 +192,7 @@ jobs:
       # so splitting them buys nothing and pays the Gradle startup cost twice.
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
         working-directory: apps
-        run: xvfb-run -a ./gradlew :shared:jvmTest :desktop:test --build-cache --console=plain
+        run: xvfb-run -a ./gradlew :shared:jvmTest :ui:jvmTest :desktop:test --build-cache --console=plain
 
       # apps/android/google-services.json is gitignored (the real one carries the
       # app's API key), and without it :android:processDebugGoogleServices fails

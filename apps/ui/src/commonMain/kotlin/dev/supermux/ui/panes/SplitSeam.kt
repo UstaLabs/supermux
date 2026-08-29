@@ -3,8 +3,8 @@
 // Shared by PaneSplit (this module), and by the desktop's ResizableSplit and SidebarDivider — all
 // three must draw the same seam, so it lives in one place.
 //
-// NOTE: the resize cursors use java.awt.Cursor. That is fine while :ui is jvm-only; when an
-// Android target is added they need an expect/actual (Android has no pointer cursors at all).
+// NOTE: resize cursors are expect/actual — JVM uses AWT E/N_RESIZE; Android uses PointerIcon.Default
+// (no pointer cursors).
 package dev.supermux.ui.panes
 
 import androidx.compose.animation.animateColorAsState
@@ -35,7 +35,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import java.awt.Cursor
 
 /**
  * Overlay seam identical to [SidebarDivider]: [SplitSeamHitWidth] strip, centered hairline,
@@ -112,10 +111,8 @@ val SplitSeamHitWidth: Dp = 12.dp
 /** Half of [SplitSeamHitWidth] — offset so the strip center sits on the seam. */
 val SplitSeamCenterOffset: Dp = 6.dp
 
-/** CSS `col-resize` equivalent (Compose common API has no resize icons — desktop uses AWT). */
-val ColResizeIcon: PointerIcon =
-    PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR))
+/** CSS `col-resize` equivalent (Compose common API has no resize icons — JVM uses AWT). */
+expect val ColResizeIcon: PointerIcon
 
 /** CSS `row-resize` equivalent for horizontal (top/bottom) splits. */
-val RowResizeIcon: PointerIcon =
-    PointerIcon(Cursor.getPredefinedCursor(Cursor.N_RESIZE_CURSOR))
+expect val RowResizeIcon: PointerIcon

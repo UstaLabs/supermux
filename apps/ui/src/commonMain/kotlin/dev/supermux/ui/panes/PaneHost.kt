@@ -69,7 +69,6 @@ import dev.supermux.workspace.reorderWithinGroup
 import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.setSplitSizes
 import dev.supermux.workspace.splitGroup
-import java.util.UUID
 
 /**
  * Renders a workspace [LayoutNode] as nested resizable splits with tab groups at
@@ -203,7 +202,7 @@ fun PaneHost(
         }
         // Minted once, outside the transform: a replay must land on the same group
         // id, not invent a new one each time the edit is rebased onto a frame.
-        val newGroupId = UUID.randomUUID().toString()
+        val newGroupId = newPaneKey()
         applyEdit { tree ->
             when (target) {
                 is PaneDropTarget.Reorder ->
@@ -618,7 +617,7 @@ fun PaneTabStrip(
     val density = LocalDensity.current
     // Unique, stable key for this strip's PaneStripChrome registrations (groupId can be "" on
     // back-compat call sites, and groups can recompose across workspaces).
-    val chromeKey = remember { java.util.UUID.randomUUID().toString() }
+    val chromeKey = remember { newPaneKey() }
     // Live shuffle while dragging (origin strip); otherwise committed order.
     val displayIds = dragState?.displayOrder(groupId, viewIds) ?: viewIds
     val showInsertCaret = dragState?.isDragging == true &&
