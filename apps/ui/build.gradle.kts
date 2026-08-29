@@ -5,11 +5,6 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
-repositories {
-    mavenCentral()
-    google()
-}
-
 // The pane layer: splits, tab strips, drag, drop zones. It knows nothing about what a pane
 // contains — no view kinds, no sessions, no broker, no fonts of its own. Everything content-shaped
 // arrives through a slot (see PaneHost's tabSlot / addSlot / emptyGroupSlot).
