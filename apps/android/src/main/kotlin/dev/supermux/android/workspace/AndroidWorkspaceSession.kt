@@ -37,7 +37,7 @@ fun rememberWorkspaceSession(
     patchLayout = androidLayoutPatch(
         isWorkspaceWidth = isWorkspaceWidth,
         onPatch = { tree -> vm.patchWorkspaceLayout(workspace.id, tree.toDto()) },
-        onSkip = { Log.d("WorkspaceSession", "skipping layout PATCH on phone") },
+        onSkip = { Log.w("WorkspaceSession", "skipping layout PATCH on phone workspace=${workspace.id}") },
     ),
     fsRead = { p -> vm.workspaceFsRead(workspace.id, p) },
     fsWrite = { p, content -> vm.workspaceFsWrite(workspace.id, p, content) },

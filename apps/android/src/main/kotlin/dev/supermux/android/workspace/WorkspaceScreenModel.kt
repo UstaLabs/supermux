@@ -4,7 +4,6 @@ import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
-import dev.supermux.workspace.WorkspaceKeepAliveCache
 import dev.supermux.workspace.collectViewIds
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -50,9 +49,3 @@ fun addViewState(kind: NewViewKind, nowMillis: Long = 0L): JsonObject = when (ki
 fun closeNeedsConfirm(kind: String): Boolean = kind == "terminal" || kind == "display"
 
 fun closeNeedsConfirm(view: ViewDto): Boolean = closeNeedsConfirm(view.kind)
-
-fun keepAliveWorkspaceIds(
-    cache: WorkspaceKeepAliveCache,
-    activeWorkspaceId: String?,
-    liveWorkspaceIds: Set<String>,
-): List<String> = cache.update(activeWorkspaceId, liveWorkspaceIds)

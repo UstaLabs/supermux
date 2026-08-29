@@ -107,6 +107,7 @@ fun EditorPanel(
     onConsumesBackChange: (Boolean) -> Unit = {},
     pendingOpen: PendingEditorOpen? = null,
     onPendingOpenConsumed: () -> Unit = {},
+    editorPrefs: EditorPrefs? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = LocalPanes.current
@@ -145,9 +146,9 @@ fun EditorPanel(
         searchResults.addAll(fsSearch(q))
     }
 
-    val editorPrefs = remember(context) { EditorPrefs(context) }
-    val lineWrap = editorPrefs.lineWrap
-    val fontSize = editorPrefs.fontSize
+    val prefs = editorPrefs ?: remember(context) { EditorPrefs(context) }
+    val lineWrap = prefs.lineWrap
+    val fontSize = prefs.fontSize
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, lspStatus, lspRpc) {
@@ -173,7 +174,7 @@ fun EditorPanel(
         },
         // A pinch / keyboard zoom in the WebView persists here so it survives reopen.
         // The engine already applied it live, so this only writes the pref (no rebuild).
-        onFontSize = { px -> editorPrefs.persistFontSize(px) },
+        onFontSize = { px -> prefs.persistFontSize(px) },
     )
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true

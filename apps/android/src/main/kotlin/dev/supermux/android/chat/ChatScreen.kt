@@ -201,6 +201,7 @@ fun ChatScreen(
     onStartDisplay: suspend () -> Unit = {},
     onOpenDisplays: () -> Unit = {},
     consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
+    editorPrefs: dev.supermux.android.editor.EditorPrefs? = null,
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
     // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
     finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
@@ -687,6 +688,7 @@ fun ChatScreen(
                     onConsumesBackChange = onEditorConsumesBackChange,
                     pendingOpen = pendingEditorOpen,
                     onPendingOpenConsumed = { pendingEditorOpen = null },
+                    editorPrefs = editorPrefs,
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }

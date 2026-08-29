@@ -92,13 +92,13 @@ class WorkspaceScreenModelTest {
     @Test fun keepAliveIsKeyedByWorkspaceAndIncludesActive() {
         val cache = WorkspaceKeepAliveCache(maxSize = 3)
         val live = (1..5).map { "w$it" }.toSet()
-        keepAliveWorkspaceIds(cache, "w1", live)
-        keepAliveWorkspaceIds(cache, "w2", live)
-        keepAliveWorkspaceIds(cache, "w3", live)
-        val kept = keepAliveWorkspaceIds(cache, "w5", live)
+        cache.update("w1", live)
+        cache.update("w2", live)
+        cache.update("w3", live)
+        val kept = cache.update("w5", live)
         assertTrue("w5" in kept)
         assertEquals(3, kept.size)
-        val switched = keepAliveWorkspaceIds(cache, "w4", live)
+        val switched = cache.update("w4", live)
         assertTrue("w4" in switched)
         assertTrue("w5" in switched)
     }

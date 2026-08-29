@@ -475,6 +475,7 @@ private fun SessionChatLayer(
             onStartDisplay = { vm.startDisplay(session.name) },
             onOpenDisplays = onOpenDisplays,
             consumePendingFirst = { vm.consumePendingFirst(it) },
+            editorPrefs = vm.editorPrefs,
             onEditorConsumesBackChange = { editorConsumesBack = it },
             finishJob = finishJob,
             onFinishReadiness = { vm.finishReadiness(session.id) },

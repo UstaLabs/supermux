@@ -14,22 +14,11 @@ import dev.supermux.workspace.WorkspaceKeepAliveCache
 @Composable
 fun rememberVisitedWorkspaces(
     selected: String?,
-    liveWorkspaceIds: Set<String>,
-    cache: WorkspaceKeepAliveCache = remember { WorkspaceKeepAliveCache() },
+    liveIds: Set<String>,
+    maxSize: Int = 10,
+    cache: WorkspaceKeepAliveCache = remember(maxSize) { WorkspaceKeepAliveCache(maxSize = maxSize) },
 ): Set<String> {
-    val liveSnapshot = liveWorkspaceIds.toSet()
-    val retained = cache.preview(selected, liveSnapshot)
-    SideEffect { cache.commit(retained) }
-    return retained.toSet()
-}
-
-@Composable
-fun rememberVisitedViews(
-    selected: String?,
-    liveViewIds: Set<String>,
-    cache: WorkspaceKeepAliveCache = remember { WorkspaceKeepAliveCache(maxSize = 3) },
-): Set<String> {
-    val liveSnapshot = liveViewIds.toSet()
+    val liveSnapshot = liveIds.toSet()
     val retained = cache.preview(selected, liveSnapshot)
     SideEffect { cache.commit(retained) }
     return retained.toSet()

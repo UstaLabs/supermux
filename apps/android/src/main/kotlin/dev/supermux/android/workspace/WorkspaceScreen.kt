@@ -121,7 +121,7 @@ private fun PhoneWorkspace(
         val liveIds = tabs.viewIds.toSet()
         // Keep the last 3 visited views composed (hidden) so WebView/terminal PTY survive tab
         // switches. Evict LRU beyond 3 — more would pin too many WebViews on a phone.
-        val retained = rememberVisitedViews(tabs.selectedId, liveIds)
+        val retained = rememberVisitedWorkspaces(tabs.selectedId, liveIds, maxSize = 3)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (retained.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -231,7 +231,7 @@ private fun TabletWorkspace(
             )
         },
         addSlot = { groupId ->
-            PhoneAddChip(
+            AddViewChip(
                 wide = true,
                 onPick = { kind, placement ->
                     addTabletView(workspace, session, vm, kind, placement, groupId, newId)
@@ -289,13 +289,10 @@ internal fun addTabletView(
         val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
         val newGroupId = newId()
         layoutSync.edit { tree ->
-            when (val owner = groupIdOf(tree, id) ?: firstGroupId(tree)) {
-                newGroupId, null -> tree
-                else -> {
-                    val withView = if (groupIdOf(tree, id) == null) addViewToGroup(tree, owner, id) else tree
-                    splitGroup(withView, owner, id, dir, newGroupId)
-                }
-            }
+            val ownerId = groupIdOf(tree, id)
+            val owner = ownerId ?: firstGroupId(tree) ?: return@edit tree
+            val withView = if (ownerId == null) addViewToGroup(tree, owner, id) else tree
+            splitGroup(withView, owner, id, dir, newGroupId)
         }
     }
 }
@@ -322,7 +319,7 @@ private fun CloseViewDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PhoneAddChip(
+private fun AddViewChip(
     wide: Boolean = false,
     onPick: (NewViewKind, NewViewPlacement) -> Unit,
 ) {
