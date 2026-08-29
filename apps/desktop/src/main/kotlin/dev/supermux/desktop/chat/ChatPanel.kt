@@ -7,6 +7,7 @@ package dev.supermux.desktop.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,9 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -34,8 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
@@ -53,6 +63,8 @@ import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.SessionInfo
+import dev.supermux.session.inferHomeDir
+import dev.supermux.session.projectLabel
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.countToolsSince
@@ -65,6 +77,12 @@ import kotlinx.coroutines.launch
  *  1440-wide window instead of stretching edge-to-edge (obligation 2). Content is centered under
  *  this cap; below it, everything is fluid. */
 private val CONTENT_MAX_WIDTH = 860.dp
+
+/** Height of the fade that carries the transcript into the header above it (the scrim over the
+ *  timeline's LazyColumn). Long enough to read as a dissolve, short enough that it never veils a
+ *  whole message row. The composer edge deliberately has no fade — the transcript runs flush into
+ *  it instead. */
+private val EDGE_FADE = 28.dp
 
 /**
  * Stable list key for the timeline so the optimistic→real id swap (local-echo → broker MessageAppend)
@@ -267,26 +285,71 @@ fun ChatPanel(
         // Header (suppressed when embedded in the shell SessionDetail, which owns the identity bar).
         // ViewHost chat views use this header and need the ⋮ menu here.
         if (showHeader) {
+            // One fixed-height line: the name and the live status share a baseline, so the
+            // header never grows/shrinks (and the transcript never shifts) as the agent starts
+            // and stops working. NO bar and no rule — it shares the panel's own background and
+            // the transcript dissolves into it through the scrim below, so the eye reads one
+            // continuous surface instead of chrome stacked on content.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(cs.surface)
-                    .padding(start = Space.lg, end = Space.sm, top = Space.md, bottom = Space.md),
+                    .height(44.dp)
+                    .padding(start = Space.lg, end = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    // Breadcrumb, not a title: the PROJECT the session belongs to, then the
+                    // session itself. [projectLabel] is the shared leaf-of-repo_root rule the
+                    // sidebar and web already tag rows with — NOT the workdir's own basename,
+                    // which for a worktree session is a throwaway slug (`supermux-3962b5bf/…`).
+                    // Chrome type stays small (13sp) and the crumb stays muted so the only strong
+                    // ink on the line is the session's own name.
+                    val projectName = projectLabel(session, inferHomeDir(session.workdir))
+                    if (projectName.isNotEmpty()) {
+                        Icon(
+                            Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = projectName,
+                            fontSize = 13.sp,
+                            color = cs.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Text(
+                            text = "/",
+                            fontSize = 13.sp,
+                            color = cs.outline,
+                            modifier = Modifier.padding(horizontal = 7.dp),
+                        )
+                    }
                     Text(
                         text = session.name,
-                        style = MaterialTheme.typography.titleLarge, // Geist SemiBold
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
                         color = cs.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (statusText != null) {
+                        // A small dot carries the state's colour so the text itself can stay
+                        // quiet (muted mono) instead of shouting in primary/warning.
+                        Spacer(Modifier.width(Space.sm))
+                        Box(Modifier.size(5.dp).clip(CircleShape).background(statusColor))
+                        Spacer(Modifier.width(6.dp))
                         Text(
                             text = statusText,
                             fontFamily = MonoFontFamily,
-                            fontSize = 12.sp,
-                            color = statusColor,
-                            modifier = Modifier.padding(top = 2.dp),
+                            fontSize = 11.sp,
+                            color = cs.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -299,6 +362,7 @@ fun ChatPanel(
                     onForceOpenConsumed = onForceLinksMenuConsumed,
                 )
                 if (hasNative) {
+                    Spacer(Modifier.width(Space.xs))
                     AgentViewToggle(
                         nativeView = nativeView,
                         onSetNative = { nativeView = it },
@@ -364,7 +428,14 @@ fun ChatPanel(
                 modifier = Modifier
                     .widthIn(max = CONTENT_MAX_WIDTH)
                     .fillMaxHeight()
-                    .padding(horizontal = Space.lg, vertical = Space.md),
+                    .padding(horizontal = Space.lg),
+                // Vertical inset as CONTENT padding, not a Modifier pad: a Modifier pad clips the
+                // scroll viewport 12dp down, so rows popped into view at that line — a hard edge —
+                // while the fade above it had nothing to fade. As content padding the list draws
+                // to the very top of the Box, so rows scroll all the way under the scrim.
+                // Bottom inset is 0: the transcript runs flush into the composer, with no band of
+                // empty panel between the last row and the card.
+                contentPadding = PaddingValues(top = Space.md, bottom = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 items(timelineItems, key = { timelineItemKey(it) }) { item ->
@@ -376,12 +447,37 @@ fun ChatPanel(
                     )
                 }
             }
+            // Fade, not a rule: a short scrim of the panel's own background over the top of the
+            // scroll area, so a message scrolling up dissolves into the header instead of being
+            // guillotined by a hard edge. Non-interactive — it must never eat clicks on the row
+            // underneath, hence full width but no pointer input.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(EDGE_FADE)
+                    .align(Alignment.TopCenter)
+                    .background(
+                        // Eased stops, not a straight ramp: a linear alpha fade reads as a faint
+                        // band because perceived contrast falls off slower than alpha does.
+                        Brush.verticalGradient(
+                            0.00f to cs.surfaceContainerLow,
+                            0.45f to cs.surfaceContainerLow.copy(alpha = 0.72f),
+                            0.75f to cs.surfaceContainerLow.copy(alpha = 0.28f),
+                            1.00f to cs.surfaceContainerLow.copy(alpha = 0f),
+                        ),
+                    ),
+            )
         }
 
         // Composer — reading-width capped + centered to line up with the timeline.
         // No separate surface strip: share the panel's surfaceContainerLow so the composer
         // doesn't sit in a contrasting band under the timeline.
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+          Column(
+              Modifier
+                  .widthIn(max = CONTENT_MAX_WIDTH)
+                  .padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
+          ) {
             DesktopComposer(
                 draft = draft,
                 onDraftChange = onDraftChange,
@@ -431,10 +527,18 @@ fun ChatPanel(
                         }
                     }
                 },
-                modifier = Modifier
-                    .widthIn(max = CONTENT_MAX_WIDTH)
-                    .padding(horizontal = Space.lg, vertical = Space.md),
+                modifier = Modifier.fillMaxWidth(),
             )
+            // Detail + git context, directly under the card (see ComposerFooter).
+            ComposerFooter(
+                session = session,
+                onFetch = { app.gitFetch(session.id) },
+                onPull = { app.gitPull(session.id) },
+                onPush = { app.gitPush(session.id) },
+                onPublish = { app.gitPublish(session.id) },
+                modifier = Modifier.padding(top = 3.dp),
+            )
+          }
         }
         }
         if (hasNative && nativeOpened) {

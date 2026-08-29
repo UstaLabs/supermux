@@ -1119,23 +1119,12 @@ fun AppShell(
                                     )
                                 }
                             }
-                            val gitSession = remember(sessions, current) {
-                                val sid = current.primarySessionId ?: current.chatSessionIds().firstOrNull()
-                                sessions.firstOrNull { it.id == sid }
-                            }
+                            // No workspace git strip: the branch + its Fetch/Pull/Push live on the
+                            // chat's composer footer now (ComposerFooter), where the branch you are
+                            // about to commit to is in view as you type. A second copy above every
+                            // pane was the same fact stated twice. Tear-out stays reachable from the
+                            // Window menu (Main.kt) and the sidebar's own context menu.
                             Column(Modifier.fillMaxSize()) {
-                            WorkspaceHeader(
-                                gitSession = gitSession,
-                                onFetch = { gitSession?.let { s -> appFor(s.id).gitFetch(s.id) } },
-                                onPull = { gitSession?.let { s -> appFor(s.id).gitPull(s.id) } },
-                                onPush = { gitSession?.let { s -> appFor(s.id).gitPush(s.id) } },
-                                onPublish = { gitSession?.let { s -> appFor(s.id).gitPublish(s.id) } },
-                                forceGitMenu = gitSession?.takeIf { isActive }?.let { s ->
-                                    ui.forceGitMenuFor?.takeIf { it.first == s.id }?.second
-                                },
-                                onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
-                                onMoveWorkspaceToNewWindow = onTearOutWorkspace,
-                            )
                             val hostedLayout = ui.windowHosts.layoutFor(ui.windowHosts.main(), localLayout)
                                 ?: emptyHostLayout(localLayout)
                             WorkspacePanes(
