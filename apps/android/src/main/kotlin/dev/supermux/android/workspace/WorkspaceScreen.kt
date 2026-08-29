@@ -57,14 +57,15 @@ fun WorkspaceScreen(
     vm: AppViewModel,
     isWorkspaceWidth: Boolean,
     modifier: Modifier = Modifier,
+    onSelectSession: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val newId = remember { { UUID.randomUUID().toString() } }
     val session = rememberWorkspaceSession(workspace, vm, isWorkspaceWidth, scope, newId)
     if (isWorkspaceWidth) {
-        TabletWorkspace(workspace, session, vm, newId, modifier)
+        TabletWorkspace(workspace, session, vm, newId, modifier, onSelectSession)
     } else {
-        PhoneWorkspace(workspace, session, vm, newId, modifier)
+        PhoneWorkspace(workspace, session, vm, newId, modifier, onSelectSession)
     }
 }
 
@@ -76,6 +77,7 @@ private fun PhoneWorkspace(
     vm: AppViewModel,
     newId: () -> String,
     modifier: Modifier,
+    onSelectSession: (String) -> Unit,
 ) {
     val layout = workspace.layout.toDomainOrNull() ?: session.layoutSync.tree
     val tabs = phoneTabModel(layout, workspace.activeViewId)
@@ -139,6 +141,7 @@ private fun PhoneWorkspace(
                                 vm = vm,
                                 wide = false,
                                 modifier = Modifier.fillMaxSize(),
+                                onSelectSession = onSelectSession,
                             )
                         }
                     }
@@ -200,6 +203,7 @@ private fun TabletWorkspace(
     vm: AppViewModel,
     newId: () -> String,
     modifier: Modifier,
+    onSelectSession: (String) -> Unit,
 ) {
     val layoutSync = session.layoutSync
     val viewsById = session.viewsById
@@ -246,7 +250,10 @@ private fun TabletWorkspace(
             val view = viewsById[viewId]
             if (view == null) UnknownViewHint("view")
             else key(view.id) {
-                AndroidViewHost(workspace, view, session, vm, Modifier.fillMaxSize(), wide = true)
+                AndroidViewHost(
+                    workspace, view, session, vm, Modifier.fillMaxSize(),
+                    wide = true, onSelectSession = onSelectSession,
+                )
             }
         },
     )

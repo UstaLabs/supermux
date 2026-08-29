@@ -2,6 +2,7 @@ package dev.supermux.android
 
 import android.content.Context
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
@@ -38,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -57,6 +59,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.toRoute
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
 import dev.supermux.android.host.AddHostScreen
 import dev.supermux.android.host.HostScopePicker
 import dev.supermux.android.host.HostView
@@ -224,6 +227,27 @@ class MainActivity : ComponentActivity() {
                 val loadHostAgents: suspend () -> List<String> = { vm.agentStatuses().filter { it.installed }.map { it.kind } }
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
+                val newChatScope = rememberCoroutineScope()
+                val activityContext = LocalContext.current
+                val onNewChatInWorkspace: (dev.supermux.proto.WorkspaceDto) -> Unit = { w ->
+                    newChatScope.launch {
+                        val recordId = activeHost
+                        if (recordId == null) {
+                            Toast.makeText(activityContext, "No host connected", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+                        runCatching {
+                            val id = vm.newChatInWorkspace(recordId, w.id, w.workdir)
+                            selected = id
+                        }.onFailure {
+                            Toast.makeText(
+                                activityContext,
+                                it.message ?: "Failed to create session",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }
                 val liveSessionIds = remember(sessions) { sessions.map { it.id }.toSet() }
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
                 // Shared multi-pane layout for wide screens — one instance across all sessions,
@@ -233,7 +257,7 @@ class MainActivity : ComponentActivity() {
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
-                LaunchedEffect(selected) {
+                LaunchedEffect(selected, workspaces) {
                     selected?.let {
                         sessionHost[it]?.let(vm::setActiveHost)
                         vm.ensureMessagesLoaded(it)
@@ -404,6 +428,7 @@ class MainActivity : ComponentActivity() {
                                                 archivedWorkspaces = archivedWorkspaces,
                                                 onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
                                                 onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
+                                                onNewChatInWorkspace = onNewChatInWorkspace,
                                                 hosts = hostViews,
                                                 sessionHost = sessionHost,
                                                 hostFilter = hostFilter,
@@ -428,6 +453,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     SessionKeepAliveTabletHost(
                                         selected = selected,
+                                        onSelect = { selected = it },
                                         visited = visitedSessions,
                                         onRemoveVisited = removeVisited,
                                         sessions = sessions,
@@ -532,6 +558,7 @@ class MainActivity : ComponentActivity() {
                                         archivedWorkspaces = archivedWorkspaces,
                                         onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
                                         onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
+                                        onNewChatInWorkspace = onNewChatInWorkspace,
                                         hosts = hostViews,
                                         sessionHost = sessionHost,
                                         hostFilter = hostFilter,

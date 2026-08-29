@@ -33,8 +33,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.supermux.android.R
 import dev.supermux.android.chat.ChatDetailPrefs
+import dev.supermux.android.chat.ChatOverflowTestIds
+import dev.supermux.android.chat.ContinueConversationSheet
+import dev.supermux.android.chat.ContinueHandoff
 import dev.supermux.android.chat.FinishButton
 import dev.supermux.android.chat.FinishSheet
+import dev.supermux.net.ModelInfo
+import dev.supermux.net.ReasoningResponse
 import dev.supermux.android.session.SessionStatusRail
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.GitOpResult
@@ -82,6 +87,11 @@ fun ChatViewHeader(
     onVerifySave: suspend (String) -> VerifySaveResult?,
     onSendToAgent: (String) -> Unit,
     onGitOp: (String) -> Unit,
+    onContinue: (suspend (ContinueHandoff) -> String?)? = null,
+    loadContinueAgents: suspend () -> List<String> = { emptyList() },
+    loadContinueModels: suspend (String) -> List<ModelInfo> = { emptyList() },
+    loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
+    onContinued: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -156,6 +166,11 @@ fun ChatViewHeader(
         ChatOverflowMenu(
             session = session,
             onGitOp = onGitOp,
+            onContinue = onContinue,
+            loadContinueAgents = loadContinueAgents,
+            loadContinueModels = loadContinueModels,
+            loadContinueReasoning = loadContinueReasoning,
+            onContinued = onContinued,
         )
     }
 }
@@ -196,6 +211,11 @@ fun SessionLinksMenu(sessionLinks: List<ProxyDto>) {
 private fun ChatOverflowMenu(
     session: SessionInfo,
     onGitOp: (String) -> Unit,
+    onContinue: (suspend (ContinueHandoff) -> String?)? = null,
+    loadContinueAgents: suspend () -> List<String> = { emptyList() },
+    loadContinueModels: suspend (String) -> List<ModelInfo> = { emptyList() },
+    loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
+    onContinued: (String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val overflowContext = LocalContext.current
@@ -203,6 +223,7 @@ private fun ChatOverflowMenu(
     val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
     var showOverflow by remember { mutableStateOf(false) }
     var detailSubmenu by remember { mutableStateOf(false) }
+    var showContinue by remember { mutableStateOf(false) }
     Box {
         IconButton(
             onClick = { showOverflow = true },
@@ -236,6 +257,16 @@ private fun ChatOverflowMenu(
                 modifier = Modifier.testTag("workspace_overflow_detail"),
                 onClick = { detailSubmenu = true },
             )
+            if (onContinue != null) {
+                DropdownMenuItem(
+                    text = { Text("Continue in new conversation") },
+                    modifier = Modifier.testTag(ChatOverflowTestIds.CONTINUE),
+                    onClick = {
+                        showOverflow = false
+                        showContinue = true
+                    },
+                )
+            }
             if (session.git != null) {
                 DropdownMenuItem(
                     text = { Text("Fetch") },
@@ -291,6 +322,17 @@ private fun ChatOverflowMenu(
                 )
             }
         }
+    }
+    if (showContinue && onContinue != null) {
+        ContinueConversationSheet(
+            session = session,
+            onContinue = onContinue,
+            onContinued = onContinued,
+            loadAgents = loadContinueAgents,
+            loadModels = loadContinueModels,
+            loadReasoning = loadContinueReasoning,
+            onDismiss = { showContinue = false },
+        )
     }
 }
 

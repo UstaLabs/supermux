@@ -29,7 +29,9 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -130,6 +132,23 @@ fun SessionKeepAlivePhoneHost(
     }
     val selectedWorkspace = selected?.let { workspaceForSession(workspaces, it) }
     val liveWorkspaceIds = remember(workspaces) { workspaces.map { it.id }.toSet() }
+    val context = LocalContext.current
+    val newChatScope = rememberCoroutineScope()
+    val onNewChatInWorkspace: (dev.supermux.proto.WorkspaceDto) -> Unit = { w ->
+        newChatScope.launch {
+            val recordId = vm.activeHost.value
+            if (recordId == null) {
+                Toast.makeText(context, "No host connected", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            runCatching {
+                val id = vm.newChatInWorkspace(recordId, w.id, w.workdir)
+                onSelect(id)
+            }.onFailure {
+                Toast.makeText(context, it.message ?: "Failed to create session", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     val retainedWorkspaces = rememberVisitedWorkspaces(selectedWorkspace?.id, liveWorkspaceIds)
     val workspaceBySession = remember(workspaces) {
         workspaces.flatMap { ws ->
@@ -149,6 +168,7 @@ fun SessionKeepAlivePhoneHost(
                     vm = vm,
                     isWorkspaceWidth = false,
                     modifier = Modifier.fillMaxSize(),
+                    onSelectSession = onSelect,
                 )
             }
             visited.forEach { sessionId ->
@@ -174,6 +194,7 @@ fun SessionKeepAlivePhoneHost(
                             }
                         },
                         onOpenDisplays = onOpenDisplays,
+                        onSelectSession = onSelect,
                         sharedScope = this@SharedTransitionLayout,
                         animScope = null,
                     )
@@ -236,6 +257,7 @@ fun SessionKeepAlivePhoneHost(
                         archivedWorkspaces = archivedWorkspaces,
                         onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
                         onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
+                        onNewChatInWorkspace = onNewChatInWorkspace,
                         hosts = hosts,
                         sessionHost = sessionHost,
                         hostFilter = hostFilter,
@@ -257,6 +279,7 @@ fun SessionKeepAlivePhoneHost(
 @Composable
 fun SessionKeepAliveTabletHost(
     selected: String?,
+    onSelect: (String) -> Unit = {},
     visited: Set<String>,
     onRemoveVisited: (String) -> Unit,
     sessions: List<SessionInfo>,
@@ -302,6 +325,7 @@ fun SessionKeepAliveTabletHost(
                 vm = vm,
                 isWorkspaceWidth = wide,
                 modifier = Modifier.fillMaxSize(),
+                onSelectSession = onSelect,
             )
         }
         visited.forEach { sessionId ->
@@ -328,6 +352,7 @@ fun SessionKeepAliveTabletHost(
                         }
                     },
                     onOpenDisplays = onOpenDisplays,
+                    onSelectSession = onSelect,
                     sharedScope = null,
                     animScope = null,
                 )
@@ -356,6 +381,7 @@ private fun SessionChatLayer(
     onBack: () -> Unit,
     onKill: () -> Unit,
     onOpenDisplays: () -> Unit,
+    onSelectSession: (String) -> Unit = {},
     sharedScope: SharedTransitionScope?,
     animScope: AnimatedVisibilityScope?,
 ) {
@@ -475,6 +501,17 @@ private fun SessionChatLayer(
             onStartDisplay = { vm.startDisplay(session.name) },
             onOpenDisplays = onOpenDisplays,
             consumePendingFirst = { vm.consumePendingFirst(it) },
+            onContinue = { handoff ->
+                val recordId = vm.sessionHost.value[session.id] ?: vm.activeHost.value
+                    ?: throw IllegalStateException("No host")
+                vm.continueInNewConversation(recordId, session.id, handoff)
+            },
+            loadContinueAgents = {
+                vm.agentStatuses().filter { it.installed }.map { it.kind }
+            },
+            loadContinueModels = { vm.launcherModels(it) },
+            loadContinueReasoning = { ag, md -> vm.launcherReasoning(ag, md) },
+            onContinued = onSelectSession,
             editorPrefs = vm.editorPrefs,
             onEditorConsumesBackChange = { editorConsumesBack = it },
             finishJob = finishJob,

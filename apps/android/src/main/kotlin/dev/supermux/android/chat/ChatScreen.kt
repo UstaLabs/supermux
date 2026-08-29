@@ -201,6 +201,11 @@ fun ChatScreen(
     onStartDisplay: suspend () -> Unit = {},
     onOpenDisplays: () -> Unit = {},
     consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
+    onContinue: (suspend (ContinueHandoff) -> String?)? = null,
+    loadContinueAgents: suspend () -> List<String> = { emptyList() },
+    loadContinueModels: suspend (String) -> List<dev.supermux.net.ModelInfo> = { emptyList() },
+    loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
+    onContinued: (String) -> Unit = {},
     editorPrefs: dev.supermux.android.editor.EditorPrefs? = null,
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
     // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
@@ -221,6 +226,7 @@ fun ChatScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(session.name) }
     var showKillDialog by remember { mutableStateOf(false) }
+    var showContinueSheet by remember { mutableStateOf(false) }
     var headerMenuExpanded by remember { mutableStateOf(false) }
     var activePanel by remember { mutableStateOf(SessionPanel.Chat) }
 
@@ -470,6 +476,16 @@ fun ChatScreen(
                                 showRenameDialog = true
                             },
                         )
+                        if (onContinue != null) {
+                            DropdownMenuItem(
+                                text = { Text("Continue in new conversation") },
+                                modifier = Modifier.testTag(ChatOverflowTestIds.CONTINUE),
+                                onClick = {
+                                    headerMenuExpanded = false
+                                    showContinueSheet = true
+                                },
+                            )
+                        }
                         val isMuted = session.mute ?: false
                         DropdownMenuItem(
                             text = { Text(if (isMuted) "Unmute" else "Mute") },
@@ -762,6 +778,18 @@ fun ChatScreen(
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
             },
+        )
+    }
+
+    if (showContinueSheet && onContinue != null) {
+        ContinueConversationSheet(
+            session = session,
+            onContinue = onContinue,
+            onContinued = onContinued,
+            loadAgents = loadContinueAgents,
+            loadModels = loadContinueModels,
+            loadReasoning = loadContinueReasoning,
+            onDismiss = { showContinueSheet = false },
         )
     }
 

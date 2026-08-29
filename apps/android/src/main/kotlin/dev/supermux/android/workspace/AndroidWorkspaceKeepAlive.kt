@@ -9,13 +9,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.workspace.MAX_RETAINED_WORKSPACES
 import dev.supermux.workspace.WorkspaceKeepAliveCache
 
 @Composable
 fun rememberVisitedWorkspaces(
     selected: String?,
     liveIds: Set<String>,
-    maxSize: Int = 10,
+    maxSize: Int = MAX_RETAINED_WORKSPACES,
     cache: WorkspaceKeepAliveCache = remember(maxSize) { WorkspaceKeepAliveCache(maxSize = maxSize) },
 ): Set<String> {
     val liveSnapshot = liveIds.toSet()

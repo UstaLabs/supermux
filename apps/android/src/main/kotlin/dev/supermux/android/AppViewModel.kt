@@ -96,6 +96,11 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.proto.chatSessionId
+import dev.supermux.android.chat.ContinueHandoff
+import dev.supermux.android.chat.continueQueuesClientSend
+import dev.supermux.android.chat.continueSpawnRequest
+import dev.supermux.android.chat.newChatHereRequest
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
@@ -1161,8 +1166,14 @@ class AppViewModel(
         reasoningLevel: String? = null,
         /** When reopening a draft, hard-delete it first (web onPromptSubmit parity). */
         replaceDraftId: String? = null,
+        workspaceId: String? = null,
+        name: String? = null,
+        inheritFrom: String? = null,
+        firstMessage: String? = null,
+        hostRecordId: String? = null,
     ): String {
-        val api = activeApi() ?: throw IllegalStateException("No host connected")
+        val api = (hostRecordId?.let { hostConns.api(it) } ?: activeApi())
+            ?: throw IllegalStateException("No host connected")
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
@@ -1175,11 +1186,15 @@ class AppViewModel(
         val resp = api.spawn(
             SpawnRequest(
                 workdir = resolvedPath,
+                name = name?.ifBlank { null },
                 agent = agent,
                 model = model?.ifBlank { null },
                 worktree = if (worktree) true else null,
                 baseBranch = baseBranch?.ifBlank { null },
                 reasoningLevel = reasoningLevel?.ifBlank { null },
+                workspaceId = workspaceId,
+                inheritFrom = inheritFrom?.ifBlank { null },
+                firstMessage = firstMessage?.ifBlank { null },
             ),
         )
         val sessionId = resp.id.ifBlank {
@@ -1192,8 +1207,92 @@ class AppViewModel(
         val attachmentIds = staged.mapNotNull { s ->
             runCatching { api.uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }.file_id }.getOrNull()
         }
-        setPendingFirst(sessionId, PendingFirstMessage(text, attachmentIds))
+        val brokerDeliversFirst = !firstMessage.isNullOrBlank()
+        if (!brokerDeliversFirst) {
+            setPendingFirst(sessionId, PendingFirstMessage(text, attachmentIds))
+        }
         return sessionId
+    }
+
+    /**
+     * Continue in a new conversation in the same workspace. Broker delivers [ContinueHandoff.message]
+     * via SpawnRequest.firstMessage — this path never queues a WS Send.
+     */
+    suspend fun continueInNewConversation(
+        recordId: String,
+        sourceSessionId: String,
+        handoff: ContinueHandoff,
+    ): String {
+        val source = sessionsByHost[recordId]?.firstOrNull { it.id == sourceSessionId }
+            ?: _sessions.value.firstOrNull { it.id == sourceSessionId }
+            ?: throw IllegalStateException("Source session not found")
+        val text = handoff.message.trim()
+        if (text.isEmpty() || source.workdir.isBlank()) {
+            throw IllegalArgumentException("Need a workdir and a handoff message")
+        }
+        setActiveHost(recordId)
+        val workspaceId = workspaceForSession(recordId, sourceSessionId)?.id
+        val req = continueSpawnRequest(
+            sourceWorkdir = source.workdir,
+            sourceSessionId = source.id,
+            sourceName = source.name,
+            sourceAgent = source.agent,
+            workspaceId = workspaceId,
+            handoff = handoff,
+        )
+        check(!continueQueuesClientSend(req)) {
+            "continue spawn must put firstMessage on the body (broker delivers; no ClientFrame.Send)"
+        }
+        val newId = createSessionWithFirstMessage(
+            workdir = req.workdir,
+            agent = req.agent ?: "claude",
+            model = req.model,
+            text = text,
+            staged = emptyList(),
+            worktree = false,
+            baseBranch = null,
+            reasoningLevel = req.reasoningLevel,
+            workspaceId = req.workspaceId,
+            name = req.name,
+            inheritFrom = req.inheritFrom,
+            firstMessage = req.firstMessage,
+            hostRecordId = recordId,
+        )
+        activateChatView(recordId, newId)
+        return newId
+    }
+
+    /** Spec §9.1: spawn a blank chat that joins [workspaceId] in that workspace's workdir. */
+    suspend fun newChatInWorkspace(
+        recordId: String,
+        workspaceId: String,
+        workdir: String,
+        agent: String = "claude",
+        model: String? = null,
+    ): String {
+        setActiveHost(recordId)
+        val api = hostConns.api(recordId) ?: activeApi()
+            ?: throw IllegalStateException("No host connected")
+        val req = newChatHereRequest(workspaceId, workdir, agent, model)
+        val resp = api.spawn(req)
+        val sessionId = resp.id.ifBlank {
+            _sessions.value.firstOrNull { it.name == resp.name }?.id
+                ?: throw IllegalStateException("Session created but id not available yet")
+        }
+        activateChatView(recordId, sessionId)
+        return sessionId
+    }
+
+    private suspend fun activateChatView(recordId: String, sessionId: String) {
+        repeat(30) {
+            val ws = workspaceForSession(recordId, sessionId)
+            val view = ws?.views?.firstOrNull { it.chatSessionId() == sessionId }
+            if (ws != null && view != null) {
+                setActiveView(ws.id, view.id)
+                return
+            }
+            delay(50)
+        }
     }
 
     // ── Settings / Usage / Devices / Archived (active host) ────────────────────────

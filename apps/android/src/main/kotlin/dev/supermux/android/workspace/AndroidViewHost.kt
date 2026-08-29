@@ -58,12 +58,13 @@ fun AndroidViewHost(
     vm: AppViewModel,
     modifier: Modifier = Modifier,
     wide: Boolean = false,
+    onSelectSession: (String) -> Unit = {},
 ) {
     when (view.kind) {
         "chat" -> {
             val sessionId = view.chatSessionId()
             if (sessionId == null) UnknownViewHint(view.kind, modifier)
-            else ChatViewPane(sessionId, workspace, session, vm, modifier, wide)
+            else ChatViewPane(sessionId, workspace, session, vm, modifier, wide, onSelectSession)
         }
         "terminal" -> {
             val scope = view.stateString("scope") ?: "workspace"
@@ -107,6 +108,7 @@ private fun ChatViewPane(
     vm: AppViewModel,
     modifier: Modifier,
     wide: Boolean,
+    onSelectSession: (String) -> Unit,
 ) {
     val sessions by vm.sessions.collectAsState()
     val messages by vm.messages.collectAsState()
@@ -169,10 +171,6 @@ private fun ChatViewPane(
             modifier = paneMod.fillMaxSize().testTag("view_chat"),
         )
     }
-    if (!wide) {
-        chatBody(modifier)
-        return
-    }
     Column(modifier.fillMaxSize()) {
         ChatViewHeader(
             session = session,
@@ -198,6 +196,15 @@ private fun ChatViewPane(
                     "publish" -> vm.gitPublish(sessionId, cb)
                 }
             },
+            onContinue = { handoff ->
+                val recordId = vm.sessionHost.value[sessionId] ?: vm.activeHost.value
+                    ?: throw IllegalStateException("No host")
+                vm.continueInNewConversation(recordId, sessionId, handoff)
+            },
+            loadContinueAgents = { vm.agentStatuses().filter { it.installed }.map { it.kind } },
+            loadContinueModels = { vm.launcherModels(it) },
+            loadContinueReasoning = { ag, md -> vm.launcherReasoning(ag, md) },
+            onContinued = onSelectSession,
         )
         Box(Modifier.weight(1f).fillMaxSize()) {
             Box(Modifier.keepAlivePanel(!nativeView)) { chatBody(Modifier) }
