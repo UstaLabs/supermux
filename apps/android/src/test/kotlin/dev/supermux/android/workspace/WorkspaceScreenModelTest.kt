@@ -1,0 +1,111 @@
+package dev.supermux.android.workspace
+
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
+import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.NewViewKind
+import dev.supermux.workspace.WorkspaceKeepAliveCache
+import kotlinx.serialization.json.JsonPrimitive
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class WorkspaceScreenModelTest {
+    private fun splitLayout(): LayoutNode = LayoutNode.Split(
+        direction = "row",
+        sizes = listOf(0.5, 0.5),
+        children = listOf(
+            LayoutNode.Group("g1", listOf("chat", "term"), "chat"),
+            LayoutNode.Group("g2", listOf("files"), "files"),
+        ),
+    )
+
+    @Test fun phoneTabsFollowCollectViewIdsOrder() {
+        val model = phoneTabModel(splitLayout(), activeViewId = "term")
+        assertEquals(listOf("chat", "term", "files"), model.viewIds)
+        assertEquals("term", model.selectedId)
+    }
+
+    @Test fun phoneSelectedFallsBackToFirstWhenActiveMissing() {
+        val model = phoneTabModel(splitLayout(), activeViewId = "gone")
+        assertEquals("chat", model.selectedId)
+    }
+
+    @Test fun phoneSelectedFallsBackWhenActiveNull() {
+        val model = phoneTabModel(splitLayout(), activeViewId = null)
+        assertEquals("chat", model.selectedId)
+    }
+
+    @Test fun emptyLayoutHasNoSelection() {
+        val model = phoneTabModel(LayoutNode.Group("g", emptyList()), activeViewId = "x")
+        assertEquals(emptyList(), model.viewIds)
+        assertNull(model.selectedId)
+    }
+
+    @Test fun phonePatchBodyNeverContainsLayout() {
+        val body = phonePatchBody("v1")
+        assertNull(body.layout)
+        assertEquals("v1", body.activeViewId)
+        assertNull(body.name)
+    }
+
+    @Test fun addViewStatePerKind() {
+        val term = addViewState(NewViewKind.TERMINAL, nowMillis = 1234567890L)
+        assertEquals(JsonPrimitive("workspace"), term["scope"])
+        assertEquals(JsonPrimitive("t567890"), term["terminalId"])
+        assertEquals(JsonPrimitive("tree"), addViewState(NewViewKind.EDITOR)["mode"])
+        assertEquals(JsonPrimitive("diff"), addViewState(NewViewKind.DIFF)["mode"])
+        assertEquals(JsonPrimitive(""), addViewState(NewViewKind.DISPLAY)["displayId"])
+        assertTrue(addViewState(NewViewKind.CHAT).isEmpty())
+    }
+
+    @Test fun phoneAddKindsExcludeChat() {
+        assertEquals(
+            listOf(NewViewKind.TERMINAL, NewViewKind.EDITOR, NewViewKind.DIFF, NewViewKind.DISPLAY),
+            phoneAddKinds(),
+        )
+    }
+
+    @Test fun closeNeedsConfirmForTerminalAndDisplay() {
+        assertTrue(closeNeedsConfirm("terminal"))
+        assertTrue(closeNeedsConfirm("display"))
+        assertFalse(closeNeedsConfirm("chat"))
+        assertFalse(closeNeedsConfirm("editor"))
+        assertTrue(closeNeedsConfirm(ViewDto(id = "t", workspaceId = "w", kind = "terminal")))
+    }
+
+    @Test fun foldUnfoldRules() {
+        assertTrue(foldKeepsActiveViewId())
+        assertFalse(unfoldShouldPatchLayout())
+    }
+
+    @Test fun keepAliveIsKeyedByWorkspaceAndIncludesActive() {
+        val cache = WorkspaceKeepAliveCache(maxSize = 3)
+        val live = (1..5).map { "w$it" }.toSet()
+        keepAliveWorkspaceIds(cache, "w1", live)
+        keepAliveWorkspaceIds(cache, "w2", live)
+        keepAliveWorkspaceIds(cache, "w3", live)
+        val kept = keepAliveWorkspaceIds(cache, "w5", live)
+        assertTrue("w5" in kept)
+        assertEquals(3, kept.size)
+        val switched = keepAliveWorkspaceIds(cache, "w4", live)
+        assertTrue("w4" in switched)
+        assertTrue("w5" in switched)
+    }
+
+    @Test fun resolveWorkspaceForPushAndDeeplink() {
+        val chat = ViewDto(
+            id = "v1",
+            workspaceId = "w1",
+            kind = "chat",
+            state = kotlinx.serialization.json.buildJsonObject {
+                put("sessionId", JsonPrimitive("s1"))
+            },
+        )
+        val ws = WorkspaceDto(id = "w1", name = "one", workdir = "/", views = listOf(chat))
+        assertEquals("w1", resolveWorkspaceForSession(listOf(ws), "s1")?.id)
+        assertNull(resolveWorkspaceForSession(listOf(ws), "s-missing"))
+    }
+}

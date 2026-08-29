@@ -41,8 +41,9 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ChatScreen
 import dev.supermux.android.ui.keepAlivePanel
-import dev.supermux.android.workspace.SessionWorkspaceDetail
-import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.android.host.workspaceForSession
+import dev.supermux.android.workspace.WorkspaceScreen
+import dev.supermux.android.workspace.rememberVisitedWorkspaces
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ProxyDto
@@ -140,11 +141,32 @@ fun SessionKeepAlivePhoneHost(
     val sessionListState = rememberSaveable(saver = LazyListState.Saver) {
         LazyListState(0, 0)
     }
+    val selectedWorkspace = selected?.let { workspaceForSession(workspaces, it) }
+    val liveWorkspaceIds = remember(workspaces) { workspaces.map { it.id }.toSet() }
+    val retainedWorkspaces = rememberVisitedWorkspaces(selectedWorkspace?.id, liveWorkspaceIds)
+    val recordId = vm.activeHost.collectAsState().value.orEmpty()
+
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
+            retainedWorkspaces.forEach { workspaceId ->
+                val ws = workspaces.firstOrNull { it.id == workspaceId } ?: return@forEach
+                val visible = workspaceId == selectedWorkspace?.id
+                key(workspaceId) {
+                    Box(Modifier.keepAlivePanel(visible)) {
+                        WorkspaceScreen(
+                            workspace = ws,
+                            vm = vm,
+                            recordId = recordId,
+                            isWorkspaceWidth = false,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
             visited.forEach { sessionId ->
+                if (workspaceForSession(workspaces, sessionId) != null) return@forEach
                 val session = resolveSession(sessionId, sessions, archived) ?: return@forEach
-                val visible = sessionId == selected
+                val visible = sessionId == selected && selectedWorkspace == null
                 key(sessionId) {
                     SessionChatLayer(
                         session = session,
@@ -260,7 +282,7 @@ fun SessionKeepAliveTabletHost(
     archived: List<ArchivedDto> = emptyList(),
     vm: AppViewModel,
     wide: Boolean,
-    layout: WorkspaceLayout,
+    workspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
     onNavigate: (String) -> Unit,
     onOpenDisplays: () -> Unit,
     modifier: Modifier = Modifier,
@@ -270,13 +292,33 @@ fun SessionKeepAliveTabletHost(
     // (each session stays composed for instant switching, but only the visible one should type).
     val focusManager = LocalFocusManager.current
     LaunchedEffect(selected) { focusManager.clearFocus(force = true) }
+    val selectedWorkspace = selected?.let { workspaceForSession(workspaces, it) }
+    val liveWorkspaceIds = remember(workspaces) { workspaces.map { it.id }.toSet() }
+    val retainedWorkspaces = rememberVisitedWorkspaces(selectedWorkspace?.id, liveWorkspaceIds)
+    val recordId = vm.activeHost.collectAsState().value.orEmpty()
     Box(modifier.fillMaxSize()) {
-        if (visited.isEmpty() && selected == null) {
+        if (visited.isEmpty() && selected == null && retainedWorkspaces.isEmpty()) {
             return@Box
         }
+        retainedWorkspaces.forEach { workspaceId ->
+            val ws = workspaces.firstOrNull { it.id == workspaceId } ?: return@forEach
+            val visible = workspaceId == selectedWorkspace?.id
+            key(workspaceId) {
+                Box(Modifier.keepAlivePanel(visible)) {
+                    WorkspaceScreen(
+                        workspace = ws,
+                        vm = vm,
+                        recordId = recordId,
+                        isWorkspaceWidth = wide,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
         visited.forEach { sessionId ->
+            if (workspaceForSession(workspaces, sessionId) != null) return@forEach
             val session = resolveSession(sessionId, sessions, archived) ?: return@forEach
-            val visible = sessionId == selected
+            val visible = sessionId == selected && selectedWorkspace == null
             key(sessionId) {
                 SessionChatLayer(
                     session = session,
@@ -288,8 +330,7 @@ fun SessionKeepAliveTabletHost(
                     commands = commands[sessionId] ?: emptyList(),
                     commandsResolved = commandsResolved[sessionId] ?: false,
                     vm = vm,
-                    wide = wide,
-                    layout = layout,
+                    wide = false,
                     onNavigate = onNavigate,
                     onBack = {},
                     onKill = {
@@ -318,10 +359,8 @@ private fun SessionChatLayer(
     commands: List<SlashCommand>,
     commandsResolved: Boolean,
     vm: AppViewModel,
-    // Wide (tablet / unfolded-foldable) renders the multi-pane workspace instead of ChatScreen.
-    // Phone hosts leave these defaulted, keeping the single-pane chat path unchanged.
+    // Old-broker fallback (workspaces empty): session-only chat + agent terminal (4f).
     wide: Boolean = false,
-    layout: WorkspaceLayout? = null,
     // Management-screen nav from the wide workspace header overflow. Phone/ChatScreen path defaults
     // to a no-op (it has its own overflow), keeping the single-pane chat path unchanged.
     onNavigate: (String) -> Unit = {},
@@ -387,93 +426,8 @@ private fun SessionChatLayer(
                 }
             },
     ) {
-        // Wide screens render the multi-pane workspace; the phone/compact path falls through to
-        // ChatScreen below (unchanged). `layout` is always non-null when `wide` (set by the tablet
-        // host); the null-guard keeps this a safe fallback if ever called wide without a layout.
-        val ws = layout
-        if (wide && ws != null) {
-            SessionWorkspaceDetail(
-                session = session,
-                messages = messages,
-                activity = activity,
-                agent = agent,
-                bgTasks = bgTasks,
-                sending = sending,
-                layout = ws,
-                onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
-                onInterrupt = { vm.interrupt(session.id) },
-                commands = commands,
-                commandsResolved = commandsResolved,
-                onUpload = { source, name, mime, kind, onProgress -> vm.uploadResumable(session.id, source, name, mime, kind, onProgress) },
-                loadBytes = { vm.fileBytes(it) },
-                transcribeAudio = { bytes, name -> vm.transcribeAudio(session.id, bytes, name) },
-                transcribeDraft = { draft -> vm.transcribeDraft(session.id, draft) },
-                loadGlossary = { vm.fetchGlossary() },
-                vmModels = { vm.fetchModels(it) },
-                vmReasoning = { vm.fetchReasoning(it) },
-                onPickModel = { vm.switchModel(session.id, it) },
-                onPickEffort = { vm.switchReasoning(session.id, it) },
-                loadDraft = { vm.loadDraft(it) },
-                saveDraft = { id, t -> vm.saveDraft(id, t) },
-                consumePendingFirst = { vm.consumePendingFirst(it) },
-                onRename = { vm.rename(session.id, it) },
-                onMute = { vm.setMute(session.id, it) },
-                onKill = onKill,
-                onNavigate = onNavigate,
-                onGitOp = { op ->
-                    val cb: (GitOpResult?) -> Unit = { r ->
-                        Toast.makeText(context, gitOpResultText(r), Toast.LENGTH_SHORT).show()
-                    }
-                    when (op) {
-                        "fetch" -> vm.gitFetch(session.id, cb)
-                        "push" -> vm.gitPush(session.id, cb)
-                        "pull" -> vm.gitPull(session.id, cb)
-                        "publish" -> vm.gitPublish(session.id, cb)
-                    }
-                },
-                sessionLinks = sessionLinks,
-                // Finish flow — same VM-backed lambdas ChatScreen receives (see below).
-                finishJob = finishJob,
-                onFinishReadiness = { vm.finishReadiness(session.id) },
-                onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                    vm.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
-                },
-                onClearFinishJob = { vm.clearFinishJob(session.id) },
-                onVerifySuggest = { vm.verifySuggest(session.id) },
-                onVerifySave = { vm.verifySave(session.id, it) },
-                onSendToAgent = { vm.sendMessage(session.id, it) },
-                fsList = { vm.fsList(session.id, it) },
-                fsRead = { vm.fsRead(session.id, it) },
-                fsWrite = { p, ct -> vm.fsWrite(session.id, p, ct) },
-                fsSearch = { vm.fsSearch(session.id, it) },
-                fsDiff = { base -> vm.fsDiff(session.id, base) },
-                fsRefs = { vm.fsRefs(session.id) },
-                reviewAddComment = { body -> vm.reviewAddComment(session.id, body) },
-                reviewResolve = { commentId -> vm.reviewResolve(session.id, commentId) },
-                reviewSubmit = { vm.reviewSubmit(session.id) },
-                fsChanges = vm.fsChanges,
-                lspStatus = vm.lspStatus,
-                lspRpc = vm.lspRpc,
-                editorOpen = { vm.editorOpen(it) },
-                editorClose = { vm.editorClose(it) },
-                lspStatusQuery = { s, p -> vm.lspStatusQuery(s, p) },
-                lspOpen = { s, sid -> vm.lspOpen(s, sid) },
-                lspRpcOut = { s, sid, m -> vm.lspRpcOut(s, sid, m) },
-                lspClose = { s, sid -> vm.lspClose(s, sid) },
-                onEditorConsumesBackChange = { editorConsumesBack = it },
-                connectTerminal = { terminalId -> vm.connectTerminal(session.id, terminalId) },
-                listTerminals = { vm.listTerminals(session.id) },
-                closeTerminal = { terminalId -> vm.closeTerminal(session.id, terminalId) },
-                connectAgentTerminal = { vm.connectAgentTerminal(session.id) },
-                listDisplays = { vm.listDisplays() },
-                connectScrcpy = { vm.connectScrcpy(it) },
-                connectVnc = { vm.connectVnc(it) },
-                displays = vm.displays,
-                onStartDisplay = { vm.startDisplay(session.name) },
-                modifier = Modifier.fillMaxSize(),
-            )
-            return@Box
-        }
+        // 4f — old broker (`workspaces` empty): session-only chat + agent terminal. Editor/diff
+        // panes from the private layout are gone; do not crash if a session has no workspace.
         ChatScreen(
             session = session,
             messages = messages,

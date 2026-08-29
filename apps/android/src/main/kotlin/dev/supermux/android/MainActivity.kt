@@ -77,7 +77,8 @@ import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
 import dev.supermux.android.workspace.SessionsRail
 import dev.supermux.android.workspace.SidebarDivider
-import dev.supermux.android.workspace.WorkspaceLayout
+import dev.supermux.android.workspace.SidebarState
+import dev.supermux.proto.chatSessionId
 import dev.supermux.android.workspace.isWorkspaceWidth
 import dev.supermux.android.workspace.workspaceShortcuts
 import dev.supermux.android.display.DisplaysScreen
@@ -224,8 +225,7 @@ class MainActivity : ComponentActivity() {
                 val (visitedSessions, removeVisited) = rememberVisitedSessions(selected, liveSessionIds)
                 // Shared multi-pane layout for wide screens — one instance across all sessions,
                 // saved across config-change/process-death, pruned when the broker drops a session.
-                val workspaceLayout = rememberSaveable(saver = WorkspaceLayout.Saver) { WorkspaceLayout() }
-                LaunchedEffect(liveSessionIds) { workspaceLayout.prune(liveSessionIds) }
+                val workspaceLayout = rememberSaveable(saver = SidebarState.Saver) { SidebarState() }
                 // A session resumed from archive arrives via `session_added` (no history), so its
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
@@ -236,6 +236,12 @@ class MainActivity : ComponentActivity() {
                         vm.ensureMessagesLoaded(it)
                         // Opening a chat clears its (grouped) notifications — parity with iOS.
                         SupermuxMessagingService.cancelForSession(applicationContext, it)
+                        val hostId = sessionHost[it] ?: vm.activeHost.value
+                        if (hostId != null) {
+                            val ws = vm.workspaceForSession(hostId, it)
+                            val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == it }
+                            if (ws != null && chatView != null) vm.setActiveView(ws.id, chatView.id)
+                        }
                     }
                 }
                 // A tapped push carries the chat id — open that chat (parity with iOS PushRouter);
@@ -324,7 +330,7 @@ class MainActivity : ComponentActivity() {
                                     .fillMaxSize()
                                     .focusRequester(focusRequester)
                                     .workspaceShortcuts(
-                                        layout = workspaceLayout,
+                                        sidebar = workspaceLayout,
                                         selectedId = selected,
                                         onNewSession = { navController.navigate(NewSession()) },
                                     )
@@ -414,7 +420,7 @@ class MainActivity : ComponentActivity() {
                                         archived = archivedSessions,
                                         vm = vm,
                                         wide = true,
-                                        layout = workspaceLayout,
+                                        workspaces = workspaces,
                                         onNavigate = navTo,
                                         onOpenDisplays = { navController.navigate(Displays) },
                                         modifier = Modifier.fillMaxSize(),
