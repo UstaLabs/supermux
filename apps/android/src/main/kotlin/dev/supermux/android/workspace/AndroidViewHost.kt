@@ -41,11 +41,18 @@ import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.TestIds
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.ui.workspace.WorkspaceSession
 import kotlinx.coroutines.launch
+
+/** Journey + desktop-parity tags for the workspace chat pane. */
+internal object WorkspaceChatPaneTestIds {
+    const val CHAT_VIEW = TestIds.CHAT_VIEW
+    const val VIEW_CHAT = "view_chat"
+}
 
 /**
  * Dispatches a broker view onto native Android panes. Kind + parsed state match desktop ViewHost.
@@ -168,14 +175,16 @@ private fun ChatViewPane(
             onRequestRename = {},
             onRequestMute = {},
             onRequestKill = {},
-            modifier = paneMod.fillMaxSize().testTag("view_chat"),
+            modifier = paneMod.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
         )
     }
     if (!wide) {
-        chatBody(modifier)
+        Box(modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.CHAT_VIEW)) {
+            chatBody(Modifier)
+        }
         return
     }
-    Column(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.CHAT_VIEW)) {
         ChatViewHeader(
             session = session,
             working = agentState[sessionId]?.working == true,

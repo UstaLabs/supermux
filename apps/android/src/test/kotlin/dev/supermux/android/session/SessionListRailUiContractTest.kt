@@ -1,8 +1,10 @@
 package dev.supermux.android.session
 
+import dev.supermux.android.workspace.WorkspaceChatPaneTestIds
 import dev.supermux.session.SessionListRailIndicator
 import dev.supermux.session.sessionListRailIndicator
 import dev.supermux.session.sessionListShowsUnread
+import dev.supermux.ui.TestIds
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -82,5 +84,12 @@ class SessionListRailUiContractTest {
         assertEquals("archived_fold", WorkspaceListTestIds.ARCHIVED_FOLD)
         assertEquals("workspaces_list", WorkspaceListTestIds.LIST)
         assertEquals("workspace_row_new_chat", WorkspaceListTestIds.ROW_NEW_CHAT)
+    }
+
+    @Test
+    fun workspace_chat_pane_carries_shared_chat_view_test_id() {
+        assertEquals(TestIds.CHAT_VIEW, WorkspaceChatPaneTestIds.CHAT_VIEW)
+        assertEquals("chat-view", WorkspaceChatPaneTestIds.CHAT_VIEW)
+        assertEquals("view_chat", WorkspaceChatPaneTestIds.VIEW_CHAT)
     }
 }
