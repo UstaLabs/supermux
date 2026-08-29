@@ -231,11 +231,10 @@ class AppViewModel(
     private val _activeHost = MutableStateFlow<String?>(null)
     val activeHost: StateFlow<String?> = _activeHost
 
-    // Viewing presence — tells the OWNING broker which chat is foreground (parity with iOS/web) so it
-    // suppresses a push for a chat you're already looking at.
-    private var viewingSession: String? = null
-    private var viewingVisible: Boolean = false
-    private var lastSentViewing: Pair<String?, Boolean>? = null
+    // Viewing presence — tells the OWNING broker which chats are foreground so it
+    // suppresses a push for a chat you're already looking at (spec §11).
+    private var viewingSnapshot: dev.supermux.android.host.WorkspaceViewingSnapshot? = null
+    private var lastSentViewing: List<dev.supermux.proto.ClientFrame.Viewing>? = null
     private var viewingHeartbeat: Job? = null
     private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
     val messages: StateFlow<Map<String, List<LogEntry>>> = _messages
@@ -854,16 +853,22 @@ class AppViewModel(
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
 
-    /** Report the foreground chat (`null` = the session list) + whether the app is visible.
-     *  Also makes that chat's host the active host so host-global ops target it. */
-    fun updateViewing(session: String?, visible: Boolean) {
-        viewingSession = session
-        viewingVisible = visible
-        if (session != null) {
-            ownerOf(session)?.let { setActiveHost(it) }
-            // Optimistic clear (web useUnread.markRead parity). The broker confirms via
-            // session_read after the viewing frame advances the server pointer.
-            if (visible) markRead(session)
+    /**
+     * Report the workspace viewing snapshot (or null = not looking at a workspace).
+     * A workspace switch publishes a non-visible frame first so the previous set
+     * cannot linger. Visible chat ids are marked read optimistically.
+     */
+    fun updateViewing(snapshot: dev.supermux.android.host.WorkspaceViewingSnapshot?) {
+        val prevWorkspace = viewingSnapshot?.workspaceId
+        if (prevWorkspace != null && snapshot != null && prevWorkspace != snapshot.workspaceId) {
+            viewingSnapshot = null
+            sendViewingIfChanged()
+        }
+        viewingSnapshot = snapshot
+        val ids = snapshot?.takeIf { it.appForeground }?.visibleChatSessionIds.orEmpty()
+        ids.firstOrNull()?.let { ownerOf(it)?.let(::setActiveHost) }
+        if (snapshot?.appForeground == true) {
+            for (id in ids) markRead(id)
         }
         sendViewingIfChanged()
         ensureViewingHeartbeat()
@@ -883,11 +888,16 @@ class AppViewModel(
     }
 
     private fun sendViewingIfChanged() {
-        val next = viewingSession to viewingVisible
+        val next = dev.supermux.android.host.framesForSnapshot(viewingSnapshot)
         if (lastSentViewing == next) return
         lastSentViewing = next
-        val target = viewingSession?.let { clientFor(it) } ?: activeClient()
-        viewModelScope.launch { runCatching { target?.send(ClientFrame.Viewing(viewingSession, viewingVisible)) } }
+        val firstId = viewingSnapshot?.visibleChatSessionIds?.firstOrNull()
+        val target = firstId?.let { clientFor(it) } ?: activeClient()
+        viewModelScope.launch {
+            for (frame in next) {
+                runCatching { target?.send(frame) }
+            }
+        }
     }
 
     private fun ensureViewingHeartbeat() {
@@ -895,9 +905,13 @@ class AppViewModel(
         viewingHeartbeat = viewModelScope.launch {
             while (isActive) {
                 delay(60_000)
-                if (viewingVisible) {
-                    val target = viewingSession?.let { clientFor(it) } ?: activeClient()
-                    runCatching { target?.send(ClientFrame.Viewing(viewingSession, true)) }
+                val snap = viewingSnapshot
+                if (snap?.appForeground == true) {
+                    val firstId = snap.visibleChatSessionIds.firstOrNull()
+                    val target = firstId?.let { clientFor(it) } ?: activeClient()
+                    for (frame in dev.supermux.android.host.framesForSnapshot(snap)) {
+                        runCatching { target?.send(frame) }
+                    }
                 }
             }
         }

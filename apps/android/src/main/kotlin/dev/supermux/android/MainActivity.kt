@@ -55,14 +55,24 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.toRoute
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import dev.supermux.android.host.AddHostScreen
 import dev.supermux.android.host.HostScopePicker
 import dev.supermux.android.host.HostView
+import dev.supermux.android.host.ViewingSurface
+import dev.supermux.android.host.WorkspaceViewingSnapshot
+import dev.supermux.android.host.notificationCancelSessionIds
+import dev.supermux.android.host.resolvePushTap
+import dev.supermux.android.host.viewingSurfaceVisible
+import dev.supermux.android.host.visibleChatIdsForAndroid
+import dev.supermux.android.host.visibleWorkspaceChatIds
+import dev.supermux.android.host.workspaceForSession
 import dev.supermux.android.nav.AddHost
 import dev.supermux.android.nav.Appearance
 import dev.supermux.android.nav.Archived
@@ -257,30 +267,53 @@ class MainActivity : ComponentActivity() {
                 // transcript would be empty until the next snapshot/restart. Seed it whenever a chat
                 // is opened — a no-op for sessions the snapshot already populated. (iOS parity:
                 // ChatPane.loadPane → BrokerSession.ensureMessagesLoaded.)
-                LaunchedEffect(selected, workspaces) {
+                // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
+                // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded
+                // Galaxy Z Fold 7 qualifies; narrower (phones / folded cover) keeps single-pane chat.
+                val wide = isWorkspaceWidth(LocalConfiguration.current.screenWidthDp)
+                val cs = MaterialTheme.colorScheme
+
+                val navController = rememberNavController()
+                val navEntry by navController.currentBackStackEntryAsState()
+                val homeRoute = navEntry?.destination?.hasRoute<Home>() == true
+                val overlayOpen = navEntry != null && !homeRoute
+
+                LaunchedEffect(selected, workspaces, wide) {
                     selected?.let {
                         sessionHost[it]?.let(vm::setActiveHost)
                         vm.ensureMessagesLoaded(it)
-                        // Opening a chat clears its (grouped) notifications — parity with iOS.
-                        SupermuxMessagingService.cancelForSession(applicationContext, it)
                         val hostId = sessionHost[it] ?: vm.activeHost.value
-                        if (hostId != null) {
-                            val ws = vm.workspaceForSession(hostId, it)
-                            val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == it }
-                            if (ws != null && chatView != null) vm.setActiveView(ws.id, chatView.id)
+                        val ws = hostId?.let { h -> vm.workspaceForSession(h, it) }
+                        val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == it }
+                        if (ws != null && chatView != null) vm.setActiveView(ws.id, chatView.id)
+                        val layout = ws?.layout?.toDomainOrNull()
+                        val visibleIds = if (ws != null) {
+                            visibleChatIdsForAndroid(wide, ws, layout)
+                        } else {
+                            listOf(it)
+                        }
+                        for (id in notificationCancelSessionIds(visibleIds.ifEmpty { listOf(it) })) {
+                            SupermuxMessagingService.cancelForSession(applicationContext, id)
                         }
                     }
                 }
-                // A tapped push carries the chat id — open that chat (parity with iOS PushRouter);
-                // the clear-on-open effect above then wipes its notifications. Keyed on the intent so
-                // a fresh tap while foregrounded (onNewIntent swaps intentState) re-opens it.
-                LaunchedEffect(currentIntent) {
-                    currentIntent?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
+                // A tapped push carries the chat id. Resolve the owning workspace (Phase 4) and
+                // activate that chat view without PATCHing layout. Old broker / no workspace →
+                // session-only screen, same as before.
+                LaunchedEffect(currentIntent, workspaces, sessionHost) {
+                    val sid = currentIntent
+                        ?.getStringExtra(SupermuxMessagingService.EXTRA_SESSION_ID)
                         ?.takeIf { it.isNotBlank() }
-                        ?.let { selected = it }
+                        ?: return@LaunchedEffect
+                    val hostId = sessionHost[sid] ?: vm.activeHost.value
+                    val owned = hostId?.let { vm.workspaceForSession(it, sid) }
+                    val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
+                    selected = sid
+                    if (tap.workspaceId != null && tap.activeViewId != null) {
+                        vm.setActiveView(tap.workspaceId, tap.activeViewId)
+                    }
                 }
-                // Report which chat is foreground so the broker suppresses a push for the chat
-                // you're looking at (parity with iOS/web). Visible = the activity is ≥ STARTED.
+                // Report which chats are foreground so the broker suppresses a push (spec §11).
                 val lifecycleOwner = LocalLifecycleOwner.current
                 var appVisible by remember {
                     mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
@@ -296,15 +329,47 @@ class MainActivity : ComponentActivity() {
                     lifecycleOwner.lifecycle.addObserver(obs)
                     onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
                 }
-                LaunchedEffect(selected, appVisible) { vm.updateViewing(selected, appVisible) }
-
-                // Wide = available width ≥600dp (the shared isWorkspaceWidth predicate /
-                // WORKSPACE_MIN_WIDTH_DP). ">=600" (not only Expanded ≥840) means the unfolded
-                // Galaxy Z Fold 7 qualifies; narrower (phones / folded cover) keeps single-pane chat.
-                val wide = isWorkspaceWidth(LocalConfiguration.current.screenWidthDp)
-                val cs = MaterialTheme.colorScheme
-
-                val navController = rememberNavController()
+                val selectedWorkspace = selected?.let { sid ->
+                    val hostId = sessionHost[sid] ?: vm.activeHost.value
+                    hostId?.let { h -> vm.workspaceForSession(h, sid) }
+                        ?: workspaceForSession(workspaces, sid)
+                }
+                val viewingSnapshot = run {
+                    val surface = ViewingSurface(
+                        homeRoute = homeRoute,
+                        overlayOpen = overlayOpen,
+                        workspaceResolved = selectedWorkspace != null,
+                        appForeground = appVisible,
+                    )
+                    val layout = selectedWorkspace?.layout?.toDomainOrNull()
+                    val ids = selectedWorkspace?.let {
+                        visibleChatIdsForAndroid(wide, it, layout)
+                    }.orEmpty()
+                    val snap = selectedWorkspace?.let {
+                        WorkspaceViewingSnapshot(
+                            workspaceId = it.id,
+                            visibleChatSessionIds = ids,
+                            appForeground = appVisible,
+                        )
+                    }
+                    val visibleIds = visibleWorkspaceChatIds(
+                        surfaceVisible = viewingSurfaceVisible(surface),
+                        selectedWorkspaceId = selectedWorkspace?.id,
+                        snapshot = snap,
+                    )
+                    when {
+                        viewingSurfaceVisible(surface) && snap != null ->
+                            snap.copy(visibleChatSessionIds = visibleIds)
+                        homeRoute && !overlayOpen && appVisible ->
+                            WorkspaceViewingSnapshot(
+                                workspaceId = "",
+                                visibleChatSessionIds = emptyList(),
+                                appForeground = true,
+                            )
+                        else -> null
+                    }
+                }
+                LaunchedEffect(viewingSnapshot) { vm.updateViewing(viewingSnapshot) }
                 // Maps the screens' legacy string-route callbacks to type-safe NavHost destinations.
                 val navTo: (String) -> Unit = { dest ->
                     when (dest) {
