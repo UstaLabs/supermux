@@ -114,12 +114,12 @@ Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layou
 - [x] "New chat in this workspace" from the workspace row joins the workspace and starts in its workdir (`55c4552d`-style: pass `workspaceId` on `POST /sessions`).
 - [x] Commit: `feat(android): continue in new conversation inside the same workspace`.
 
-### Phase 6 — Presence, unread, notifications on the workspace model
+### Phase 6 — Presence, unread, notifications on the workspace model — DONE `3a2fc71c`, `738bffe2` (2026-08-29)
 
-- [ ] `Viewing` frames: one per visible chat view (`a5e049f9`), using the atomic `WorkspaceViewingSnapshot` pattern (`04041157`) — visible = Home route ∧ no launcher/sheet ∧ resolved workspace ∧ app foreground.
-- [ ] Unread badge on the workspace row = server-authoritative session unread (`8e153022`) aggregated over the workspace's chat sessions.
-- [ ] FCM tap → open the session's **workspace** and set `activeViewId` to that chat view locally (no PATCH).
-- [ ] Commit: `feat(android): workspace-scoped viewing, unread and push routing`.
+- [x] `Viewing` frames: one per visible chat view (`a5e049f9`), using the atomic `WorkspaceViewingSnapshot` pattern (`04041157`) — visible = Home route ∧ no launcher/sheet ∧ resolved workspace ∧ app foreground.
+- [x] Unread badge on the workspace row = server-authoritative session unread (`8e153022`) aggregated over the workspace's chat sessions.
+- [x] FCM tap → open the session's **workspace** and set `activeViewId` to that chat view locally (no PATCH).
+- [x] Commit: `feat(android): workspace-scoped viewing, unread and push routing`.
 
 ### Phase 7 — Verification & release
 
