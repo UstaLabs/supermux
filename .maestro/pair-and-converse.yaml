@@ -59,18 +59,21 @@ appId: dev.supermux.android
     timeout: 30000
 - tapOn: "Connect"
 
-# Paired and synced: the session list is on screen with the seeded session.
+# Paired and synced: the WORKSPACE list is on screen (the broker self-heals the
+# seeded session into a workspace at boot, so its id is minted there — match by
+# prefix). An old broker with no workspaces falls back to "session-list" +
+# "session-row:<id>"; this flow targets the workspace path.
 - extendedWaitUntil:
     visible:
-      id: "session-list"
+      id: "workspaces_list"
     timeout: 60000
 - extendedWaitUntil:
     visible:
-      id: "session-row:${SESSION_ID}"
+      id: "workspace_row_.*"
     timeout: 30000
 
 - tapOn:
-    id: "session-row:${SESSION_ID}"
+    id: "workspace_row_.*"
 - extendedWaitUntil:
     visible:
       id: "chat-view"
