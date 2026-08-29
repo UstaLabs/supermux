@@ -101,6 +101,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
+import dev.supermux.chat.TimelineItem
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.LocalSemantics
 import dev.supermux.android.theme.MonoFontFamily

@@ -113,10 +113,8 @@ import dev.supermux.ui.MdBlock
 import dev.supermux.ui.SpanStyleKind
 import dev.supermux.ui.parseInlineMarkdown
 import dev.supermux.ui.parseMarkdownBlocks
-
-// Shared fold — re-exported so package-local call sites keep working.
-typealias TimelineItem = dev.supermux.chat.TimelineItem
-typealias ToolStatus = dev.supermux.chat.ToolStatus
+import dev.supermux.chat.TimelineItem
+import dev.supermux.chat.ToolStatus
 
 fun mergeTimeline(
     messages: List<LogEntry>,
