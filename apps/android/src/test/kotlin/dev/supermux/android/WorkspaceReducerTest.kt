@@ -69,6 +69,25 @@ class WorkspaceReducerTest {
     }
 
     @Test
+    fun workspaceAddedForAKnownIdReplacesRatherThanDuplicates() {
+        val first = reduce(WorkspaceHostState(), ServerFrame.WorkspaceAdded(ws("w1", name = "first")))
+        val next = reduce(first, ServerFrame.WorkspaceAdded(ws("w1", name = "second")))
+        assertEquals(1, next.workspaces.size)
+        assertEquals("second", next.workspaces[0].name)
+    }
+
+    @Test
+    fun workspaceAddedLeavesTheArchivedList() {
+        val seeded = reduce(
+            WorkspaceHostState(),
+            ServerFrame.Snapshot(archivedWorkspaces = listOf(ws("w1").copy(status = "archived"))),
+        )
+        val next = reduce(seeded, ServerFrame.WorkspaceAdded(ws("w1")))
+        assertEquals(listOf("w1"), next.workspaces.map { it.id })
+        assertEquals(emptyList(), next.archivedWorkspaces.map { it.id })
+    }
+
+    @Test
     fun workspaceChangedReplacesInPlaceKeepingOrder() {
         val seeded = reduce(WorkspaceHostState(), ServerFrame.Snapshot(workspaces = listOf(ws("w1"), ws("w2"))))
         val next = reduce(seeded, ServerFrame.WorkspaceChanged(ws("w1", name = "renamed")))

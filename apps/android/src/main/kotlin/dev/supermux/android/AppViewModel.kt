@@ -803,7 +803,7 @@ class AppViewModel(
 
     private fun onHostsChanged() {
         hostConns.sync(store.list())
-        if (_activeHost.value == null) _activeHost.value = store.list().firstOrNull()?.recordId
+        if (_activeHost.value == null) store.list().firstOrNull()?.recordId?.let { setActiveHost(it) }
         rebuildHostViews()
     }
 
@@ -840,7 +840,7 @@ class AppViewModel(
         viewingSession = session
         viewingVisible = visible
         if (session != null) {
-            ownerOf(session)?.let { _activeHost.value = it }
+            ownerOf(session)?.let { setActiveHost(it) }
             // Optimistic clear (web useUnread.markRead parity). The broker confirms via
             // session_read after the viewing frame advances the server pointer.
             if (visible) markRead(session)
