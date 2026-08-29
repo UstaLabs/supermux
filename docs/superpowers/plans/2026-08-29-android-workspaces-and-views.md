@@ -32,13 +32,16 @@ Keep untouched (Android-only assets that must survive): FCM push (`push/`), `sup
 1. **The broker's layout is the only layout.** `apps/android/.../workspace/WorkspaceLayout.kt`, `WorkspaceSnapshot`, `PaneVisibility`, `PaneToggleCluster`, `ResizableSplit` and the `cmux-workspace-layout` SharedPrefs blob are **deleted** at the end of Phase 3. One migration step wipes the old pref key.
 2. **Phone = read-only tabs (spec §8.3).** `Breakpoint.isWorkspaceWidth` (≥600 dp) is the single gate: below it the client never calls `PATCH /workspaces/:id {layout}`; it only calls `PATCH … {activeViewId}` and `POST/DELETE views` (adding/closing a view is content, not arrangement).
 3. **`:ui` becomes multiplatform** (`jvm()` + `androidTarget()`), not copied. Two known leaks to fix: `SplitSeam.kt` uses `java.awt.Cursor` for resize cursors (→ `expect`/`actual` `PointerIcon`, Android actual returns `PointerIcon.Default`), and `PaneHost.kt:621` uses `java.util.UUID` (→ shared id minter already used for client-minted view ids; grep `BrokerApi.addView` callers on desktop for it).
-4. **Hoist before port, not after.** Generic desktop state that Android needs is moved to `:shared` commonMain first (Phase 4) so Android never grows a second copy: `WorkspaceLayoutState`, `WorkspaceFileOpener`, `WorkspaceKeepAliveCache`, `viewTitle`, `DocumentStore`, `ExplorerState`, `DiffState`. Android's `editor/EditorState.kt` is deleted in favour of them.
+4. **Hoist before port, not after** (Ahmet, 2026-08-29: Q5=a). Generic desktop state that Android needs is moved to `:shared` commonMain first (Phase 3, before any Android pane work) so Android never grows a second copy: `WorkspaceLayoutState`, `WorkspaceFileOpener`, `WorkspaceKeepAliveCache`, `viewTitle`, `DocumentStore`, `ExplorerState`, `DiffState`. Android's `editor/EditorState.kt` is deleted in favour of them.
 5. **Sidebar rows stay lean and keep git data** (spec §13.6 + digest rule): reuse `SessionStatusRail`/`GitBadge`, one row per workspace, children only when ≥2 views.
 6. **Multi-window / tear-out / `WindowHostRegistry` / `PersistedWindowHost` are out of scope** for Android.
+7. **Phone flattens the tree** (Q3=b): every view of the workspace, in `collectViewIds(layout)` order, is one tab row; groups/splits are ignored on a phone. No overflow chip.
+8. **Phone may add every view kind and may close a view** (Q1, Q2), with a confirm dialog when closing ends work (terminal, display) — same as desktop.
+9. **Tablets: one CodeMirror WebView per editor pane** (Q4=a), same as desktop's one-JCEF-per-view, bounded by the keep-alive LRU.
 
 ## 2. Phases
 
-Each phase ends green on `:android:testDebugUnitTest` + `:android:assembleDebug` + `:shared:allTests` + `:ui:jvmTest` (and `:ui:testDebugUnitTest` once Android target exists), and is verified on the `pixel_api35` (phone) and `workspace_fold` (tablet, unfolded 2076×2152) emulators per the e2e recipe in `~/.mux/domains/claudemux.digest.md` ("e2e verdicts").
+Order: 1 state → 2 sidebar → 3 hoist + `:ui` multiplatform → 4 views/layout → 5 continue → 6 presence → 7 verify. Each phase ends green on `:android:testDebugUnitTest` + `:android:assembleDebug` + `:shared:allTests` + `:ui:jvmTest` (and `:ui:testDebugUnitTest` once Android target exists), and is verified on the `pixel_api35` (phone) and `workspace_fold` (tablet, unfolded 2076×2152) emulators per the e2e recipe in `~/.mux/domains/claudemux.digest.md` ("e2e verdicts").
 
 ### Phase 1 — Workspace state in `AppViewModel` (no UI change)
 
@@ -64,46 +67,43 @@ Each phase ends green on `:android:testDebugUnitTest` + `:android:assembleDebug`
 - [ ] Update `SessionListRailUiContract` test-id vocabulary (shared across web/Android/iOS/desktop, `9868a02e`) — add workspace-row ids in lockstep with desktop's.
 - [ ] Commit: `feat(android): workspace sidebar with grouping, reorder, archive and restore`.
 
-### Phase 3 — Views and the layout tree replace `PaneVisibility`
+### Phase 3 — Hoist generic view logic out of `apps/desktop` and make `:ui` multiplatform
 
-**Files:** `workspace/*` (mostly deleted), `session/SessionWorkspaceDetail.kt`, `chat/ChatScreen.kt`, `editor/EditorScreen.kt`, `terminal/TerminalPanel.kt`, `display/DisplayPanel.kt`, `MainActivity.kt`, `apps/ui/build.gradle.kts`, `apps/ui/src/**/SplitSeam.kt`, `PaneHost.kt`, `apps/android/build.gradle.kts`.
+**Files:** `apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/{WorkspaceLayoutState,WorkspaceSession,WorkspaceFileOpen,WorkspaceSingletonView,WorkspaceKeepAlive,ViewHost(viewTitle only),DocumentStore,ExplorerState,DiffState,EditorState}.kt` → `apps/shared/src/commonMain/kotlin/dev/supermux/workspace/…` (pure state) and `apps/ui/src/commonMain/…` (composables). Desktop keeps thin imports. Android does not touch any of this yet; it consumes it in Phase 4.
 
-3a. **`:ui` goes multiplatform**
-- [ ] `apps/ui/build.gradle.kts`: `kotlin.multiplatform` + `android.library`, `jvm()` + `androidTarget()`, move `src/main` → `src/commonMain`, `src/test` → `src/jvmTest`. Add the Android target to `ci.yml` (`:ui:testDebugUnitTest`) — the digest records CI silently not running `:ui:jvmTest` once; check the lane.
-- [ ] `SplitSeam.kt`: `expect val ColResizeIcon: PointerIcon` / `RowResizeIcon`; jvm actual = current AWT cursors; android actual = `PointerIcon.Default`.
-- [ ] `PaneHost.kt:621`: replace `java.util.UUID` with the shared id minter (`dev.supermux.…` — same one desktop uses for client-minted view ids, `3bfb400c`).
-- [ ] `apps/android/build.gradle.kts`: `implementation(project(":ui"))`.
-- [ ] Commit: `build(ui): add androidTarget and drop AWT/UUID from the pane layer`.
-
-3b. **`ViewHost` for Android**
-- [ ] New `apps/android/.../workspace/AndroidViewHost.kt`: `@Composable fun AndroidViewHost(view: ViewDto, workspace: WorkspaceDto, …)` switching on `view.kind` and its state: `chat` → `ChatPanel(sessionId)`; `terminal` scope=session → existing agent terminal, scope=workspace → workspace terminal (`24e2629c` added the broker side); `editor` mode tree/file/diff → `FileTree` / `WebCodeEditor` / `DiffView` on the **workspace-scoped** FS routes (`77d64a73`, `BrokerApi` workspace FS methods) instead of session-scoped; `display` → `DisplayPanel(displayId)`; unknown → hint. Titles via shared `viewTitle` (hoisted in Phase 4; until then a local copy marked `// TODO(phase4) delete`).
-- [ ] Commit: `feat(android): AndroidViewHost dispatches broker views to native panes`.
-
-3c. **Phone: one group at a time (spec §8.3)**
-- [ ] `session/SessionWorkspaceDetail.kt` becomes `WorkspaceScreen`: when `!isWorkspaceWidth`, pick the group containing the workspace's `activeViewId` (`groupIdOf` / `firstGroupId` from `LayoutTree.kt`), render a `PrimaryTabRow` of that group's `viewIds` and one `AndroidViewHost` for the active tab. Tab tap → `BrokerApi.patchWorkspace(id, activeViewId=…)` only. A "+" in the tab row → `POST /workspaces/:id/views` (terminal / files / diff / display), closing a tab → `DELETE …/views/:viewId` (this ends the work — confirm for terminals, as desktop does). **Never** send `layout` from a phone.
-- [ ] Other groups of a split are reachable through an overflow chip ("2 more groups") that switches the displayed group **locally** (no PATCH).
-- [ ] Commit: `feat(android): phone shows one layout group as tabs, never writes the layout`.
-
-3d. **Tablet / unfolded: full tree**
-- [ ] When `isWorkspaceWidth`, render `PaneHost(layout, onEdit = layoutState::edit, tabSlot/addSlot/emptyGroupSlot = Android chrome, content = AndroidViewHost)` where `layoutState` is the shared `WorkspaceLayoutState` (Phase 4 hoist; until then instantiate desktop's class copied verbatim with `// TODO(phase4)`). Drag/drop, split, reorder, move-to-group all come from `:ui`.
-- [ ] `Breakpoint` change mid-session (fold/unfold): switching from tree to tabs must keep `activeViewId`; switching back must not PATCH anything until the user drags.
-- [ ] Commit: `feat(android): tablets render the broker layout tree with PaneHost`.
-
-3e. **Delete the private layout**
-- [ ] Remove `workspace/WorkspaceLayout.kt`, `WorkspaceSnapshot`, `PaneVisibility`, `PaneToggleCluster`, `ResizableSplit`, `WorkspaceLayoutTest`, and the `cmux-workspace-layout` pref read path; add a one-shot `remove("cmux-workspace-layout")` in `AndroidSnapshotPersistence`.
-- [ ] Keep `Breakpoint.kt`, `SessionsRail.kt`, `WorkspaceShortcuts` (keyboard on tablets).
-- [ ] Commit: `refactor(android): drop the client-local pane layout`.
-
-### Phase 4 — Hoist generic view logic out of `apps/desktop`
-
-**Files:** `apps/desktop/src/main/kotlin/dev/supermux/desktop/shell/{WorkspaceLayoutState,WorkspaceSession,WorkspaceFileOpen,WorkspaceSingletonView,WorkspaceKeepAlive,ViewHost(viewTitle only),DocumentStore,ExplorerState,DiffState,EditorState}.kt` → `apps/shared/src/commonMain/kotlin/dev/supermux/workspace/…` (pure state) and `apps/ui/src/commonMain/…` (composables). Desktop keeps thin imports; Android deletes its `// TODO(phase4)` copies and `editor/EditorState.kt`.
-
+- [ ] **3a. `:ui` goes multiplatform.** `apps/ui/build.gradle.kts`: `kotlin.multiplatform` + `android.library`, `jvm()` + `androidTarget()`, move `src/main` → `src/commonMain`, `src/test` → `src/jvmTest`. Add `:ui:testDebugUnitTest` to `ci.yml` (the digest records CI silently not running `:ui:jvmTest` once — check the lane). `SplitSeam.kt`: `expect val ColResizeIcon: PointerIcon` / `RowResizeIcon`; jvm actual = current AWT cursors; android actual = `PointerIcon.Default`. `PaneHost.kt:621`: replace `java.util.UUID` with the shared id minter desktop uses for client-minted view ids (`3bfb400c`). Commit: `build(ui): add androidTarget and drop AWT/UUID from the pane layer`.
 - [ ] Move `WorkspaceLayoutState` (pending-edit rebase onto `workspace_changed`, 300 ms debounce, drop-on-refuse). Its tests move with it into `:shared` commonTest.
 - [ ] Move `WorkspaceKeepAliveCache` (LRU of 10 ids incl. active) + `WorkspaceKeepAliveHost`; Android's `SessionKeepAlive` becomes a caller.
-- [ ] Move `DocumentStore` (per-workspace, dirty tracking), `ExplorerState`, `DiffState`; Android `editor/EditorTabs.kt`, `FileTree.kt`, `DiffView.kt` bind to them. Delete `apps/android/.../editor/EditorState.kt`.
+- [ ] Move `DocumentStore` (per-workspace, dirty tracking), `ExplorerState`, `DiffState`. (Android binds to them in Phase 4 and deletes `apps/android/.../editor/EditorState.kt` then.)
 - [ ] Move `viewTitle(view)` and `WorkspaceFileOpener` (transcript file-path → editor view, `55e2a15b`).
 - [ ] Desktop must be byte-for-byte behaviour-identical: run `:desktop:test` and the desktop hot-run smoke on the Mac (`./gradlew :desktop:hotRun --auto`).
 - [ ] Commit per moved unit: `refactor(shared): hoist WorkspaceLayoutState from desktop`, etc.
+
+### Phase 4 — Views and the layout tree replace `PaneVisibility`
+
+**Files:** `workspace/*` (mostly deleted), `session/SessionWorkspaceDetail.kt`, `chat/ChatScreen.kt`, `editor/EditorScreen.kt`, `terminal/TerminalPanel.kt`, `display/DisplayPanel.kt`, `MainActivity.kt`, `apps/ui/build.gradle.kts`, `apps/ui/src/**/SplitSeam.kt`, `PaneHost.kt`, `apps/android/build.gradle.kts`.
+
+4a. **Wire `:ui` into Android**
+- [ ] `apps/android/build.gradle.kts`: `implementation(project(":ui"))`; delete Android's `editor/EditorState.kt` and bind `editor/EditorTabs.kt`, `FileTree.kt`, `DiffView.kt` to the shared `DocumentStore`/`ExplorerState`/`DiffState` from Phase 3.
+- [ ] Commit: `build(android): depend on :ui and the shared document stores`.
+
+4b. **`ViewHost` for Android**
+- [ ] New `apps/android/.../workspace/AndroidViewHost.kt`: `@Composable fun AndroidViewHost(view: ViewDto, workspace: WorkspaceDto, …)` switching on `view.kind` and its state: `chat` → `ChatPanel(sessionId)`; `terminal` scope=session → existing agent terminal, scope=workspace → workspace terminal (`24e2629c` added the broker side); `editor` mode tree/file/diff → `FileTree` / `WebCodeEditor` / `DiffView` on the **workspace-scoped** FS routes (`77d64a73`, `BrokerApi` workspace FS methods) instead of session-scoped; `display` → `DisplayPanel(displayId)`; unknown → hint. Titles via shared `viewTitle` (Phase 3).
+- [ ] Commit: `feat(android): AndroidViewHost dispatches broker views to native panes`.
+
+4c. **Phone: one group at a time (spec §8.3)**
+- [ ] `session/SessionWorkspaceDetail.kt` becomes `WorkspaceScreen`: when `!isWorkspaceWidth`, render a `PrimaryTabRow` of **every** view id in `collectViewIds(layout)` order (groups and splits ignored — decision 7) and one `AndroidViewHost` for `activeViewId`. Tab tap → `BrokerApi.patchWorkspace(id, activeViewId=…)` only. A "+" in the tab row → `POST /workspaces/:id/views` (terminal / files / diff / display), closing a tab → `DELETE …/views/:viewId` (this ends the work — confirm for terminal/display, as desktop does; decision 8). **Never** send `layout` from a phone.
+- [ ] Commit: `feat(android): phone shows every view as a tab, never writes the layout`.
+
+4d. **Tablet / unfolded: full tree**
+- [ ] When `isWorkspaceWidth`, render `PaneHost(layout, onEdit = layoutState::edit, tabSlot/addSlot/emptyGroupSlot = Android chrome, content = AndroidViewHost)` where `layoutState` is the shared `WorkspaceLayoutState` from Phase 3. Each editor view gets its own `WebCodeEditor` WebView (decision 9). Drag/drop, split, reorder, move-to-group all come from `:ui`.
+- [ ] `Breakpoint` change mid-session (fold/unfold): switching from tree to tabs must keep `activeViewId`; switching back must not PATCH anything until the user drags.
+- [ ] Commit: `feat(android): tablets render the broker layout tree with PaneHost`.
+
+4e. **Delete the private layout**
+- [ ] Remove `workspace/WorkspaceLayout.kt`, `WorkspaceSnapshot`, `PaneVisibility`, `PaneToggleCluster`, `ResizableSplit`, `WorkspaceLayoutTest`, and the `cmux-workspace-layout` pref read path; add a one-shot `remove("cmux-workspace-layout")` in `AndroidSnapshotPersistence`.
+- [ ] Keep `Breakpoint.kt`, `SessionsRail.kt`, `WorkspaceShortcuts` (keyboard on tablets).
+- [ ] Commit: `refactor(android): drop the client-local pane layout`.
 
 ### Phase 5 — Continue-in-new-conversation and chat header parity
 
@@ -127,13 +127,13 @@ Each phase ends green on `:android:testDebugUnitTest` + `:android:assembleDebug`
 - [ ] Cross-client check: arrange a 3-pane layout on desktop, open on phone → tabs match; move a view on tablet → desktop updates live.
 - [ ] Bump `versionCode`/name in `apps/android/build.gradle.kts`, run `play-store/RELEASE-CHECKLIST.md`, sideload APK to supermux-apk.ustalabs.com, then Play closed test.
 
-## 3. Open questions for Ahmet (answer before Phase 3)
+## 3. Answers from Ahmet (2026-08-29)
 
-1. **Phone "+" set:** which view kinds may a phone add — all four (terminal / files / diff / display) or chat-only? (Plan assumes all four; adding is content, not layout.)
-2. **Closing a view from a phone** ends the work (terminal/display) — OK to allow with a confirm, or make close tablet-only?
-3. **Split groups on a phone:** overflow chip to switch groups locally (plan), or flatten every view of the workspace into one tab row and ignore groups?
-4. **Editor on tablet:** keep the CodeMirror WebView per view (memory ×N panes) or one shared WebView swapped between editor views? Desktop keeps one JCEF per view.
-5. **Phase 4 ordering:** do the hoist first (safer for desktop, slower to see Android progress) or after Phase 3 with temporary copies (plan default)?
+1. Phone may add **all** view kinds.
+2. Phone **may close** a view even though it ends the work (confirm dialog).
+3. Split groups on a phone: **flatten** into one tab row (b).
+4. Tablet editor: **one WebView per editor pane** (a).
+5. Ordering: **hoist first** (a) — Phase 3 before Phase 4.
 
 ## 4. Risks
 
