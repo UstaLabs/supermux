@@ -26,6 +26,16 @@ class AndroidSnapshotPersistence(context: Context) : SnapshotPersistence {
     private val appContext = context.applicationContext
     private val key = stringPreferencesKey(KEY)
 
+    init {
+        // One-shot: drop the pre-Phase-4 client-local pane layout. The broker layout is the only layout.
+        runCatching {
+            appContext.getSharedPreferences("cmux", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .remove("cmux-workspace-layout")
+                .apply()
+        }
+    }
+
     override fun loadAll(): List<HostSnapshot> {
         val json = runCatching {
             runBlocking { appContext.snapshotDataStore.data.first()[key] }
