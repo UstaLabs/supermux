@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -173,8 +174,12 @@ private fun PhoneWorkspace(
             }
         }
     }
+    val sessions by vm.sessions.collectAsState()
     CloseViewDialog(
         view = closeCandidate,
+        sessionName = closeCandidate?.chatSessionId()?.let { sid ->
+            sessions.firstOrNull { it.id == sid }?.name
+        },
         onDismiss = { closeCandidate = null },
         onConfirm = { view ->
             vm.closeWorkspaceView(workspace.id, view.id)
@@ -267,8 +272,12 @@ private fun TabletWorkspace(
             }
         },
     )
+    val sessions by vm.sessions.collectAsState()
     CloseViewDialog(
         view = closeCandidate,
+        sessionName = closeCandidate?.chatSessionId()?.let { sid ->
+            sessions.firstOrNull { it.id == sid }?.name
+        },
         onDismiss = { closeCandidate = null },
         onConfirm = { view ->
             vm.closeWorkspaceView(workspace.id, view.id)
@@ -317,14 +326,14 @@ internal fun addTabletView(
 @Composable
 private fun CloseViewDialog(
     view: ViewDto?,
+    sessionName: String?,
     onDismiss: () -> Unit,
     onConfirm: (ViewDto) -> Unit,
 ) {
     view ?: return
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Close ${viewTitle(view)}?") },
-        text = { Text("This ends the work behind this view.") },
+        text = { Text(closeConfirmText(view, sessionName)) },
         confirmButton = {
             TextButton(onClick = { onConfirm(view) }) { Text("Close") }
         },

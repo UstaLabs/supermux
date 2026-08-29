@@ -77,12 +77,38 @@ class WorkspaceScreenModelTest {
         assertTrue(closeNeedsConfirm("display"))
     }
 
-    @Test fun closeNeedsConfirmChatFalse() {
-        assertFalse(closeNeedsConfirm("chat"))
+    @Test fun closeNeedsConfirmChat() {
+        assertTrue(closeNeedsConfirm("chat"))
     }
 
     @Test fun closeNeedsConfirmEditorFalse() {
         assertFalse(closeNeedsConfirm("editor"))
+    }
+
+    @Test fun closeConfirmTextChatUsesSessionName() {
+        val view = ViewDto(id = "c", workspaceId = "w", kind = "chat")
+        assertEquals(
+            "Close this chat? This archives the session Fix Session Renaming.",
+            closeConfirmText(view, "Fix Session Renaming"),
+        )
+    }
+
+    @Test fun closeConfirmTextChatFallsBackToViewTitle() {
+        val view = ViewDto(id = "c", workspaceId = "w", kind = "chat")
+        assertEquals(
+            "Close this chat? This archives the session Chat.",
+            closeConfirmText(view, null),
+        )
+    }
+
+    @Test fun closeConfirmTextTerminal() {
+        val view = ViewDto(id = "t", workspaceId = "w", kind = "terminal")
+        assertEquals("Close this terminal? This kills it.", closeConfirmText(view, null))
+    }
+
+    @Test fun closeConfirmTextDisplay() {
+        val view = ViewDto(id = "d", workspaceId = "w", kind = "display")
+        assertEquals("Close this display? This stops the stream.", closeConfirmText(view, null))
     }
 
     @Test fun closeNeedsConfirmViewDtoUsesKind() {

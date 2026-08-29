@@ -6,6 +6,7 @@ import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectViewIds
+import dev.supermux.workspace.viewTitle
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -70,6 +71,18 @@ fun addViewState(kind: NewViewKind, nowMillis: Long = 0L): JsonObject = when (ki
     NewViewKind.CHAT -> buildJsonObject { }
 }
 
-fun closeNeedsConfirm(kind: String): Boolean = kind == "terminal" || kind == "display"
+fun closeNeedsConfirm(kind: String): Boolean =
+    kind == "chat" || kind == "terminal" || kind == "display"
 
 fun closeNeedsConfirm(view: ViewDto): Boolean = closeNeedsConfirm(view.kind)
+
+/** Spec §9.3 — one question naming what the close stops. */
+fun closeConfirmText(view: ViewDto, sessionName: String?): String = when (view.kind) {
+    "chat" -> {
+        val name = sessionName?.takeIf { it.isNotBlank() } ?: viewTitle(view)
+        "Close this chat? This archives the session $name."
+    }
+    "terminal" -> "Close this terminal? This kills it."
+    "display" -> "Close this display? This stops the stream."
+    else -> "Close this view?"
+}
