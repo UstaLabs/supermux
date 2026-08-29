@@ -18,6 +18,7 @@ import dev.supermux.workspace.workspaceActivity
 object WorkspaceListTestIds {
     const val LIST = "workspaces_list"
     const val ARCHIVED_FOLD = "archived_fold"
+    const val ROW_NEW_CHAT = "workspace_row_new_chat"
     fun row(id: String) = "workspace_row_$id"
     fun children(id: String) = "workspace-children-$id"
     fun multiAgent(id: String) = "workspace-multiagent-$id"

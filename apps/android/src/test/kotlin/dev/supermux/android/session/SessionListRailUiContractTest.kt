@@ -81,5 +81,6 @@ class SessionListRailUiContractTest {
         assertEquals("archived_workspace_abc", WorkspaceListTestIds.archived("abc"))
         assertEquals("archived_fold", WorkspaceListTestIds.ARCHIVED_FOLD)
         assertEquals("workspaces_list", WorkspaceListTestIds.LIST)
+        assertEquals("workspace_row_new_chat", WorkspaceListTestIds.ROW_NEW_CHAT)
     }
 }

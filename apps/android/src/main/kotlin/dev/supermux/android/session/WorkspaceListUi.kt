@@ -67,6 +67,7 @@ fun WorkspaceRow(
     onToggleChildren: (() -> Unit)? = null,
     onClick: () -> Unit,
     onRename: () -> Unit = {},
+    onNewChat: () -> Unit = {},
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
     onChildClick: (String) -> Unit = {},
@@ -213,6 +214,14 @@ fun WorkspaceRow(
                                             onClick = {
                                                 menu = false
                                                 onRename()
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("New chat here") },
+                                            modifier = Modifier.testTag(WorkspaceListTestIds.ROW_NEW_CHAT),
+                                            onClick = {
+                                                menu = false
+                                                onNewChat()
                                             },
                                         )
                                     }

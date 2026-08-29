@@ -505,6 +505,7 @@ fun SessionListScreen(
     archivedWorkspaces: List<WorkspaceDto> = emptyList(),
     onArchiveWorkspace: (String) -> Unit = {},
     onRestoreWorkspace: (String) -> Unit = {},
+    onNewChatInWorkspace: (WorkspaceDto) -> Unit = {},
     // ── Multi-host (spec §5). All default-empty so single-host callers render exactly as before. ──
     hosts: List<dev.supermux.android.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
@@ -1033,6 +1034,7 @@ fun SessionListScreen(
                             onFinishDrag = onFinishWsDrag,
                             onRenameWs = onRenameWs,
                             onArchiveWs = onArchiveWs,
+                            onNewChatHere = { onNewChatInWorkspace(w) },
                         )
                     }
                 } else {
@@ -1084,6 +1086,7 @@ fun SessionListScreen(
                                     onFinishDrag = onFinishWsDrag,
                                     onRenameWs = onRenameWs,
                                     onArchiveWs = onArchiveWs,
+                                    onNewChatHere = { onNewChatInWorkspace(w) },
                                 )
                             }
                         }
@@ -1557,6 +1560,7 @@ private fun LazyItemScope.WorkspaceReorderableRow(
     onFinishDrag: () -> Unit,
     onRenameWs: (WorkspaceDto) -> Unit,
     onArchiveWs: (WorkspaceDto) -> Unit,
+    onNewChatHere: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val model = remember(w, sessionById, agentTyped, lastBySession, lastRead, wsHome, activeId) {
@@ -1598,6 +1602,7 @@ private fun LazyItemScope.WorkspaceReorderableRow(
             mute = primary?.mute == true,
             onClick = { openSid?.let(onOpen) },
             onRename = { onRenameWs(w) },
+            onNewChat = onNewChatHere,
             onKill = { onArchiveWs(w) },
             onToggleMute = {
                 val sid = model.primarySessionId ?: return@WorkspaceRow
