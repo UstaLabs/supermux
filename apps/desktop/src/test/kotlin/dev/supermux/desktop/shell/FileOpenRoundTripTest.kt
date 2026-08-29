@@ -15,6 +15,9 @@
 // Both broadcasts go through the same `serverLayout` the real AppShell feeds rememberWorkspaceLayout.
 package dev.supermux.desktop.shell
 
+import dev.supermux.ui.workspace.WorkspaceLayoutState
+import dev.supermux.ui.workspace.rememberWorkspaceLayout
+
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf

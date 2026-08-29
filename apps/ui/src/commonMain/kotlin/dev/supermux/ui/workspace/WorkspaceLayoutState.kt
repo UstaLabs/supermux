@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.workspace
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -15,10 +15,9 @@ import dev.supermux.workspace.validateLayout
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import dev.supermux.ui.panes.PaneHost
 
 /** A splitter drag fires on every pointer move; one PATCH per move would flood every peer. */
-internal const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
+const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
 
 /**
  * The open workspace's layout tree as the UI edits it, plus the debounced
@@ -64,7 +63,7 @@ internal const val LAYOUT_PATCH_DEBOUNCE_MS = 300L
  * to be dropped too, or it is replayed over every frame for the rest of the
  * session. See the call site for why that branch used to be unreachable.
  */
-internal class WorkspaceLayoutState(initial: LayoutNode) {
+class WorkspaceLayoutState(initial: LayoutNode) {
     /** What PaneHost renders and what the next PATCH will send. */
     var tree by mutableStateOf(initial)
         private set
@@ -107,7 +106,7 @@ internal class WorkspaceLayoutState(initial: LayoutNode) {
      * otherwise the unconfirmed edit is replayed on top of it — as long as the
      * result is still a layout the broker would take.
      */
-    internal fun onServerFrame(frame: LayoutNode) {
+    fun onServerFrame(frame: LayoutNode) {
         server = frame
         val replay = pending
         if (replay == null) {
@@ -134,14 +133,14 @@ internal class WorkspaceLayoutState(initial: LayoutNode) {
      * resending ours — an edit that cannot be written must never become a
      * permanent offset applied to every frame that follows.
      */
-    internal fun rollback() {
+    fun rollback() {
         pending = null
         dirty = false
         tree = server
     }
 
     /** The broker now holds [tree]: nothing is outstanding. */
-    internal fun markClean() {
+    fun markClean() {
         pending = null
         dirty = false
         server = tree
@@ -164,7 +163,7 @@ internal class WorkspaceLayoutState(initial: LayoutNode) {
  * call site below.
  */
 @Composable
-internal fun rememberWorkspaceLayout(
+fun rememberWorkspaceLayout(
     workspaceId: String,
     serverLayout: LayoutNodeDto?,
     unconfirmedViews: Set<String> = emptySet(),

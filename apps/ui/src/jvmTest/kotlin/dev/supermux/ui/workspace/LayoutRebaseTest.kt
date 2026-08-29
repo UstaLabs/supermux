@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.workspace
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
