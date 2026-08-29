@@ -1,6 +1,8 @@
 package dev.supermux.android.settings
 
+import android.app.Application
 import android.content.Context
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -35,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.android.AppViewModel
 import dev.supermux.android.R
 import dev.supermux.android.update.AppUpdatePage
 import dev.supermux.android.chat.TimelineItemRow
@@ -880,11 +883,11 @@ private fun EditorSettingsPage(
     lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
 ) {
     val cs = MaterialTheme.colorScheme
-    val prefs = LocalContext.current
-        .getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
-
-    var lineWrap by remember { mutableStateOf(prefs.getBoolean("lineWrap", true)) }
-    var fontSize by remember { mutableStateOf(prefs.getInt("fontSize", 13)) }
+    val app = LocalContext.current.applicationContext as Application
+    val vm: AppViewModel = viewModel(factory = AppViewModel.factory(app))
+    val editorPrefs = vm.editorPrefs
+    val lineWrap = editorPrefs.lineWrap
+    val fontSize = editorPrefs.fontSize
 
     BackHandler { onBack() }
 
@@ -921,10 +924,7 @@ private fun EditorSettingsPage(
             ) {
                 Switch(
                     checked = lineWrap,
-                    onCheckedChange = {
-                        lineWrap = it
-                        prefs.edit().putBoolean("lineWrap", it).apply()
-                    },
+                    onCheckedChange = { editorPrefs.persistLineWrap(it) },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = cs.onPrimary,
                         checkedTrackColor = cs.primary,
@@ -943,9 +943,7 @@ private fun EditorSettingsPage(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     StepperButton(text = "−", enabled = fontSize > 10) {
-                        val v = (fontSize - 1).coerceIn(10, 24)
-                        fontSize = v
-                        prefs.edit().putInt("fontSize", v).apply()
+                        editorPrefs.persistFontSize(fontSize - 1)
                     }
                     Text(
                         fontSize.toString(),
@@ -954,9 +952,7 @@ private fun EditorSettingsPage(
                         fontFamily = FontFamily.Monospace,
                     )
                     StepperButton(text = "+", enabled = fontSize < 24) {
-                        val v = (fontSize + 1).coerceIn(10, 24)
-                        fontSize = v
-                        prefs.edit().putInt("fontSize", v).apply()
+                        editorPrefs.persistFontSize(fontSize + 1)
                     }
                 }
             }

@@ -3,6 +3,7 @@ package dev.supermux.android.workspace
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.Dp
@@ -21,13 +22,12 @@ class SidebarState {
     companion object {
         val SIDEBAR_MIN = 220.dp
         val SIDEBAR_MAX = 560.dp
-        val Saver: Saver<SidebarState, String> = Saver(
-            save = { "${it.sidebarCollapsed}|${it.sidebarWidth.value}" },
-            restore = {
-                val parts = it.split('|')
+        val Saver: Saver<SidebarState, Any> = listSaver(
+            save = { listOf(it.sidebarCollapsed, it.sidebarWidth.value) },
+            restore = { parts ->
                 SidebarState().apply {
-                    sidebarCollapsed = parts.getOrNull(0) == "true"
-                    parts.getOrNull(1)?.toFloatOrNull()?.dp?.let(::setSidebarWidth)
+                    sidebarCollapsed = parts.getOrNull(0) as? Boolean ?: false
+                    (parts.getOrNull(1) as? Float)?.dp?.let(::setSidebarWidth)
                 }
             },
         )

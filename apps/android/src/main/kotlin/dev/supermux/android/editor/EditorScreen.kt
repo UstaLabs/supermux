@@ -145,9 +145,9 @@ fun EditorPanel(
         searchResults.addAll(fsSearch(q))
     }
 
-    val prefs = context.getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
-    val lineWrap = prefs.getBoolean("lineWrap", true)
-    val fontSize = prefs.getInt("fontSize", 13)
+    val editorPrefs = remember(context) { EditorPrefs(context) }
+    val lineWrap = editorPrefs.lineWrap
+    val fontSize = editorPrefs.fontSize
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, lspStatus, lspRpc) {
@@ -173,7 +173,7 @@ fun EditorPanel(
         },
         // A pinch / keyboard zoom in the WebView persists here so it survives reopen.
         // The engine already applied it live, so this only writes the pref (no rebuild).
-        onFontSize = { px -> prefs.edit().putInt("fontSize", px.coerceIn(10, 24)).apply() },
+        onFontSize = { px -> editorPrefs.persistFontSize(px) },
     )
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true

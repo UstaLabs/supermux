@@ -5,7 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class WorkspaceLayoutTest {
+class SidebarStateTest {
     @Test fun sidebarWidthClampsToRange() {
         val l = SidebarState()
         l.setSidebarWidth(50.dp); assertEquals(SidebarState.SIDEBAR_MIN, l.sidebarWidth)
