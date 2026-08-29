@@ -1118,12 +1118,13 @@ class BrokerApi(
             val text = resp.bodyAsText()
             if (resp.status.isSuccess()) return json.decodeFromString(text)
             println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
+            throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
         } catch (c: CancellationException) {
             throw c
         } catch (e: Throwable) {
             println("[BrokerApi] request failed: ${e.message?.take(160)}")
+            throw CancellationException("BrokerApi request unavailable: ${e.message}")
         }
-        throw CancellationException("BrokerApi request unavailable")
     }
 
     private suspend inline fun <reified T> getJson(url: String): T =
@@ -1144,7 +1145,7 @@ class BrokerApi(
             ""
         }
         println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable")
+        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
     }
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
@@ -1520,7 +1521,7 @@ class BrokerApi(
             ""
         }
         println("[BrokerApi] HTTP ${resp.status.value}: ${text.take(120)}")
-        throw CancellationException("BrokerApi request unavailable")
+        throw CancellationException("BrokerApi request unavailable: HTTP ${resp.status.value} ${text.take(200)}")
     }
 
     /** PUT /settings/soul (text/plain body) → true on success. */
