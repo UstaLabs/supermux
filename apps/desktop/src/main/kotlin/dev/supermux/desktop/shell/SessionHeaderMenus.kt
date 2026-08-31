@@ -57,7 +57,7 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.ui.draw.clip
 import dev.supermux.desktop.ui.AlertDialog
 import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.desktop.ui.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme

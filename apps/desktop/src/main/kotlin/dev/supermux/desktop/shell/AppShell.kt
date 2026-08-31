@@ -34,7 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.desktop.ui.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text

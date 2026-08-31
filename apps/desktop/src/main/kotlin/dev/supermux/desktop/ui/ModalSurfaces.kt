@@ -81,6 +81,16 @@ fun DropdownMenu(
         onDismissRequest = onDismissRequest,
         modifier = modifier,
         offset = offset,
+        // The app's one menu surface — see [MenuStyle] for why the M3 defaults had
+        // to go. Every in-app menu funnels through here, so this is the only place
+        // the container is described; the rows are [dev.supermux.desktop.ui.DropdownMenuItem].
+        shape = MenuStyle.Shape,
+        containerColor = MenuStyle.containerColor,
+        // Tonal elevation would tint the container a second time on top of the
+        // explicit containerColor; the shadow alone carries the "floating" read.
+        tonalElevation = 0.dp,
+        shadowElevation = MenuStyle.ShadowElevation,
+        border = MenuStyle.border,
         content = content,
     )
 }

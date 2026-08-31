@@ -53,7 +53,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
 import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.desktop.ui.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
