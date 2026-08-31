@@ -2,6 +2,8 @@ package dev.supermux.proto
 
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishResult
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.Walkthrough
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -447,6 +449,18 @@ sealed interface ServerFrame {
         val serverId: String,
         val ok: Boolean = false,
         val error: String? = null,
+    ) : ServerFrame
+
+    @Serializable @SerialName("walkthrough_updated")
+    data class WalkthroughUpdated(
+        val sessionId: String,
+        val walkthrough: Walkthrough,
+    ) : ServerFrame
+
+    @Serializable @SerialName("review_comment")
+    data class ReviewCommentFrame(
+        val sessionId: String,
+        val comment: ReviewComment,
     ) : ServerFrame
 }
 

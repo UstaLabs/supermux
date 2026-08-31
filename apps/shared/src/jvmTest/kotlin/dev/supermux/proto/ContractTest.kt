@@ -57,6 +57,8 @@ class ContractTest {
                 is ServerFrame.DisplayRemoved -> {}
                 is ServerFrame.FinishJobFrame -> {}
                 is ServerFrame.SessionGit -> {}
+                is ServerFrame.WalkthroughUpdated -> {}
+                is ServerFrame.ReviewCommentFrame -> {}
             }
         }
     }

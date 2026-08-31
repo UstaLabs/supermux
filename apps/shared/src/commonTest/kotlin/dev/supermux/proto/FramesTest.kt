@@ -133,4 +133,29 @@ class FramesTest {
         assertNull(s.tool)
         assertNull(s.workingSince)
     }
+
+    @Test fun parses_walkthrough_updated() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"walkthrough_updated","sessionId":"s1","walkthrough":{"id":"w1","title":"Auth","baseSpec":"head","revision":2,"createdAt":"t","steps":[{"id":"st1","ord":0,"title":"Login","bodyMd":"hi","path":"a.ts","side":"RIGHT","anchorLine":4,"anchorStatus":"ok"}]}}""",
+        )
+        assertTrue(f is ServerFrame.WalkthroughUpdated)
+        val w = (f as ServerFrame.WalkthroughUpdated).walkthrough
+        assertEquals("s1", f.sessionId)
+        assertEquals("Auth", w.title)
+        assertEquals(2, w.revision)
+        assertEquals("Login", w.steps[0].title)
+        assertEquals(4, w.steps[0].anchorLine)
+    }
+
+    @Test fun parses_review_comment_frame() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"review_comment","sessionId":"s1","comment":{"id":"c1","repo":"","path":"a.ts","side":"RIGHT","anchorLine":4,"body":"why","author":"agent","status":"open","parentId":"c0"}}""",
+        )
+        assertTrue(f is ServerFrame.ReviewCommentFrame)
+        val c = (f as ServerFrame.ReviewCommentFrame).comment
+        assertEquals("s1", f.sessionId)
+        assertEquals("c1", c.id)
+        assertEquals("agent", c.author)
+        assertEquals("c0", c.parentId)
+    }
 }

@@ -738,6 +738,9 @@ data class ReviewComment(
     val status: String,
     val currentLine: Int? = null,
     val outdated: Boolean = false,
+    val parentId: String? = null,
+    val rangeStart: Int? = null,
+    val rangeEnd: Int? = null,
 )
 
 @Serializable
@@ -749,6 +752,42 @@ data class AddCommentBody(
     val anchorContext: String,
     val body: String,
     val diffHunkHeader: String? = null,
+    /** "instant" delivers the comment to the agent immediately (walkthrough). */
+    val deliver: String? = null,
+    val parentId: String? = null,
+)
+
+@Serializable
+data class WalkthroughStep(
+    val id: String,
+    val ord: Int = 0,
+    val title: String,
+    val bodyMd: String = "",
+    val repo: String? = null,
+    val path: String? = null,
+    val side: String = "RIGHT",
+    val anchorLine: Int? = null,
+    val rangeStart: Int? = null,
+    val rangeEnd: Int? = null,
+    val anchorContext: String? = null,
+    val anchorStatus: String = "ok",
+    val currentLine: Int? = null,
+    val outdated: Boolean = false,
+)
+
+@Serializable
+data class Walkthrough(
+    val id: String,
+    val title: String,
+    val baseSpec: String = "",
+    val revision: Int = 1,
+    val createdAt: String = "",
+    val steps: List<WalkthroughStep> = emptyList(),
+)
+
+@Serializable
+data class WalkthroughResult(
+    val walkthrough: Walkthrough? = null,
 )
 
 @Serializable
@@ -2196,6 +2235,10 @@ class BrokerApi(
     /** POST /sessions/<id>/review/submit {} → { ok, delivered, reason? }. */
     suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult =
         postReturningJson("$httpBase/sessions/$sessionId/review/submit", EmptyBody())
+
+    /** GET /sessions/<id>/walkthrough → { walkthrough } or { walkthrough: null }. */
+    suspend fun getWalkthrough(sessionId: String): WalkthroughResult =
+        getJson("$httpBase/sessions/$sessionId/walkthrough")
 
     // ── Displays ─────────────────────────────────────────────────────────────────
 
