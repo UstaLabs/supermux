@@ -18,7 +18,7 @@ test("listTools advertises reply / react / edit_message / download_attachment", 
 
 test("listTools advertises orchestration tools too", () => {
   const names = listTools().map(t => t.name)
-  for (const n of ["spawn_session", "kill_session", "rename_session", "mute_session", "list_sessions", "set_active", "get_active"]) {
+  for (const n of ["spawn_session", "kill_session", "rename_session", "mute_session", "list_sessions", "set_active", "get_active", "walkthrough", "reply_comment"]) {
     expect(names).toContain(n)
   }
 })
@@ -64,6 +64,14 @@ test("spawn_session forwards to broker orchestration", async () => {
   const shim = fakeShim()
   await callTool({ name: "spawn_session", arguments: { workdir: "/tmp/foo" } }, shim)
   expect(shim.orchestration).toEqual([{ name: "spawn_session", args: { workdir: "/tmp/foo" } }])
+})
+
+test("walkthrough and reply_comment forward to broker orchestration", async () => {
+  const shim = fakeShim()
+  await callTool({ name: "walkthrough", arguments: { title: "T", steps: [] } }, shim)
+  await callTool({ name: "reply_comment", arguments: { comment_id: "c1", body: "ok" } }, shim)
+  expect(shim.orchestration[0]).toEqual({ name: "walkthrough", args: { title: "T", steps: [] } })
+  expect(shim.orchestration[1]).toEqual({ name: "reply_comment", args: { comment_id: "c1", body: "ok" } })
 })
 
 test("broker error becomes MCP error response", async () => {
