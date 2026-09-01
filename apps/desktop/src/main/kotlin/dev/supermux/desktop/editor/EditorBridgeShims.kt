@@ -13,6 +13,8 @@
 package dev.supermux.desktop.editor
 
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -49,6 +51,9 @@ internal fun bridgeShimJs(queryFn: String): String = """
         onSave: function () { post("onSave", ""); },
         onReady: function () { post("onReady", ""); },
         onFontSize: function (px) { post("onFontSize", String(px)); },
+        onDiffLineClick: function (line) { post("onDiffLineClick", String(line)); },
+        onDiffExpand: function (direction) { post("onDiffExpand", String(direction)); },
+        onDiffPage: function (direction) { post("onDiffPage", String(direction)); },
       };
       window.webkit = window.webkit || {};
       window.webkit.messageHandlers = window.webkit.messageHandlers || {};
@@ -92,6 +97,15 @@ internal sealed interface BridgeEvent {
      *  DesktopLspBridge via the engine's `onLspOut` callback (M4g-3). */
     data class LspOut(val payload: String) : BridgeEvent
 
+    /** A 1-indexed ORIGINAL-file line clicked in walkthrough diff mode. */
+    data class DiffLineClick(val line: Int) : BridgeEvent
+
+    /** One of the edge controls asked to reveal twenty more lines. */
+    data class DiffExpand(val direction: String) : BridgeEvent
+
+    /** Horizontal trackpad paging from inside the heavyweight JCEF child. */
+    data class DiffPage(val direction: String) : BridgeEvent
+
     /** A direct-JCEF async JavaScript read completed. */
     data class EvalResult(val id: Long, val value: String) : BridgeEvent
 }
@@ -117,6 +131,9 @@ internal fun parseBridgeEvent(request: String): BridgeEvent? {
         "onReady" -> BridgeEvent.Ready
         "onFontSize" -> payload.arg.trim().toIntOrNull()?.let { BridgeEvent.FontSize(it) }
         "lspOut" -> BridgeEvent.LspOut(payload.arg)
+        "onDiffLineClick" -> payload.arg.toIntOrNull()?.takeIf { it > 0 }?.let { BridgeEvent.DiffLineClick(it) }
+        "onDiffExpand" -> payload.arg.takeIf { it == "up" || it == "down" }?.let { BridgeEvent.DiffExpand(it) }
+        "onDiffPage" -> payload.arg.takeIf { it == "previous" || it == "next" }?.let { BridgeEvent.DiffPage(it) }
         "evalResult" -> parseEvalResult(payload.arg)?.let { BridgeEvent.EvalResult(it.id, it.value) }
         else -> null
     }
@@ -178,6 +195,37 @@ internal fun parseLspOut(payload: String): Pair<String, String>? {
 
 @kotlinx.serialization.Serializable
 private data class LspOutPayload(val serverId: String = "", val message: String = "")
+
+@Serializable
+data class DiffRegionRange(
+    val startLine: Int,
+    val endLine: Int,
+    val kind: String = "change",
+    /** Old-side rows inserted before [startLine] by the read-only renderer. */
+    val deletedLines: List<String> = emptyList(),
+)
+
+@Serializable
+private data class DiffRegionPayload(
+    val path: String,
+    val content: String,
+    val ranges: List<DiffRegionRange>,
+    val language: String,
+)
+
+/** Pure builder used by the engine and smoke tests. JSON is a valid JS object expression. */
+internal fun showDiffRegionJs(
+    path: String,
+    content: String,
+    ranges: List<DiffRegionRange>,
+    language: String,
+    restoreScrollTop: Int? = null,
+): String {
+    val payload = bridgeJson.encodeToString(DiffRegionPayload(path, content, ranges, language))
+    val show = "window.cmShowDiffRegion && window.cmShowDiffRegion($payload)"
+    return if (restoreScrollTop == null) show else
+        "$show;requestAnimationFrame(function(){window.cmSetScrollTop&&window.cmSetScrollTop(${restoreScrollTop.coerceAtLeast(0)})})"
+}
 
 // ── LSP JS-statement builders (pure — mirrors EditorPushPlanner's cmSet* builders; the engine
 //    forwards these strings verbatim to `browser.executeJavaScript`) ──────────────────────────

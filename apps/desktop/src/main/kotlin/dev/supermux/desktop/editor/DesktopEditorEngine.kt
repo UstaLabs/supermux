@@ -76,6 +76,9 @@ class DesktopEditorEngine(
     var onFontSize: (Int) -> Unit = {}
     /** Outbound LSP JSON-RPC from cm6's `LSPClient`, parsed to (serverId, message). */
     var onLspOut: (serverId: String, message: String) -> Unit = { _, _ -> }
+    var onDiffLineClick: (Int) -> Unit = {}
+    var onDiffExpand: (String) -> Unit = {}
+    var onDiffPage: (String) -> Unit = {}
 
     private val planner = EditorPushPlanner(lineWrap, fontSize)
 
@@ -84,6 +87,7 @@ class DesktopEditorEngine(
     private var browser: CefBrowser? = null
     private val nextEvaluationId = AtomicLong(1)
     private val pendingEvaluations = mutableMapOf<Long, (String) -> Unit>()
+    private var pendingDiffRegion: DiffRegionRequest? = null
 
     /** The AWT child to embed in a SwingPanel; null until [load]. */
     fun uiComponent(): Component? = browser?.uiComponent
@@ -123,6 +127,18 @@ class DesktopEditorEngine(
     fun setFontSize(px: Int) = emit(planner.setFontSize(px))
     fun setLineWrap(on: Boolean) = emit(planner.setLineWrap(on))
     fun setScrollTop(px: Int) = emit(planner.setScrollTop(px))
+
+    /** Switch CodeMirror into the read-only walkthrough renderer. Calls before onReady are queued. */
+    fun showDiffRegion(
+        path: String,
+        content: String,
+        ranges: List<DiffRegionRange>,
+        language: String,
+        restoreScrollTop: Int? = null,
+    ) {
+        pendingDiffRegion = DiffRegionRequest(path, content, ranges, language, restoreScrollTop)
+        if (_ready.value) emitDiffRegion()
+    }
 
     // ── JS → Kotlin reads (async; result marshalled to the EDT) ──────────────
 
@@ -292,6 +308,7 @@ class DesktopEditorEngine(
             BridgeEvent.Ready -> {
                 emit(planner.onReady()) // flush the queued document + pending reveal
                 _ready.value = true
+                emitDiffRegion()
                 onReady()
             }
             // The user zoom already applied in-page; keep our copy in sync + persist (no loop-back).
@@ -305,8 +322,21 @@ class DesktopEditorEngine(
                     onLspOut(parsed.first, parsed.second)
                 }
             }
+            is BridgeEvent.DiffLineClick -> onDiffLineClick(event.line)
+            is BridgeEvent.DiffExpand -> onDiffExpand(event.direction)
+            is BridgeEvent.DiffPage -> onDiffPage(event.direction)
             is BridgeEvent.EvalResult -> pendingEvaluations.remove(event.id)?.invoke(event.value)
         }
+    }
+
+    private fun emitDiffRegion() {
+        val request = pendingDiffRegion ?: return
+        val b = browser ?: return
+        b.executeJavaScript(
+            showDiffRegionJs(request.path, request.content, request.ranges, request.language, request.restoreScrollTop),
+            b.url ?: "",
+            0,
+        )
     }
 
     /** Execute one internal expression and return its string value through [QUERY_FN]. */
@@ -336,3 +366,11 @@ class DesktopEditorEngine(
         const val QUERY_CANCEL_FN: String = "smxEditorQueryCancel"
     }
 }
+
+private data class DiffRegionRequest(
+    val path: String,
+    val content: String,
+    val ranges: List<DiffRegionRange>,
+    val language: String,
+    val restoreScrollTop: Int?,
+)
