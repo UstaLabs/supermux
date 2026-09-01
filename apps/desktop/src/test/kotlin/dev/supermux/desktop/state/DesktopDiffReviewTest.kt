@@ -5,6 +5,9 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
+import dev.supermux.net.Walkthrough
+import dev.supermux.net.WalkthroughStep
+import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -110,6 +113,20 @@ class DesktopDiffReviewTest {
         assertNull(app.fsDiff(session()))
     }
 
+    @Test fun review_comments_get_loads_existing_walkthrough_threads() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(
+            recorded,
+            body = """{"comments":[{"id":"c1","repo":"","path":"a.txt","side":"RIGHT","anchorLine":3,"body":"existing","status":"open"}]}""",
+        )
+
+        val result = app.reviewComments(session("sess-1"))
+
+        assertEquals(HttpMethod.Get, recorded.single().method)
+        assertEquals("/sessions/sess-1/review/comments", recorded.single().path)
+        assertEquals(listOf("c1"), result.map { it.id })
+    }
+
     // ── reviewAddComment ───────────────────────────────────────────────────────────
 
     @Test fun review_add_comment_posts_the_body_and_decodes_the_created_comment() = runTest {
@@ -143,6 +160,68 @@ class DesktopDiffReviewTest {
         )
 
         assertNull(result)
+    }
+
+    @Test fun walkthrough_comment_is_delivered_instantly() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(
+            recorded,
+            body = """{"id":"c10","repo":"","path":"a.txt","side":"RIGHT","anchorLine":3,"body":"please explain","status":"open"}""",
+        )
+
+        app.reviewAddComment(
+            session("sess-1"),
+            AddCommentBody(
+                repo = "",
+                path = "a.txt",
+                side = "RIGHT",
+                anchorLine = 3,
+                anchorContext = "+new",
+                body = "please explain",
+                deliver = "instant",
+            ),
+        )
+
+        assertTrue(recorded.single().body.contains("\"deliver\":\"instant\""))
+    }
+
+    @Test fun get_walkthrough_uses_session_endpoint_and_decodes_steps() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(
+            recorded,
+            body = """{"id":"w1","sessionId":"sess-1","title":"Tour","baseSpec":"head","revision":3,"steps":[{"id":"st1","ord":0,"title":"First","bodyMd":"Body","repo":"","path":"a.txt","anchorLine":3,"rangeStart":3,"rangeEnd":4,"anchorStatus":"ok"}]}""",
+        )
+
+        val result = app.getWalkthrough(session("sess-1"))
+
+        assertEquals(HttpMethod.Get, recorded.single().method)
+        assertEquals("/sessions/sess-1/walkthrough", recorded.single().path)
+        assertEquals("Tour", result?.title)
+        assertEquals(4, result?.steps?.single()?.rangeEnd)
+    }
+
+    @Test fun walkthrough_and_comment_frames_reduce_into_the_same_session_state() {
+        val app = appRecording(mutableListOf())
+        val walkthrough = Walkthrough(
+            id = "w1", sessionId = "sess-1", title = "Tour", revision = 1,
+            steps = listOf(WalkthroughStep(id = "st1", ord = 0, title = "First", path = "a.txt", anchorLine = 3)),
+        )
+
+        app.reduce(ServerFrame.WalkthroughUpdated("sess-1", walkthrough))
+        app.reduce(
+            ServerFrame.ReviewCommentFrame(
+                "sess-1",
+                ReviewComment(
+                    id = "r1", parentId = "c1", repo = "", path = "a.txt", side = "RIGHT",
+                    anchorLine = 3, body = "reply", author = "agent", status = "open",
+                ),
+            ),
+        )
+
+        val state = app.walkthroughState("sess-1")
+        assertEquals("Tour", state.walkthrough?.title)
+        assertEquals("r1", state.comments.single().id)
+        assertEquals(1, state.unreadReplies)
     }
 
     // ── reviewResolve ──────────────────────────────────────────────────────────────
