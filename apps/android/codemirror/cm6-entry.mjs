@@ -1,7 +1,7 @@
 // CodeMirror 6 bundle for the Android WebView editor — mirrors the web's
 // CodeEditor.vue setup (minus LSP), with a curated language set so there are
 // no dynamic imports (which can't load from a file:// WebView origin).
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from "@codemirror/view"
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, Decoration, gutter, GutterMarker } from "@codemirror/view"
 import { EditorState, Compartment } from "@codemirror/state"
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
 import { syntaxHighlighting, defaultHighlightStyle, foldGutter, bracketMatching, indentOnInput, StreamLanguage } from "@codemirror/language"
@@ -146,6 +146,7 @@ const wrapC = new Compartment()
 const fontC = new Compartment()
 const langC = new Compartment()
 const lspC = new Compartment()
+const diffC = new Compartment()
 const bridge = () => (typeof window !== "undefined" ? window.AndroidEditor : null)
 const wrapExt = (on) => (on ? EditorView.lineWrapping : [])
 const fontExt = (px) => EditorView.theme({ "&": { fontSize: (px || 13) + "px" } })
@@ -245,6 +246,7 @@ window.cmInit = function (content, filename, lineWrap, fontSize) {
       oneDark,
       langC.of(langFor(filename)),
       lspC.of([]),
+      diffC.of([]),
       keymap.of([
         ...closeBracketsKeymap, ...completionKeymap, ...lintKeymap,
         ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab,
@@ -294,6 +296,167 @@ window.cmGetContent = function () { return view ? view.state.doc.toString() : ""
 window.cmSetLineWrap = function (on) { if (view) view.dispatch({ effects: wrapC.reconfigure(wrapExt(!!on)) }) }
 window.cmSetFontSize = function (px) { reconfigureFont(px) }
 window.cmSetLanguage = function (filename) { if (view) view.dispatch({ effects: langC.reconfigure(langFor(filename)) }) }
+
+// ---------------------------------------------------------------------------
+// Walkthrough read-only diff region. Native passes the FULL file plus 1-indexed
+// original-file ranges; this renderer initially clips to 20 context lines and
+// expands in 20-line increments without a native/file round trip.
+// ---------------------------------------------------------------------------
+
+let diffRegion = null
+let diffContextBefore = 20, diffContextAfter = 20
+let diffUpButton = null, diffDownButton = null
+let lastDiffPageAt = 0
+let diffDisplayMeta = []
+
+class DiffGutterMarker extends GutterMarker {
+  constructor(mark, className) { super(); this.mark = mark; this.className = className }
+  toDOM() {
+    const el = document.createElement("span")
+    el.textContent = this.mark
+    el.className = this.className
+    return el
+  }
+}
+const addMarker = new DiffGutterMarker("+", "cm-diff-gutter-add")
+const deleteMarker = new DiffGutterMarker("−", "cm-diff-gutter-delete")
+const changeMarker = new DiffGutterMarker("±", "cm-diff-gutter-change")
+
+function normalizedRanges(spec) {
+  const count = String(spec.content || "").split("\n").length
+  return (Array.isArray(spec.ranges) ? spec.ranges : []).map((r) => ({
+    startLine: Math.max(1, Math.min(count, Number(r.startLine) || 1)),
+    endLine: Math.max(1, Math.min(count, Number(r.endLine) || Number(r.startLine) || 1)),
+    kind: r.kind === "add" || r.kind === "delete" || r.kind === "context" ? r.kind : "change",
+    deletedLines: Array.isArray(r.deletedLines) ? r.deletedLines.map((line) => String(line)) : [],
+  })).map((r) => ({ ...r, endLine: Math.max(r.startLine, r.endLine) }))
+}
+
+function diffKindForOriginalLine(line) {
+  if (!diffRegion) return null
+  for (const r of diffRegion.ranges) {
+    if (r.kind !== "delete" && r.kind !== "context" && line >= r.startLine && line <= r.endLine) return r.kind
+  }
+  return null
+}
+
+function setExpandButton(which, visible, action) {
+  const parent = document.getElementById("editor")
+  if (!parent) return null
+  let button = which === "up" ? diffUpButton : diffDownButton
+  if (!visible) { if (button) button.style.display = "none"; return button }
+  if (!button) {
+    button = document.createElement("button")
+    button.type = "button"
+    button.className = "cm-diff-expand cm-diff-expand-" + which
+    button.addEventListener("click", action)
+    parent.appendChild(button)
+    if (which === "up") diffUpButton = button; else diffDownButton = button
+  }
+  button.textContent = which === "up" ? "expand ↑ 20" : "expand ↓ 20"
+  button.style.display = "block"
+  return button
+}
+
+function renderDiffRegion() {
+  if (!view || !diffRegion) return
+  // Re-anchors/revisions replace the slice in-place. Capture before dispatch and restore after
+  // layout so a live walkthrough_updated frame never yanks the reader back to the top.
+  const preservedScrollTop = view.scrollDOM.scrollTop
+  const allLines = String(diffRegion.content || "").split("\n")
+  const firstChanged = diffRegion.ranges.length ? Math.min(...diffRegion.ranges.map((r) => r.startLine)) : 1
+  const lastChanged = diffRegion.ranges.length ? Math.max(...diffRegion.ranges.map((r) => r.endLine)) : Math.min(1, allLines.length)
+  const sliceStart = Math.max(1, firstChanged - diffContextBefore)
+  const sliceEnd = Math.min(allLines.length, lastChanged + diffContextAfter)
+  diffRegion.sliceStart = sliceStart
+  const displayLines = []
+  diffDisplayMeta = []
+  for (let original = sliceStart; original <= sliceEnd; original++) {
+    for (const range of diffRegion.ranges) {
+      if (range.startLine !== original) continue
+      for (const deleted of range.deletedLines) {
+        displayLines.push(deleted)
+        diffDisplayMeta.push({ originalLine: original, kind: "delete" })
+      }
+    }
+    displayLines.push(allLines[original - 1])
+    diffDisplayMeta.push({ originalLine: original, kind: diffKindForOriginalLine(original) })
+  }
+  const slice = displayLines.join("\n")
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: slice },
+    effects: [
+      langC.reconfigure(langFor(diffRegion.language || diffRegion.path)),
+      diffC.reconfigure([
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        EditorView.decorations.compute([], (state) => {
+          const decorations = []
+          for (let n = 1; n <= state.doc.lines; n++) {
+            const kind = diffDisplayMeta[n - 1] && diffDisplayMeta[n - 1].kind
+            if (kind) decorations.push(Decoration.line({ class: "cm-diff-line cm-diff-" + kind }).range(state.doc.line(n).from))
+          }
+          return Decoration.set(decorations, true)
+        }),
+        gutter({
+          class: "cm-diff-gutter",
+          lineMarker(v, line) {
+            const displayLine = v.state.doc.lineAt(line.from).number
+            const kind = diffDisplayMeta[displayLine - 1] && diffDisplayMeta[displayLine - 1].kind
+            return kind === "add" ? addMarker : kind === "delete" ? deleteMarker : kind === "change" ? changeMarker : null
+          },
+        }),
+        EditorView.domEventHandlers({
+          mousedown(event, v) {
+            const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
+            if (pos == null) return false
+            const displayLine = v.state.doc.lineAt(pos).number
+            const original = (diffDisplayMeta[displayLine - 1] || {}).originalLine || sliceStart
+            try { bridge() && bridge().onDiffLineClick(original) } catch (e) {}
+            return false
+          },
+          wheel(event) {
+            if (Math.abs(event.deltaX) < 60 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return false
+            const now = Date.now()
+            if (now - lastDiffPageAt < 450) return true
+            lastDiffPageAt = now
+            try { bridge() && bridge().onDiffPage(event.deltaX > 0 ? "next" : "previous") } catch (e) {}
+            event.preventDefault()
+            return true
+          },
+        }),
+        EditorView.theme({
+          "&": { height: "100%" },
+          ".cm-content": { paddingTop: "30px", paddingBottom: "30px" },
+          ".cm-diff-line.cm-diff-add": { backgroundColor: "rgba(46, 160, 67, .20)" },
+          ".cm-diff-line.cm-diff-change": { backgroundColor: "rgba(210, 153, 34, .18)" },
+          ".cm-diff-line.cm-diff-delete": { backgroundColor: "rgba(248, 81, 73, .20)" },
+          ".cm-diff-gutter": { width: "20px", textAlign: "center", fontWeight: "700" },
+          ".cm-diff-gutter-add": { color: "#56d364" },
+          ".cm-diff-gutter-change": { color: "#e3b341" },
+          ".cm-diff-gutter-delete": { color: "#ff7b72" },
+        }),
+      ]),
+    ],
+  })
+  requestAnimationFrame(() => { if (view) view.scrollDOM.scrollTop = preservedScrollTop })
+  setExpandButton("up", sliceStart > 1, () => {
+    diffContextBefore += 20; renderDiffRegion()
+    try { bridge() && bridge().onDiffExpand("up") } catch (e) {}
+  })
+  setExpandButton("down", sliceEnd < allLines.length, () => {
+    diffContextAfter += 20; renderDiffRegion()
+    try { bridge() && bridge().onDiffExpand("down") } catch (e) {}
+  })
+}
+
+window.cmShowDiffRegion = function (spec) {
+  if (!view || !spec) return
+  diffRegion = { ...spec, ranges: normalizedRanges(spec) }
+  diffContextBefore = 20
+  diffContextAfter = 20
+  renderDiffRegion()
+}
 
 // ---------------------------------------------------------------------------
 // LSP (language-server) support — ported 1:1 from the web app's
