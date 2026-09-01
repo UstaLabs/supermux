@@ -194,7 +194,7 @@ export function toWalkthroughDto(wt: {
       ord: s.ord,
       title: s.title,
       bodyMd: s.bodyMd,
-      repo: s.repo ?? null,
+      repo: s.repo ?? "",
       path: s.path ?? null,
       side: s.side,
       anchorLine: s.anchorLine ?? null,
