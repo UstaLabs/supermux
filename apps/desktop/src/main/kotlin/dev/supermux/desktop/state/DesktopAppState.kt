@@ -12,6 +12,7 @@
 package dev.supermux.desktop.state
 
 import dev.supermux.desktop.notify.AgentReplyEvent
+import dev.supermux.desktop.editor.WalkthroughState
 import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
@@ -61,6 +62,7 @@ import dev.supermux.net.TerminalSummary
 import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UpdateStatus
+import dev.supermux.net.Walkthrough
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -214,6 +216,11 @@ class DesktopAppState(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+    /** Compose-owned per-session walkthrough state. The stable instance survives pane switches. */
+    private val walkthroughStates = mutableMapOf<String, WalkthroughState>()
+
+    fun walkthroughState(sessionId: String): WalkthroughState =
+        walkthroughStates.getOrPut(sessionId) { WalkthroughState(sessionId) }
     /**
      * Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
      * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
@@ -410,6 +417,7 @@ class DesktopAppState(
             is ServerFrame.SessionRemoved -> {
                 _sessions.update { it.filterNot { s -> s.id == frame.id } }
                 _bgTasks.update { it - frame.id }
+                walkthroughStates.remove(frame.id)
             }
             is ServerFrame.SessionRenamed -> {
                 _sessions.update { current ->
@@ -537,6 +545,10 @@ class DesktopAppState(
             is ServerFrame.FsChanged -> {
                 _fsChanges.tryEmit(frame)
             }
+            is ServerFrame.WalkthroughUpdated ->
+                walkthroughState(frame.sessionId).applyWalkthrough(frame.walkthrough)
+            is ServerFrame.ReviewCommentFrame ->
+                walkthroughState(frame.sessionId).applyComment(frame.comment)
             // M4b finish flow: the async job's progress/outcome arrives here. Update the finishJobs
             // flow the FinishDialog drives AND write the job back onto the session's finish_job so a
             // list row (and any later snapshot round-trip) stays consistent (AppViewModel:275 parity).
@@ -1117,6 +1129,10 @@ class DesktopAppState(
     suspend fun fsDiff(session: SessionInfo, base: String? = null): FsDiffResult? =
         runApi("fsDiff") { api.fsDiff(session.id, base) }
 
+    /** GET the current authored walkthrough. Null on a missing/failed endpoint. */
+    suspend fun getWalkthrough(session: SessionInfo): Walkthrough? =
+        runApi("getWalkthrough") { api.getWalkthrough(session.id) }
+
     /** GET /sessions/<id>/fs/refs → branches + recent commits per repo, for the diff-base picker's
      *  "Previous commit…" / "Another branch…" submenus. Null on any failure. */
     suspend fun fsRefs(session: SessionInfo): FsRefsResult? =
@@ -1125,6 +1141,10 @@ class DesktopAppState(
     /** POST /sessions/<id>/review/comments → the created comment. Null on any failure. */
     suspend fun reviewAddComment(session: SessionInfo, body: AddCommentBody): ReviewComment? =
         runApi("reviewAddComment") { api.reviewAddComment(session.id, body) }
+
+    /** GET existing roots and replies so a reopened walkthrough is complete before live frames. */
+    suspend fun reviewComments(session: SessionInfo): List<ReviewComment> =
+        runApi("reviewComments") { api.reviewComments(session.id) } ?: emptyList()
 
     /** PATCH a comment to status="resolved" (iOS/Android reviewResolve parity). False on any failure. */
     suspend fun reviewResolve(session: SessionInfo, commentId: String): Boolean =

@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -161,6 +162,8 @@ fun ChatPanel(
      * and returns to the transcript.
      */
     nativeContent: (@Composable (onExit: () -> Unit) -> Unit)? = null,
+    /** Opens the workspace's singleton Changes pane in walkthrough mode. */
+    onOpenWalkthrough: (stepId: String?) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -169,6 +172,7 @@ fun ChatPanel(
     val activityMap by app.activity.collectAsState()
     val agentMap by app.agentState.collectAsState()
     val pending by app.pendingSend.collectAsState()
+    val walkthrough = app.walkthroughState(session.id)
 
     val agent = agentMap[session.id]
     val working = agent?.working == true
@@ -444,6 +448,7 @@ fun ChatPanel(
                         loadBytes = { id -> app.fileBytes(id) },
                         onOpenFile = onOpenFile,
                         highDetail = highDetail,
+                        onOpenWalkthrough = { onOpenWalkthrough(null) },
                     )
                 }
             }
@@ -467,6 +472,15 @@ fun ChatPanel(
                         ),
                     ),
             )
+        }
+
+        if (walkthrough.unreadReplies > 0) {
+            TextButton(
+                onClick = { onOpenWalkthrough(walkthrough.unreadStepId) },
+                modifier = Modifier.align(Alignment.CenterHorizontally).testTag("walkthrough_unread_chip"),
+            ) {
+                Text("💬 ${walkthrough.unreadReplies} new walkthrough replies")
+            }
         }
 
         // Composer — reading-width capped + centered to line up with the timeline.

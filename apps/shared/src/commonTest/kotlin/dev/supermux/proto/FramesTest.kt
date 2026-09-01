@@ -9,6 +9,28 @@ import kotlin.test.assertTrue
 private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
 
 class FramesTest {
+    @Test fun parses_walkthrough_updated() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"walkthrough_updated","sessionId":"s1","walkthrough":{"id":"w1","title":"Tour","baseSpec":"session-start","revision":2,"steps":[{"id":"st1","ord":0,"title":"First","bodyMd":"Hello","repo":"","path":"src/A.kt","side":"RIGHT","anchorLine":7,"rangeStart":7,"rangeEnd":9,"anchorContext":"val x = 1","anchorStatus":"ok"}]}}""",
+        )
+        assertTrue(f is ServerFrame.WalkthroughUpdated)
+        val update = f as ServerFrame.WalkthroughUpdated
+        assertEquals("s1", update.sessionId)
+        assertEquals(2, update.walkthrough.revision)
+        assertEquals("src/A.kt", update.walkthrough.steps.single().path)
+        assertEquals(9, update.walkthrough.steps.single().rangeEnd)
+    }
+
+    @Test fun parses_review_comment_frame_with_thread_parent() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"review_comment","sessionId":"s1","comment":{"id":"r1","parentId":"c1","repo":"","path":"src/A.kt","side":"RIGHT","anchorLine":7,"body":"Fixed","author":"agent","status":"open"}}""",
+        )
+        assertTrue(f is ServerFrame.ReviewCommentFrame)
+        val reply = (f as ServerFrame.ReviewCommentFrame).comment
+        assertEquals("c1", reply.parentId)
+        assertEquals("agent", reply.author)
+    }
+
     @Test fun parses_agent_state_with_workingSince() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"agent_state","session":"editor","phase":"working","workingSince":1717200000000}""",
@@ -132,19 +154,6 @@ class FramesTest {
         assertNull(s.detail)
         assertNull(s.tool)
         assertNull(s.workingSince)
-    }
-
-    @Test fun parses_walkthrough_updated() {
-        val f = json.decodeFromString<ServerFrame>(
-            """{"type":"walkthrough_updated","sessionId":"s1","walkthrough":{"id":"w1","title":"Auth","baseSpec":"head","revision":2,"createdAt":"t","steps":[{"id":"st1","ord":0,"title":"Login","bodyMd":"hi","path":"a.ts","side":"RIGHT","anchorLine":4,"anchorStatus":"ok"}]}}""",
-        )
-        assertTrue(f is ServerFrame.WalkthroughUpdated)
-        val w = (f as ServerFrame.WalkthroughUpdated).walkthrough
-        assertEquals("s1", f.sessionId)
-        assertEquals("Auth", w.title)
-        assertEquals(2, w.revision)
-        assertEquals("Login", w.steps[0].title)
-        assertEquals(4, w.steps[0].anchorLine)
     }
 
     @Test fun parses_review_comment_frame() {

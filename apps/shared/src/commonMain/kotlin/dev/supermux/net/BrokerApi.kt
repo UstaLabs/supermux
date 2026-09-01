@@ -728,6 +728,7 @@ data class RefCommit(
 @Serializable
 data class ReviewComment(
     val id: String,
+    val parentId: String? = null,
     val repo: String,
     val path: String,
     val side: String,
@@ -738,10 +739,13 @@ data class ReviewComment(
     val status: String,
     val currentLine: Int? = null,
     val outdated: Boolean = false,
-    val parentId: String? = null,
     val rangeStart: Int? = null,
     val rangeEnd: Int? = null,
+    val resolvedBy: String? = null,
 )
+
+@Serializable
+data class ReviewCommentsResult(val comments: List<ReviewComment> = emptyList())
 
 @Serializable
 data class AddCommentBody(
@@ -757,13 +761,27 @@ data class AddCommentBody(
     val parentId: String? = null,
 )
 
+/** One authored walkthrough for a session. The broker returns only the current walkthrough. */
+@Serializable
+data class Walkthrough(
+    val id: String,
+    val sessionId: String = "",
+    val title: String,
+    val baseSpec: String = "session-start",
+    val revision: Int = 1,
+    val createdAt: String = "",
+    val current: Boolean = true,
+    val steps: List<WalkthroughStep> = emptyList(),
+)
+
 @Serializable
 data class WalkthroughStep(
     val id: String,
+    val walkthroughId: String = "",
     val ord: Int = 0,
     val title: String,
     val bodyMd: String = "",
-    val repo: String? = null,
+    val repo: String = "",
     val path: String? = null,
     val side: String = "RIGHT",
     val anchorLine: Int? = null,
@@ -773,16 +791,6 @@ data class WalkthroughStep(
     val anchorStatus: String = "ok",
     val currentLine: Int? = null,
     val outdated: Boolean = false,
-)
-
-@Serializable
-data class Walkthrough(
-    val id: String,
-    val title: String,
-    val baseSpec: String = "",
-    val revision: Int = 1,
-    val createdAt: String = "",
-    val steps: List<WalkthroughStep> = emptyList(),
 )
 
 @Serializable
@@ -2174,6 +2182,10 @@ class BrokerApi(
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/sessions/$sessionId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
 
+    /** GET /sessions/<id>/walkthrough → { walkthrough } envelope; null when none authored. */
+    suspend fun getWalkthrough(sessionId: String): Walkthrough? =
+        getJson<WalkthroughResult>("$httpBase/sessions/$sessionId/walkthrough").walkthrough
+
     /** GET /sessions/<id>/fs/refs → { repos: RepoRefs[] } (branches + recent commits per repo). */
     suspend fun fsRefs(sessionId: String): FsRefsResult =
         getJson("$httpBase/sessions/$sessionId/fs/refs")
@@ -2222,6 +2234,10 @@ class BrokerApi(
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =
         postReturningJson("$httpBase/sessions/$sessionId/review/comments", body)
 
+    /** GET all existing review threads for a session. */
+    suspend fun reviewComments(sessionId: String): List<ReviewComment> =
+        getJson<ReviewCommentsResult>("$httpBase/sessions/$sessionId/review/comments").comments
+
     /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
     suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {
         val resp = http.patch("$httpBase/sessions/$sessionId/review/comments/${urlEncode(commentId)}") {
@@ -2235,10 +2251,6 @@ class BrokerApi(
     /** POST /sessions/<id>/review/submit {} → { ok, delivered, reason? }. */
     suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult =
         postReturningJson("$httpBase/sessions/$sessionId/review/submit", EmptyBody())
-
-    /** GET /sessions/<id>/walkthrough → { walkthrough } or { walkthrough: null }. */
-    suspend fun getWalkthrough(sessionId: String): WalkthroughResult =
-        getJson("$httpBase/sessions/$sessionId/walkthrough")
 
     // ── Displays ─────────────────────────────────────────────────────────────────
 
