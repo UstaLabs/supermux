@@ -229,6 +229,7 @@ private fun StepSlide(
     var selectedAnchor by remember(step.repo, path) { mutableStateOf<CommentAnchor?>(null) }
     var submitting by remember { mutableStateOf(false) }
     var contextLines by remember(step.id) { mutableIntStateOf(20) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(step.repo, path, state.walkthrough?.revision) {
         content = null
@@ -292,24 +293,11 @@ private fun StepSlide(
                     includeDiff = inDiff,
                 )
                 val viewportAnchor = CommentAnchor(step.repo, path, step.side, start)
-                val visibleLines = lines.mapNotNullTo(mutableSetOf()) { it.newLine }
-                val hasThreads = walkthroughRootComments(state.comments, step, visibleLines).isNotEmpty()
+                // Threads + composer live INSIDE CodeMirror now (block widgets). The native
+                // DiffRows path below is only ever reached when JCEF is unavailable.
+                val threads = walkthroughThreads(state.comments, step.repo, path)
+                val composer = selectedAnchor?.let { DiffRegionComposer(it.line, state.draft(it)) }
                 Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 240.dp)) {
-                    if (selectedAnchor != null || hasThreads) {
-                        WalkthroughNativeRegion(
-                            state = state,
-                            step = step,
-                            lines = lines,
-                            viewportAnchor = viewportAnchor,
-                            selectedAnchor = selectedAnchor,
-                            submitting = submitting,
-                            reason = null,
-                            onSelectedAnchorChange = { selectedAnchor = it },
-                            onSubmittingChange = { submitting = it },
-                            onAddComment = onAddComment,
-                            onResolve = onResolve,
-                        )
-                    } else {
                     DiffRegionSurface(
                         jcefState = jcefState,
                         path = path,
@@ -319,6 +307,51 @@ private fun StepSlide(
                         onLineClick = { line -> selectedAnchor = CommentAnchor(step.repo, path, step.side, line) },
                         onPage = { direction -> if (direction == "next") state.next() else state.previous() },
                         onExpand = { contextLines += 20 },
+                        threads = threads,
+                        composer = composer,
+                        onCommentSubmit = { line, body ->
+                            val anchor = CommentAnchor(step.repo, path, step.side, line)
+                            state.setDraft(anchor, body)
+                            selectedAnchor = null
+                            scope.launch {
+                                postComment(
+                                    state, anchor, text.split('\n').getOrElse(line - 1) { "" },
+                                    onAddComment, { submitting = it },
+                                )
+                            }
+                        },
+                        onReplySubmit = { threadId, body ->
+                            val root = state.comments.firstOrNull { it.id == threadId }
+                            if (root != null) scope.launch {
+                                submitting = true
+                                val created = onAddComment(
+                                    AddCommentBody(
+                                        repo = root.repo, path = root.path, side = root.side,
+                                        anchorLine = root.currentLine ?: root.anchorLine,
+                                        anchorContext = root.anchorContext, body = body,
+                                        deliver = "instant", parentId = threadId,
+                                    ),
+                                )
+                                submitting = false
+                                created?.let(state::applyComment)
+                            }
+                        },
+                        onResolveThread = { id ->
+                            scope.launch {
+                                if (onResolve(id)) state.comments.firstOrNull { it.id == id }
+                                    ?.let { state.applyComment(it.copy(status = "resolved")) }
+                            }
+                        },
+                        onComposerState = { line, body ->
+                            if (line <= 0) {
+                                selectedAnchor?.let(state::clearDraft)
+                                selectedAnchor = null
+                            } else {
+                                val anchor = CommentAnchor(step.repo, path, step.side, line)
+                                selectedAnchor = anchor
+                                state.setDraft(anchor, body)
+                            }
+                        },
                         scrollKey = viewportAnchor,
                         scrollTop = state.scroll(viewportAnchor),
                         onScrollChange = { state.setScroll(viewportAnchor, it) },
@@ -339,7 +372,6 @@ private fun StepSlide(
                             )
                         },
                     )
-                    }
                 }
             }
         }
@@ -432,14 +464,24 @@ private fun anchorFromKey(key: String, side: String): CommentAnchor? {
     return CommentAnchor(parts[0], parts[1], side, parts[2].toIntOrNull() ?: return null)
 }
 
-private fun walkthroughRootComments(
+/** Project this file's review comments into the in-editor thread payload — roots (with their
+ *  replies, root-first) anchored on the CURRENT new-side line. Threads whose line falls outside the
+ *  rendered slice are simply not drawn by the bundle, so no filtering is needed here. */
+internal fun walkthroughThreads(
     comments: List<ReviewComment>,
-    step: WalkthroughStep,
-    visibleLines: Set<Int>,
-): List<ReviewComment> {
-    return comments.filter {
-        val line = it.currentLine ?: it.anchorLine
-        it.parentId == null && it.repo == step.repo && it.path == step.path && line in visibleLines
+    repo: String,
+    path: String,
+): List<DiffRegionThread> {
+    val forFile = comments.filter { it.repo == repo && it.path == path }
+    return forFile.filter { it.parentId == null }.map { root ->
+        DiffRegionThread(
+            id = root.id,
+            line = root.currentLine ?: root.anchorLine,
+            status = root.status,
+            comments = (listOf(root) + forFile.filter { it.parentId == root.id }).map { c ->
+                DiffRegionComment(id = c.id, author = c.author.ifEmpty { "user" }, body = c.body)
+            },
+        )
     }
 }
 

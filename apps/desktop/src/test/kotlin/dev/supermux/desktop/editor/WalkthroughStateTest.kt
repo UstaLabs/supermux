@@ -180,6 +180,52 @@ class WalkthroughStateTest {
         assertFalse(state.isOpen)
     }
 
+    // ── In-editor threads + composer draft persistence ──────────────────────
+
+    private fun comment(
+        id: String, body: String, parentId: String? = null, line: Int = 12,
+        status: String = "open", author: String = "user", path: String = "a.kt",
+    ) = ReviewComment(
+        id = id, parentId = parentId, repo = "r", path = path, side = "new",
+        anchorLine = line, body = body, author = author, status = status,
+    )
+
+    @Test fun walkthrough_threads_group_replies_under_their_root() {
+        val comments = listOf(
+            comment("c1", "why?"),
+            comment("c2", "because", parentId = "c1", author = "agent"),
+            comment("c3", "done", line = 30, status = "resolved"),
+            comment("other", "different file", path = "b.kt"),
+        )
+        val threads = walkthroughThreads(comments, "r", "a.kt")
+        assertEquals(listOf("c1", "c3"), threads.map { it.id })
+        assertEquals(listOf(12, 30), threads.map { it.line })
+        assertEquals(listOf("open", "resolved"), threads.map { it.status })
+        assertEquals(listOf("c1", "c2"), threads[0].comments.map { it.id })
+        assertEquals("agent", threads[0].comments[1].author)
+        assertEquals(1, threads[1].comments.size)
+    }
+
+    @Test fun walkthrough_threads_prefer_the_current_line_over_the_authored_anchor() {
+        val threads = walkthroughThreads(listOf(comment("c1", "hi").copy(currentLine = 44)), "r", "a.kt")
+        assertEquals(44, threads.single().line)
+    }
+
+    @Test fun composer_state_persists_a_draft_per_anchor_and_clears_on_close() {
+        val state = WalkthroughState("s1")
+        val a = CommentAnchor("r", "a.kt", "new", 12)
+        val b = CommentAnchor("r", "a.kt", "new", 30)
+        // onComposerState(line > 0, text) → store the draft for that line.
+        state.setDraft(a, "half a thou")
+        state.setDraft(b, "elsewhere")
+        assertEquals("half a thou", state.draft(a))
+        assertEquals("elsewhere", state.draft(b))
+        // onComposerState(line == 0) → the composer closed; its draft goes away, the other survives.
+        state.clearDraft(a)
+        assertEquals("", state.draft(a))
+        assertEquals("elsewhere", state.draft(b))
+    }
+
     @Test fun explicit_open_target_does_not_override_later_navigation_on_revision() {
         val state = WalkthroughState("s1")
         state.applyWalkthrough(walkthrough())
