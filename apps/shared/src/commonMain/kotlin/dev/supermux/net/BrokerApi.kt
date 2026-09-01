@@ -728,6 +728,7 @@ data class RefCommit(
 @Serializable
 data class ReviewComment(
     val id: String,
+    val parentId: String? = null,
     val repo: String,
     val path: String,
     val side: String,
@@ -738,7 +739,11 @@ data class ReviewComment(
     val status: String,
     val currentLine: Int? = null,
     val outdated: Boolean = false,
+    val resolvedBy: String? = null,
 )
+
+@Serializable
+data class ReviewCommentsResult(val comments: List<ReviewComment> = emptyList())
 
 @Serializable
 data class AddCommentBody(
@@ -749,6 +754,37 @@ data class AddCommentBody(
     val anchorContext: String,
     val body: String,
     val diffHunkHeader: String? = null,
+    val deliver: String? = null,
+)
+
+/** One authored walkthrough for a session. The broker returns only the current walkthrough. */
+@Serializable
+data class Walkthrough(
+    val id: String,
+    val sessionId: String = "",
+    val title: String,
+    val baseSpec: String = "session-start",
+    val revision: Int = 1,
+    val createdAt: String = "",
+    val current: Boolean = true,
+    val steps: List<WalkthroughStep> = emptyList(),
+)
+
+@Serializable
+data class WalkthroughStep(
+    val id: String,
+    val walkthroughId: String = "",
+    val ord: Int,
+    val title: String,
+    val bodyMd: String = "",
+    val repo: String = "",
+    val path: String? = null,
+    val side: String = "RIGHT",
+    val anchorLine: Int? = null,
+    val rangeStart: Int? = null,
+    val rangeEnd: Int? = null,
+    val anchorContext: String? = null,
+    val anchorStatus: String = "ok",
 )
 
 @Serializable
@@ -2135,6 +2171,10 @@ class BrokerApi(
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/sessions/$sessionId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
 
+    /** GET /sessions/<id>/walkthrough → the session's current authored walkthrough. */
+    suspend fun getWalkthrough(sessionId: String): Walkthrough =
+        getJson("$httpBase/sessions/$sessionId/walkthrough")
+
     /** GET /sessions/<id>/fs/refs → { repos: RepoRefs[] } (branches + recent commits per repo). */
     suspend fun fsRefs(sessionId: String): FsRefsResult =
         getJson("$httpBase/sessions/$sessionId/fs/refs")
@@ -2182,6 +2222,10 @@ class BrokerApi(
     /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =
         postReturningJson("$httpBase/sessions/$sessionId/review/comments", body)
+
+    /** GET all existing review threads for a session. */
+    suspend fun reviewComments(sessionId: String): List<ReviewComment> =
+        getJson<ReviewCommentsResult>("$httpBase/sessions/$sessionId/review/comments").comments
 
     /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
     suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {

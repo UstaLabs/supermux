@@ -2,6 +2,8 @@ package dev.supermux.proto
 
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishResult
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.Walkthrough
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -389,6 +391,20 @@ sealed interface ServerFrame {
         /** Present since the workspaces change; null from an older broker. */
         val workspace: String? = null,
         val paths: List<String> = emptyList(),
+    ) : ServerFrame
+
+    /** The session's current walkthrough was created, replaced, or re-anchored. */
+    @Serializable @SerialName("walkthrough_updated")
+    data class WalkthroughUpdated(
+        val sessionId: String,
+        val walkthrough: Walkthrough,
+    ) : ServerFrame
+
+    /** One review-thread mutation, including live agent replies. */
+    @Serializable @SerialName("review_comment")
+    data class ReviewCommentFrame(
+        val sessionId: String,
+        val comment: ReviewComment,
     ) : ServerFrame
 
     // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
