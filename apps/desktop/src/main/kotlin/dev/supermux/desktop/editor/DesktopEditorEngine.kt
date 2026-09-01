@@ -80,6 +80,16 @@ class DesktopEditorEngine(
     var onDiffExpand: (String) -> Unit = {}
     var onDiffPage: (String) -> Unit = {}
 
+    // ── In-editor walkthrough comments (the CodeMirror block widgets) ────────
+    /** The composer submitted a root comment on a 1-indexed new-side line. */
+    var onCommentSubmit: (line: Int, text: String) -> Unit = { _, _ -> }
+    /** A reply typed into a thread widget. */
+    var onReplySubmit: (threadId: String, text: String) -> Unit = { _, _ -> }
+    /** "Resolve" pressed on an open thread widget. */
+    var onResolveThread: (threadId: String) -> Unit = {}
+    /** Composer draft persistence; line == 0 means the composer closed. */
+    var onComposerState: (line: Int, text: String) -> Unit = { _, _ -> }
+
     private val planner = EditorPushPlanner(lineWrap, fontSize)
 
     private var client: CefClient? = null
@@ -135,8 +145,21 @@ class DesktopEditorEngine(
         ranges: List<DiffRegionRange>,
         language: String,
         restoreScrollTop: Int? = null,
+        threads: List<DiffRegionThread> = emptyList(),
+        composer: DiffRegionComposer? = null,
     ) {
-        pendingDiffRegion = DiffRegionRequest(path, content, ranges, language, restoreScrollTop)
+        pendingDiffRegion = DiffRegionRequest(path, content, ranges, language, restoreScrollTop, threads, composer)
+        if (_ready.value) emitDiffRegion()
+    }
+
+    /**
+     * Push refreshed threads / composer into the SAME region — no restoreScrollTop, so the bundle's
+     * own scroll preservation (and its expand-context, keyed on the unchanged slice signature) wins.
+     * A no-op before [showDiffRegion] has established a region.
+     */
+    fun updateDiffThreads(threads: List<DiffRegionThread>, composer: DiffRegionComposer?) {
+        val current = pendingDiffRegion ?: return
+        pendingDiffRegion = current.copy(restoreScrollTop = null, threads = threads, composer = composer)
         if (_ready.value) emitDiffRegion()
     }
 
@@ -325,6 +348,10 @@ class DesktopEditorEngine(
             is BridgeEvent.DiffLineClick -> onDiffLineClick(event.line)
             is BridgeEvent.DiffExpand -> onDiffExpand(event.direction)
             is BridgeEvent.DiffPage -> onDiffPage(event.direction)
+            is BridgeEvent.CommentSubmit -> onCommentSubmit(event.line, event.text)
+            is BridgeEvent.ReplySubmit -> onReplySubmit(event.threadId, event.text)
+            is BridgeEvent.ResolveThread -> onResolveThread(event.threadId)
+            is BridgeEvent.ComposerState -> onComposerState(event.line, event.text)
             is BridgeEvent.EvalResult -> pendingEvaluations.remove(event.id)?.invoke(event.value)
         }
     }
@@ -333,7 +360,10 @@ class DesktopEditorEngine(
         val request = pendingDiffRegion ?: return
         val b = browser ?: return
         b.executeJavaScript(
-            showDiffRegionJs(request.path, request.content, request.ranges, request.language, request.restoreScrollTop),
+            showDiffRegionJs(
+                request.path, request.content, request.ranges, request.language,
+                request.restoreScrollTop, request.threads, request.composer,
+            ),
             b.url ?: "",
             0,
         )
@@ -373,4 +403,6 @@ private data class DiffRegionRequest(
     val ranges: List<DiffRegionRange>,
     val language: String,
     val restoreScrollTop: Int?,
+    val threads: List<DiffRegionThread> = emptyList(),
+    val composer: DiffRegionComposer? = null,
 )

@@ -54,6 +54,10 @@ internal fun bridgeShimJs(queryFn: String): String = """
         onDiffLineClick: function (line) { post("onDiffLineClick", String(line)); },
         onDiffExpand: function (direction) { post("onDiffExpand", String(direction)); },
         onDiffPage: function (direction) { post("onDiffPage", String(direction)); },
+        onCommentSubmit: function (line, text) { post("onCommentSubmit", JSON.stringify({ line: Number(line) || 0, text: String(text) })); },
+        onReplySubmit: function (threadId, text) { post("onReplySubmit", JSON.stringify({ threadId: String(threadId), text: String(text) })); },
+        onResolveThread: function (threadId) { post("onResolveThread", String(threadId)); },
+        onComposerState: function (line, text) { post("onComposerState", JSON.stringify({ line: Number(line) || 0, text: String(text) })); },
       };
       window.webkit = window.webkit || {};
       window.webkit.messageHandlers = window.webkit.messageHandlers || {};
@@ -106,6 +110,19 @@ internal sealed interface BridgeEvent {
     /** Horizontal trackpad paging from inside the heavyweight JCEF child. */
     data class DiffPage(val direction: String) : BridgeEvent
 
+    /** The in-editor composer submitted a new root comment on a 1-indexed new-side [line]. */
+    data class CommentSubmit(val line: Int, val text: String) : BridgeEvent
+
+    /** A reply typed into an in-editor thread widget. */
+    data class ReplySubmit(val threadId: String, val text: String) : BridgeEvent
+
+    /** "Resolve" pressed on an open in-editor thread. */
+    data class ResolveThread(val threadId: String) : BridgeEvent
+
+    /** Composer draft persistence. [line] == 0 means the composer was CLOSED (Esc/Cancel/submit) —
+     *  Kotlin drops the draft and clears its selection; otherwise it stores [text] for that line. */
+    data class ComposerState(val line: Int, val text: String) : BridgeEvent
+
     /** A direct-JCEF async JavaScript read completed. */
     data class EvalResult(val id: Long, val value: String) : BridgeEvent
 }
@@ -134,6 +151,16 @@ internal fun parseBridgeEvent(request: String): BridgeEvent? {
         "onDiffLineClick" -> payload.arg.toIntOrNull()?.takeIf { it > 0 }?.let { BridgeEvent.DiffLineClick(it) }
         "onDiffExpand" -> payload.arg.takeIf { it == "up" || it == "down" }?.let { BridgeEvent.DiffExpand(it) }
         "onDiffPage" -> payload.arg.takeIf { it == "previous" || it == "next" }?.let { BridgeEvent.DiffPage(it) }
+        "onCommentSubmit" -> parseLinePayload(payload.arg)
+            ?.takeIf { it.line > 0 && it.text.isNotBlank() }
+            ?.let { BridgeEvent.CommentSubmit(it.line, it.text) }
+        "onReplySubmit" -> parseReplyPayload(payload.arg)
+            ?.takeIf { it.threadId.isNotEmpty() && it.text.isNotBlank() }
+            ?.let { BridgeEvent.ReplySubmit(it.threadId, it.text) }
+        "onResolveThread" -> payload.arg.takeIf { it.isNotBlank() }?.let { BridgeEvent.ResolveThread(it) }
+        "onComposerState" -> parseLinePayload(payload.arg)
+            ?.takeIf { it.line >= 0 }
+            ?.let { BridgeEvent.ComposerState(it.line, it.text) }
         "evalResult" -> parseEvalResult(payload.arg)?.let { BridgeEvent.EvalResult(it.id, it.value) }
         else -> null
     }
@@ -144,6 +171,28 @@ private data class BridgePayload(val fn: String = "", val arg: String = "")
 
 @kotlinx.serialization.Serializable
 private data class EvalResultPayload(val id: Long = -1, val value: String = "")
+
+@kotlinx.serialization.Serializable
+private data class LinePayload(val line: Int = -1, val text: String = "")
+
+@kotlinx.serialization.Serializable
+private data class ReplyPayload(val threadId: String = "", val text: String = "")
+
+private fun parseLinePayload(payload: String): LinePayload? = try {
+    bridgeJson.decodeFromString<LinePayload>(payload)
+} catch (_: SerializationException) {
+    null
+} catch (_: IllegalArgumentException) {
+    null
+}
+
+private fun parseReplyPayload(payload: String): ReplyPayload? = try {
+    bridgeJson.decodeFromString<ReplyPayload>(payload)
+} catch (_: SerializationException) {
+    null
+} catch (_: IllegalArgumentException) {
+    null
+}
 
 private fun parseEvalResult(payload: String): EvalResultPayload? {
     val parsed = try {
@@ -205,13 +254,41 @@ data class DiffRegionRange(
     val deletedLines: List<String> = emptyList(),
 )
 
+/** One comment inside an in-editor thread widget. */
+@Serializable
+data class DiffRegionComment(
+    val id: String,
+    val author: String,
+    val body: String,
+    val createdAt: String = "",
+)
+
+/** One in-editor thread, anchored on a 1-indexed NEW-side original line. [comments] is root-first. */
+@Serializable
+data class DiffRegionThread(
+    val id: String,
+    val line: Int,
+    val status: String,
+    val comments: List<DiffRegionComment> = emptyList(),
+)
+
+/** An open (or restored) in-editor composer. */
+@Serializable
+data class DiffRegionComposer(val line: Int, val draft: String = "")
+
 @Serializable
 private data class DiffRegionPayload(
     val path: String,
     val content: String,
     val ranges: List<DiffRegionRange>,
     val language: String,
+    val threads: List<DiffRegionThread> = emptyList(),
+    val composer: DiffRegionComposer? = null,
 )
+
+/** encodeDefaults so `threads`/`composer` are ALWAYS present in the payload — the bundle's contract
+ *  is explicit ("composer": null closes an open composer), not "absent means unchanged". */
+private val diffRegionJson = Json { encodeDefaults = true; explicitNulls = true }
 
 /** Pure builder used by the engine and smoke tests. JSON is a valid JS object expression. */
 internal fun showDiffRegionJs(
@@ -220,8 +297,10 @@ internal fun showDiffRegionJs(
     ranges: List<DiffRegionRange>,
     language: String,
     restoreScrollTop: Int? = null,
+    threads: List<DiffRegionThread> = emptyList(),
+    composer: DiffRegionComposer? = null,
 ): String {
-    val payload = bridgeJson.encodeToString(DiffRegionPayload(path, content, ranges, language))
+    val payload = diffRegionJson.encodeToString(DiffRegionPayload(path, content, ranges, language, threads, composer))
     val show = "window.cmShowDiffRegion && window.cmShowDiffRegion($payload)"
     return if (restoreScrollTop == null) show else
         "$show;requestAnimationFrame(function(){window.cmSetScrollTop&&window.cmSetScrollTop(${restoreScrollTop.coerceAtLeast(0)})})"

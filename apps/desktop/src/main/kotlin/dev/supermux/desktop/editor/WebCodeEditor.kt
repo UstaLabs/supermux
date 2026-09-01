@@ -280,6 +280,14 @@ fun DiffRegionSurface(
     onLineClick: (Int) -> Unit,
     onExpand: (String) -> Unit = {},
     onPage: (String) -> Unit = {},
+    /** Comment threads rendered as in-editor block widgets (GitHub-PR style). */
+    threads: List<DiffRegionThread> = emptyList(),
+    /** An open/restored in-editor composer, or null. */
+    composer: DiffRegionComposer? = null,
+    onCommentSubmit: (line: Int, text: String) -> Unit = { _, _ -> },
+    onReplySubmit: (threadId: String, text: String) -> Unit = { _, _ -> },
+    onResolveThread: (threadId: String) -> Unit = {},
+    onComposerState: (line: Int, text: String) -> Unit = { _, _ -> },
     scrollKey: Any? = null,
     scrollTop: Int = 0,
     onScrollChange: (Int) -> Unit = {},
@@ -306,12 +314,25 @@ fun DiffRegionSurface(
         engine?.onDiffLineClick = onLineClick
         engine?.onDiffExpand = onExpand
         engine?.onDiffPage = onPage
+        engine?.onCommentSubmit = onCommentSubmit
+        engine?.onReplySubmit = onReplySubmit
+        engine?.onResolveThread = onResolveThread
+        engine?.onComposerState = onComposerState
     }
     val ready by (engine?.ready ?: remember { MutableStateFlow(false) }).collectAsState()
     LaunchedEffect(ready) { onEngineReadyChange(ready) }
     LaunchedEffect(engine, path, content, ranges, language, scrollKey) {
         engine?.setDocument(path, "")
-        engine?.showDiffRegion(path, content, ranges, language, restoreScrollTop = scrollTop)
+        engine?.showDiffRegion(path, content, ranges, language, scrollTop, threads, composer)
+    }
+    // Live thread/composer updates re-enter the SAME region: keyed on the threads and the composer's
+    // LINE (never its draft — a per-keystroke push would rebuild the textarea under the caret), and
+    // deliberately skipping the first run, which the region effect above already covered with the
+    // scroll restore attached.
+    var threadsPushed by remember(engine) { mutableStateOf(false) }
+    LaunchedEffect(engine, threads, composer?.line) {
+        if (!threadsPushed) { threadsPushed = true; return@LaunchedEffect }
+        engine?.updateDiffThreads(threads, composer)
     }
     var missedReady by remember(engine) { mutableStateOf(false) }
     LaunchedEffect(engine, ready) {

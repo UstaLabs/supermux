@@ -125,6 +125,84 @@ class EditorBridgeShimsTest {
         assertTrue(restored.endsWith("window.cmSetScrollTop(73)})"))
     }
 
+    // ── In-editor comment threads (block widgets) ───────────────────────────
+
+    @Test
+    fun show_diff_region_js_carries_threads_and_composer() {
+        val js = showDiffRegionJs(
+            path = "src/A.kt",
+            content = "one\ntwo\nthree",
+            ranges = listOf(DiffRegionRange(2, 2, "add")),
+            language = "kotlin",
+            threads = listOf(
+                DiffRegionThread(
+                    id = "c1", line = 2, status = "open",
+                    comments = listOf(
+                        DiffRegionComment("c1", "user", "why?", "2026-01-01"),
+                        DiffRegionComment("c2", "agent", "because", ""),
+                    ),
+                ),
+            ),
+            composer = DiffRegionComposer(line = 3, draft = "half a thought"),
+        )
+        assertTrue(js.contains("\"threads\":["), js)
+        assertTrue(js.contains("\"id\":\"c1\""), js)
+        assertTrue(js.contains("\"line\":2"), js)
+        assertTrue(js.contains("\"status\":\"open\""), js)
+        assertTrue(js.contains("\"author\":\"agent\""), js)
+        assertTrue(js.contains("\"createdAt\":\"2026-01-01\""), js)
+        assertTrue(js.contains("\"composer\":{\"line\":3,\"draft\":\"half a thought\"}"), js)
+    }
+
+    @Test
+    fun show_diff_region_js_omits_a_closed_composer_and_defaults_threads_empty() {
+        val js = showDiffRegionJs("a.kt", "one", emptyList(), "kotlin")
+        assertTrue(js.contains("\"threads\":[]"), js)
+        assertTrue(js.contains("\"composer\":null"), js)
+    }
+
+    @Test
+    fun bridge_shim_defines_the_comment_callbacks() {
+        val shim = bridgeShimJs("q")
+        for (fn in listOf("onCommentSubmit", "onReplySubmit", "onResolveThread", "onComposerState")) {
+            assertTrue(shim.contains("$fn: function"), "missing $fn in shim")
+        }
+    }
+
+    @Test
+    fun parse_comment_submit_reply_resolve_and_composer_state() {
+        assertEquals(
+            BridgeEvent.CommentSubmit(12, "looks wrong"),
+            parseBridgeEvent("""{"fn":"onCommentSubmit","arg":"{\"line\":12,\"text\":\"looks wrong\"}"}"""),
+        )
+        assertEquals(
+            BridgeEvent.ReplySubmit("c1", "fixed"),
+            parseBridgeEvent("""{"fn":"onReplySubmit","arg":"{\"threadId\":\"c1\",\"text\":\"fixed\"}"}"""),
+        )
+        assertEquals(
+            BridgeEvent.ResolveThread("c1"),
+            parseBridgeEvent("""{"fn":"onResolveThread","arg":"c1"}"""),
+        )
+        assertEquals(
+            BridgeEvent.ComposerState(7, "draft"),
+            parseBridgeEvent("""{"fn":"onComposerState","arg":"{\"line\":7,\"text\":\"draft\"}"}"""),
+        )
+        // line 0 = the composer closed (Esc / Cancel / submit) — still a valid event.
+        assertEquals(
+            BridgeEvent.ComposerState(0, ""),
+            parseBridgeEvent("""{"fn":"onComposerState","arg":"{\"line\":0,\"text\":\"\"}"}"""),
+        )
+    }
+
+    @Test
+    fun parse_rejects_empty_or_malformed_comment_payloads() {
+        assertNull(parseBridgeEvent("""{"fn":"onCommentSubmit","arg":"{\"line\":0,\"text\":\"x\"}"}"""))
+        assertNull(parseBridgeEvent("""{"fn":"onCommentSubmit","arg":"{\"line\":4,\"text\":\"   \"}"}"""))
+        assertNull(parseBridgeEvent("""{"fn":"onReplySubmit","arg":"{\"threadId\":\"\",\"text\":\"x\"}"}"""))
+        assertNull(parseBridgeEvent("""{"fn":"onResolveThread","arg":"  "}"""))
+        assertNull(parseBridgeEvent("""{"fn":"onCommentSubmit","arg":"not json"}"""))
+    }
+
     @Test
     fun parse_eval_result_reads_the_nested_request_id_and_value() {
         assertEquals(
