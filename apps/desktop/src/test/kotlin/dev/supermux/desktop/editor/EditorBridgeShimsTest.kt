@@ -56,8 +56,8 @@ class EditorBridgeShimsTest {
         // Every post routes through the named query function, guarded (queue-or-drop).
         assertTrue(shim.contains("window.smxEditorQuery"), "does not call the query function")
         assertTrue(shim.contains("if (window.smxEditorQuery)"), "missing the not-ready guard")
-        // The four bundle callbacks + lspOut are present.
-        for (fn in listOf("onChange", "onSave", "onReady", "onFontSize", "lspOut")) {
+        // The editor, LSP, and walkthrough-diff callbacks are present.
+        for (fn in listOf("onChange", "onSave", "onReady", "onFontSize", "onDiffLineClick", "onDiffExpand", "onDiffPage", "lspOut")) {
             assertTrue(shim.contains("\"$fn\"") || shim.contains(fn), "shim missing $fn")
         }
     }
@@ -99,6 +99,30 @@ class EditorBridgeShimsTest {
     @Test
     fun parse_lsp_out_carries_the_payload() {
         assertEquals(BridgeEvent.LspOut("""{"serverId":"x"}"""), parseBridgeEvent("""{"fn":"lspOut","arg":"{\"serverId\":\"x\"}"}"""))
+    }
+
+    @Test
+    fun parse_diff_line_click_and_expand() {
+        assertEquals(BridgeEvent.DiffLineClick(42), parseBridgeEvent("""{"fn":"onDiffLineClick","arg":"42"}"""))
+        assertEquals(BridgeEvent.DiffExpand("up"), parseBridgeEvent("""{"fn":"onDiffExpand","arg":"up"}"""))
+        assertNull(parseBridgeEvent("""{"fn":"onDiffExpand","arg":"sideways"}"""))
+        assertEquals(BridgeEvent.DiffPage("next"), parseBridgeEvent("""{"fn":"onDiffPage","arg":"next"}"""))
+    }
+
+    @Test
+    fun show_diff_region_js_passes_quoted_payload_to_bundle() {
+        val js = showDiffRegionJs(
+            path = "src/A\".kt",
+            content = "one\ntwo\nthree",
+            ranges = listOf(DiffRegionRange(2, 3, "change")),
+            language = "kotlin",
+        )
+        assertTrue(js.startsWith("window.cmShowDiffRegion && window.cmShowDiffRegion("))
+        assertTrue(js.contains("src/A\\\".kt"))
+        assertTrue(js.contains("\"startLine\":2"))
+        assertTrue(js.contains("\"language\":\"kotlin\""))
+        val restored = showDiffRegionJs("a.kt", "one", emptyList(), "kotlin", restoreScrollTop = 73)
+        assertTrue(restored.endsWith("window.cmSetScrollTop(73)})"))
     }
 
     @Test

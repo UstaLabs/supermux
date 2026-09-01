@@ -13,6 +13,7 @@ import { authToken, authedViaBearer, buildAuthCookie, buildClearCookie, sameOrig
 import { FsService } from "../../core/editor/fs-service"
 import { computeWorkdirDiff, listRepoRefs } from "../../core/editor/workdir-diff"
 import { reanchor } from "../../core/review/anchor"
+import { formatInstantComment, matchingStep, toWalkthroughDto } from "../../core/walkthrough/author"
 import { FsWatcher } from "../../core/editor/fs-watcher"
 import { LspConnection } from "../../core/lsp/bridge"
 import { encodeTouch, encodeKey, encodeText, TouchAction } from "../../core/display/scrcpy/control"
@@ -220,6 +221,7 @@ export interface WebChannelOpts {
   reviewDelete?: (commentId: string) => void
   reviewSubmit?: (id: string) => Promise<{ ok: boolean; delivered: number; reason?: string }>
   sendUserMessage?: (id: string, text: string) => Promise<{ ok: boolean; reason?: string }>
+  getWalkthrough?: (id: string) => import("../../core/walkthrough/store").Walkthrough | undefined
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
@@ -2355,9 +2357,49 @@ export class WebChannel implements Channel {
         rangeStart: b.rangeStart != null ? Number(b.rangeStart) : undefined,
         rangeEnd: b.rangeEnd != null ? Number(b.rangeEnd) : undefined,
         diffHunkHeader: b.diffHunkHeader != null ? String(b.diffHunkHeader) : undefined,
+        parentId: b.parentId != null ? String(b.parentId) : undefined,
         body: String(b.body ?? ""), author: "user", createdAt: new Date().toISOString(), headBlobSha,
       })
+      if (b.deliver === "instant" && this.opts.sendUserMessage) {
+        const wt = this.opts.getWalkthrough?.(id)
+        const step = wt ? matchingStep(wt.steps, commentPath, anchorLine, String(b.repo ?? "") || undefined) : undefined
+        const text = formatInstantComment({
+          id: c.id,
+          repo: c.repo || undefined,
+          path: c.path,
+          line: c.anchorLine,
+          body: c.body,
+          stepN: step?.n,
+          stepTitle: step?.title,
+        })
+        await this.opts.sendUserMessage(id, text)
+      }
       return this.json(c)
+    }
+    if (method === "GET" && path.match(/^\/sessions\/[^/]+\/walkthrough$/)) {
+      const id = decodeURIComponent(path.split("/")[2]!)
+      const wt = this.opts.getWalkthrough?.(id)
+      if (!wt) return this.json({ walkthrough: null })
+      const sess = this.opts.reviewSession?.(id)
+      const workdir = sess?.workdir
+      const steps = wt.steps.map((s) => {
+        if (!s.path || !workdir || s.anchorLine == null) {
+          return { ...s, currentLine: null as number | null, outdated: false }
+        }
+        const repoAbs = s.repo ? join(workdir, s.repo) : workdir
+        const { currentLine, outdated } = reanchor(repoAbs, {
+          path: s.path,
+          anchorLine: s.anchorLine,
+          anchorContext: s.anchorContext ?? "",
+        })
+        return {
+          ...s,
+          currentLine,
+          outdated,
+          anchorStatus: outdated ? "outdated" : s.anchorStatus,
+        }
+      })
+      return this.json({ walkthrough: toWalkthroughDto({ ...wt, steps }) })
     }
     if (method === "PATCH" && path.match(/^\/sessions\/[^/]+\/review\/comments\/[^/]+$/)) {
       const commentId = decodeURIComponent(path.split("/")[5]!)

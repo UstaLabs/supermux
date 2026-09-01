@@ -794,7 +794,7 @@ private fun FileSection(
 // ── Diff rows + inline comments ────────────────────────────────────────────────
 
 @Composable
-private fun DiffRows(
+internal fun DiffRows(
     repo: String,
     path: String,
     lines: List<DiffLine>,
@@ -833,8 +833,14 @@ private fun DiffRows(
                         onAdd = { onAdd(repo, path, line, hunkHeader(lines, idx)) },
                     )
                 }
-                commentsFor(comments, repo, path, newLine).forEach { c ->
-                    CommentThreadRow(c, onResolve = { onResolve(c.id) })
+                val lineComments = commentsFor(comments, repo, path, newLine)
+                val roots = lineComments.filter { it.parentId == null }
+                roots.forEach { c ->
+                    CommentThreadRow(
+                        c,
+                        replies = lineComments.filter { it.parentId == c.id },
+                        onResolve = { onResolve(c.id) },
+                    )
                 }
             }
         }
@@ -921,7 +927,7 @@ private fun GutterText(s: String, color: Color) {
 }
 
 @Composable
-private fun Composer(
+internal fun Composer(
     draft: String,
     submitting: Boolean,
     onDraftChange: (String) -> Unit,
@@ -957,7 +963,11 @@ private fun Composer(
 }
 
 @Composable
-private fun CommentThreadRow(c: ReviewComment, onResolve: () -> Unit) {
+internal fun CommentThreadRow(
+    c: ReviewComment,
+    replies: List<ReviewComment> = emptyList(),
+    onResolve: () -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier
@@ -967,26 +977,35 @@ private fun CommentThreadRow(c: ReviewComment, onResolve: () -> Unit) {
             .testTag("diff_comment_thread"),
         verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                c.author.ifEmpty { "You" },
-                fontSize = 11.sp,
-                color = cs.onSurfaceVariant,
-            )
-            CommentStatusBadge(c)
-            Box(Modifier.weight(1f))
-            if (c.status == "open") {
-                TextButton(onClick = onResolve, modifier = Modifier.testTag("diff_resolve")) {
-                    Text("Resolve", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.primary)
+        if (c.status == "resolved") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CommentStatusBadge(c)
+                Text("${1 + replies.size} message${if (replies.isEmpty()) "" else "s"}",
+                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                    modifier = Modifier.padding(start = Space.xs))
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(c.author.ifEmpty { "You" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                CommentStatusBadge(c)
+                Box(Modifier.weight(1f))
+                if (c.status == "open") {
+                    TextButton(onClick = onResolve, modifier = Modifier.testTag("diff_resolve")) {
+                        Text("Resolve", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.primary)
+                    }
+                }
+            }
+            Text(c.body, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface, modifier = Modifier.fillMaxWidth())
+            replies.forEach { reply ->
+                Row(Modifier.fillMaxWidth().padding(top = Space.xs), verticalAlignment = Alignment.Top) {
+                    Text(if (reply.author == "agent") "🤖" else "●", fontSize = 12.sp, modifier = Modifier.padding(end = Space.xs))
+                    Column {
+                        Text(reply.author.ifEmpty { "You" }, fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        Text(reply.body, style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
+                    }
                 }
             }
         }
-        Text(
-            c.body,
-            style = MaterialTheme.typography.bodyMedium,
-            color = cs.onSurface,
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 

@@ -76,6 +76,8 @@ import { FrpRelayProvider, parentBoundFrpcCommand } from "./core/relay/frp-provi
 import { UpdateChecker } from "./core/update/checker"
 import { detectUpdateMode } from "./core/update/mode"
 import { ReviewStore } from "./core/review/store"
+import { WalkthroughStore } from "./core/walkthrough/store"
+import { formatInstantComment, matchingStep, toWalkthroughDto } from "./core/walkthrough/author"
 import { serializeReview } from "./core/review/serialize"
 import { FileStore } from "./core/files/store"
 import { loadOrGenerateVapid } from "./core/push/vapid"
@@ -253,6 +255,7 @@ const registry = new Registry(db)
 // Registry constructor.
 registry.healWorkspaces()
 const reviewStore = new ReviewStore(db)
+const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
 const credentialHelperPath = join(STATE_DIR, "bin", "mux-credential")
 try { installCredentialLauncher(join(STATE_DIR, "bin"), join(import.meta.dir, "..")) }
@@ -663,8 +666,9 @@ const sessionManager = new SessionManager(registry, {
       getStatus: (domain) => proxyLivenessMonitor.getStatus(domain),
       refresh: () => proxyLivenessMonitor.refresh(),
     },
+    postBrokerInbound: (sessionId, text) => postBrokerInbound(sessionId, text),
   },
-  stores: { fileStore, messageLog, searchStore, db },
+  stores: { fileStore, messageLog, searchStore, db, reviewStore, walkthroughStore },
   resume: {
     bind: (sid) => server.bind(sid),
     ensureSessionWorktree: (s) => ensureSessionWorktree(s),
@@ -1987,11 +1991,20 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       } catch (e: any) { return { reachable: false, error: e?.message ?? String(e) } }
     },
     reviewList: (id) => reviewStore.list(id),
-    reviewAdd: (id, c) => reviewStore.add({ ...c, sessionId: id }),
-    reviewUpdate: (cid, patch) => reviewStore.update(cid, patch),
+    reviewAdd: (id, c) => {
+      const comment = reviewStore.add({ ...c, sessionId: id })
+      webChannel?.broadcastToAll({ type: "review_comment", sessionId: id, comment })
+      return comment
+    },
+    reviewUpdate: (cid, patch) => {
+      reviewStore.update(cid, patch)
+      const comment = reviewStore.get(cid)
+      if (comment) webChannel?.broadcastToAll({ type: "review_comment", sessionId: comment.sessionId, comment })
+    },
     reviewDelete: (cid) => reviewStore.delete(cid),
     reviewSubmit: (id) => submitReview(id),
     sendUserMessage: (id, text) => deliverUserMessage(id, text),
+    getWalkthrough: (id) => walkthroughStore.getCurrent(id),
     reviewSession: (id) => { const s = registry.get(id); return s ? { workdir: s.workdir, repoRoot: s.repo_root ?? undefined, baseCommits: s.base_commits ?? undefined } : undefined },
     verifySuggest: (id) => { const s = registry.get(id); return s?.repo_root && s.session_branch ? suggestVerify(s.workdir) : undefined },
     verifySave: (id, content) => {
@@ -2262,6 +2275,25 @@ const server = await startSocketServer({
 // existing call sites read unchanged.
 function deliverInbound(sessionId: string, text: string, meta: any): Promise<InboundDeliveryResult> {
   return sessionManager.deliver(sessionId, text, meta)
+}
+
+function postBrokerInbound(sessionId: string, text: string): void {
+  const s = registry.get(sessionId)
+  if (!s) return
+  const messageId = `broker-${Date.now()}`
+  try {
+    messageLog.append(s.id, {
+      id: `in:web:${messageId}`,
+      ts: new Date().toISOString(),
+      direction: "inbound",
+      channel: "web",
+      chat_id: "web",
+      message_id: messageId,
+      text,
+    })
+  } catch (err: any) {
+    log.error("broker_inbound_append_failed", { session: s.name, err: err?.message ?? String(err) })
+  }
 }
 
 async function submitReview(sessionId: string): Promise<{ ok: boolean; delivered: number; reason?: string }> {

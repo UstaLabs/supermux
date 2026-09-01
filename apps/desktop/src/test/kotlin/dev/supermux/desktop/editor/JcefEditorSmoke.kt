@@ -65,19 +65,15 @@ fun main() {
             if (shuttingDown) return@Window
 
             MaterialTheme {
-                EditorSurface(
+                DiffRegionSurface(
                     jcefState = jcefState,
-                    content = "fun main() = println(\"JCEF editor smoke\")\n",
-                    filename = "Smoke.kt",
-                    lineWrap = true,
-                    fontSize = 14,
-                    scrollTop = 0,
-                    revealLine = null,
-                    onChange = {},
-                    onSave = {},
-                    onRevealConsumed = {},
-                    onFontSize = {},
+                    content = "fun main() {\n  println(\"before\")\n  println(\"after\")\n}\n",
+                    path = "Smoke.kt",
+                    ranges = listOf(DiffRegionRange(2, 3, "change")),
+                    language = "kotlin",
+                    onLineClick = {},
                     onEngineReadyChange = { editorReady = it },
+                    fallback = { reason -> androidx.compose.material3.Text(reason) },
                     modifier = Modifier.fillMaxSize(),
                 )
             }

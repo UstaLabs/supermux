@@ -10,6 +10,11 @@
     #editor { position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
     .cm-editor { height: 100%; }
     .cm-scroller { -webkit-overflow-scrolling: touch; }
+    .cm-diff-expand { position: absolute; z-index: 20; left: 50%; transform: translateX(-50%);
+      border: 1px solid #4b5263; border-radius: 6px; padding: 3px 9px; color: #abb2bf;
+      background: rgba(40,44,52,.94); font: 600 11px/1.2 system-ui,sans-serif; cursor: pointer; }
+    .cm-diff-expand-up { top: 4px; }
+    .cm-diff-expand-down { bottom: 4px; }
   </style>
 </head>
 <body>

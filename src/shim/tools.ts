@@ -90,6 +90,45 @@ const ORCHESTRATION_TOOLS = [
       required: ["session_id"],
     },
   },
+  {
+    name: "walkthrough",
+    description: "Publish or replace this session's current code walkthrough: an ordered slideshow of markdown steps anchored to diff regions. Call again to update. Returns per-step ok | not_in_diff so you can fix bad anchors. Text-only steps omit file. lines is new-side numbers: \"42\" or \"12-40\".",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        base: { type: "string", description: "Diff base: omitted/session-start, head, commit:<sha>, branch:<name>" },
+        steps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              body: { type: "string" },
+              file: { type: "string" },
+              repo: { type: "string" },
+              lines: { type: "string" },
+            },
+            required: ["title", "body"],
+          },
+        },
+      },
+      required: ["title", "steps"],
+    },
+  },
+  {
+    name: "reply_comment",
+    description: "Reply in-thread to a code-review / walkthrough comment. Pass comment_id of the comment you are answering. Optional resolve:true marks the root comment resolved.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        comment_id: { type: "string" },
+        body: { type: "string" },
+        resolve: { type: "boolean" },
+      },
+      required: ["comment_id", "body"],
+    },
+  },
 ]
 
 export const RPC_TOOLS = [

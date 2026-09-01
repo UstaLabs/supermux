@@ -1322,6 +1322,7 @@ fun TimelineItemRow(
     loadBytes: suspend (String) -> ByteArray? = { null },
     onOpenFile: (FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
+    onOpenWalkthrough: () -> Unit = {},
 ) {
     when (item) {
         is TimelineItem.Msg -> {
@@ -1338,6 +1339,8 @@ fun TimelineItemRow(
                     if (!text.isNullOrBlank()) {
                         if (isUser) {
                             UserMessage(text)
+                        } else if (text.startsWith("📖 Walkthrough ready")) {
+                            WalkthroughReadyCard(text, onOpenWalkthrough)
                         } else {
                             AssistantMessage(text, onOpenFile = onOpenFile, ts = item.entry.ts)
                         }
@@ -1363,6 +1366,22 @@ fun TimelineItemRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun WalkthroughReadyCard(text: String, onOpen: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.md))
+            .background(cs.primaryContainer.copy(alpha = 0.55f))
+            .clickable(onClick = onOpen)
+            .padding(Space.md)
+            .testTag("walkthrough_ready_card"),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        Text(text, style = MaterialTheme.typography.titleSmall, color = cs.onPrimaryContainer)
+        Text("Open walkthrough →", style = MaterialTheme.typography.labelMedium, color = cs.primary)
     }
 }
 
