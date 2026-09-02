@@ -50,6 +50,8 @@ import { cleanupDraft, VOICE_CLEANUP_MODEL } from "./core/transcription/voice-cl
 import { runTtsStream, VOICE_TTS_ENGINE } from "./core/tts/tts"
 import { pluginSpawnArgsForKind, codexPrepareGlobal, ensureOpenCodePluginScopes, ensureGrokPluginScopes } from "./core/plugins"
 import { agentModules } from "./core/agents/registry"
+import type { CodexAdapter } from "./core/agents/codex/adapter"
+import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
@@ -761,6 +763,12 @@ async function onAssistantMessage(
   // A broker notice ("Resuming session…") is not the agent finishing a turn.
   if (!ev.system) agentStateStore.applyEvent(sessionId, "Stop")
   const sessionEntry = registry.get(sessionId)
+  // Claude has no adapter turn-complete event (it replies through the shim), so
+  // this is where its activity feeds the usage store's 5-minute refresh gate.
+  if (!ev.system) {
+    const kind = sessionEntry?.agent ?? "claude"
+    if (isUsageProvider(kind)) getUsageStore().noteActivity(kind)
+  }
   const sessionName = sessionEntry?.name ?? sessionId
 
   // Resolve file paths relative to the session's working directory.
@@ -1014,6 +1022,12 @@ function finishReadinessById(sessionId: string): FinishReadiness | { error: stri
 // Wire a codex/cursor adapter's structured events into the agent-agnostic
 // activity timeline + live status. (Claude uses its own transcript/hook path.)
 function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
+  if (adapter.kind === AgentKind.Codex) {
+    const store = getUsageStore()
+    const codex = adapter as CodexAdapter
+    codex.onUsageUpdate = (data) => store.apply("codex", data, "agent")
+    codex.getPrevUsage = () => store.snapshot().codex
+  }
   adapter.on("assistant-message", (ev: any) => {
     // Same answer as the Claude path gets through the shim. A failure here used
     // to be a log line only: the reply was discarded and the user saw the turn
@@ -1034,7 +1048,10 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
   })
   adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
-  adapter.on("turn-complete", () => agentStateStore.applyEvent(sessionId, "Stop"))
+  adapter.on("turn-complete", () => {
+    agentStateStore.applyEvent(sessionId, "Stop")
+    if (isUsageProvider(adapter.kind)) getUsageStore().noteActivity(adapter.kind)
+  })
   adapter.on("error", (ev: any) => {
     const session = registry.get(sessionId)
     void notifyAgentError(sessionId, session?.name ?? sessionId, "error", String(ev?.error?.message ?? ev?.error ?? "agent error"))
@@ -2169,9 +2186,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
   })
   channels.web = webChannel as Channel
   writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)
+  getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
 } else {
   try { rmSync(CLAUDE_HOOKS_SETTINGS_PATH, { force: true }) } catch {}
 }
+void getUsageStore().seedFromLocal()
 
 async function refreshTelegramMenu() {
   if (!telegram) return

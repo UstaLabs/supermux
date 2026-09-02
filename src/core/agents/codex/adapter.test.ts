@@ -90,3 +90,61 @@ test("webSearch with an early query is emitted once at item start", () => {
 
   expect(received.map((event) => event.phase)).toEqual(["started", "completed"])
 })
+
+test("account/rateLimits/updated maps params and calls onUsageUpdate", () => {
+  let notify: ((n: { method: string; params: any }) => void) | undefined
+  const client = {
+    request: async <T = any>() => ({} as T),
+    onNotification: (handler: (n: { method: string; params: any }) => void) => { notify = handler },
+  }
+  const received: any[] = []
+  const adapter = new CodexAdapter({
+    sessionName: "s",
+    workdir: "/w",
+    client,
+    persistThreadId: async () => {},
+    getPrevUsage: () => ({
+      plan: "prev",
+      windows: [],
+      credits: null,
+      limitReached: false,
+      resetCredits: 4,
+    }),
+    onUsageUpdate: (data) => { received.push(data) },
+  })
+  expect(adapter.kind).toBe("codex")
+
+  notify?.({
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: 1_700_000_000 },
+        secondary: { usedPercent: 10, windowDurationMins: 10_080, resetsAt: 1_700_001_000 },
+        planType: "plus",
+        credits: { hasCredits: true, unlimited: false, balance: "12" },
+        rateLimitReachedType: "primary",
+      },
+    },
+  })
+
+  expect(received).toHaveLength(1)
+  expect(received[0]).toMatchObject({
+    plan: "plus",
+    resetCredits: 4,
+    limitReached: true,
+    credits: { hasCredits: true, balance: "12" },
+  })
+  expect(received[0].windows[0]).toMatchObject({
+    id: "primary",
+    used: 40,
+    windowSeconds: 18_000,
+    resetsAt: 1_700_000_000,
+    label: "5-hour window",
+  })
+  expect(received[0].windows[1]).toMatchObject({
+    id: "secondary",
+    used: 10,
+    windowSeconds: 604_800,
+    label: "7-day window",
+  })
+})

@@ -172,7 +172,9 @@ export class UsageStore extends EventEmitter {
     this.setProviderData(provider, data)
     this.fetchedAt[provider] = new Date(atMs).toISOString()
     this.source[provider] = source
-    if (source === "live") this.lastLiveAt[provider] = atMs
+    // An agent push carries the same payload the provider API would return, so
+    // it satisfies the live-fetch throttle too — no point re-hitting the API.
+    if (source === "live" || source === "agent") this.lastLiveAt[provider] = atMs
     delete this.errors[provider]
     this.schedulePersist()
     this.emitUpdated()
@@ -425,4 +427,12 @@ let singleton: UsageStore | null = null
 export function getUsageStore(): UsageStore {
   if (!singleton) singleton = new UsageStore()
   return singleton
+}
+
+export function isUsageProvider(value: unknown): value is UsageProvider {
+  return typeof value === "string" && (PROVIDERS as readonly string[]).includes(value)
+}
+
+export function setUsageStoreForTests(store: UsageStore | null): void {
+  singleton = store
 }

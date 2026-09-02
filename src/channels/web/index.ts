@@ -2899,16 +2899,32 @@ export class WebChannel implements Channel {
     }
 
     if (method === "GET" && path === "/usage") {
-      const { fetchAllUsage } = await import("../../core/usage/index")
-      const data = await fetchAllUsage()
-      return this.json(data)
+      const { getUsageStore } = await import("../../core/usage/store")
+      const store = getUsageStore()
+      const force = url.searchParams.get("refresh") === "1" || url.searchParams.get("force") === "1"
+      if (force) void store.refresh(undefined, { force: true })
+      else store.ensureFresh()
+      return this.json(store.snapshot())
+    }
+
+    if (method === "POST" && path === "/usage/refresh") {
+      const { getUsageStore, isUsageProvider } = await import("../../core/usage/store")
+      const body = await req.json().catch(() => ({})) as { providers?: unknown; force?: unknown }
+      const providers = Array.isArray(body.providers)
+        ? body.providers.filter(isUsageProvider)
+        : undefined
+      const store = getUsageStore()
+      void store.refresh(providers, { force: body.force === true })
+      return this.json(store.snapshot())
     }
 
     if (method === "POST" && path === "/usage/codex/reset") {
       const { redeemCodexReset, fetchCodexUsage } = await import("../../core/usage/index")
+      const { getUsageStore } = await import("../../core/usage/store")
       try {
         const result = await redeemCodexReset()
         const codex = await fetchCodexUsage().catch(() => null) // best-effort refresh
+        if (codex) getUsageStore().apply("codex", codex, "live")
         return this.json({ ...result, codex })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 502)
