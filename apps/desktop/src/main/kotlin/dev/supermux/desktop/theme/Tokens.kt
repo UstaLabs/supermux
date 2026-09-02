@@ -71,6 +71,10 @@ object Sizes {
     val iconSm = 18.dp
     /** Hairline stroke for compact progress indicators and status rings. */
     val hairline = 1.5.dp
+    /** Tap target for the inline video transport buttons. */
+    val iconButton = 32.dp
+    /** Play glyph on an inline video poster — large enough to read as the affordance. */
+    val videoPlayGlyph = 40.dp
 }
 
 /** Media layout tokens (inline images, previews). */
@@ -80,6 +84,12 @@ object Media {
      * the same height so the timeline does not reflow when the bitmap arrives.
      */
     val inlineImageMaxHeight = 280.dp
+
+    /** Max painted height for an inline video surface (poster, spinner and player all share it). */
+    val inlineVideoMaxHeight = 320.dp
+
+    /** Fraction of the message column an inline video poster/player occupies. */
+    const val inlineVideoWidthFraction = 0.7f
 }
 
 /**

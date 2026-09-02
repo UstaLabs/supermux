@@ -44,6 +44,9 @@ dependencies {
     // Native LazyList reorder (elevates, auto-scrolls, animates neighbors) — same library Android uses.
     // Custom detectDragGestures step-math was jumpy on desktop trackpads; Calvin is production-proven.
     implementation(libs.reorderable)
+    // Inline video in the chat timeline (Android has ExoPlayer; JVM desktop has no player at all).
+    // Renders frames into a Compose Canvas, so unlike JCEF it is not a heavyweight AWT child.
+    implementation(libs.compose.media.player)
     // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub,
     // Archived, AppUpdate). Workspace shell stays outside the stack so chat/editor/term keep state.
     implementation(libs.jetbrains.navigation3.ui)
@@ -312,6 +315,11 @@ compose.desktop {
                 debMaintainer = "supermux"
                 menuGroup = "Development"
                 appCategory = "Development"
+                // ⚠️ Inline chat video (Compose Media Player) links the SYSTEM GStreamer on Linux:
+                // the bundled `libNativeVideoPlayer.so` is a thin JNI shim, unlike macOS/Windows
+                // where the backend is an OS framework. On a box without
+                // `libgstreamer-1.0-0` + `gstreamer1.0-plugins-{base,good,libav}` the player fails
+                // to load and Timeline.kt falls back to the download chip — the app still starts.
             }
             // macOS DMG. Deliberately a DIFFERENT app name + bundle id from the shipping native
             // SwiftUI mac client (`Supermux.app` / `dev.supermux.app`): both would land in

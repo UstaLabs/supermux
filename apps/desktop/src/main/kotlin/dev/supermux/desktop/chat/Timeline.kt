@@ -5,7 +5,7 @@
 // Desktop adaptations vs the Android source:
 //  - Icons: materialIconsExtended instead of R.drawable.*
 //  - Links: openInBrowser / java.awt.Desktop (not Android intents)
-//  - Attachments: inline image preview; save-as + OS open for everything else (no inline video yet)
+//  - Attachments: inline image + video preview; save-as + OS open for everything else
 //  - Selection: SelectionContainer for mouse copy
 package dev.supermux.desktop.chat
 
@@ -45,11 +45,14 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -97,6 +100,8 @@ import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Sizes
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
+import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
+import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.Attachment
@@ -1422,17 +1427,170 @@ private fun AttachmentItem(
         InlineImageAttachment(att, alignEnd, loadBytes)
         return
     }
+    if (isVideo) {
+        InlineVideo(att, loadBytes)
+        return
+    }
     val label = when {
         isAudio -> att.name ?: "voice message"
-        isVideo -> att.name ?: "video"
         else -> att.name ?: att.file_id
     }
     val icon = when {
         isAudio -> Icons.AutoMirrored.Filled.VolumeUp
-        isVideo -> Icons.Filled.Movie
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
     AttachmentChip(icon, label, att, loadBytes)
+}
+
+/**
+ * Inline video playback (Android parity — Android has had a tap-to-play ExoPlayer surface since
+ * 2026-07-02; desktop only ever offered the download chip because the JVM has no video player).
+ *
+ * The player is Compose Media Player (MIT), whose backends are AVFoundation on macOS, Media
+ * Foundation on Windows and GStreamer on Linux, with the natives compiled into the jar — no system
+ * install. Crucially it decodes into a Compose `Canvas` rather than a heavyweight AWT child, so
+ * unlike JCEF/JediTerm it composes inside the scrolling message list (ModalPresence.kt documents
+ * why a heavyweight child there would be unworkable).
+ *
+ * Bytes are fetched only once the user opts into playback — a transcript must never eagerly
+ * download every clip — then cached to a temp file the native backend can open by URI. A failed
+ * download, or a backend error (missing codec, unreadable container), falls back to the ordinary
+ * [AttachmentChip] so save-as + the OS player remain reachable.
+ *
+ * [renderPlayer] is the mount seam: tests inject a stub so the suite never loads native media
+ * libraries in a headless Gradle worker.
+ */
+@Composable
+internal fun InlineVideo(
+    att: Attachment,
+    loadBytes: suspend (String) -> ByteArray?,
+    renderPlayer: @Composable (File, () -> Unit) -> Unit = { file, onError ->
+        InlineVideoPlayer(file, onError)
+    },
+) {
+    val cs = MaterialTheme.colorScheme
+    var playing by remember(att.file_id) { mutableStateOf(false) }
+    var file by remember(att.file_id) { mutableStateOf<File?>(null) }
+    var failed by remember(att.file_id) { mutableStateOf(false) }
+
+    LaunchedEffect(att.file_id, playing) {
+        if (!playing || file != null || failed) return@LaunchedEffect
+        val bytes = runCatching { loadBytes(att.file_id) }.getOrNull()
+        if (bytes == null) {
+            failed = true
+            return@LaunchedEffect
+        }
+        // Name by the unique file_id so two clips never collide in the temp dir, and keep the
+        // original extension — the native backends pick their demuxer from it.
+        val cached = withContext(Dispatchers.IO) {
+            writeAttachmentTempFile(bytes, "video_${att.file_id.substringAfterLast('/')}", att.name, "mp4")
+        }
+        if (cached != null) file = cached else failed = true
+    }
+
+    val f = file
+    val surface = Modifier
+        .fillMaxWidth(Media.inlineVideoWidthFraction)
+        .heightIn(max = Media.inlineVideoMaxHeight)
+    when {
+        failed -> AttachmentChip(Icons.Filled.Movie, att.name ?: "video", att, loadBytes)
+        !playing -> Box(
+            modifier = surface
+                .height(Media.inlineVideoMaxHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .clickable { playing = true }
+                .testTag("attachment_video_poster"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = att.name ?: "Play video",
+                tint = cs.onSurface,
+                modifier = Modifier.size(Sizes.videoPlayGlyph),
+            )
+        }
+        f == null -> Box(
+            modifier = surface
+                .height(Media.inlineVideoMaxHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .testTag("attachment_video_loading"),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                Modifier.size(MdImageDimens.SpinnerSize),
+                color = cs.onSurfaceVariant,
+                strokeWidth = MdImageDimens.SpinnerStroke,
+            )
+        }
+        else -> Box(surface) { renderPlayer(f) { failed = true } }
+    }
+}
+
+/**
+ * The mounted player: video surface + a minimal transport (play/pause, scrub, elapsed/total).
+ * Autoplays, because the user already opted in by clicking the poster. A backend error is
+ * reported through [onError] so [InlineVideo] can fall back to the download chip rather than
+ * leave a black rectangle in the transcript.
+ */
+@Composable
+private fun InlineVideoPlayer(file: File, onError: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val player = rememberVideoPlayerState()
+    // runCatching, not try/catch-in-composition: on a Linux box with no GStreamer the JNI shim
+    // fails to load and the bridge throws UnsatisfiedLinkError (an Error, which is why this
+    // catches Throwable) the first time the backend is touched. That must degrade to the download
+    // chip, never take the whole timeline down.
+    LaunchedEffect(file) {
+        runCatching { player.openUri(file.toURI().toString()) }.onFailure { onError() }
+    }
+    val error = player.error
+    LaunchedEffect(error) { if (error != null) onError() }
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = Media.inlineVideoMaxHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(Color.Black)
+                .testTag("attachment_video_player"),
+            contentAlignment = Alignment.Center,
+        ) {
+            VideoPlayerSurface(playerState = player, modifier = Modifier.fillMaxWidth())
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
+            IconButton(
+                onClick = { if (player.isPlaying) player.pause() else player.play() },
+                modifier = Modifier.size(Sizes.iconButton).testTag("attachment_video_playpause"),
+            ) {
+                Icon(
+                    imageVector = if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (player.isPlaying) "Pause" else "Play",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(Sizes.iconSm),
+                )
+            }
+            Slider(
+                value = player.sliderPos,
+                onValueChange = { player.seekStart(it) },
+                onValueChangeFinished = { player.seekFinished() },
+                valueRange = 0f..1000f,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "${player.positionText} / ${player.durationText}",
+                color = cs.onSurfaceVariant,
+                fontSize = 11.sp,
+                fontFamily = MonoFontFamily,
+                maxLines = 1,
+            )
+        }
+    }
 }
 
 /**
@@ -1516,18 +1674,32 @@ private fun InlineImageAttachment(
 }
 
 /**
+ * Write attachment bytes to a temp file. [base] names the file (so an OS viewer's title bar is
+ * meaningful, or so two clips cannot collide when the caller keys it by file_id) and the extension
+ * comes from [extensionFrom], falling back to [defaultExt] — both OS viewers and the video
+ * backends pick their decoder from the suffix. Returns null if the write fails.
+ */
+internal fun writeAttachmentTempFile(
+    bytes: ByteArray,
+    base: String,
+    extensionFrom: String?,
+    defaultExt: String,
+): File? {
+    val safeBase = base.substringAfterLast('/').substringBeforeLast('.', base).take(64).ifBlank { "file" }
+    val ext = (extensionFrom ?: "").substringAfterLast('.', "").ifBlank { defaultExt }
+    return runCatching {
+        val dir = File(System.getProperty("java.io.tmpdir"), "supermux-attachments").apply { mkdirs() }
+        File(dir, "$safeBase.$ext").also { it.writeBytes(bytes) }
+    }.getOrNull()
+}
+
+/**
  * Write image bytes to a temp file for the OS viewer. Named from the attachment so the viewer's
- * title bar is meaningful, and always suffixed with an extension because most viewers pick their
- * decoder from it. Returns null if the write fails.
+ * title bar is meaningful, and always suffixed with an extension. Returns null if the write fails.
  */
 internal fun writeImageTempFile(bytes: ByteArray, name: String): File? {
     val safeName = name.substringAfterLast('/').ifBlank { "image" }
-    val base = safeName.substringBeforeLast('.', safeName).take(64).ifBlank { "image" }
-    val ext = safeName.substringAfterLast('.', "").ifBlank { "png" }
-    return runCatching {
-        val dir = File(System.getProperty("java.io.tmpdir"), "supermux-images").apply { mkdirs() }
-        File(dir, "$base.$ext").also { it.writeBytes(bytes) }
-    }.getOrNull()
+    return writeAttachmentTempFile(bytes, safeName, safeName, "png")
 }
 
 /** Click path for an inline image: temp-file the bytes, then open the OS image viewer. */
