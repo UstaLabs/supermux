@@ -5,7 +5,7 @@
 // Desktop adaptations vs the Android source:
 //  - Icons: materialIconsExtended instead of R.drawable.*
 //  - Links: openInBrowser / java.awt.Desktop (not Android intents)
-//  - Attachments: save-as + OS open (no inline video yet)
+//  - Attachments: inline image preview; save-as + OS open for everything else (no inline video yet)
 //  - Selection: SelectionContainer for mouse copy
 package dev.supermux.desktop.chat
 
@@ -1404,29 +1404,135 @@ fun AttachmentList(
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        for (att in attachments) AttachmentItem(att, loadBytes)
+        for (att in attachments) AttachmentItem(att, alignEnd, loadBytes)
     }
 }
 
 @Composable
-private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteArray?) {
+private fun AttachmentItem(
+    att: Attachment,
+    alignEnd: Boolean,
+    loadBytes: suspend (String) -> ByteArray?,
+) {
     val mime = att.mime ?: ""
     val isImage = att.kind == "photo" || att.kind == "image" || mime.startsWith("image/")
     val isVideo = att.kind == "video" || att.kind == "video_note" || mime.startsWith("video/")
     val isAudio = att.kind == "voice" || att.kind == "audio" || mime.startsWith("audio/")
+    if (isImage) {
+        InlineImageAttachment(att, alignEnd, loadBytes)
+        return
+    }
     val label = when {
         isAudio -> att.name ?: "voice message"
         isVideo -> att.name ?: "video"
-        isImage -> att.name ?: "image"
         else -> att.name ?: att.file_id
     }
     val icon = when {
         isAudio -> Icons.AutoMirrored.Filled.VolumeUp
         isVideo -> Icons.Filled.Movie
-        isImage -> Icons.Filled.Image
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
     AttachmentChip(icon, label, att, loadBytes)
+}
+
+/**
+ * Inline preview for image attachments (Android parity — desktop had only the download chip, so a
+ * screenshot pasted into chat showed as a filename). Bytes come from the same [loadBytes] seam the
+ * chip uses (broker file fetch); decode happens off the frame path via [decodeImageBytes], which
+ * force-rasterises so nothing can throw at draw time.
+ *
+ * Painted at natural size, shrunk-only to fit the column and [MdImageDimens.MaxHeight] — the same
+ * rule as markdown images, so a 32x32 icon is not blown up to a 280 dp blob. Click opens the
+ * full-resolution original in the OS image viewer via a temp file (a Save dialog on every click
+ * would be hostile); a load or decode failure falls back to the ordinary [AttachmentChip] so the
+ * user keeps the retry + save-as path.
+ */
+@Composable
+private fun InlineImageAttachment(
+    att: Attachment,
+    alignEnd: Boolean,
+    loadBytes: suspend (String) -> ByteArray?,
+    decode: (ByteArray) -> ImageBitmap? = ::decodeImageBytes,
+    onOpenImage: (ByteArray, String) -> Unit = ::openImageBytesExternally,
+) {
+    val cs = MaterialTheme.colorScheme
+    var bitmap by remember(att.file_id) { mutableStateOf<ImageBitmap?>(null) }
+    var raw by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
+    var failed by remember(att.file_id) { mutableStateOf(false) }
+    LaunchedEffect(att.file_id) {
+        val bytes = runCatching { loadBytes(att.file_id) }.getOrNull()
+        val decoded = if (bytes == null) null else withContext(Dispatchers.Default) { decode(bytes) }
+        if (decoded != null) {
+            raw = bytes
+            bitmap = decoded
+        } else {
+            failed = true
+        }
+    }
+    val bmp = bitmap
+    when {
+        bmp != null -> BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = if (alignEnd) Alignment.TopEnd else Alignment.TopStart,
+        ) {
+            val density = LocalDensity.current
+            val (w, h) = mdImagePaintSize(
+                pixelWidth = bmp.width,
+                pixelHeight = bmp.height,
+                maxWidth = maxWidth,
+                maxHeight = MdImageDimens.MaxHeight,
+                density = density,
+            )
+            Image(
+                bitmap = bmp,
+                contentDescription = att.name ?: "image",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .width(w)
+                    .height(h)
+                    .clip(RoundedCornerShape(Radii.md))
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { raw?.let { onOpenImage(it, att.name ?: att.file_id) } }
+                    .testTag("attachment_image"),
+            )
+        }
+        failed -> AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, loadBytes)
+        else -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(MdImageDimens.LoadingHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .testTag("attachment_image_loading"),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                Modifier.size(MdImageDimens.SpinnerSize),
+                color = cs.onSurfaceVariant,
+                strokeWidth = MdImageDimens.SpinnerStroke,
+            )
+        }
+    }
+}
+
+/**
+ * Write image bytes to a temp file for the OS viewer. Named from the attachment so the viewer's
+ * title bar is meaningful, and always suffixed with an extension because most viewers pick their
+ * decoder from it. Returns null if the write fails.
+ */
+internal fun writeImageTempFile(bytes: ByteArray, name: String): File? {
+    val safeName = name.substringAfterLast('/').ifBlank { "image" }
+    val base = safeName.substringBeforeLast('.', safeName).take(64).ifBlank { "image" }
+    val ext = safeName.substringAfterLast('.', "").ifBlank { "png" }
+    return runCatching {
+        val dir = File(System.getProperty("java.io.tmpdir"), "supermux-images").apply { mkdirs() }
+        File(dir, "$base.$ext").also { it.writeBytes(bytes) }
+    }.getOrNull()
+}
+
+/** Click path for an inline image: temp-file the bytes, then open the OS image viewer. */
+internal fun openImageBytesExternally(bytes: ByteArray, name: String) {
+    writeImageTempFile(bytes, name)?.let { openLocalFile(it) }
 }
 
 /** Compact chip: kind glyph + name + download. Tap downloads and Save-as via AWT FileDialog. */
