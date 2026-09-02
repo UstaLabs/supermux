@@ -11,11 +11,16 @@ package dev.supermux.desktop.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,11 +38,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -45,6 +52,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -53,8 +61,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
@@ -1530,14 +1541,42 @@ internal fun InlineVideo(
 }
 
 /**
- * The mounted player: video surface + a minimal transport (play/pause, scrub, elapsed/total).
+ * Transport surface the video controls draw against. Extracted from the player state so the
+ * control bar is a pure composable that can be driven by a fake in tests — mounting the real
+ * player would load AVFoundation/GStreamer inside a headless Gradle worker.
+ */
+@Stable
+internal interface VideoTransport {
+    val isPlaying: Boolean
+    val isLoading: Boolean
+
+    /** Playback position on the backend's 0f..1000f scale. */
+    val sliderPos: Float
+    val positionText: String
+    val durationText: String
+    val muted: Boolean
+
+    fun togglePlay()
+
+    fun seekStart(value: Float)
+
+    fun seekFinished()
+
+    fun toggleMute()
+
+    /** Hand the clip to the OS player — full screen, system controls, scrubbing a long file. */
+    fun openExternally()
+}
+
+/**
+ * The mounted player: the video surface with its controls overlaid.
+ *
  * Autoplays, because the user already opted in by clicking the poster. A backend error is
  * reported through [onError] so [InlineVideo] can fall back to the download chip rather than
  * leave a black rectangle in the transcript.
  */
 @Composable
 private fun InlineVideoPlayer(file: File, onError: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
     val player = rememberVideoPlayerState()
     // ⚠️ openUri MUST NOT run on the Compose/AWT main thread. Compose Media Player's macOS backend
     // reports failures through `setPlayerError`, which is `runBlocking { withContext(Main) }` — on
@@ -1554,49 +1593,229 @@ private fun InlineVideoPlayer(file: File, onError: () -> Unit) {
     }
     val error = player.error
     LaunchedEffect(error) { if (error != null) onError() }
-    Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = Media.inlineVideoMaxHeight)
-                .clip(RoundedCornerShape(Radii.md))
-                .background(Color.Black)
-                .testTag("attachment_video_player"),
-            contentAlignment = Alignment.Center,
-        ) {
-            VideoPlayerSurface(playerState = player, modifier = Modifier.fillMaxWidth())
+
+    // Mute is remembered here, not in the backend: restoring the previous level is nicer than
+    // ramping back to 1.0, and the player exposes volume as a plain Float.
+    var mutedVolume by remember(file) { mutableStateOf<Float?>(null) }
+    val transport = remember(player, file) {
+        object : VideoTransport {
+            override val isPlaying get() = player.isPlaying
+            override val isLoading get() = player.isLoading
+            override val sliderPos get() = player.sliderPos
+            override val positionText get() = player.positionText
+            override val durationText get() = player.durationText
+            override val muted get() = mutedVolume != null
+
+            override fun togglePlay() {
+                if (player.isPlaying) player.pause() else player.play()
+            }
+
+            override fun seekStart(value: Float) = player.seekStart(value)
+
+            override fun seekFinished() = player.seekFinished()
+
+            override fun toggleMute() {
+                val saved = mutedVolume
+                if (saved == null) {
+                    mutedVolume = player.volume
+                    player.volume = 0f
+                } else {
+                    player.volume = saved
+                    mutedVolume = null
+                }
+            }
+
+            override fun openExternally() = openLocalFile(file)
         }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        ) {
-            IconButton(
-                onClick = { if (player.isPlaying) player.pause() else player.play() },
-                modifier = Modifier.size(Sizes.iconButton).testTag("attachment_video_playpause"),
+    }
+    VideoPlayerFrame(transport) { modifier ->
+        VideoPlayerSurface(playerState = player, modifier = modifier)
+    }
+}
+
+/**
+ * Video frame + overlaid controls. [surface] paints the actual frames (the library's
+ * `VideoPlayerSurface` in production, anything in tests).
+ *
+ * Layout rules, chosen to match how a video behaves everywhere else and to stay calm inside a
+ * message list:
+ *  - Fixed height (same as the poster) with the frame letterboxed on black, so mounting the player
+ *    never reflows the timeline and a portrait clip does not blow the bubble open.
+ *  - Controls sit ON the video over a bottom scrim, rather than stealing a row underneath it.
+ *  - They show while paused, while hovered and while scrubbing; otherwise they fade away.
+ *  - The whole surface is a play/pause target, with a large centred glyph while paused.
+ */
+@Composable
+internal fun VideoPlayerFrame(
+    transport: VideoTransport,
+    surface: @Composable (Modifier) -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var scrubbing by remember { mutableStateOf(false) }
+    val controlsVisible = hovered || scrubbing || !transport.isPlaying
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(Media.inlineVideoMaxHeight)
+            .clip(RoundedCornerShape(Radii.md))
+            .background(Color.Black)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = { transport.togglePlay() },
+            )
+            .testTag("attachment_video_player"),
+        contentAlignment = Alignment.Center,
+    ) {
+        surface(Modifier.fillMaxWidth())
+
+        if (transport.isLoading) {
+            CircularProgressIndicator(
+                Modifier.size(MdImageDimens.SpinnerSize).testTag("attachment_video_buffering"),
+                color = VideoControls.Foreground,
+                strokeWidth = MdImageDimens.SpinnerStroke,
+            )
+        } else if (!transport.isPlaying) {
+            // Centred glyph on a translucent disc — readable over a bright or a dark frame.
+            Box(
+                modifier = Modifier
+                    .size(Sizes.videoPlayGlyph + Space.md)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = VideoControls.DiscAlpha)),
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (player.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (player.isPlaying) "Pause" else "Play",
-                    tint = cs.onSurfaceVariant,
-                    modifier = Modifier.size(Sizes.iconSm),
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Play",
+                    tint = VideoControls.Foreground,
+                    modifier = Modifier.size(Sizes.videoPlayGlyph).testTag("attachment_video_center_play"),
                 )
             }
-            Slider(
-                value = player.sliderPos,
-                onValueChange = { player.seekStart(it) },
-                onValueChangeFinished = { player.seekFinished() },
-                valueRange = 0f..1000f,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = "${player.positionText} / ${player.durationText}",
-                color = cs.onSurfaceVariant,
-                fontSize = 11.sp,
-                fontFamily = MonoFontFamily,
-                maxLines = 1,
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            VideoTransportBar(
+                transport = transport,
+                onScrubbingChange = { scrubbing = it },
             )
         }
     }
+}
+
+/** Bottom control bar: play/pause · elapsed · scrubber · total · mute · open externally. */
+@Composable
+private fun VideoTransportBar(
+    transport: VideoTransport,
+    onScrubbingChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Scrim, not a solid bar: controls stay legible over a bright frame without boxing
+            // the picture in.
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = VideoControls.ScrimAlpha)),
+                ),
+            )
+            .padding(horizontal = Space.sm, vertical = Space.xs)
+            .testTag("attachment_video_controls"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        VideoControlButton(
+            icon = if (transport.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            label = if (transport.isPlaying) "Pause" else "Play",
+            tag = "attachment_video_playpause",
+            onClick = transport::togglePlay,
+        )
+        VideoTimeLabel(transport.positionText, "attachment_video_position")
+        Slider(
+            value = transport.sliderPos,
+            onValueChange = {
+                onScrubbingChange(true)
+                transport.seekStart(it)
+            },
+            onValueChangeFinished = {
+                transport.seekFinished()
+                onScrubbingChange(false)
+            },
+            valueRange = 0f..VideoControls.SliderRange,
+            colors = SliderDefaults.colors(
+                thumbColor = VideoControls.Foreground,
+                activeTrackColor = VideoControls.Foreground,
+                inactiveTrackColor = VideoControls.Foreground.copy(alpha = VideoControls.TrackAlpha),
+            ),
+            modifier = Modifier.weight(1f).height(Sizes.iconButton).testTag("attachment_video_scrubber"),
+        )
+        VideoTimeLabel(transport.durationText, "attachment_video_duration")
+        VideoControlButton(
+            icon = if (transport.muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+            label = if (transport.muted) "Unmute" else "Mute",
+            tag = "attachment_video_mute",
+            onClick = transport::toggleMute,
+        )
+        VideoControlButton(
+            icon = Icons.Filled.OpenInNew,
+            label = "Open in system player",
+            tag = "attachment_video_external",
+            onClick = transport::openExternally,
+        )
+    }
+}
+
+@Composable
+private fun VideoTimeLabel(text: String, tag: String) {
+    Text(
+        text = text,
+        color = VideoControls.Foreground,
+        fontSize = 11.sp,
+        fontFamily = MonoFontFamily,
+        maxLines = 1,
+        modifier = Modifier.testTag(tag),
+    )
+}
+
+@Composable
+private fun VideoControlButton(
+    icon: ImageVector,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(Sizes.iconButton).pointerHoverIcon(PointerIcon.Hand).testTag(tag),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = VideoControls.Foreground,
+            modifier = Modifier.size(Sizes.iconSm),
+        )
+    }
+}
+
+/**
+ * Video controls paint over arbitrary frames, so they use their own fixed palette rather than the
+ * theme's — a themed tint would vanish against the wrong picture.
+ */
+internal object VideoControls {
+    val Foreground = Color.White
+    const val ScrimAlpha = 0.72f
+    const val DiscAlpha = 0.45f
+    const val TrackAlpha = 0.3f
+
+    /** The backends express position on a 0..1000 scale, not 0..1. */
+    const val SliderRange = 1000f
 }
 
 /**
@@ -1678,7 +1897,6 @@ private fun InlineImageAttachment(
         }
     }
 }
-
 /**
  * `file://`-authority URI for the native media backends.
  *
