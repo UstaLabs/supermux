@@ -11,6 +11,7 @@ import { useBgTasks } from "../stores/bgTasks"
 import { useCommandsStore } from "../stores/commands"
 
 import { useOnboarding } from "../stores/onboarding"
+import { useUsage } from "../stores/usage"
 import { useSessionCache } from "../stores/sessionCache"
 import { useFinishJob } from "../stores/finishJob"
 import { useGitStatus } from "../stores/gitStatus"
@@ -31,6 +32,7 @@ export const useWS = defineStore("ws", () => {
   const bgTasks = useBgTasks()
   const commands = useCommandsStore()
   const onboarding = useOnboarding()
+  const usage = useUsage()
   const finishJob = useFinishJob()
   const gitStatus = useGitStatus()
   const unread = useUnread()
@@ -169,6 +171,7 @@ export const useWS = defineStore("ws", () => {
       if (cb) cb(frame.paths)
     }
     else if (frame.type === "agent_login_state") onboarding.setAgentLoginState(frame.kind, frame.state)
+    else if (frame.type === "usage_updated") usage.set(frame.usage)
     else if (typeof frame.type === "string" && frame.type.startsWith("lsp_")) {
       import("../stores/lsp").then(({ useLsp }) => useLsp().handleFrame(frame))
     }
