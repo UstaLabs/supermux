@@ -131,6 +131,34 @@ class AttachmentVideoTest {
         onNodeWithTag("attachment_chip").assertIsDisplayed()
     }
 
+    /**
+     * Regression: the first build froze the whole app the moment a clip was clicked. Two causes,
+     * both covered here and by the `Dispatchers.IO` hop in InlineVideoPlayer:
+     * 1. `File.toURI()` produces `file:/path` (no authority). The backend's own local-file check
+     *    looks for "://", finds none, treats the string as a bare path, and fails "File not found".
+     * 2. Reporting that failure runs `runBlocking { withContext(Main) }` on the calling thread —
+     *    the EDT — parking it against itself.
+     */
+    @Test fun media_uri_has_a_file_authority_and_round_trips_to_the_same_file() {
+        val f = assertNotNull(writeAttachmentTempFile(ByteArray(2), "video_uri", "clip.mp4", "mp4"))
+        val uri = mediaUriFor(f)
+        assertTrue(uri.startsWith("file:///"), "backends parse a file:// authority, not file:/ — got $uri")
+        assertTrue(
+            File(uri.removePrefix("file://")).exists(),
+            "the backend strips exactly this prefix to stat the file; it must resolve",
+        )
+        assertEquals(f.absolutePath, File(java.net.URI(uri)).absolutePath)
+        f.delete()
+    }
+
+    @Test fun media_uri_percent_encodes_a_space() {
+        val f = assertNotNull(writeAttachmentTempFile(ByteArray(1), "holiday clip", "a.mp4", "mp4"))
+        val uri = mediaUriFor(f)
+        assertTrue(" " !in uri, "a raw space breaks URI parsing in the backends — got $uri")
+        assertEquals(f.absolutePath, File(java.net.URI(uri)).absolutePath)
+        f.delete()
+    }
+
     @Test fun temp_file_keeps_the_name_extension_and_falls_back_to_a_default() {
         val mp4 = assertNotNull(writeAttachmentTempFile(ByteArray(3), "video_v1", "holiday.MOV", "mp4"))
         assertEquals("video_v1.MOV", mp4.name, "the attachment's own container wins")

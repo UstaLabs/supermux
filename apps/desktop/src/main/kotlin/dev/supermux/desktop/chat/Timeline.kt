@@ -1539,12 +1539,18 @@ internal fun InlineVideo(
 private fun InlineVideoPlayer(file: File, onError: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val player = rememberVideoPlayerState()
-    // runCatching, not try/catch-in-composition: on a Linux box with no GStreamer the JNI shim
-    // fails to load and the bridge throws UnsatisfiedLinkError (an Error, which is why this
-    // catches Throwable) the first time the backend is touched. That must degrade to the download
-    // chip, never take the whole timeline down.
+    // ⚠️ openUri MUST NOT run on the Compose/AWT main thread. Compose Media Player's macOS backend
+    // reports failures through `setPlayerError`, which is `runBlocking { withContext(Main) }` — on
+    // the main thread that parks the EDT waiting for the EDT and freezes the entire app (confirmed
+    // by jstack on a frozen build: AWT-EventQueue-0 parked in MacVideoPlayerState.setPlayerError,
+    // reached from openUri). A LaunchedEffect body runs on the main dispatcher, so hop to IO.
+    //
+    // runCatching, not try/catch-in-composition, because a Linux box with no GStreamer throws
+    // UnsatisfiedLinkError (an Error — runCatching catches Throwable) the first time the JNI shim
+    // is touched. Either way we degrade to the download chip instead of taking the timeline down.
     LaunchedEffect(file) {
-        runCatching { player.openUri(file.toURI().toString()) }.onFailure { onError() }
+        runCatching { withContext(Dispatchers.IO) { player.openUri(mediaUriFor(file)) } }
+            .onFailure { onError() }
     }
     val error = player.error
     LaunchedEffect(error) { if (error != null) onError() }
@@ -1672,6 +1678,16 @@ private fun InlineImageAttachment(
         }
     }
 }
+
+/**
+ * `file://`-authority URI for the native media backends.
+ *
+ * [File.toURI] yields `file:/path` — no authority — and Compose Media Player's own local-file
+ * check (`MacVideoPlayerState.checkExistsIfLocalFile`) looks for `"://"`, finds none, treats the
+ * whole string as a bare path and rejects the clip as "File not found". [java.nio.file.Path.toUri]
+ * yields `file:///path`, which it parses correctly, and it percent-encodes spaces for free.
+ */
+internal fun mediaUriFor(file: File): String = file.toPath().toUri().toString()
 
 /**
  * Write attachment bytes to a temp file. [base] names the file (so an OS viewer's title bar is
