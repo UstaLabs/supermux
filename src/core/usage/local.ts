@@ -190,10 +190,19 @@ function readTail(path: string, maxBytes: number): string {
   }
 }
 
+// Rollout lines nest the block: `{"type":"event_msg","payload":{"type":"token_count",…,"rate_limits":{…}}}`.
+// Look at the top level first, then one level down through the usual wrappers.
 function extractRateLimits(obj: any): any | null {
   if (!obj || typeof obj !== "object") return null
   if (obj.rate_limits && typeof obj.rate_limits === "object") return obj.rate_limits
   if (obj.rateLimits && typeof obj.rateLimits === "object") return obj.rateLimits
+  for (const key of ["payload", "msg", "params"]) {
+    const inner = obj[key]
+    if (inner && typeof inner === "object") {
+      const found = extractRateLimits(inner)
+      if (found) return found
+    }
+  }
   return null
 }
 

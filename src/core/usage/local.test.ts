@@ -84,14 +84,18 @@ test("readCodexLocalUsage walks newest date dirs and reads rate_limits from the 
     [
       JSON.stringify({ type: "session_meta" }),
       JSON.stringify({ rate_limits: { primary: null } }),
+      // Real rollout shape: the block is nested under payload (event_msg/token_count).
       JSON.stringify({
-        payload: "noise",
-        rate_limits: {
-          primary: { used_percent: 40, window_minutes: 300, resets_at: 1_700_000_000 },
-          secondary: { used_percent: 10, window_minutes: 10_080, resets_at: 1_700_001_000 },
-          credits: { has_credits: true, balance: "12" },
-          plan_type: "plus",
-          rate_limit_reached_type: null,
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          rate_limits: {
+            primary: { used_percent: 40, window_minutes: 300, resets_at: 1_700_000_000 },
+            secondary: { used_percent: 10, window_minutes: 10_080, resets_at: 1_700_001_000 },
+            credits: { has_credits: true, balance: "12" },
+            plan_type: "plus",
+            rate_limit_reached_type: null,
+          },
         },
       }),
     ].join("\n") + "\n",
