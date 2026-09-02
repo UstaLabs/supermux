@@ -108,7 +108,6 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsagePopover
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
-import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
@@ -793,15 +792,16 @@ fun AppShell(
                     archivedLoading = false
                 }
             }
-            var usageData by remember { mutableStateOf<UsageResponse?>(null) }
+            val usageSnapshot by hostApp.usageSnapshot.collectAsState()
             var usageLoading by remember { mutableStateOf(false) }
             LaunchedEffect(ui.usageOpen, activeHostId) {
                 if (ui.usageOpen) {
-                    usageLoading = true
-                    usageData = hostApp.usage()
+                    // Paint the last held snapshot immediately; GET /usage only fills gaps /
+                    // picks up the broker's current snapshot (never blanks the popover).
+                    usageLoading = hostApp.usageSnapshot.value == null
+                    hostApp.usage()
                     usageLoading = false
                 } else {
-                    usageData = null
                     usageLoading = false
                 }
             }
@@ -810,15 +810,20 @@ fun AppShell(
                 Column(Modifier.fillMaxWidth()) {
                     HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
                     UsageScreen(
-                        usage = usageData,
+                        usage = usageSnapshot,
                         loading = usageLoading,
                         onBack = { ui.closeUsage() },
                         onRedeem = {
                             val r = hostApp.redeemCodexReset()
                             if (r?.code == "reset" && r.codex != null) {
-                                usageData = usageData?.copy(codex = r.codex)
+                                hostApp.usageSnapshot.value?.copy(codex = r.codex)?.let { hostApp.applyUsage(it) }
                             }
                             r
+                        },
+                        onRefresh = {
+                            usageLoading = hostApp.usageSnapshot.value == null
+                            hostApp.refreshUsage()
+                            usageLoading = false
                         },
                     )
                 }

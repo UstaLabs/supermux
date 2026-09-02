@@ -422,6 +422,12 @@ data class UsageResponse(
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
     val errors: Map<String, String> = emptyMap(),
+    /** ISO timestamp of when each provider's data was last obtained. Absent on older brokers. */
+    val fetchedAt: Map<String, String?> = emptyMap(),
+    /** live | agent | local | cache — where each provider's current data came from. */
+    val source: Map<String, String?> = emptyMap(),
+    /** Providers with a live fetch in flight right now. */
+    val refreshing: List<String> = emptyList(),
 )
 
 // Result of redeeming a banked Codex rate-limit reset (POST /usage/codex/reset).
@@ -1097,6 +1103,14 @@ private data class RegisterPushDeviceBody(
     val pubkey: String,
 )
 
+/** POST /usage/refresh body. [force] is always encoded (the Kotlin default is true; the
+ *  broker treats an omitted force as false). [providers] is omitted when null. */
+@Serializable
+private data class RefreshUsageBody(
+    val providers: List<String>? = null,
+    val force: Boolean,
+)
+
 /** POST $relayUrl/register body. */
 @Serializable
 private data class RegisterPushRelayBody(
@@ -1764,6 +1778,11 @@ class BrokerApi(
 
     /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode / grok) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
+
+    /** POST /usage/refresh → kick a live refresh; returns the current snapshot immediately
+     *  with [UsageResponse.refreshing] populated. [force] ignores the 5-min throttle. */
+    suspend fun refreshUsage(providers: List<String>? = null, force: Boolean = true): UsageResponse =
+        postReturningJson("$httpBase/usage/refresh", RefreshUsageBody(providers, force))
 
     /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */
     suspend fun redeemCodexReset(): CodexResetResult =

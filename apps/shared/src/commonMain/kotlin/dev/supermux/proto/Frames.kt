@@ -3,6 +3,7 @@ package dev.supermux.proto
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishResult
 import dev.supermux.net.ReviewComment
+import dev.supermux.net.UsageResponse
 import dev.supermux.net.Walkthrough
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -424,6 +425,12 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("display_removed")
     data class DisplayRemoved(val id: String) : ServerFrame
+
+    // Usage snapshot: the broker broadcasts `{type:"usage_updated",usage}` to every web
+    // client whenever the in-memory snapshot changes (any source). `usage` is the same
+    // shape as GET /usage (UsageResponse + fetchedAt/source/refreshing).
+    @Serializable @SerialName("usage_updated")
+    data class UsageUpdated(val usage: UsageResponse) : ServerFrame
 
     @Serializable @SerialName("lsp_status")
     data class LspStatus(
