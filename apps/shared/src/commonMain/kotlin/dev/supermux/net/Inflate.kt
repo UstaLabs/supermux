@@ -6,7 +6,7 @@ package dev.supermux.net
  * ZRLE shares **one** zlib stream across every FramebufferUpdate for the life of
  * the connection, so the decoder needs to feed compressed bytes in and pull
  * decompressed bytes out incrementally — state must persist between calls. This
- * is a thin `expect/actual` over the platform zlib (JVM `java.util.zip.Inflater`,
+ * is a thin `expect/actual` over the platform zlib (JVM zip Inflater,
  * Apple `platform.zlib`).
  *
  * Usage: [feed] appended compressed bytes, then call [inflate] repeatedly until

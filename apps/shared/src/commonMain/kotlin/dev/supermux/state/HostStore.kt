@@ -158,6 +158,7 @@ class HostStore(
     sendFrameOverride: (suspend (ClientFrame) -> Unit)? = null,
     apiOverride: BrokerApi? = null,
     onConnectionChange: ((Boolean) -> Unit)? = null,
+    private val walkthroughSeam: WalkthroughSeam<*>? = null,
     private val bindTts: ((
         resolveEngine: suspend () -> String,
         speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
@@ -217,12 +218,14 @@ class HostStore(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
-    /** Per-session walkthrough holders. Desktop supplies Compose [WalkthroughState] via [create]. */
+    /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> walkthroughState(sessionId: String, create: (String) -> T): T =
-        walkthroughs.getOrPut(sessionId) { create(sessionId) } as T
+    fun <T : Any> walkthroughState(sessionId: String): T {
+        val seam = requireNotNull(walkthroughSeam) { "HostStore was built without a WalkthroughSeam" } as WalkthroughSeam<Any>
+        return walkthroughs.getOrPut(sessionId) { seam.create(sessionId) } as T
+    }
     /**
      * Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
      * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
@@ -274,12 +277,6 @@ class HostStore(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val agentReplies: SharedFlow<AgentReplyEvent> = _agentReplies.asSharedFlow()
-
-    private val _walkthroughFrames = MutableSharedFlow<ServerFrame>(
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val walkthroughFrames: SharedFlow<ServerFrame> = _walkthroughFrames.asSharedFlow()
 
     // ── LSP (M4g-3/M4g-4) ───────────────────────────────────────────────────────────
     // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
@@ -358,6 +355,12 @@ class HostStore(
             println("[HostStore] $op failed: $e")
             null
         }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun applyWalkthroughFrame(sessionId: String, frame: ServerFrame) {
+        val seam = (walkthroughSeam ?: return) as WalkthroughSeam<Any>
+        seam.apply(walkthroughs.getOrPut(sessionId) { seam.create(sessionId) }, frame)
+    }
 
     // ── ServerFrame reducer (ported subset of AppViewModel's when(frame)) ──────────
 
@@ -557,10 +560,8 @@ class HostStore(
             is ServerFrame.FsChanged -> {
                 _fsChanges.tryEmit(frame)
             }
-            is ServerFrame.WalkthroughUpdated ->
-                _walkthroughFrames.tryEmit(frame)
-            is ServerFrame.ReviewCommentFrame ->
-                _walkthroughFrames.tryEmit(frame)
+            is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
+            is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
             // M4b finish flow: the async job's progress/outcome arrives here. Update the finishJobs
             // flow the FinishDialog drives AND write the job back onto the session's finish_job so a
             // list row (and any later snapshot round-trip) stays consistent (AppViewModel:275 parity).

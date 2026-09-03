@@ -18,6 +18,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
 import dev.supermux.desktop.session.LauncherStore
+import dev.supermux.desktop.editor.DesktopWalkthroughSeam
 import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
@@ -101,6 +102,7 @@ class AppShellTest {
             connectOnInit = false,
             sendFrameOverride = { sent.add(it) },
             apiOverride = api,
+            walkthroughSeam = DesktopWalkthroughSeam,
         )
     }
 

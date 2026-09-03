@@ -340,7 +340,7 @@ internal fun WorkspacePanes(
                     },
                     onOpenWalkthrough = { sessionId, stepId ->
                         walkthroughSessionId = sessionId
-                        appFor(sessionId).walkthroughState(sessionId) { WalkthroughState(it) }.open(stepId)
+                        appFor(sessionId).walkthroughState<WalkthroughState>(sessionId).open(stepId)
                         val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
                         if (existing != null) {
                             val (diffViewId, ownerGroup) = existing

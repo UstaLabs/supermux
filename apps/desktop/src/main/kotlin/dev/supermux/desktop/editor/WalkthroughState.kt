@@ -1,17 +1,14 @@
 package dev.supermux.desktop.editor
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.WalkthroughStep
 import dev.supermux.proto.ServerFrame
-import dev.supermux.state.HostStore
+import dev.supermux.state.WalkthroughSeam
 
 /** Per-session walkthrough UI state. Mutable maps are deliberately keyed by stable code anchors so
  * drafts and scroll survive a replacement walkthrough whose step indices or ids changed. */
@@ -151,13 +148,9 @@ data class CommentAnchor(
     val line: Int,
 )
 
-@Composable
-fun rememberWalkthroughState(app: HostStore, sessionId: String): WalkthroughState {
-    val state = remember(app, sessionId) { app.walkthroughState(sessionId) { WalkthroughState(it) } }
-    LaunchedEffect(app, sessionId) {
-        app.walkthroughFrames.collect { state.applyServerFrame(it) }
-    }
-    return state
+object DesktopWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
+    override fun create(sessionId: String) = WalkthroughState(sessionId)
+    override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
 }
 
 fun WalkthroughStep.commentAnchor(): CommentAnchor? {

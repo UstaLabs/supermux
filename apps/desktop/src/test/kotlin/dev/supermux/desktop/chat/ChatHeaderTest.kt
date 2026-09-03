@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.desktop.editor.DesktopWalkthroughSeam
 import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
@@ -52,6 +53,7 @@ class ChatHeaderTest {
         scope = TestScope(UnconfinedTestDispatcher()),
         deps = testDeps(),
         connectOnInit = false,
+        walkthroughSeam = DesktopWalkthroughSeam,
     )
 
     private val claudeSession =

@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
-import dev.supermux.desktop.editor.rememberWalkthroughState
+import dev.supermux.desktop.editor.WalkthroughState
 import dev.supermux.desktop.shell.AgentViewToggle
 import dev.supermux.desktop.shell.OverflowMenu
 import dev.supermux.desktop.shell.SessionLinksMenu
@@ -173,7 +173,7 @@ fun ChatPanel(
     val activityMap by app.activity.collectAsState()
     val agentMap by app.agentState.collectAsState()
     val pending by app.pendingSend.collectAsState()
-    val walkthrough = rememberWalkthroughState(app, session.id)
+    val walkthrough = app.walkthroughState<WalkthroughState>(session.id)
 
     val agent = agentMap[session.id]
     val working = agent?.working == true

@@ -111,6 +111,7 @@ fun filterSessions(
     filter: String?,
 ): List<SessionInfo> {
     if (filter == null) return sessions
+    if (sessionHost.values.none { it == filter }) return sessions
     return sessions.filter { sessionHost[it.id] == filter }
 }
 

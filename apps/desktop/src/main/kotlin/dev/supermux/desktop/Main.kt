@@ -50,6 +50,7 @@ import dev.supermux.desktop.chat.AssistantMessage
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.desktop.chat.loadMarkdownImageBitmap
 import dev.supermux.desktop.chat.prunePasteCache
+import dev.supermux.desktop.editor.DesktopWalkthroughSeam
 import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
@@ -532,6 +533,7 @@ fun main() {
                                 HostStore(
                                     url, token, scope, desktopDeps,
                                     onConnectionChange = onConn,
+                                    walkthroughSeam = DesktopWalkthroughSeam,
                                     bindTts = desktopBindTts,
                                 )
                             },

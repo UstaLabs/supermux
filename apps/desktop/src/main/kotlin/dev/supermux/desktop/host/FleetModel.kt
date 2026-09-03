@@ -67,60 +67,18 @@ fun formatLastSeen(nowMs: Long, lastSeenAt: Long): String {
     }
 }
 
-/**
- * The sessions visible under the current host [filter] (a recordId, or null = "All"). An unknown
- * filter (host forgotten while selected) falls back to All so the list never blanks out.
- */
+typealias MergedSessions = dev.supermux.host.MergedSessions
+
 fun filterSessions(
     sessions: List<SessionInfo>,
     sessionHost: Map<String, String>,
     filter: String?,
-): List<SessionInfo> {
-    if (filter == null) return sessions
-    if (sessionHost.values.none { it == filter }) return sessions
-    return sessions.filter { sessionHost[it.id] == filter }
-}
+): List<SessionInfo> = dev.supermux.host.filterSessions(sessions, sessionHost, filter)
 
-/** A merged fleet session list plus the sessionId → owning-host recordId map that drives per-row
- *  badges and per-session routing. */
-data class MergedSessions(
-    val sessions: List<SessionInfo>,
-    val sessionHost: Map<String, String>,
-)
-
-/**
- * Flatten the per-host session buckets into ONE merged list (in store [order], then any cached
- * bucket whose host is no longer in the store) plus the sessionId → recordId owner map. Session
- * ids are globally unique across hosts, so a duplicate id (should not happen) keeps its FIRST
- * owner in store order rather than double-rendering. Mirrors Android AppViewModel.rebuildSessions.
- */
 fun mergeSessions(
     order: List<String>,
     sessionsByHost: Map<String, List<SessionInfo>>,
-): MergedSessions {
-    val ids = LinkedHashSet(order).apply { addAll(sessionsByHost.keys) }
-    val flat = ArrayList<SessionInfo>()
-    val owner = LinkedHashMap<String, String>()
-    for (rid in ids) {
-        sessionsByHost[rid]?.forEach { s ->
-            if (owner[s.id] == null) {
-                flat += s
-                owner[s.id] = rid
-            }
-        }
-    }
-    return MergedSessions(flat, owner)
-}
+): MergedSessions = dev.supermux.host.mergeSessions(order, sessionsByHost)
 
-/** Derive the [HostView] list from the store's [hosts] (source of order + identity + lastSeenAt)
- *  and the live [online] reachability map (recordId → connected). */
 fun hostViewsFrom(hosts: List<PairedHost>, online: Map<String, Boolean>): List<HostView> =
-    hosts.map { h ->
-        HostView(
-            recordId = h.recordId,
-            hostId = h.hostId,
-            displayName = h.displayName,
-            online = online[h.recordId] == true,
-            lastSeenAt = h.lastSeenAt,
-        )
-    }
+    dev.supermux.host.hostViewsFrom(hosts, online)

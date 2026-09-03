@@ -19,7 +19,6 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -62,6 +61,7 @@ class DesktopDiffReviewTest {
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"status":"ok"}""",
+        walkthroughSeam: WalkthroughSeam<*>? = null,
     ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath, bodyText(req.body)))
@@ -76,6 +76,7 @@ class DesktopDiffReviewTest {
             deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
+            walkthroughSeam = walkthroughSeam,
         )
     }
 
@@ -202,32 +203,44 @@ class DesktopDiffReviewTest {
         assertEquals(4, result?.steps?.single()?.rangeEnd)
     }
 
+    class RecordingWalkthroughSeam : WalkthroughSeam<MutableList<ServerFrame>> {
+        val created = mutableListOf<String>()
+        override fun create(sessionId: String) = mutableListOf<ServerFrame>().also { created += sessionId }
+        override fun apply(state: MutableList<ServerFrame>, frame: ServerFrame) { state += frame }
+    }
+
     @Test fun walkthrough_and_comment_frames_reduce_into_the_same_session_state() = runTest {
-        val app = appRecording(mutableListOf())
+        val seam = RecordingWalkthroughSeam()
+        val app = appRecording(mutableListOf(), walkthroughSeam = seam)
         val walkthrough = Walkthrough(
             id = "w1", sessionId = "sess-1", title = "Tour", revision = 1,
             steps = listOf(WalkthroughStep(id = "st1", ord = 0, title = "First", path = "a.txt", anchorLine = 3)),
         )
-        val frames = mutableListOf<ServerFrame>()
-        val job = launch(UnconfinedTestDispatcher()) { app.walkthroughFrames.collect { frames.add(it) } }
-
-        app.reduce(ServerFrame.WalkthroughUpdated("sess-1", walkthrough))
-        app.reduce(
-            ServerFrame.ReviewCommentFrame(
-                "sess-1",
-                ReviewComment(
-                    id = "r1", parentId = "c1", repo = "", path = "a.txt", side = "RIGHT",
-                    anchorLine = 3, body = "reply", author = "agent", status = "open",
-                ),
+        val updated = ServerFrame.WalkthroughUpdated("sess-1", walkthrough)
+        val comment = ServerFrame.ReviewCommentFrame(
+            "sess-1",
+            ReviewComment(
+                id = "r1", parentId = "c1", repo = "", path = "a.txt", side = "RIGHT",
+                anchorLine = 3, body = "reply", author = "agent", status = "open",
             ),
         )
+        val otherSession = ServerFrame.WalkthroughUpdated(
+            "sess-2",
+            walkthrough.copy(sessionId = "sess-2"),
+        )
 
-        job.cancel()
-        assertEquals(2, frames.size)
-        assertTrue(frames[0] is ServerFrame.WalkthroughUpdated)
-        assertEquals("Tour", (frames[0] as ServerFrame.WalkthroughUpdated).walkthrough.title)
-        assertTrue(frames[1] is ServerFrame.ReviewCommentFrame)
-        assertEquals("r1", (frames[1] as ServerFrame.ReviewCommentFrame).comment.id)
+        app.reduce(updated)
+        app.reduce(comment)
+        app.reduce(otherSession)
+
+        assertEquals(listOf("sess-1", "sess-2"), seam.created)
+        val sess1: MutableList<ServerFrame> = app.walkthroughState("sess-1")
+        val sess2: MutableList<ServerFrame> = app.walkthroughState("sess-2")
+        assertEquals(listOf<ServerFrame>(updated, comment), sess1.toList())
+        assertEquals(listOf<ServerFrame>(otherSession), sess2.toList())
+        assertTrue(sess1.none { frame ->
+            frame is ServerFrame.WalkthroughUpdated && frame.sessionId == "sess-2"
+        })
     }
 
     // ── reviewResolve ──────────────────────────────────────────────────────────────

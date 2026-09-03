@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
  * Mirrors the intent of Android AppViewModel's addHost/addHostByUrl identity-mismatch guard.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class FleetStateTest {
+class FleetStoreTest {
 
     private class FakePersistence(var hosts: MutableList<PairedHost> = mutableListOf()) : HostPersistence {
         override fun loadAll() = hosts.toList()

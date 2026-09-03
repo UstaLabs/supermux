@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.launch
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
 
 /**
  * Multi-host orchestrator for the desktop client (spec §5) — the desktop analogue of Android's
@@ -64,7 +66,7 @@ class FleetStore(
     // Own child scope (supervised, parented to the caller's) so [close] stops the folds without
     // tearing down the caller's scope, and one failed fold never cancels its siblings.
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
-    private val lock = Any()
+    private val lock = SynchronizedObject()
 
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()
