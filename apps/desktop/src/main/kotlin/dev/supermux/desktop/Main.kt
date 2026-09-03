@@ -529,7 +529,6 @@ fun main() {
                             hostStore,
                             scope,
                             desktopDeps,
-                            walkthroughSeam = DesktopWalkthroughSeam,
                             appFactory = { url, token, onConn ->
                                 HostStore(
                                     url, token, scope, desktopDeps,

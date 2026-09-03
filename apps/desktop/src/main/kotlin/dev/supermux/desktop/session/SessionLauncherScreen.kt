@@ -20,6 +20,8 @@
 // [shouldResetBaseBranchOnWorkdirChange] and unit-tested (SessionLauncherScreenTest).
 package dev.supermux.desktop.session
 
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -432,8 +434,9 @@ fun SessionLauncherScreen(
         launcherReasoning = prefs.reasoningLevels
         model = prefs.models[agent]
         val draft = loadDraft()
-        if (draft.workdir != null) {
-            workdir = draft.workdir
+        val restoredWorkdir = draft.workdir
+        if (restoredWorkdir != null) {
+            workdir = restoredWorkdir
             workdirTouched = true
         }
         useWorktree = draft.useWorktree

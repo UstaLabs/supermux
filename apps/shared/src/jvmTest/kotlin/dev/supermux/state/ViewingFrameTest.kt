@@ -1,5 +1,6 @@
 package dev.supermux.state
 
+import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ClientFrame
 import kotlin.test.Test
 import kotlin.test.assertEquals

@@ -15,32 +15,14 @@
 package dev.supermux.desktop.session
 
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-
-/** Sticky New Session launcher preferences — the agent + its last-used model, keyed per agent.
- *  Desktop copy of `dev.supermux.android.session.LauncherPrefs`. */
-@Serializable
-data class LauncherPrefs(
-    val agent: String = "claude",
-    val models: Map<String, String> = emptyMap(),
-    val reasoningLevels: Map<String, String> = emptyMap(),
-)
-
-/** In-progress New Session launcher draft — cleared once a session is actually created.
- *  Desktop copy of `dev.supermux.android.session.LauncherDraft`. `workdir` is null when nothing
- *  was explicitly restored (so the screen's own most-recent-session fallback still applies). */
-@Serializable
-data class LauncherDraft(
-    val workdir: String? = null,
-    val useWorktree: Boolean = true,
-    val baseBranch: String = "",
-    val text: String = "",
-)
 
 @Serializable
 private data class LauncherStateBlob(

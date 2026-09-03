@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.chat.MicCapture
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import kotlin.test.Test

@@ -143,12 +143,19 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         activity = state.activity + (frame.session to ((state.activity[frame.session] ?: emptyList()) + frame.event)),
     )
     is ServerFrame.BgTasks -> state.copy(bgTasks = state.bgTasks + (frame.session to frame.tasks))
-    is ServerFrame.AgentState -> state.copy(
-        agentState = state.agentState + (frame.session to AgentStatus(
-            phase = frame.phase, state = frame.state, working = frame.working,
-            detail = frame.detail, tool = frame.tool, since = frame.since,
-            workingSince = frame.workingSince, waiting = frame.waiting, bgOpen = frame.bgOpen,
-        )),
+    is ServerFrame.AgentState -> {
+        val nextErrors = if (frame.state != "dead") state.agentErrors - frame.session else state.agentErrors
+        state.copy(
+            agentState = state.agentState + (frame.session to AgentStatus(
+                phase = frame.phase, state = frame.state, working = frame.working,
+                detail = frame.detail, tool = frame.tool, since = frame.since,
+                workingSince = frame.workingSince, waiting = frame.waiting, bgOpen = frame.bgOpen,
+            )),
+            agentErrors = nextErrors,
+        )
+    }
+    is ServerFrame.AgentError -> state.copy(
+        agentErrors = state.agentErrors + (frame.session to frame),
     )
     is ServerFrame.CommandsChanged -> state.copy(
         commands = state.commands + (frame.session to frame.commands),

@@ -34,6 +34,8 @@
 // went with the shell whose header it opened).
 package dev.supermux.desktop.shell
 
+import dev.supermux.state.ContinueHandoff
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -314,14 +316,6 @@ fun SessionLinksMenu(
 }
 
 // ── OverflowMenu ───────────────────────────────────────────────────────────────────────
-
-/** Payload from the continue dialog — agent/model/thinking plus the editable handoff text. */
-data class ContinueHandoff(
-    val message: String,
-    val agent: String,
-    val model: String?,
-    val reasoningLevel: String?,
-)
 
 private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok")
 

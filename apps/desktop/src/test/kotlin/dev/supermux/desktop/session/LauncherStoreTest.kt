@@ -1,5 +1,7 @@
 package dev.supermux.desktop.session
 
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
 import java.nio.file.Files
 import kotlin.io.path.exists
 import kotlin.test.Test

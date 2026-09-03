@@ -65,7 +65,9 @@ import dev.supermux.net.Walkthrough
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
+import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.VncClient
+import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.net.AddViewBody
@@ -84,10 +86,16 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.workspace.activeViewPatchBody
 import dev.supermux.workspace.chatSessionIds
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.SupervisorJob
@@ -107,36 +115,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-
-/**
- * The Viewing frames to send for the currently visible chat views (spec §11).
- *
- * Before workspaces there was exactly one open chat. A workspace can show two at
- * once, so the whole visible set goes out in ONE frame via [ClientFrame.Viewing.sessions]
- * — never a workspace id, and never a chat sitting in an inactive tab.
- *
- * One frame, not one per chat: bare `Viewing(s, true)` means "viewing exactly s"
- * and REPLACES the broker's set, because every other client switches chats that
- * way. Sending two such frames would leave only the last one. `session` is still
- * filled with the first id so an older broker that ignores `sessions` degrades to
- * correct single-chat behaviour instead of nothing.
- *
- * With nothing visible, send the null-session frame the list view sends, so the
- * broker clears this device's state instead of keeping a stale one.
- */
-fun viewingFramesFor(visibleChatSessionIds: List<String>): List<ClientFrame.Viewing> = when {
-    visibleChatSessionIds.isEmpty() -> listOf(ClientFrame.Viewing(null, false))
-    else -> listOf(
-        ClientFrame.Viewing(
-            session = visibleChatSessionIds.first(),
-            visible = true,
-            // Only when there really are several. One visible chat — the case
-            // every client and every existing test already covers — puts the
-            // exact same bytes on the wire as before workspaces existed.
-            sessions = visibleChatSessionIds.takeIf { it.size > 1 },
-        ),
-    )
-}
 
 /**
  * @param connectOnInit when false (tests), the constructor does NOT collect frames, launch the
@@ -173,6 +151,19 @@ class HostStore(
      *  failed child never cancels its siblings. */
     private val stateScope =
         CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
+    /**
+     * Collectors for [stateIn] projections. [close] must NOT cancel this: the public flows must
+     * keep tracking [_state] after the WS/heartbeat jobs die. Dies with the caller via
+     * [invokeOnCompletion] on the caller's Job (not as a structured child, so [close] does not
+     * stall `runTest` while the caller is still alive).
+     */
+    private val projectionJob = SupervisorJob()
+    private val projectionScope = CoroutineScope(Dispatchers.Unconfined + projectionJob)
+
+    init {
+        scope.coroutineContext[Job]?.invokeOnCompletion { projectionJob.cancel() }
+    }
+    private val settingsJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val http = deps.httpFactory(null)
     val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)
@@ -201,29 +192,32 @@ class HostStore(
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
+    /** The public flows lag [_state] by one dispatch; read [state.value] for a synchronous view. */
     private val _state = MutableStateFlow(HostState())
     val state: StateFlow<HostState> = _state.asStateFlow()
     val sessions: StateFlow<List<SessionInfo>> =
-        _state.map { it.sessions }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+        _state.map { it.sessions }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val workspaces: StateFlow<List<WorkspaceDto>> =
-        _state.map { it.workspaces }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+        _state.map { it.workspaces }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val archivedWorkspaces: StateFlow<List<WorkspaceDto>> =
-        _state.map { it.archivedWorkspaces }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+        _state.map { it.archivedWorkspaces }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
     val messages: StateFlow<Map<String, List<LogEntry>>> =
-        _state.map { it.messages }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.messages }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val activity: StateFlow<Map<String, List<ActivityEvent>>> =
-        _state.map { it.activity }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.activity }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentState: StateFlow<Map<String, AgentStatus>> =
-        _state.map { it.agentState }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.agentState }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
+        _state.map { it.agentErrors }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> =
-        _state.map { it.bgTasks }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.bgTasks }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
     val commands: StateFlow<Map<String, List<SlashCommand>>> =
-        _state.map { it.commands }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.commands }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     val commandsResolved: StateFlow<Map<String, Boolean>> =
-        _state.map { it.commandsResolved }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.commandsResolved }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
@@ -237,7 +231,7 @@ class HostStore(
      * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
      */
     val lastRead: StateFlow<Map<String, String>> =
-        _state.map { it.lastRead }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.lastRead }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
     // ── Finish flow (M4b) ──────────────────────────────────────────────────────────
     // The last/in-flight finish job per session, keyed by session id (Android AppViewModel
@@ -245,7 +239,7 @@ class HostStore(
     // FinishJobFrame reducer; the FinishDialog drives its 3-state machine (menu/running/outcome)
     // off this flow. clearFinishJob drops an entry client-side once the user dismisses the outcome.
     val finishJobs: StateFlow<Map<String, FinishJobDto>> =
-        _state.map { it.finishJobs }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.finishJobs }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
     // Which finish result the user has "seen" (acked), per session id → the job's startedAt. The
     // header's unacked dot derives from this vs the live finishJobs entry. It lives HERE (not as
@@ -289,7 +283,7 @@ class HostStore(
     // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
     // (inbound) is a raw relay SharedFlow — DesktopLspBridge (Task 2) filters it by session+serverId.
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> =
-        _state.map { it.lspStatus }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.lspStatus }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
     private val _lspRpc = MutableSharedFlow<ServerFrame.LspRpcIn>(extraBufferCapacity = 256)
     val lspRpc: SharedFlow<ServerFrame.LspRpcIn> = _lspRpc.asSharedFlow()
@@ -297,16 +291,19 @@ class HostStore(
     // Live install progress/result per LSP serverId (M4g-4). Drives LspSettingsScreen's streamed
     // install log + terminal result row — mirrors AppViewModel:173-180.
     val lspInstallLog: StateFlow<Map<String, List<String>>> =
-        _state.map { it.lspInstallLog }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.lspInstallLog }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
     val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> =
-        _state.map { it.lspInstallDone }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+        _state.map { it.lspInstallDone }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
     // ── Displays (M5-2) ─────────────────────────────────────────────────────────────
     // Live display streams, kept in sync via display_added/display_removed frames (seeded on
     // demand by [listDisplays]) — mirrors AppViewModel:158-161.
     val displays: StateFlow<List<DisplayStream>> =
-        _state.map { it.displays }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+        _state.map { it.displays }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
+
+    private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
+    val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions.asStateFlow()
 
     // Last GET /usage (or usage_updated) snapshot. The Usage popover renders this immediately
     // on open and updates in place when a usage_updated frame arrives — never waits on the
@@ -524,6 +521,128 @@ class HostStore(
             }
         }
     }
+
+    /** Android name for [sendMessage] with attachments. */
+    fun sendWith(sessionId: String, text: String, attachments: List<String>) =
+        sendMessage(sessionId, text, attachments)
+
+    data class PendingFirstMessage(val text: String, val attachments: List<String> = emptyList())
+
+    private var pendingFirst: Pair<String, PendingFirstMessage>? = null
+
+    fun setPendingFirst(sessionId: String, message: PendingFirstMessage) {
+        pendingFirst = sessionId to message
+    }
+
+    fun consumePendingFirst(sessionId: String): PendingFirstMessage? {
+        val entry = pendingFirst ?: return null
+        if (entry.first != sessionId) return null
+        pendingFirst = null
+        return entry.second
+    }
+
+    /**
+     * Fire-and-forget POST /sessions. Distinct from [createSessionWithFirstMessage] (validate path,
+     * upload staged files, resolve spawn id). Android's launcher-picker `spawn` is this simpler
+     * path, not a rename of createSessionWithFirstMessage.
+     */
+    fun spawn(workdir: String, name: String?, agent: String, model: String? = null) {
+        stateScope.launch {
+            runApi("spawn") {
+                api.spawn(
+                    SpawnRequest(
+                        workdir = workdir,
+                        name = name?.ifBlank { null },
+                        agent = agent,
+                        model = model?.ifBlank { null },
+                    ),
+                )
+            }
+        }
+    }
+
+    fun saveName(n: String) {
+        stateScope.launch { runApi("saveName") { api.putConfig(n) } }
+    }
+
+    fun setActiveView(workspaceId: String, viewId: String) {
+        _state.update { st ->
+            st.copy(
+                workspaces = st.workspaces.map { w ->
+                    if (w.id == workspaceId) w.copy(activeViewId = viewId) else w
+                },
+            )
+        }
+        stateScope.launch {
+            runApi("setActiveView") { api.patchWorkspace(workspaceId, activeViewPatchBody(viewId)) }
+        }
+    }
+
+    fun refreshArchived() {
+        stateScope.launch {
+            _archivedSessions.value = runApi("archived") { api.archived() } ?: emptyList()
+        }
+    }
+
+    fun agentSendCode(kind: String, code: String) {
+        stateScope.launch { runApi("agentSendCode") { api.sendAgentLoginCode(kind, code) } }
+    }
+
+    fun agentCancelLogin(kind: String) {
+        stateScope.launch { runApi("agentCancelLogin") { api.cancelAgentLogin(kind) } }
+    }
+
+    fun agentSaveSecret(kind: String, value: String) {
+        stateScope.launch { runApi("agentSaveSecret") { saveAgentSecret(kind, value) } }
+    }
+
+    fun openCodeSetKey(providerId: String, key: String) {
+        stateScope.launch { runApi("openCodeSetKey") { api.setOpenCodeKey(providerId, key) } }
+    }
+
+    fun openCodeFinishOAuth(providerId: String, method: Int, code: String) {
+        stateScope.launch { runApi("openCodeFinishOAuth") { api.finishOpenCodeOAuth(providerId, method, code) } }
+    }
+
+    /** Re-bind read-aloud using GET /settings/config + POST /speak. No-op without [bindTts]. */
+    fun bindMessageTts() {
+        bindTts?.invoke(
+            { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
+            { text, onChunk -> api.speakStream(text = text, engine = "codex", onChunk = onChunk) },
+        )
+    }
+
+    fun saveDraft(sessionId: String, text: String) {
+        stateScope.launch { deps.settings.putString(SettingsKeys.draft(sessionId), text.ifBlank { null }) }
+    }
+
+    fun draft(sessionId: String): Flow<String?> = deps.settings.string(SettingsKeys.draft(sessionId))
+
+    fun saveLauncherPrefs(prefs: LauncherPrefs) {
+        stateScope.launch {
+            deps.settings.putString(SettingsKeys.LAUNCHER_PREFS, settingsJson.encodeToString(prefs))
+        }
+    }
+
+    val launcherPrefs: Flow<LauncherPrefs> =
+        deps.settings.string(SettingsKeys.LAUNCHER_PREFS).map { raw ->
+            raw?.let { runCatching { settingsJson.decodeFromString<LauncherPrefs>(it) }.getOrNull() }
+                ?: LauncherPrefs()
+        }
+
+    fun saveLauncherDraft(workdir: String, draft: LauncherDraft) {
+        stateScope.launch {
+            deps.settings.putString(
+                SettingsKeys.launcherDraft(workdir),
+                settingsJson.encodeToString(draft),
+            )
+        }
+    }
+
+    fun launcherDraft(workdir: String): Flow<LauncherDraft?> =
+        deps.settings.string(SettingsKeys.launcherDraft(workdir)).map { raw ->
+            raw?.let { runCatching { settingsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() }
+        }
 
     // ── Session controls (HTTP via BrokerApi) ───────────────────────────────────────
 
@@ -815,6 +934,7 @@ class HostStore(
     /** Factory for this session's VNC transport client; called once per connected stream and
      *  remembered by the Display panel (mirrors [connectAgentTerminal]). */
     fun connectVnc(streamId: String): VncClient = VncClient(baseUrl, token, http, streamId)
+    fun connectScrcpy(streamId: String): ScrcpyClient = ScrcpyClient(baseUrl, token, http, streamId)
 
     /** POST /displays → the started stream (the display_added frame also folds it into [displays]
      *  for every connected client, including this one). Null on any failure. [provider] defaults
@@ -1339,6 +1459,11 @@ class HostStore(
     /** DELETE /devices/<name> — revoke a paired device. False on failure. */
     suspend fun revokeDevice(name: String): Boolean =
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
+
+    /** Fire-and-forget Android name for [revokeDevice]. */
+    fun revoke(n: String) {
+        stateScope.launch { runApi("revoke") { api.revokeDevice(n) } }
+    }
 
     // ── System / maintenance (desktop-parity Task 3) ───────────────────────────────────
     // Backs the System section of the Settings hub. Mirrors AppViewModel updateStatus /

@@ -72,6 +72,16 @@ class HostReducerTest {
         assertEquals("opus", out.sessions.single().model)
     }
 
+    @Test fun agentErrorStoresAndAgentStateClearsUnlessDead() {
+        val err = ServerFrame.AgentError(session = "s1", errorType = "auth", errorMessage = "nope")
+        val withErr = reduceHostFrame(HostState(), err)
+        assertEquals(err, withErr.agentErrors["s1"])
+        val cleared = reduceHostFrame(withErr, ServerFrame.AgentState(session = "s1", phase = "idle", state = "idle"))
+        assertEquals(emptyMap(), cleared.agentErrors)
+        val deadKeeps = reduceHostFrame(withErr, ServerFrame.AgentState(session = "s1", phase = "dead", state = "dead"))
+        assertEquals(err, deadKeeps.agentErrors["s1"])
+    }
+
     @Test fun sessionRemovedDropsKnownId() {
         val s = HostState(sessions = listOf(sessionFixture("s1")), bgTasks = mapOf("s1" to emptyList()))
         val out = reduceHostFrame(s, ServerFrame.SessionRemoved(id = "s1"))

@@ -21,6 +21,7 @@ import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
+import dev.supermux.state.ContinueHandoff
 import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals

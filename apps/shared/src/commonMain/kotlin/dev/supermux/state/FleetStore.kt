@@ -5,10 +5,14 @@ import dev.supermux.host.HostView
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.host.PairingPayload
+import dev.supermux.host.WorkspaceViewingSnapshot
 import dev.supermux.host.hostViewsFrom
 import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
+import dev.supermux.host.previousHostClearSessionId
+import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
+import dev.supermux.util.TransportPolicy
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
 import dev.supermux.proto.AgentStatus
@@ -19,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -75,8 +80,10 @@ class FleetStore(
     private val messagesByHost = HashMap<String, Map<String, List<LogEntry>>>()
     private val agentByHost = HashMap<String, Map<String, AgentStatus>>()
     private val lastReadByHost = HashMap<String, Map<String, String>>()
+    private val archivedByHost = HashMap<String, List<ArchivedDto>>()
     private val onlineHosts = HashMap<String, Boolean>()
     private var lastViewingHost: String? = null
+    private var viewingSnapshot: WorkspaceViewingSnapshot? = null
 
     private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val sessions: StateFlow<List<SessionInfo>> = _sessions.asStateFlow()
@@ -94,6 +101,11 @@ class FleetStore(
     /** Merged sessionId → ISO last_read_at across hosts (ids are globally unique). */
     private val _lastRead = MutableStateFlow<Map<String, String>>(emptyMap())
     val lastRead: StateFlow<Map<String, String>> = _lastRead.asStateFlow()
+
+    private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
+    val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions.asStateFlow()
+
+    val hostFilter: Flow<String?> = deps.settings.string(SettingsKeys.HOST_FILTER)
 
     /** The paired fleet as the list/chips render it (identity + reachability + badge slot). */
     private val _hostViews = MutableStateFlow<List<HostView>>(emptyList())
@@ -148,6 +160,7 @@ class FleetStore(
         conn.jobs += fleetScope.launch { app.agentState.collect { onHostAgent(recordId, it) } }
         conn.jobs += fleetScope.launch { app.lastRead.collect { onHostLastRead(recordId, it) } }
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
+        conn.jobs += fleetScope.launch { app.archivedSessions.collect { onHostArchived(recordId, it) } }
         conns[recordId] = conn
     }
 
@@ -212,7 +225,7 @@ class FleetStore(
                 (before - store.list().map { it.recordId }.toSet()).also { removed ->
                     removed.forEach {
                         sessionsByHost.remove(it); messagesByHost.remove(it)
-                        agentByHost.remove(it); lastReadByHost.remove(it); onlineHosts.remove(it)
+                        agentByHost.remove(it); lastReadByHost.remove(it); archivedByHost.remove(it); onlineHosts.remove(it)
                     }
                 }
             }
@@ -229,7 +242,7 @@ class FleetStore(
     }
 
     private fun recomputeAll() {
-        recomputeSessions(); recomputeMessages(); recomputeAgent(); recomputeLastRead(); rebuildHostViews()
+        recomputeSessions(); recomputeMessages(); recomputeAgent(); recomputeLastRead(); recomputeArchived(); rebuildHostViews()
     }
 
     private fun recomputeSessions() {
@@ -258,6 +271,18 @@ class FleetStore(
         store.list().forEach { h -> lastReadByHost[h.recordId]?.let { out.putAll(it) } }
         lastReadByHost.forEach { (rid, m) -> if (store.list().none { it.recordId == rid }) out.putAll(m) }
         _lastRead.value = out
+    }
+
+    private fun onHostArchived(recordId: String, archived: List<ArchivedDto>) = synchronized(lock) {
+        archivedByHost[recordId] = archived
+        recomputeArchived()
+    }
+
+    private fun recomputeArchived() {
+        val out = ArrayList<ArchivedDto>()
+        store.list().forEach { h -> archivedByHost[h.recordId]?.let { out.addAll(it) } }
+        archivedByHost.forEach { (rid, list) -> if (store.list().none { it.recordId == rid }) out.addAll(list) }
+        _archivedSessions.value = out
     }
 
     private fun rebuildHostViews() {
@@ -292,6 +317,60 @@ class FleetStore(
         if (prev != null && prev != owner) conns[prev]?.app?.updateViewing(null, visible)
         (owner?.let { conns[it]?.app } ?: activeApp())?.updateViewing(sessionId, visible)
         lastViewingHost = owner
+    }
+
+    /**
+     * Report the workspace viewing snapshot (or null = not looking at a workspace).
+     * A workspace switch publishes a non-visible frame to the host that owned
+     * the previous snapshot's ids first so that host's tracker cannot linger
+     * after switching to a workspace on another host. Visible chat ids are
+     * marked read optimistically.
+     */
+    fun updateViewing(snapshot: WorkspaceViewingSnapshot?) {
+        val previous = viewingSnapshot
+        val clearOn = previousHostClearSessionId(previous, snapshot)
+        if (clearOn != null || (previous != null && snapshot != null && previous.workspaceId != snapshot.workspaceId)) {
+            val target = clearOn?.let { appFor(it) } ?: activeApp()
+            target?.updateViewing(null, false)
+        }
+        viewingSnapshot = snapshot
+        val ids = snapshot?.takeIf { it.appForeground }?.visibleChatSessionIds.orEmpty()
+        ids.firstOrNull()?.let { sid ->
+            _sessionHost.value[sid]?.let(::setActiveHost)
+        }
+        if (snapshot?.appForeground == true) {
+            for (id in ids) appFor(id)?.markRead(id)
+        }
+        val owner = ids.firstOrNull()?.let { _sessionHost.value[it] }
+        val dest = owner?.let { conns[it]?.app } ?: activeApp()
+        when {
+            snapshot == null || !snapshot.appForeground -> dest?.updateViewing(null, false)
+            ids.isEmpty() -> dest?.updateViewing(null, true)
+            else -> dest?.updateViewingSessions(ids, true)
+        }
+        lastViewingHost = owner
+    }
+
+    fun saveHostFilter(recordId: String?) {
+        fleetScope.launch { deps.settings.putString(SettingsKeys.HOST_FILTER, recordId) }
+    }
+
+    fun refreshArchived() {
+        conns.values.forEach { it.app.refreshArchived() }
+    }
+
+    /** Rename a paired host (the merged-list chip/badge label). */
+    fun renameHost(recordId: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return
+        store.rename(recordId, trimmed)
+        rebuildHostViews()
+    }
+
+    /** True when a typed add-host URL is plain HTTP to a non-loopback host. */
+    fun urlNeedsInsecureOptIn(rawUrl: String): Boolean {
+        val url = normalizeHostUrl(rawUrl) ?: return false
+        return !TransportPolicy.isPlainHttpAllowedWithoutOptIn(url)
     }
 
     // ── Add host (spec §3.4 / §5) ──────────────────────────────────────────────────
@@ -370,6 +449,7 @@ class FleetStore(
             messagesByHost.remove(recordId)
             agentByHost.remove(recordId)
             lastReadByHost.remove(recordId)
+            archivedByHost.remove(recordId)
             onlineHosts.remove(recordId)
             if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
         }

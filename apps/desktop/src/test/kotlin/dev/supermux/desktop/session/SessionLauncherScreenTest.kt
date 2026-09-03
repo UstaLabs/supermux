@@ -25,6 +25,8 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.StagedUpload
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.ForgeAccount
