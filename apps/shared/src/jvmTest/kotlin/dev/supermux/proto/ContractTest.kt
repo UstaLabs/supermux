@@ -18,6 +18,7 @@ class ContractTest {
             "agent_state", "agent_error", "message_append", "activity_append", "bg_tasks",
             "commands_changed", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
+            "walkthrough_updated", "review_comment",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -46,6 +47,8 @@ class ContractTest {
                 is ServerFrame.BgTasks -> {}
                 is ServerFrame.CommandsChanged -> {}
                 is ServerFrame.FsChanged -> {}
+                is ServerFrame.WalkthroughUpdated -> {}
+                is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.LspStatus -> {}
                 is ServerFrame.LspReady -> {}
                 is ServerFrame.LspError -> {}
@@ -55,8 +58,11 @@ class ContractTest {
                 is ServerFrame.LspInstallDone -> {}
                 is ServerFrame.DisplayAdded -> {}
                 is ServerFrame.DisplayRemoved -> {}
+                is ServerFrame.UsageUpdated -> {}
                 is ServerFrame.FinishJobFrame -> {}
                 is ServerFrame.SessionGit -> {}
+                is ServerFrame.WalkthroughUpdated -> {}
+                is ServerFrame.ReviewCommentFrame -> {}
             }
         }
     }

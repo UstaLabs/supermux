@@ -107,4 +107,23 @@ class UsageResetFormatTest {
         val secs = Instant.parse("2026-08-01T00:00:00Z").epochSecond.toDouble()
         assertEquals("resets Aug 1", formatResetEpochSeconds(secs, now))
     }
+
+    // ── formatFetchedAt: relative "as of …" caption from ISO snapshot times ───────────────────────
+
+    @Test fun format_fetched_at_null_or_blank_is_blank() {
+        assertEquals("", formatFetchedAt(null, now))
+        assertEquals("", formatFetchedAt("   ", now))
+        assertEquals("", formatFetchedAt("not-a-date", now))
+    }
+
+    @Test fun format_fetched_at_under_a_minute_is_just_now() {
+        assertEquals("as of just now", formatFetchedAt("2026-07-09T11:59:30Z", now))
+        assertEquals("as of just now", formatFetchedAt("2026-07-09T12:00:00Z", now))
+    }
+
+    @Test fun format_fetched_at_minutes_hours_days() {
+        assertEquals("as of 5m ago", formatFetchedAt("2026-07-09T11:55:00Z", now))
+        assertEquals("as of 2h ago", formatFetchedAt("2026-07-09T10:00:00Z", now))
+        assertEquals("as of 2d ago", formatFetchedAt("2026-07-07T12:00:00Z", now))
+    }
 }

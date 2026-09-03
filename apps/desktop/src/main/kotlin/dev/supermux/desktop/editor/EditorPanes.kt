@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -373,23 +374,91 @@ fun FilePane(
 @Composable
 fun DiffPane(
     diff: DiffState,
+    walkthrough: WalkthroughState? = null,
+    reviewWalkthrough: WalkthroughState? = null,
     fsDiff: suspend (String) -> FsDiffResult?,
     fsRefs: suspend () -> FsRefsResult?,
+    getWalkthrough: suspend () -> dev.supermux.net.Walkthrough? = { null },
+    getWalkthroughComments: suspend () -> List<ReviewComment> = { emptyList() },
+    getReviewComments: suspend () -> List<ReviewComment> = { emptyList() },
+    readWalkthroughFile: suspend (repo: String, path: String) -> Result<String> = { _, _ -> Result.failure(IllegalStateException("File unavailable")) },
+    onOpenWalkthroughFile: (repo: String, path: String, line: Int?) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier,
     onReviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
     onReviewResolve: suspend (String) -> Boolean = { false },
+    onWalkthroughAddComment: (suspend (AddCommentBody) -> ReviewComment?)? = null,
+    onWalkthroughResolve: (suspend (String) -> Boolean)? = null,
+    onWalkthroughClosed: () -> Unit = {},
     onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     onClose: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
+    val reviewState = reviewWalkthrough ?: walkthrough
 
     LaunchedEffect(diff) {
         if (diff.diffRepos.isEmpty() && !diff.diffLoading) diff.loadDiff(fsDiff, fsRefs)
     }
+    LaunchedEffect(walkthrough) {
+        if (walkthrough != null && walkthrough.walkthrough == null && !walkthrough.loading) {
+            walkthrough.load(getWalkthrough)
+        }
+        if (walkthrough != null) walkthrough.seedComments(getWalkthroughComments())
+    }
+    LaunchedEffect(reviewState) {
+        if (reviewState != null && reviewState !== walkthrough) {
+            reviewState.seedComments(getReviewComments())
+        }
+    }
+    LaunchedEffect(reviewState, diff.diffComments) {
+        if (reviewState != null && diff.diffComments.isNotEmpty()) reviewState.seedComments(diff.diffComments)
+    }
+    LaunchedEffect(reviewState?.comments) {
+        if (reviewState != null && reviewState.comments != diff.diffComments) {
+            diff.diffComments = reviewState.comments
+        }
+    }
 
+    // Keep the host's pane tag and this component's tag on separate semantics nodes. Compose merges
+    // duplicate TestTag properties on one modifier chain, which would hide editor_diff_pane.
     Box(modifier.fillMaxSize()) {
-      Box(Modifier.fillMaxSize().testTag("editor_diff_pane")) {
-        DiffView(
+    Column(Modifier.fillMaxSize().testTag("editor_diff_pane")) {
+        val hasWalkthrough = walkthrough?.steps?.isNotEmpty() == true
+        if (hasWalkthrough) {
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = Space.sm, vertical = Space.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = {
+                        if (walkthrough.isOpen) {
+                            walkthrough.close()
+                            onWalkthroughClosed()
+                        } else walkthrough.open()
+                    },
+                    modifier = Modifier.testTag("walkthrough_toggle"),
+                ) {
+                    Text("📖 Walkthrough · ${walkthrough.steps.size} steps")
+                }
+                if (walkthrough.isOpen) Text("Showing walkthrough", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        if (walkthrough?.isOpen == true && hasWalkthrough) {
+            WalkthroughView(
+                state = walkthrough,
+                repos = diff.diffRepos,
+                readFile = readWalkthroughFile,
+                onAddComment = onWalkthroughAddComment ?: onReviewAddComment,
+                onResolve = onWalkthroughResolve ?: onReviewResolve,
+                onOpenFile = onOpenWalkthroughFile,
+                onClose = {
+                    walkthrough.close()
+                    onWalkthroughClosed()
+                },
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+          DiffView(
             repos = diff.diffRepos,
             comments = diff.diffComments,
             base = diff.diffBase,
@@ -414,8 +483,9 @@ fun DiffPane(
             onReload = { scope.launch { diff.reloadDiff(fsDiff) } },
             // The pane's close IS the tab's close — there is no "back to the editor" here.
             onClose = onClose,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f),
         )
-      }
+        }
+    }
     }
 }

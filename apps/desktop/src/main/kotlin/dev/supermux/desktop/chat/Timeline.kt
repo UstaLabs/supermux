@@ -5,17 +5,22 @@
 // Desktop adaptations vs the Android source:
 //  - Icons: materialIconsExtended instead of R.drawable.*
 //  - Links: openInBrowser / java.awt.Desktop (not Android intents)
-//  - Attachments: save-as + OS open (no inline video yet)
+//  - Attachments: inline image + video preview; save-as + OS open for everything else
 //  - Selection: SelectionContainer for mouse copy
 package dev.supermux.desktop.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,11 +38,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -45,13 +52,19 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
@@ -97,6 +111,8 @@ import dev.supermux.desktop.theme.Radii
 import dev.supermux.desktop.theme.Sizes
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
+import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
+import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.Attachment
@@ -1322,6 +1338,7 @@ fun TimelineItemRow(
     loadBytes: suspend (String) -> ByteArray? = { null },
     onOpenFile: (FilePathRef) -> Unit = {},
     highDetail: Boolean = false,
+    onOpenWalkthrough: () -> Unit = {},
 ) {
     when (item) {
         is TimelineItem.Msg -> {
@@ -1338,6 +1355,8 @@ fun TimelineItemRow(
                     if (!text.isNullOrBlank()) {
                         if (isUser) {
                             UserMessage(text)
+                        } else if (text.startsWith("📖 Walkthrough ready")) {
+                            WalkthroughReadyCard(text, onOpenWalkthrough)
                         } else {
                             AssistantMessage(text, onOpenFile = onOpenFile, ts = item.entry.ts)
                         }
@@ -1366,6 +1385,22 @@ fun TimelineItemRow(
     }
 }
 
+@Composable
+private fun WalkthroughReadyCard(text: String, onOpen: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Radii.md))
+            .background(cs.primaryContainer.copy(alpha = 0.55f))
+            .clickable(onClick = onOpen)
+            .padding(Space.md)
+            .testTag("walkthrough_ready_card"),
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        Text(text, style = MaterialTheme.typography.titleSmall, color = cs.onPrimaryContainer)
+        Text("Open walkthrough →", style = MaterialTheme.typography.labelMedium, color = cs.primary)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Attachments
 // ---------------------------------------------------------------------------
@@ -1385,29 +1420,525 @@ fun AttachmentList(
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
         verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
-        for (att in attachments) AttachmentItem(att, loadBytes)
+        for (att in attachments) AttachmentItem(att, alignEnd, loadBytes)
     }
 }
 
 @Composable
-private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteArray?) {
+private fun AttachmentItem(
+    att: Attachment,
+    alignEnd: Boolean,
+    loadBytes: suspend (String) -> ByteArray?,
+) {
     val mime = att.mime ?: ""
     val isImage = att.kind == "photo" || att.kind == "image" || mime.startsWith("image/")
     val isVideo = att.kind == "video" || att.kind == "video_note" || mime.startsWith("video/")
     val isAudio = att.kind == "voice" || att.kind == "audio" || mime.startsWith("audio/")
+    if (isImage) {
+        InlineImageAttachment(att, alignEnd, loadBytes)
+        return
+    }
+    if (isVideo) {
+        InlineVideo(att, loadBytes)
+        return
+    }
     val label = when {
         isAudio -> att.name ?: "voice message"
-        isVideo -> att.name ?: "video"
-        isImage -> att.name ?: "image"
         else -> att.name ?: att.file_id
     }
     val icon = when {
         isAudio -> Icons.AutoMirrored.Filled.VolumeUp
-        isVideo -> Icons.Filled.Movie
-        isImage -> Icons.Filled.Image
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
     AttachmentChip(icon, label, att, loadBytes)
+}
+
+/**
+ * Inline video playback (Android parity — Android has had a tap-to-play ExoPlayer surface since
+ * 2026-07-02; desktop only ever offered the download chip because the JVM has no video player).
+ *
+ * The player is Compose Media Player (MIT), whose backends are AVFoundation on macOS, Media
+ * Foundation on Windows and GStreamer on Linux, with the natives compiled into the jar — no system
+ * install. Crucially it decodes into a Compose `Canvas` rather than a heavyweight AWT child, so
+ * unlike JCEF/JediTerm it composes inside the scrolling message list (ModalPresence.kt documents
+ * why a heavyweight child there would be unworkable).
+ *
+ * Bytes are fetched only once the user opts into playback — a transcript must never eagerly
+ * download every clip — then cached to a temp file the native backend can open by URI. A failed
+ * download, or a backend error (missing codec, unreadable container), falls back to the ordinary
+ * [AttachmentChip] so save-as + the OS player remain reachable.
+ *
+ * [renderPlayer] is the mount seam: tests inject a stub so the suite never loads native media
+ * libraries in a headless Gradle worker.
+ */
+@Composable
+internal fun InlineVideo(
+    att: Attachment,
+    loadBytes: suspend (String) -> ByteArray?,
+    renderPlayer: @Composable (File, () -> Unit) -> Unit = { file, onError ->
+        InlineVideoPlayer(file, onError)
+    },
+) {
+    val cs = MaterialTheme.colorScheme
+    var playing by remember(att.file_id) { mutableStateOf(false) }
+    var file by remember(att.file_id) { mutableStateOf<File?>(null) }
+    var failed by remember(att.file_id) { mutableStateOf(false) }
+
+    LaunchedEffect(att.file_id, playing) {
+        if (!playing || file != null || failed) return@LaunchedEffect
+        val bytes = runCatching { loadBytes(att.file_id) }.getOrNull()
+        if (bytes == null) {
+            failed = true
+            return@LaunchedEffect
+        }
+        // Name by the unique file_id so two clips never collide in the temp dir, and keep the
+        // original extension — the native backends pick their demuxer from it.
+        val cached = withContext(Dispatchers.IO) {
+            writeAttachmentTempFile(bytes, "video_${att.file_id.substringAfterLast('/')}", att.name, "mp4")
+        }
+        if (cached != null) file = cached else failed = true
+    }
+
+    val f = file
+    val surface = Modifier
+        .fillMaxWidth(Media.inlineVideoWidthFraction)
+        .heightIn(max = Media.inlineVideoMaxHeight)
+    when {
+        failed -> AttachmentChip(Icons.Filled.Movie, att.name ?: "video", att, loadBytes)
+        !playing -> Box(
+            modifier = surface
+                .height(Media.inlineVideoMaxHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .clickable { playing = true }
+                .testTag("attachment_video_poster"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = att.name ?: "Play video",
+                tint = cs.onSurface,
+                modifier = Modifier.size(Sizes.videoPlayGlyph),
+            )
+        }
+        f == null -> Box(
+            modifier = surface
+                .height(Media.inlineVideoMaxHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .testTag("attachment_video_loading"),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                Modifier.size(MdImageDimens.SpinnerSize),
+                color = cs.onSurfaceVariant,
+                strokeWidth = MdImageDimens.SpinnerStroke,
+            )
+        }
+        else -> Box(surface) { renderPlayer(f) { failed = true } }
+    }
+}
+
+/**
+ * Transport surface the video controls draw against. Extracted from the player state so the
+ * control bar is a pure composable that can be driven by a fake in tests — mounting the real
+ * player would load AVFoundation/GStreamer inside a headless Gradle worker.
+ */
+@Stable
+internal interface VideoTransport {
+    val isPlaying: Boolean
+    val isLoading: Boolean
+
+    /** Playback position on the backend's 0f..1000f scale. */
+    val sliderPos: Float
+    val positionText: String
+    val durationText: String
+    val muted: Boolean
+
+    fun togglePlay()
+
+    fun seekStart(value: Float)
+
+    fun seekFinished()
+
+    fun toggleMute()
+
+    /** Hand the clip to the OS player — full screen, system controls, scrubbing a long file. */
+    fun openExternally()
+}
+
+/**
+ * The mounted player: the video surface with its controls overlaid.
+ *
+ * Autoplays, because the user already opted in by clicking the poster. A backend error is
+ * reported through [onError] so [InlineVideo] can fall back to the download chip rather than
+ * leave a black rectangle in the transcript.
+ */
+@Composable
+private fun InlineVideoPlayer(file: File, onError: () -> Unit) {
+    val player = rememberVideoPlayerState()
+    // ⚠️ openUri MUST NOT run on the Compose/AWT main thread. Compose Media Player's macOS backend
+    // reports failures through `setPlayerError`, which is `runBlocking { withContext(Main) }` — on
+    // the main thread that parks the EDT waiting for the EDT and freezes the entire app (confirmed
+    // by jstack on a frozen build: AWT-EventQueue-0 parked in MacVideoPlayerState.setPlayerError,
+    // reached from openUri). A LaunchedEffect body runs on the main dispatcher, so hop to IO.
+    //
+    // runCatching, not try/catch-in-composition, because a Linux box with no GStreamer throws
+    // UnsatisfiedLinkError (an Error — runCatching catches Throwable) the first time the JNI shim
+    // is touched. Either way we degrade to the download chip instead of taking the timeline down.
+    LaunchedEffect(file) {
+        runCatching { withContext(Dispatchers.IO) { player.openUri(mediaUriFor(file)) } }
+            .onFailure { onError() }
+    }
+    val error = player.error
+    LaunchedEffect(error) { if (error != null) onError() }
+
+    // Mute is remembered here, not in the backend: restoring the previous level is nicer than
+    // ramping back to 1.0, and the player exposes volume as a plain Float.
+    var mutedVolume by remember(file) { mutableStateOf<Float?>(null) }
+    val transport = remember(player, file) {
+        object : VideoTransport {
+            override val isPlaying get() = player.isPlaying
+            override val isLoading get() = player.isLoading
+            override val sliderPos get() = player.sliderPos
+            override val positionText get() = player.positionText
+            override val durationText get() = player.durationText
+            override val muted get() = mutedVolume != null
+
+            override fun togglePlay() {
+                if (player.isPlaying) player.pause() else player.play()
+            }
+
+            override fun seekStart(value: Float) = player.seekStart(value)
+
+            override fun seekFinished() = player.seekFinished()
+
+            override fun toggleMute() {
+                val saved = mutedVolume
+                if (saved == null) {
+                    mutedVolume = player.volume
+                    player.volume = 0f
+                } else {
+                    player.volume = saved
+                    mutedVolume = null
+                }
+            }
+
+            override fun openExternally() = openLocalFile(file)
+        }
+    }
+    VideoPlayerFrame(transport) { modifier ->
+        VideoPlayerSurface(playerState = player, modifier = modifier)
+    }
+}
+
+/**
+ * Video frame + overlaid controls. [surface] paints the actual frames (the library's
+ * `VideoPlayerSurface` in production, anything in tests).
+ *
+ * Layout rules, chosen to match how a video behaves everywhere else and to stay calm inside a
+ * message list:
+ *  - Fixed height (same as the poster) with the frame letterboxed on black, so mounting the player
+ *    never reflows the timeline and a portrait clip does not blow the bubble open.
+ *  - Controls sit ON the video over a bottom scrim, rather than stealing a row underneath it.
+ *  - They show while paused, while hovered and while scrubbing; otherwise they fade away.
+ *  - The whole surface is a play/pause target, with a large centred glyph while paused.
+ */
+@Composable
+internal fun VideoPlayerFrame(
+    transport: VideoTransport,
+    surface: @Composable (Modifier) -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var scrubbing by remember { mutableStateOf(false) }
+    val controlsVisible = hovered || scrubbing || !transport.isPlaying
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(Media.inlineVideoMaxHeight)
+            .clip(RoundedCornerShape(Radii.md))
+            .background(Color.Black)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = { transport.togglePlay() },
+            )
+            .testTag("attachment_video_player"),
+        contentAlignment = Alignment.Center,
+    ) {
+        surface(Modifier.fillMaxWidth())
+
+        if (transport.isLoading) {
+            CircularProgressIndicator(
+                Modifier.size(MdImageDimens.SpinnerSize).testTag("attachment_video_buffering"),
+                color = VideoControls.Foreground,
+                strokeWidth = MdImageDimens.SpinnerStroke,
+            )
+        } else if (!transport.isPlaying) {
+            // Centred glyph on a translucent disc — readable over a bright or a dark frame.
+            Box(
+                modifier = Modifier
+                    .size(Sizes.videoPlayGlyph + Space.md)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = VideoControls.DiscAlpha)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "Play",
+                    tint = VideoControls.Foreground,
+                    modifier = Modifier.size(Sizes.videoPlayGlyph).testTag("attachment_video_center_play"),
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            VideoTransportBar(
+                transport = transport,
+                onScrubbingChange = { scrubbing = it },
+            )
+        }
+    }
+}
+
+/** Bottom control bar: play/pause · elapsed · scrubber · total · mute · open externally. */
+@Composable
+private fun VideoTransportBar(
+    transport: VideoTransport,
+    onScrubbingChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Scrim, not a solid bar: controls stay legible over a bright frame without boxing
+            // the picture in.
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = VideoControls.ScrimAlpha)),
+                ),
+            )
+            .padding(horizontal = Space.sm, vertical = Space.xs)
+            .testTag("attachment_video_controls"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        VideoControlButton(
+            icon = if (transport.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            label = if (transport.isPlaying) "Pause" else "Play",
+            tag = "attachment_video_playpause",
+            onClick = transport::togglePlay,
+        )
+        VideoTimeLabel(transport.positionText, "attachment_video_position")
+        Slider(
+            value = transport.sliderPos,
+            onValueChange = {
+                onScrubbingChange(true)
+                transport.seekStart(it)
+            },
+            onValueChangeFinished = {
+                transport.seekFinished()
+                onScrubbingChange(false)
+            },
+            valueRange = 0f..VideoControls.SliderRange,
+            colors = SliderDefaults.colors(
+                thumbColor = VideoControls.Foreground,
+                activeTrackColor = VideoControls.Foreground,
+                inactiveTrackColor = VideoControls.Foreground.copy(alpha = VideoControls.TrackAlpha),
+            ),
+            modifier = Modifier.weight(1f).height(Sizes.iconButton).testTag("attachment_video_scrubber"),
+        )
+        VideoTimeLabel(transport.durationText, "attachment_video_duration")
+        VideoControlButton(
+            icon = if (transport.muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+            label = if (transport.muted) "Unmute" else "Mute",
+            tag = "attachment_video_mute",
+            onClick = transport::toggleMute,
+        )
+        VideoControlButton(
+            icon = Icons.Filled.OpenInNew,
+            label = "Open in system player",
+            tag = "attachment_video_external",
+            onClick = transport::openExternally,
+        )
+    }
+}
+
+@Composable
+private fun VideoTimeLabel(text: String, tag: String) {
+    Text(
+        text = text,
+        color = VideoControls.Foreground,
+        fontSize = 11.sp,
+        fontFamily = MonoFontFamily,
+        maxLines = 1,
+        modifier = Modifier.testTag(tag),
+    )
+}
+
+@Composable
+private fun VideoControlButton(
+    icon: ImageVector,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(Sizes.iconButton).pointerHoverIcon(PointerIcon.Hand).testTag(tag),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = VideoControls.Foreground,
+            modifier = Modifier.size(Sizes.iconSm),
+        )
+    }
+}
+
+/**
+ * Video controls paint over arbitrary frames, so they use their own fixed palette rather than the
+ * theme's — a themed tint would vanish against the wrong picture.
+ */
+internal object VideoControls {
+    val Foreground = Color.White
+    const val ScrimAlpha = 0.72f
+    const val DiscAlpha = 0.45f
+    const val TrackAlpha = 0.3f
+
+    /** The backends express position on a 0..1000 scale, not 0..1. */
+    const val SliderRange = 1000f
+}
+
+/**
+ * Inline preview for image attachments (Android parity — desktop had only the download chip, so a
+ * screenshot pasted into chat showed as a filename). Bytes come from the same [loadBytes] seam the
+ * chip uses (broker file fetch); decode happens off the frame path via [decodeImageBytes], which
+ * force-rasterises so nothing can throw at draw time.
+ *
+ * Painted at natural size, shrunk-only to fit the column and [MdImageDimens.MaxHeight] — the same
+ * rule as markdown images, so a 32x32 icon is not blown up to a 280 dp blob. Click opens the
+ * full-resolution original in the OS image viewer via a temp file (a Save dialog on every click
+ * would be hostile); a load or decode failure falls back to the ordinary [AttachmentChip] so the
+ * user keeps the retry + save-as path.
+ */
+@Composable
+private fun InlineImageAttachment(
+    att: Attachment,
+    alignEnd: Boolean,
+    loadBytes: suspend (String) -> ByteArray?,
+    decode: (ByteArray) -> ImageBitmap? = ::decodeImageBytes,
+    onOpenImage: (ByteArray, String) -> Unit = ::openImageBytesExternally,
+) {
+    val cs = MaterialTheme.colorScheme
+    var bitmap by remember(att.file_id) { mutableStateOf<ImageBitmap?>(null) }
+    var raw by remember(att.file_id) { mutableStateOf<ByteArray?>(null) }
+    var failed by remember(att.file_id) { mutableStateOf(false) }
+    LaunchedEffect(att.file_id) {
+        val bytes = runCatching { loadBytes(att.file_id) }.getOrNull()
+        val decoded = if (bytes == null) null else withContext(Dispatchers.Default) { decode(bytes) }
+        if (decoded != null) {
+            raw = bytes
+            bitmap = decoded
+        } else {
+            failed = true
+        }
+    }
+    val bmp = bitmap
+    when {
+        bmp != null -> BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = if (alignEnd) Alignment.TopEnd else Alignment.TopStart,
+        ) {
+            val density = LocalDensity.current
+            val (w, h) = mdImagePaintSize(
+                pixelWidth = bmp.width,
+                pixelHeight = bmp.height,
+                maxWidth = maxWidth,
+                maxHeight = MdImageDimens.MaxHeight,
+                density = density,
+            )
+            Image(
+                bitmap = bmp,
+                contentDescription = att.name ?: "image",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .width(w)
+                    .height(h)
+                    .clip(RoundedCornerShape(Radii.md))
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { raw?.let { onOpenImage(it, att.name ?: att.file_id) } }
+                    .testTag("attachment_image"),
+            )
+        }
+        failed -> AttachmentChip(Icons.Filled.Image, att.name ?: "image", att, loadBytes)
+        else -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(MdImageDimens.LoadingHeight)
+                .clip(RoundedCornerShape(Radii.md))
+                .background(cs.surfaceContainer)
+                .testTag("attachment_image_loading"),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                Modifier.size(MdImageDimens.SpinnerSize),
+                color = cs.onSurfaceVariant,
+                strokeWidth = MdImageDimens.SpinnerStroke,
+            )
+        }
+    }
+}
+/**
+ * `file://`-authority URI for the native media backends.
+ *
+ * [File.toURI] yields `file:/path` — no authority — and Compose Media Player's own local-file
+ * check (`MacVideoPlayerState.checkExistsIfLocalFile`) looks for `"://"`, finds none, treats the
+ * whole string as a bare path and rejects the clip as "File not found". [java.nio.file.Path.toUri]
+ * yields `file:///path`, which it parses correctly, and it percent-encodes spaces for free.
+ */
+internal fun mediaUriFor(file: File): String = file.toPath().toUri().toString()
+
+/**
+ * Write attachment bytes to a temp file. [base] names the file (so an OS viewer's title bar is
+ * meaningful, or so two clips cannot collide when the caller keys it by file_id) and the extension
+ * comes from [extensionFrom], falling back to [defaultExt] — both OS viewers and the video
+ * backends pick their decoder from the suffix. Returns null if the write fails.
+ */
+internal fun writeAttachmentTempFile(
+    bytes: ByteArray,
+    base: String,
+    extensionFrom: String?,
+    defaultExt: String,
+): File? {
+    val safeBase = base.substringAfterLast('/').substringBeforeLast('.', base).take(64).ifBlank { "file" }
+    val ext = (extensionFrom ?: "").substringAfterLast('.', "").ifBlank { defaultExt }
+    return runCatching {
+        val dir = File(System.getProperty("java.io.tmpdir"), "supermux-attachments").apply { mkdirs() }
+        File(dir, "$safeBase.$ext").also { it.writeBytes(bytes) }
+    }.getOrNull()
+}
+
+/**
+ * Write image bytes to a temp file for the OS viewer. Named from the attachment so the viewer's
+ * title bar is meaningful, and always suffixed with an extension. Returns null if the write fails.
+ */
+internal fun writeImageTempFile(bytes: ByteArray, name: String): File? {
+    val safeName = name.substringAfterLast('/').ifBlank { "image" }
+    return writeAttachmentTempFile(bytes, safeName, safeName, "png")
+}
+
+/** Click path for an inline image: temp-file the bytes, then open the OS image viewer. */
+internal fun openImageBytesExternally(bytes: ByteArray, name: String) {
+    writeImageTempFile(bytes, name)?.let { openLocalFile(it) }
 }
 
 /** Compact chip: kind glyph + name + download. Tap downloads and Save-as via AWT FileDialog. */

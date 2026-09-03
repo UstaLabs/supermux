@@ -1,7 +1,7 @@
 // CodeMirror 6 bundle for the Android WebView editor — mirrors the web's
 // CodeEditor.vue setup (minus LSP), with a curated language set so there are
 // no dynamic imports (which can't load from a file:// WebView origin).
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from "@codemirror/view"
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, Decoration, gutter, GutterMarker, WidgetType } from "@codemirror/view"
 import { EditorState, Compartment } from "@codemirror/state"
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
 import { syntaxHighlighting, defaultHighlightStyle, foldGutter, bracketMatching, indentOnInput, StreamLanguage } from "@codemirror/language"
@@ -146,6 +146,7 @@ const wrapC = new Compartment()
 const fontC = new Compartment()
 const langC = new Compartment()
 const lspC = new Compartment()
+const diffC = new Compartment()
 const bridge = () => (typeof window !== "undefined" ? window.AndroidEditor : null)
 const wrapExt = (on) => (on ? EditorView.lineWrapping : [])
 const fontExt = (px) => EditorView.theme({ "&": { fontSize: (px || 13) + "px" } })
@@ -245,6 +246,7 @@ window.cmInit = function (content, filename, lineWrap, fontSize) {
       oneDark,
       langC.of(langFor(filename)),
       lspC.of([]),
+      diffC.of([]),
       keymap.of([
         ...closeBracketsKeymap, ...completionKeymap, ...lintKeymap,
         ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab,
@@ -294,6 +296,424 @@ window.cmGetContent = function () { return view ? view.state.doc.toString() : ""
 window.cmSetLineWrap = function (on) { if (view) view.dispatch({ effects: wrapC.reconfigure(wrapExt(!!on)) }) }
 window.cmSetFontSize = function (px) { reconfigureFont(px) }
 window.cmSetLanguage = function (filename) { if (view) view.dispatch({ effects: langC.reconfigure(langFor(filename)) }) }
+
+// ---------------------------------------------------------------------------
+// Walkthrough read-only diff region. Native passes the FULL file plus 1-indexed
+// original-file ranges; this renderer initially clips to 20 context lines and
+// expands in 20-line increments without a native/file round trip.
+// ---------------------------------------------------------------------------
+
+let diffRegion = null
+let diffContextBefore = 20, diffContextAfter = 20
+let diffUpButton = null, diffDownButton = null
+let lastDiffPageAt = 0
+let diffDisplayMeta = []
+// Region identity — expand-context resets ONLY when the underlying slice changes. A threads-only
+// push (a live review_comment frame) must not collapse the reader's expanded context.
+let diffRegionSignature = ""
+// { line, draft } while a composer is open in-editor, else null.
+let diffComposer = null
+// Resolved threads collapse to one line; ids in here are force-expanded by the reader.
+const expandedThreads = new Set()
+// Per-thread reply drafts survive a threads re-render (the widget DOM is rebuilt on any change).
+const replyDrafts = new Map()
+let activeReplyThreadId = null
+
+class DiffGutterMarker extends GutterMarker {
+  constructor(mark, className) { super(); this.mark = mark; this.className = className }
+  toDOM() {
+    const el = document.createElement("span")
+    el.textContent = this.mark
+    el.className = this.className
+    return el
+  }
+}
+const addMarker = new DiffGutterMarker("+", "cm-diff-gutter-add")
+const deleteMarker = new DiffGutterMarker("−", "cm-diff-gutter-delete")
+const changeMarker = new DiffGutterMarker("±", "cm-diff-gutter-change")
+
+function normalizedRanges(spec) {
+  const count = String(spec.content || "").split("\n").length
+  return (Array.isArray(spec.ranges) ? spec.ranges : []).map((r) => ({
+    startLine: Math.max(1, Math.min(count, Number(r.startLine) || 1)),
+    endLine: Math.max(1, Math.min(count, Number(r.endLine) || Number(r.startLine) || 1)),
+    kind: r.kind === "add" || r.kind === "delete" || r.kind === "context" ? r.kind : "change",
+    deletedLines: Array.isArray(r.deletedLines) ? r.deletedLines.map((line) => String(line)) : [],
+  })).map((r) => ({ ...r, endLine: Math.max(r.startLine, r.endLine) }))
+}
+
+
+function normalizedThreads(spec) {
+  return (Array.isArray(spec.threads) ? spec.threads : []).map((t) => ({
+    id: String(t.id || ""),
+    line: Math.max(1, Number(t.line) || 1),
+    status: t.status === "resolved" ? "resolved" : "open",
+    comments: (Array.isArray(t.comments) ? t.comments : []).map((c) => ({
+      id: String(c.id || ""),
+      author: String(c.author || ""),
+      body: String(c.body || ""),
+      createdAt: String(c.createdAt || ""),
+    })),
+  })).filter((t) => t.id)
+}
+
+const el = (tag, className, text) => {
+  const node = document.createElement(tag)
+  if (className) node.className = className
+  if (text != null) node.textContent = text
+  return node
+}
+const authorLabel = (a) => (a === "agent" ? "Agent" : a === "user" || !a ? "You" : a)
+
+// ── Thread widget ──────────────────────────────────────────────────────────
+// Rebuilt whenever its serialized content changes (eq() compares the key), so a live update
+// re-renders in place. Reply drafts live in `replyDrafts` so a rebuild never eats typing.
+class ThreadWidget extends WidgetType {
+  constructor(thread, expanded) {
+    super()
+    this.thread = thread
+    this.expanded = expanded
+    this.key = JSON.stringify([thread, expanded])
+  }
+  eq(other) { return other.key === this.key }
+  ignoreEvent() { return true }
+  toDOM() {
+    const t = this.thread
+    const root = el("div", "cm-wt-thread cm-wt-thread-" + t.status)
+    if (t.status === "resolved" && !this.expanded) {
+      const replies = Math.max(0, t.comments.length - 1)
+      const row = el("button", "cm-wt-collapsed", "✓ resolved · " + replies + (replies === 1 ? " reply" : " replies"))
+      row.type = "button"
+      row.addEventListener("click", () => { expandedThreads.add(t.id); renderDiffRegion() })
+      root.appendChild(row)
+      return root
+    }
+    if (t.status === "resolved") {
+      const row = el("button", "cm-wt-collapsed", "✓ resolved · hide")
+      row.type = "button"
+      row.addEventListener("click", () => { expandedThreads.delete(t.id); renderDiffRegion() })
+      root.appendChild(row)
+    }
+    t.comments.forEach((c) => {
+      const item = el("div", "cm-wt-comment")
+      const head = el("div", "cm-wt-head")
+      head.appendChild(el("span", "cm-wt-author cm-wt-author-" + (c.author || "user"), authorLabel(c.author)))
+      if (c.createdAt) head.appendChild(el("span", "cm-wt-time", c.createdAt))
+      item.appendChild(head)
+      item.appendChild(el("div", "cm-wt-body", c.body))
+      root.appendChild(item)
+    })
+    if (t.status !== "resolved") {
+      const actions = el("div", "cm-wt-actions")
+      const resolve = el("button", "cm-wt-btn", "Resolve")
+      resolve.type = "button"
+      resolve.addEventListener("click", () => {
+        try { bridge() && bridge().onResolveThread(t.id) } catch (e) {}
+      })
+      actions.appendChild(resolve)
+      root.appendChild(actions)
+
+      const reply = el("textarea", "cm-wt-input")
+      reply.rows = 1
+      reply.placeholder = "Reply…"
+      reply.value = replyDrafts.get(t.id) || ""
+      reply.addEventListener("input", () => replyDrafts.set(t.id, reply.value))
+      reply.addEventListener("focus", () => { activeReplyThreadId = t.id })
+      reply.addEventListener("blur", () => { if (activeReplyThreadId === t.id) activeReplyThreadId = null })
+      const send = () => {
+        const text = reply.value.trim()
+        if (!text) return
+        replyDrafts.delete(t.id)
+        reply.value = ""
+        try { bridge() && bridge().onReplySubmit(t.id, text) } catch (e) {}
+      }
+      reply.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); send() }
+        else if (event.key === "Escape") { event.preventDefault(); reply.blur() }
+      })
+      const replyRow = el("div", "cm-wt-reply")
+      const replyBtn = el("button", "cm-wt-btn cm-wt-btn-primary", "Reply")
+      replyBtn.type = "button"
+      replyBtn.addEventListener("click", send)
+      replyRow.appendChild(reply)
+      replyRow.appendChild(replyBtn)
+      root.appendChild(replyRow)
+      if (activeReplyThreadId === t.id) requestAnimationFrame(() => reply.focus())
+    }
+    return root
+  }
+}
+
+// ── Composer widget ────────────────────────────────────────────────────────
+// ONE reused DOM node: eq() compares only the line, so a threads-only re-render keeps the very
+// same textarea (and its caret/focus) alive while the user is mid-sentence.
+let composerEl = null, composerInput = null, composerLine = 0
+function composerDom(line, draft) {
+  if (!composerEl) {
+    composerEl = el("div", "cm-wt-thread cm-wt-composer")
+    composerInput = el("textarea", "cm-wt-input")
+    composerInput.rows = 3
+    composerInput.placeholder = "Leave a comment…  (⌘↩ to send, Esc to cancel)"
+    const actions = el("div", "cm-wt-actions")
+    const cancel = el("button", "cm-wt-btn", "Cancel")
+    cancel.type = "button"
+    const submit = el("button", "cm-wt-btn cm-wt-btn-primary", "Comment")
+    submit.type = "button"
+    const doCancel = () => {
+      diffComposer = null
+      composerInput.value = ""
+      composerLine = 0 // so a re-open on the same line re-seeds from the pushed draft
+      // line 0 = "composer closed" — Kotlin drops the draft and clears its selection.
+      try { bridge() && bridge().onComposerState(0, "") } catch (e) {}
+      renderDiffRegion()
+    }
+    const doSubmit = () => {
+      const text = composerInput.value.trim()
+      if (!text) return
+      const at = composerLine
+      diffComposer = null
+      composerInput.value = ""
+      composerLine = 0
+      try { bridge() && bridge().onCommentSubmit(at, text) } catch (e) {}
+      renderDiffRegion()
+    }
+    cancel.addEventListener("click", doCancel)
+    submit.addEventListener("click", doSubmit)
+    composerInput.addEventListener("input", () => {
+      if (diffComposer) diffComposer.draft = composerInput.value
+      try { bridge() && bridge().onComposerState(composerLine, composerInput.value) } catch (e) {}
+    })
+    composerInput.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); doCancel() }
+      else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); doSubmit() }
+    })
+    actions.appendChild(cancel)
+    actions.appendChild(submit)
+    composerEl.appendChild(composerInput)
+    composerEl.appendChild(actions)
+  }
+  if (composerLine !== line) {
+    composerLine = line
+    composerInput.value = draft || ""
+  }
+  requestAnimationFrame(() => { if (composerInput && composerEl.isConnected) composerInput.focus() })
+  return composerEl
+}
+
+class ComposerWidget extends WidgetType {
+  constructor(line, draft) { super(); this.line = line; this.draft = draft }
+  eq(other) { return other.line === this.line }
+  ignoreEvent() { return true }
+  toDOM() { return composerDom(this.line, this.draft) }
+}
+
+function diffKindForOriginalLine(line) {
+  if (!diffRegion) return null
+  for (const r of diffRegion.ranges) {
+    if (r.kind !== "delete" && r.kind !== "context" && line >= r.startLine && line <= r.endLine) return r.kind
+  }
+  return null
+}
+
+function setExpandButton(which, visible, action) {
+  const parent = document.getElementById("editor")
+  if (!parent) return null
+  let button = which === "up" ? diffUpButton : diffDownButton
+  if (!visible) { if (button) button.style.display = "none"; return button }
+  if (!button) {
+    button = document.createElement("button")
+    button.type = "button"
+    button.className = "cm-diff-expand cm-diff-expand-" + which
+    button.addEventListener("click", action)
+    parent.appendChild(button)
+    if (which === "up") diffUpButton = button; else diffDownButton = button
+  }
+  button.textContent = which === "up" ? "expand ↑ 20" : "expand ↓ 20"
+  button.style.display = "block"
+  return button
+}
+
+function renderDiffRegion() {
+  if (!view || !diffRegion) return
+  // Re-anchors/revisions replace the slice in-place. Capture before dispatch and restore after
+  // layout so a live walkthrough_updated frame never yanks the reader back to the top.
+  const preservedScrollTop = view.scrollDOM.scrollTop
+  const allLines = String(diffRegion.content || "").split("\n")
+  const firstChanged = diffRegion.ranges.length ? Math.min(...diffRegion.ranges.map((r) => r.startLine)) : 1
+  const lastChanged = diffRegion.ranges.length ? Math.max(...diffRegion.ranges.map((r) => r.endLine)) : Math.min(1, allLines.length)
+  const sliceStart = Math.max(1, firstChanged - diffContextBefore)
+  const sliceEnd = Math.min(allLines.length, lastChanged + diffContextAfter)
+  diffRegion.sliceStart = sliceStart
+  const displayLines = []
+  // originalLine -> the 1-indexed DISPLAY row carrying that line's real content (never a deleted
+  // row). Thread/composer block widgets hang off this row so a deletion never swallows them.
+  const anchorRow = new Map()
+  diffDisplayMeta = []
+  for (let original = sliceStart; original <= sliceEnd; original++) {
+    for (const range of diffRegion.ranges) {
+      if (range.startLine !== original) continue
+      for (const deleted of range.deletedLines) {
+        displayLines.push(deleted)
+        diffDisplayMeta.push({ originalLine: original, kind: "delete" })
+      }
+    }
+    displayLines.push(allLines[original - 1])
+    diffDisplayMeta.push({ originalLine: original, kind: diffKindForOriginalLine(original) })
+    anchorRow.set(original, diffDisplayMeta.length)
+  }
+  const slice = displayLines.join("\n")
+  const threadsByLine = new Map()
+  for (const thread of diffRegion.threads) {
+    const list = threadsByLine.get(thread.line) || []
+    list.push(thread)
+    threadsByLine.set(thread.line, list)
+  }
+  // Only replace the doc when the TEXT actually changed. A threads-only re-render then reuses the
+  // existing widget DOM (see ComposerWidget.eq) instead of tearing the composer out mid-sentence.
+  const textChanged = view.state.doc.toString() !== slice
+  view.dispatch({
+    changes: textChanged ? { from: 0, to: view.state.doc.length, insert: slice } : undefined,
+    effects: [
+      langC.reconfigure(langFor(diffRegion.language || diffRegion.path)),
+      diffC.reconfigure([
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        EditorView.decorations.compute([], (state) => {
+          const decorations = []
+          for (let n = 1; n <= state.doc.lines; n++) {
+            const kind = diffDisplayMeta[n - 1] && diffDisplayMeta[n - 1].kind
+            if (kind) decorations.push(Decoration.line({ class: "cm-diff-line cm-diff-" + kind }).range(state.doc.line(n).from))
+          }
+          for (const [original, list] of threadsByLine) {
+            const row = anchorRow.get(original)
+            if (!row || row > state.doc.lines) continue
+            const pos = state.doc.line(row).to
+            for (const thread of list) {
+              const expanded = thread.status !== "resolved" || expandedThreads.has(thread.id)
+              decorations.push(Decoration.widget({
+                widget: new ThreadWidget(thread, expanded), block: true, side: 1,
+              }).range(pos))
+            }
+          }
+          if (diffComposer) {
+            const row = anchorRow.get(diffComposer.line)
+            if (row && row <= state.doc.lines) {
+              decorations.push(Decoration.widget({
+                widget: new ComposerWidget(diffComposer.line, diffComposer.draft), block: true, side: 2,
+              }).range(state.doc.line(row).to))
+            }
+          }
+          return Decoration.set(decorations, true)
+        }),
+        gutter({
+          class: "cm-diff-gutter",
+          lineMarker(v, line) {
+            const displayLine = v.state.doc.lineAt(line.from).number
+            const kind = diffDisplayMeta[displayLine - 1] && diffDisplayMeta[displayLine - 1].kind
+            return kind === "add" ? addMarker : kind === "delete" ? deleteMarker : kind === "change" ? changeMarker : null
+          },
+        }),
+        EditorView.domEventHandlers({
+          mousedown(event, v) {
+            // Clicks inside a thread/composer widget belong to that widget, not to the gutter.
+            if (event.target && event.target.closest && event.target.closest(".cm-wt-thread")) return false
+            const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
+            if (pos == null) return false
+            const displayLine = v.state.doc.lineAt(pos).number
+            // A deleted row is display-only — its composer anchors on the originalLine it precedes.
+            const original = (diffDisplayMeta[displayLine - 1] || {}).originalLine || sliceStart
+            if (!diffComposer || diffComposer.line !== original) {
+              diffComposer = { line: original, draft: "" }
+              renderDiffRegion()
+            }
+            try { bridge() && bridge().onDiffLineClick(original) } catch (e) {}
+            return false
+          },
+          wheel(event) {
+            if (Math.abs(event.deltaX) < 60 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return false
+            const now = Date.now()
+            if (now - lastDiffPageAt < 450) return true
+            lastDiffPageAt = now
+            try { bridge() && bridge().onDiffPage(event.deltaX > 0 ? "next" : "previous") } catch (e) {}
+            event.preventDefault()
+            return true
+          },
+        }),
+        EditorView.theme({
+          "&": { height: "100%" },
+          ".cm-content": { paddingTop: "30px", paddingBottom: "30px" },
+          ".cm-diff-line.cm-diff-add": { backgroundColor: "rgba(46, 160, 67, .20)" },
+          ".cm-diff-line.cm-diff-change": { backgroundColor: "rgba(210, 153, 34, .18)" },
+          ".cm-diff-line.cm-diff-delete": { backgroundColor: "rgba(248, 81, 73, .20)" },
+          ".cm-diff-gutter": { width: "20px", textAlign: "center", fontWeight: "700" },
+          ".cm-diff-gutter-add": { color: "#56d364" },
+          ".cm-diff-gutter-change": { color: "#e3b341" },
+          ".cm-diff-gutter-delete": { color: "#ff7b72" },
+          // Thread + composer bubbles — GitHub-PR shaped, tuned to the app's dark surface.
+          ".cm-wt-thread": {
+            margin: "6px 12px 6px 44px", padding: "8px 10px", borderRadius: "8px",
+            border: "1px solid #3a4150", background: "#21262d", color: "#c9d1d9",
+            font: "13px/1.45 system-ui, -apple-system, sans-serif", whiteSpace: "normal",
+          },
+          ".cm-wt-thread-resolved": { opacity: "0.75" },
+          ".cm-wt-collapsed": {
+            display: "block", width: "100%", textAlign: "left", background: "transparent",
+            border: "0", padding: "0", color: "#7ee787", cursor: "pointer", font: "inherit",
+          },
+          ".cm-wt-comment": { paddingBottom: "6px" },
+          ".cm-wt-head": { display: "flex", gap: "8px", alignItems: "baseline", paddingBottom: "2px" },
+          ".cm-wt-author": { fontWeight: "600", color: "#58a6ff" },
+          ".cm-wt-author-agent": { color: "#d2a8ff" },
+          ".cm-wt-time": { fontSize: "11px", color: "#8b949e" },
+          ".cm-wt-body": { whiteSpace: "pre-wrap", wordBreak: "break-word" },
+          ".cm-wt-actions": { display: "flex", gap: "8px", justifyContent: "flex-end", paddingTop: "4px" },
+          ".cm-wt-reply": { display: "flex", gap: "6px", alignItems: "flex-start", paddingTop: "6px" },
+          ".cm-wt-btn": {
+            padding: "3px 10px", borderRadius: "6px", border: "1px solid #3a4150",
+            background: "#2d333b", color: "#c9d1d9", cursor: "pointer", font: "inherit", fontSize: "12px",
+          },
+          ".cm-wt-btn-primary": { background: "#238636", borderColor: "#2ea043", color: "#ffffff" },
+          ".cm-wt-input": {
+            flex: "1", width: "100%", boxSizing: "border-box", resize: "vertical",
+            padding: "6px 8px", borderRadius: "6px", border: "1px solid #3a4150",
+            background: "#0d1117", color: "#c9d1d9", font: "inherit", outline: "none",
+          },
+          ".cm-wt-input:focus": { borderColor: "#58a6ff" },
+        }),
+      ]),
+    ],
+  })
+  requestAnimationFrame(() => { if (view) view.scrollDOM.scrollTop = preservedScrollTop })
+  setExpandButton("up", sliceStart > 1, () => {
+    diffContextBefore += 20; renderDiffRegion()
+    try { bridge() && bridge().onDiffExpand("up") } catch (e) {}
+  })
+  setExpandButton("down", sliceEnd < allLines.length, () => {
+    diffContextAfter += 20; renderDiffRegion()
+    try { bridge() && bridge().onDiffExpand("down") } catch (e) {}
+  })
+}
+
+window.cmShowDiffRegion = function (spec) {
+  if (!view || !spec) return
+  const ranges = normalizedRanges(spec)
+  const signature = JSON.stringify([spec.path || "", String(spec.content || "").length, ranges])
+  diffRegion = { ...spec, ranges, threads: normalizedThreads(spec) }
+  // A threads/composer-only push (live review_comment frame) keeps the reader's expanded context.
+  if (signature !== diffRegionSignature) {
+    diffRegionSignature = signature
+    diffContextBefore = 20
+    diffContextAfter = 20
+    expandedThreads.clear()
+  }
+  const nextComposer = spec.composer && Number(spec.composer.line) > 0
+    ? { line: Number(spec.composer.line), draft: String(spec.composer.draft || "") }
+    : null
+  // Keep an in-flight local draft: only adopt the pushed composer when it moved to another line.
+  if (!nextComposer) diffComposer = null
+  else if (!diffComposer || diffComposer.line !== nextComposer.line) diffComposer = nextComposer
+  renderDiffRegion()
+}
 
 // ---------------------------------------------------------------------------
 // LSP (language-server) support — ported 1:1 from the web app's

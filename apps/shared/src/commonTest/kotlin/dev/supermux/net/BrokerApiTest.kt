@@ -85,6 +85,64 @@ class BrokerApiTest {
     }
 
     @Test
+    fun usage_response_parses_snapshot_fields() {
+        val r = json.decodeFromString<UsageResponse>(
+            """
+            {
+              "claude": {"fiveHour": {"used": 1.0}, "sevenDay": {"used": 2.0}},
+              "errors": {},
+              "fetchedAt": {"claude": "2026-01-02T03:04:05.000Z", "codex": null},
+              "source": {"claude": "live", "codex": null, "cursor": "cache"},
+              "refreshing": ["cursor", "grok"]
+            }
+            """.trimIndent(),
+        )
+        assertEquals("2026-01-02T03:04:05.000Z", r.fetchedAt["claude"])
+        assertEquals(null, r.fetchedAt["codex"])
+        assertEquals("live", r.source["claude"])
+        assertEquals("cache", r.source["cursor"])
+        assertEquals(listOf("cursor", "grok"), r.refreshing)
+    }
+
+    @Test
+    fun usage_response_tolerates_absent_snapshot_fields() {
+        val r = json.decodeFromString<UsageResponse>(
+            """{"claude":null,"codex":null,"cursor":null,"errors":{}}""",
+        )
+        assertEquals(emptyMap(), r.fetchedAt)
+        assertEquals(emptyMap(), r.source)
+        assertEquals(emptyList(), r.refreshing)
+    }
+
+    @Test
+    fun refresh_usage_posts_force_and_optional_providers() = runTest {
+        var path = ""
+        var method = ""
+        var body = ""
+        val engine = MockEngine { req ->
+            path = req.url.encodedPath
+            method = req.method.value
+            body = (req.body as? io.ktor.http.content.TextContent)?.text ?: ""
+            respond(
+                ByteReadChannel(
+                    """{"errors":{},"refreshing":["claude"],"fetchedAt":{"claude":"2026-01-01T00:00:00Z"},"source":{"claude":"live"}}""",
+                ),
+                io.ktor.http.HttpStatusCode.OK,
+                io.ktor.http.headersOf(io.ktor.http.HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val api = BrokerApi("http://h", "tok", HttpClient(engine))
+        val r = api.refreshUsage(providers = listOf("claude"), force = true)
+        assertEquals("POST", method)
+        assertEquals("/usage/refresh", path)
+        assertTrue("\"force\":true" in body, "expected force=true in $body")
+        assertTrue("claude" in body, "expected providers in $body")
+        assertEquals(listOf("claude"), r.refreshing)
+        assertEquals("2026-01-01T00:00:00Z", r.fetchedAt["claude"])
+        assertEquals("live", r.source["claude"])
+    }
+
+    @Test
     fun httpBase_strips_ws_scheme() {
         // Access internal field to verify URL conversion logic.
         // Dummy HttpClient — we only test the URL derivation, no real HTTP calls.

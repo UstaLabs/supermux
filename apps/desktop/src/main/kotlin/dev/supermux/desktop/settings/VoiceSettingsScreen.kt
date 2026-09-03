@@ -31,7 +31,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CircularProgressIndicator
 import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.desktop.ui.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton

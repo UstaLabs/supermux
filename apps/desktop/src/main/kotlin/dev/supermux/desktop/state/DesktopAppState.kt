@@ -12,6 +12,7 @@
 package dev.supermux.desktop.state
 
 import dev.supermux.desktop.notify.AgentReplyEvent
+import dev.supermux.desktop.editor.WalkthroughState
 import dev.supermux.desktop.session.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
@@ -61,6 +62,7 @@ import dev.supermux.net.TerminalSummary
 import dev.supermux.net.TranscribeResponse
 import dev.supermux.net.UpdateCommentBody
 import dev.supermux.net.UpdateStatus
+import dev.supermux.net.Walkthrough
 import dev.supermux.net.UsageResponse
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
@@ -214,6 +216,11 @@ class DesktopAppState(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+    /** Compose-owned per-session walkthrough state. The stable instance survives pane switches. */
+    private val walkthroughStates = mutableMapOf<String, WalkthroughState>()
+
+    fun walkthroughState(sessionId: String): WalkthroughState =
+        walkthroughStates.getOrPut(sessionId) { WalkthroughState(sessionId) }
     /**
      * Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
      * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
@@ -289,6 +296,12 @@ class DesktopAppState(
     // demand by [listDisplays]) — mirrors AppViewModel:158-161.
     private val _displays = MutableStateFlow<List<DisplayStream>>(emptyList())
     val displays: StateFlow<List<DisplayStream>> = _displays
+
+    // Last GET /usage (or usage_updated) snapshot. The Usage popover renders this immediately
+    // on open and updates in place when a usage_updated frame arrives — never waits on the
+    // network to draw. Seeded by [usage]/[refreshUsage]; WS [ServerFrame.UsageUpdated] replaces it.
+    private val _usage = MutableStateFlow<UsageResponse?>(null)
+    val usageSnapshot: StateFlow<UsageResponse?> = _usage
 
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
@@ -410,6 +423,7 @@ class DesktopAppState(
             is ServerFrame.SessionRemoved -> {
                 _sessions.update { it.filterNot { s -> s.id == frame.id } }
                 _bgTasks.update { it - frame.id }
+                walkthroughStates.remove(frame.id)
             }
             is ServerFrame.SessionRenamed -> {
                 _sessions.update { current ->
@@ -537,6 +551,10 @@ class DesktopAppState(
             is ServerFrame.FsChanged -> {
                 _fsChanges.tryEmit(frame)
             }
+            is ServerFrame.WalkthroughUpdated ->
+                walkthroughState(frame.sessionId).applyWalkthrough(frame.walkthrough)
+            is ServerFrame.ReviewCommentFrame ->
+                walkthroughState(frame.sessionId).applyComment(frame.comment)
             // M4b finish flow: the async job's progress/outcome arrives here. Update the finishJobs
             // flow the FinishDialog drives AND write the job back onto the session's finish_job so a
             // list row (and any later snapshot round-trip) stays consistent (AppViewModel:275 parity).
@@ -572,6 +590,7 @@ class DesktopAppState(
                 _displays.update { list -> list.filterNot { it.id == frame.display.id } + frame.display }
             is ServerFrame.DisplayRemoved ->
                 _displays.update { list -> list.filterNot { it.id == frame.id } }
+            is ServerFrame.UsageUpdated -> _usage.value = frame.usage
             // Out of M1/M3/M4b/M5-2 scope — reduced in later milestones: agent_error (see
             // AppViewModel for the full reducer). Must still not crash.
             else -> {}
@@ -1117,6 +1136,10 @@ class DesktopAppState(
     suspend fun fsDiff(session: SessionInfo, base: String? = null): FsDiffResult? =
         runApi("fsDiff") { api.fsDiff(session.id, base) }
 
+    /** GET the current authored walkthrough. Null on a missing/failed endpoint. */
+    suspend fun getWalkthrough(session: SessionInfo): Walkthrough? =
+        runApi("getWalkthrough") { api.getWalkthrough(session.id) }
+
     /** GET /sessions/<id>/fs/refs → branches + recent commits per repo, for the diff-base picker's
      *  "Previous commit…" / "Another branch…" submenus. Null on any failure. */
     suspend fun fsRefs(session: SessionInfo): FsRefsResult? =
@@ -1125,6 +1148,10 @@ class DesktopAppState(
     /** POST /sessions/<id>/review/comments → the created comment. Null on any failure. */
     suspend fun reviewAddComment(session: SessionInfo, body: AddCommentBody): ReviewComment? =
         runApi("reviewAddComment") { api.reviewAddComment(session.id, body) }
+
+    /** GET existing roots and replies so a reopened walkthrough is complete before live frames. */
+    suspend fun reviewComments(session: SessionInfo): List<ReviewComment> =
+        runApi("reviewComments") { api.reviewComments(session.id) } ?: emptyList()
 
     /** PATCH a comment to status="resolved" (iOS/Android reviewResolve parity). False on any failure. */
     suspend fun reviewResolve(session: SessionInfo, commentId: String): Boolean =
@@ -1405,9 +1432,19 @@ class DesktopAppState(
     // throw (SKIE-safe) on a non-2xx, so a broker hiccup here yields null, not an exception.
 
     /** GET /usage — per-provider usage (Claude / Codex / Cursor / opencode) + partial-failure
-     *  [UsageResponse.errors]. Null on any transport/decode failure. */
+     *  [UsageResponse.errors]. Null on any transport/decode failure. A successful decode is
+     *  also held on [usageSnapshot] so the popover can paint immediately on the next open. */
     suspend fun usage(): UsageResponse? =
-        runApi("usage") { api.usage() }
+        runApi("usage") { api.usage() }?.also { _usage.value = it }
+
+    /** POST /usage/refresh — kick a live refresh (force ignores the 5-min throttle) and return
+     *  the current snapshot immediately with [UsageResponse.refreshing] populated. Null on
+     *  any transport/decode failure. */
+    suspend fun refreshUsage(providers: List<String>? = null, force: Boolean = true): UsageResponse? =
+        runApi("refreshUsage") { api.refreshUsage(providers, force) }?.also { _usage.value = it }
+
+    /** Replace the held snapshot (Codex redeem updates one provider in place). */
+    fun applyUsage(usage: UsageResponse) { _usage.value = usage }
 
     /** POST /usage/codex/reset — redeem one banked Codex rate-limit reset; returns the refreshed
      *  Codex usage so the card can update in place. Null on any failure. */

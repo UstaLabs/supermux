@@ -52,12 +52,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.ui.draw.clip
 import dev.supermux.desktop.ui.AlertDialog
 import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.desktop.ui.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -296,10 +296,10 @@ fun SessionLinksMenu(
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("session_links")) {
             Icon(
-                Icons.Filled.Public,
+                Icons.Outlined.Public,
                 contentDescription = "Links",
                 tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -428,10 +428,10 @@ fun OverflowMenu(
     Box(modifier) {
         IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("shell_overflow")) {
             Icon(
-                Icons.Filled.MoreVert,
+                Icons.Outlined.MoreVert,
                 contentDescription = "More",
                 tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
         val chatDetail by ChatDetailPrefs.level.collectAsState()

@@ -13,6 +13,8 @@ import { GrokAdapter } from "../agents/grok/adapter"
 import type { GrokRunner } from "../agents/grok/runner"
 import type { AgentPhase } from "./agent-state-store"
 import type { FileStore } from "../files/store"
+import { ReviewStore } from "../review/store"
+import { WalkthroughStore } from "../walkthrough/store"
 
 /** Seams for the applyConfig frame tests; everything else stays inert. */
 type PortSeams = {
@@ -69,12 +71,15 @@ function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
       exposedProxyLinksBaseUrl: () => undefined,
       proxyWsPayload: () => ({}),
       proxyLiveness: { getStatus: () => "unknown", refresh: async () => {} },
+      postBrokerInbound: () => {},
     },
     stores: {
       fileStore: {} as unknown as FileStore,
       messageLog: { get: () => [], update: () => false, addReaction: () => false, findByChannelMessageId: () => undefined },
       searchStore: { searchKnowledge: () => [], searchSessions: () => [] },
       db,
+      reviewStore: new ReviewStore(db),
+      walkthroughStore: new WalkthroughStore(db),
     },
     resume: {
       bind: async () => {},

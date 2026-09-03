@@ -1,6 +1,8 @@
 package dev.supermux.desktop.state
 
 import dev.supermux.net.BrokerApi
+import dev.supermux.net.UsageResponse
+import dev.supermux.proto.ServerFrame
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -151,5 +153,58 @@ class DesktopUsageTest {
         val result = app.redeemCodexReset()
 
         assertNull(result)
+    }
+
+    // ── refreshUsage + held snapshot ──────────────────────────────────────────
+
+    @Test fun refresh_usage_posts_to_the_refresh_path_with_force_true() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(
+            recorded,
+            body = """{"errors":{},"refreshing":["claude"],"fetchedAt":{"claude":"2026-01-01T00:00:00Z"},"source":{"claude":"live"}}""",
+        )
+
+        val result = app.refreshUsage()
+
+        val rec = recorded.single()
+        assertEquals(HttpMethod.Post, rec.method)
+        assertEquals("/usage/refresh", rec.path)
+        assertTrue(result != null)
+        assertEquals(listOf("claude"), result.refreshing)
+        assertEquals("2026-01-01T00:00:00Z", result.fetchedAt["claude"])
+        assertEquals(result, app.usageSnapshot.value)
+    }
+
+    @Test fun usage_get_holds_the_snapshot_in_app_state() = runTest {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(
+            recorded,
+            body = """{"errors":{"opencode":"not configured"},"fetchedAt":{"claude":"2026-01-02T03:04:05.000Z"}}""",
+        )
+        assertNull(app.usageSnapshot.value)
+
+        val result = app.usage()
+
+        assertEquals(result, app.usageSnapshot.value)
+        assertEquals("2026-01-02T03:04:05.000Z", app.usageSnapshot.value?.fetchedAt?.get("claude"))
+    }
+
+    @Test fun usage_updated_frame_replaces_the_held_snapshot() {
+        val s = DesktopAppState(
+            baseUrl = "ws://test:9898",
+            token = "t",
+            scope = TestScope(UnconfinedTestDispatcher()),
+            connectOnInit = false,
+        )
+        val snap = UsageResponse(
+            fetchedAt = mapOf("codex" to "2026-04-01T00:00:00Z"),
+            source = mapOf("codex" to "agent"),
+            refreshing = listOf("cursor"),
+        )
+
+        s.reduce(ServerFrame.UsageUpdated(snap))
+
+        assertEquals(snap, s.usageSnapshot.value)
+        assertEquals(listOf("cursor"), s.usageSnapshot.value?.refreshing)
     }
 }

@@ -43,6 +43,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import dev.supermux.desktop.ui.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -106,6 +107,23 @@ fun formatResetEpochSeconds(resetsAt: Double?, now: Instant = Instant.now()): St
     return formatResetFromEpochMillis((secs * 1000.0).toLong(), now)
 }
 
+/**
+ * Per-provider "as of <relative>" caption from [UsageResponse.fetchedAt] (ISO-8601, or a
+ * numeric epoch-millis string). Blank when missing/unparseable — the card then omits the line.
+ * [now] is injected for deterministic tests (same java.time Instant as [formatResetIso]).
+ */
+fun formatFetchedAt(fetchedAt: String?, now: Instant = Instant.now()): String {
+    val s = fetchedAt?.takeIf { it.isNotBlank() } ?: return ""
+    val ms = s.toLongOrNull() ?: runCatching { Instant.parse(s).toEpochMilli() }.getOrElse { return "" }
+    val diffSec = ((now.toEpochMilli() - ms) / 1000L).coerceAtLeast(0L)
+    return when {
+        diffSec < 60L -> "as of just now"
+        diffSec < 3600L -> "as of ${diffSec / 60}m ago"
+        diffSec < 86_400L -> "as of ${diffSec / 3600}h ago"
+        else -> "as of ${diffSec / 86_400}d ago"
+    }
+}
+
 private fun formatResetFromEpochMillis(ms: Long, now: Instant): String {
     val diff = ms - now.toEpochMilli()
     if (diff <= 0) return "resets soon"
@@ -152,6 +170,10 @@ fun UsageCard(
     subtitle: String,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    asOf: String? = null,
+    asOfTag: String? = null,
+    refreshing: Boolean = false,
+    refreshingTag: String? = null,
     badge: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -172,6 +194,24 @@ fun UsageCard(
             Column(Modifier.weight(1f)) {
                 Text(title, color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Text(subtitle, color = cs.onSurfaceVariant, fontSize = 12.sp)
+                if (!asOf.isNullOrEmpty()) {
+                    Text(
+                        asOf,
+                        color = cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        modifier = asOfTag?.let { Modifier.testTag(it) } ?: Modifier,
+                    )
+                }
+            }
+            if (refreshing) {
+                CircularProgressIndicator(
+                    color = cs.primary,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier
+                        .padding(end = Space.sm)
+                        .size(14.dp)
+                        .then(refreshingTag?.let { Modifier.testTag(it) } ?: Modifier),
+                )
             }
             badge?.invoke()
         }
@@ -223,13 +263,22 @@ fun UsageFooterRow(label: String, value: String) {
 // ─── Provider cards ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun ClaudeUsageCard(claude: ClaudeUsage?, error: String?) {
+fun ClaudeUsageCard(
+    claude: ClaudeUsage?,
+    error: String?,
+    asOf: String? = null,
+    refreshing: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
         title = "Claude",
         subtitle = "Pro plan",
         enabled = claude != null,
         modifier = Modifier.testTag("usage_card_claude"),
+        asOf = asOf,
+        asOfTag = "usage_as_of_claude",
+        refreshing = refreshing,
+        refreshingTag = "usage_refreshing_claude",
     ) {
         if (claude == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
@@ -258,6 +307,8 @@ fun CodexUsageCard(
     codex: CodexUsage?,
     error: String?,
     onRedeem: (suspend () -> CodexResetResult?)? = null,
+    asOf: String? = null,
+    refreshing: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -273,6 +324,10 @@ fun CodexUsageCard(
         subtitle = codex?.plan?.takeIf { it.isNotBlank() } ?: "unknown",
         enabled = codex != null,
         modifier = Modifier.testTag("usage_card_codex"),
+        asOf = asOf,
+        asOfTag = "usage_as_of_codex",
+        refreshing = refreshing,
+        refreshingTag = "usage_refreshing_codex",
         badge = if (codex?.limitReached == true) {
             {
                 Box(
@@ -361,13 +416,22 @@ fun codexResetNote(r: CodexResetResult?): String {
 }
 
 @Composable
-fun CursorUsageCard(cursor: CursorUsage?, error: String?) {
+fun CursorUsageCard(
+    cursor: CursorUsage?,
+    error: String?,
+    asOf: String? = null,
+    refreshing: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
         title = "Cursor",
         subtitle = "Billing cycle",
         enabled = cursor != null,
         modifier = Modifier.testTag("usage_card_cursor"),
+        asOf = asOf,
+        asOfTag = "usage_as_of_cursor",
+        refreshing = refreshing,
+        refreshingTag = "usage_refreshing_cursor",
     ) {
         if (cursor == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
@@ -383,13 +447,22 @@ fun CursorUsageCard(cursor: CursorUsage?, error: String?) {
 /** opencode has no subscription quota, so this shows cumulative local token/cost
  *  stats — same shape as the web UsageView card. */
 @Composable
-fun OpenCodeUsageCard(opencode: OpenCodeUsage?, error: String?) {
+fun OpenCodeUsageCard(
+    opencode: OpenCodeUsage?,
+    error: String?,
+    asOf: String? = null,
+    refreshing: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
         title = "opencode",
         subtitle = "Local usage · all time",
         enabled = opencode != null,
         modifier = Modifier.testTag("usage_card_opencode"),
+        asOf = asOf,
+        asOfTag = "usage_as_of_opencode",
+        refreshing = refreshing,
+        refreshingTag = "usage_refreshing_opencode",
         badge = opencode?.let { u -> { Text(dollars(u.totalCostUsd), color = cs.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp) } },
     ) {
         if (opencode == null) {
@@ -405,13 +478,22 @@ fun OpenCodeUsageCard(opencode: OpenCodeUsage?, error: String?) {
 }
 
 @Composable
-fun GrokUsageCard(grok: GrokUsage?, error: String?) {
+fun GrokUsageCard(
+    grok: GrokUsage?,
+    error: String?,
+    asOf: String? = null,
+    refreshing: Boolean = false,
+) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
         title = "Grok",
         subtitle = grok?.plan?.ifBlank { null } ?: "unknown",
         enabled = grok != null,
         modifier = Modifier.testTag("usage_card_grok"),
+        asOf = asOf,
+        asOfTag = "usage_as_of_grok",
+        refreshing = refreshing,
+        refreshingTag = "usage_refreshing_grok",
     ) {
         if (grok == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
@@ -448,8 +530,11 @@ fun UsageScreen(
     loading: Boolean,
     onBack: () -> Unit,
     onRedeem: suspend () -> CodexResetResult?,
+    onRefresh: (suspend () -> Unit)? = null,
+    now: Instant = Instant.now(),
 ) {
     val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
     Column(
         Modifier
             .fillMaxSize()
@@ -466,6 +551,20 @@ fun UsageScreen(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            if (onRefresh != null) {
+                IconButton(
+                    onClick = { if (!loading) scope.launch { onRefresh() } },
+                    enabled = !loading,
+                    modifier = Modifier.testTag("usage_refresh"),
+                ) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = "Refresh",
+                        tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
             IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
                 Icon(
                     Icons.Filled.Close,
@@ -499,11 +598,37 @@ fun UsageScreen(
                             .padding(Space.lg),
                         verticalArrangement = Arrangement.spacedBy(Space.md),
                     ) {
-                        ClaudeUsageCard(usage?.claude, usage?.errors?.get("claude"))
-                        CodexUsageCard(usage?.codex, usage?.errors?.get("codex"), onRedeem = onRedeem)
-                        CursorUsageCard(usage?.cursor, usage?.errors?.get("cursor"))
-                        OpenCodeUsageCard(usage?.opencode, usage?.errors?.get("opencode"))
-                        GrokUsageCard(usage?.grok, usage?.errors?.get("grok"))
+                        ClaudeUsageCard(
+                            usage?.claude,
+                            usage?.errors?.get("claude"),
+                            asOf = formatFetchedAt(usage?.fetchedAt?.get("claude"), now),
+                            refreshing = usage?.refreshing?.contains("claude") == true,
+                        )
+                        CodexUsageCard(
+                            usage?.codex,
+                            usage?.errors?.get("codex"),
+                            onRedeem = onRedeem,
+                            asOf = formatFetchedAt(usage?.fetchedAt?.get("codex"), now),
+                            refreshing = usage?.refreshing?.contains("codex") == true,
+                        )
+                        CursorUsageCard(
+                            usage?.cursor,
+                            usage?.errors?.get("cursor"),
+                            asOf = formatFetchedAt(usage?.fetchedAt?.get("cursor"), now),
+                            refreshing = usage?.refreshing?.contains("cursor") == true,
+                        )
+                        OpenCodeUsageCard(
+                            usage?.opencode,
+                            usage?.errors?.get("opencode"),
+                            asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
+                            refreshing = usage?.refreshing?.contains("opencode") == true,
+                        )
+                        GrokUsageCard(
+                            usage?.grok,
+                            usage?.errors?.get("grok"),
+                            asOf = formatFetchedAt(usage?.fetchedAt?.get("grok"), now),
+                            refreshing = usage?.refreshing?.contains("grok") == true,
+                        )
                     }
                 }
             }

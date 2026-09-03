@@ -422,6 +422,12 @@ data class UsageResponse(
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
     val errors: Map<String, String> = emptyMap(),
+    /** ISO timestamp of when each provider's data was last obtained. Absent on older brokers. */
+    val fetchedAt: Map<String, String?> = emptyMap(),
+    /** live | agent | local | cache — where each provider's current data came from. */
+    val source: Map<String, String?> = emptyMap(),
+    /** Providers with a live fetch in flight right now. */
+    val refreshing: List<String> = emptyList(),
 )
 
 // Result of redeeming a banked Codex rate-limit reset (POST /usage/codex/reset).
@@ -728,6 +734,7 @@ data class RefCommit(
 @Serializable
 data class ReviewComment(
     val id: String,
+    val parentId: String? = null,
     val repo: String,
     val path: String,
     val side: String,
@@ -738,7 +745,13 @@ data class ReviewComment(
     val status: String,
     val currentLine: Int? = null,
     val outdated: Boolean = false,
+    val rangeStart: Int? = null,
+    val rangeEnd: Int? = null,
+    val resolvedBy: String? = null,
 )
+
+@Serializable
+data class ReviewCommentsResult(val comments: List<ReviewComment> = emptyList())
 
 @Serializable
 data class AddCommentBody(
@@ -749,6 +762,46 @@ data class AddCommentBody(
     val anchorContext: String,
     val body: String,
     val diffHunkHeader: String? = null,
+    /** "instant" delivers the comment to the agent immediately (walkthrough). */
+    val deliver: String? = null,
+    val parentId: String? = null,
+)
+
+/** One authored walkthrough for a session. The broker returns only the current walkthrough. */
+@Serializable
+data class Walkthrough(
+    val id: String,
+    val sessionId: String = "",
+    val title: String,
+    val baseSpec: String = "session-start",
+    val revision: Int = 1,
+    val createdAt: String = "",
+    val current: Boolean = true,
+    val steps: List<WalkthroughStep> = emptyList(),
+)
+
+@Serializable
+data class WalkthroughStep(
+    val id: String,
+    val walkthroughId: String = "",
+    val ord: Int = 0,
+    val title: String,
+    val bodyMd: String = "",
+    val repo: String = "",
+    val path: String? = null,
+    val side: String = "RIGHT",
+    val anchorLine: Int? = null,
+    val rangeStart: Int? = null,
+    val rangeEnd: Int? = null,
+    val anchorContext: String? = null,
+    val anchorStatus: String = "ok",
+    val currentLine: Int? = null,
+    val outdated: Boolean = false,
+)
+
+@Serializable
+data class WalkthroughResult(
+    val walkthrough: Walkthrough? = null,
 )
 
 @Serializable
@@ -1048,6 +1101,14 @@ private data class RegisterPushDeviceBody(
     val platform: String,
     val routingToken: String,
     val pubkey: String,
+)
+
+/** POST /usage/refresh body. [force] is always encoded (the Kotlin default is true; the
+ *  broker treats an omitted force as false). [providers] is omitted when null. */
+@Serializable
+private data class RefreshUsageBody(
+    val providers: List<String>? = null,
+    val force: Boolean,
 )
 
 /** POST $relayUrl/register body. */
@@ -1719,6 +1780,11 @@ class BrokerApi(
     /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode / grok) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
 
+    /** POST /usage/refresh → kick a live refresh; returns the current snapshot immediately
+     *  with [UsageResponse.refreshing] populated. [force] ignores the 5-min throttle. */
+    suspend fun refreshUsage(providers: List<String>? = null, force: Boolean = true): UsageResponse =
+        postReturningJson("$httpBase/usage/refresh", RefreshUsageBody(providers, force))
+
     /** POST /usage/codex/reset → redeem one banked Codex rate-limit reset. */
     suspend fun redeemCodexReset(): CodexResetResult =
         postReturningJson("$httpBase/usage/codex/reset", EmptyBody())
@@ -2136,6 +2202,10 @@ class BrokerApi(
     suspend fun fsDiff(sessionId: String, base: String? = null): FsDiffResult =
         getJson("$httpBase/sessions/$sessionId/fs/diff" + if (base != null) "?base=${urlEncode(base)}" else "")
 
+    /** GET /sessions/<id>/walkthrough → { walkthrough } envelope; null when none authored. */
+    suspend fun getWalkthrough(sessionId: String): Walkthrough? =
+        getJson<WalkthroughResult>("$httpBase/sessions/$sessionId/walkthrough").walkthrough
+
     /** GET /sessions/<id>/fs/refs → { repos: RepoRefs[] } (branches + recent commits per repo). */
     suspend fun fsRefs(sessionId: String): FsRefsResult =
         getJson("$httpBase/sessions/$sessionId/fs/refs")
@@ -2183,6 +2253,10 @@ class BrokerApi(
     /** POST /sessions/<id>/review/comments {repo,path,side,anchorLine,anchorContext,body,diffHunkHeader?} → the created comment. */
     suspend fun reviewAddComment(sessionId: String, body: AddCommentBody): ReviewComment =
         postReturningJson("$httpBase/sessions/$sessionId/review/comments", body)
+
+    /** GET all existing review threads for a session. */
+    suspend fun reviewComments(sessionId: String): List<ReviewComment> =
+        getJson<ReviewCommentsResult>("$httpBase/sessions/$sessionId/review/comments").comments
 
     /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
     suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {

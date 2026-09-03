@@ -269,6 +269,88 @@ fun EditorSurface(
     }
 }
 
+/** Read-only CodeMirror host used by walkthrough slides. Unlike [EditorSurface], its fallback is
+ * supplied by the caller so the native path can reuse [DiffRows] instead of an editable text box. */
+@Composable
+fun DiffRegionSurface(
+    jcefState: JcefState,
+    path: String,
+    content: String,
+    ranges: List<DiffRegionRange>,
+    language: String,
+    onLineClick: (Int) -> Unit,
+    onExpand: (String) -> Unit = {},
+    onPage: (String) -> Unit = {},
+    /** Comment threads rendered as in-editor block widgets (GitHub-PR style). */
+    threads: List<DiffRegionThread> = emptyList(),
+    /** An open/restored in-editor composer, or null. */
+    composer: DiffRegionComposer? = null,
+    onCommentSubmit: (line: Int, text: String) -> Unit = { _, _ -> },
+    onReplySubmit: (threadId: String, text: String) -> Unit = { _, _ -> },
+    onResolveThread: (threadId: String) -> Unit = {},
+    onComposerState: (line: Int, text: String) -> Unit = { _, _ -> },
+    scrollKey: Any? = null,
+    scrollTop: Int = 0,
+    onScrollChange: (Int) -> Unit = {},
+    onEngineReadyChange: (Boolean) -> Unit = {},
+    modifier: Modifier = Modifier,
+    onEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
+    indexUrlProvider: () -> String? = { defaultIndexUrl() },
+    engineFactory: (String, Boolean, Int) -> DesktopEditorEngine = { url, lw, fs ->
+        DesktopEditorEngine(url, lw, fs)
+    },
+    fallback: @Composable (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { onEnsureInit(scope) }
+    val engine = remember(jcefState is JcefState.Ready) {
+        if (jcefState !is JcefState.Ready) null
+        else runCatching { indexUrlProvider()?.let { engineFactory(it, true, EDITOR_FONT_DEFAULT) } }.getOrNull()
+    }
+    DisposableEffect(engine) { onDispose { engine?.dispose() } }
+    DisposableEffect(engine, scrollKey) {
+        onDispose { engine?.getScrollTop(onScrollChange) }
+    }
+    SideEffect {
+        engine?.onDiffLineClick = onLineClick
+        engine?.onDiffExpand = onExpand
+        engine?.onDiffPage = onPage
+        engine?.onCommentSubmit = onCommentSubmit
+        engine?.onReplySubmit = onReplySubmit
+        engine?.onResolveThread = onResolveThread
+        engine?.onComposerState = onComposerState
+    }
+    val ready by (engine?.ready ?: remember { MutableStateFlow(false) }).collectAsState()
+    LaunchedEffect(ready) { onEngineReadyChange(ready) }
+    LaunchedEffect(engine, path, content, ranges, language, scrollKey) {
+        engine?.setDocument(path, "")
+        engine?.showDiffRegion(path, content, ranges, language, scrollTop, threads, composer)
+    }
+    // Live thread/composer updates re-enter the SAME region: keyed on the threads and the composer's
+    // LINE (never its draft — a per-keystroke push would rebuild the textarea under the caret), and
+    // deliberately skipping the first run, which the region effect above already covered with the
+    // scroll restore attached.
+    var threadsPushed by remember(engine) { mutableStateOf(false) }
+    LaunchedEffect(engine, threads, composer?.line) {
+        if (!threadsPushed) { threadsPushed = true; return@LaunchedEffect }
+        engine?.updateDiffThreads(threads, composer)
+    }
+    var missedReady by remember(engine) { mutableStateOf(false) }
+    LaunchedEffect(engine, ready) {
+        if (engine == null || ready) return@LaunchedEffect
+        delay(READY_MISS_MS)
+        if (!engine.ready.value) missedReady = true
+    }
+    when {
+        jcefState is JcefState.Error || missedReady || (jcefState is JcefState.Ready && engine == null) ->
+            fallback(fallbackReason(jcefState))
+        jcefState is JcefState.Idle || jcefState is JcefState.Initializing -> InitializingView(modifier)
+        else -> Box(modifier.fillMaxSize().background(EDITOR_BG).testTag("walkthrough_diff_region")) {
+            if (engine != null) EditorSwingHost(engine, Modifier.fillMaxSize())
+        }
+    }
+}
+
 /**
  * Hosts the engine's JCEF AWT child. The browser is CREATED here — inside the SwingPanel factory,
  * which the compose-desktop runtime runs on the EDT when the panel is realized at full size — so the
@@ -277,7 +359,7 @@ fun EditorSurface(
  * into the dark holder once available; a stable dark holder means no white flash before first paint.
  */
 @Composable
-private fun EditorSwingHost(engine: DesktopEditorEngine, modifier: Modifier = Modifier) {
+internal fun EditorSwingHost(engine: DesktopEditorEngine, modifier: Modifier = Modifier) {
     val holder = remember { JPanel(BorderLayout()).apply { background = java.awt.Color(0x28, 0x2C, 0x34) } }
     // Step aside while anything modal is open — Compose cannot paint over this
     // heavyweight child, so a dialog or menu over the editor would be invisible.
@@ -391,7 +473,7 @@ private fun NativeCodeEditor(
     }
 }
 
-private fun fallbackReason(jcefState: JcefState): String = when (jcefState) {
+internal fun fallbackReason(jcefState: JcefState): String = when (jcefState) {
     is JcefState.Error -> "Native editor (embedded browser failed: ${jcefState.msg})"
     else -> "Native editor (rich editor unavailable)"
 }

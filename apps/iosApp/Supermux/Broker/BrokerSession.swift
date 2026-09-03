@@ -57,6 +57,9 @@ final class BrokerSession {
     private(set) var pendingSend: Set<String> = []            // client-local "Sending…"
     private(set) var commands: [String: [SlashCommand]] = [:]
     private(set) var displays: [DisplayStream] = []
+    /// Last GET /usage (or `usage_updated`) snapshot. The Usage page paints this immediately
+    /// on open and updates in place when a `usage_updated` frame arrives.
+    private(set) var usageSnapshot: UsageResponse?
     private(set) var finishJobs: [String: FinishJobDto] = [:]
     /// Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
     /// and optimistic markRead when the user opens a chat (web/Android/desktop parity).
@@ -424,6 +427,8 @@ final class BrokerSession {
         case .displayRemoved(let f):
             displays.removeAll { $0.id == f.id }
             dropDisplayHost(streamId: f.id)   // stream stopped → tear down its live host
+        case .usageUpdated(let f):
+            usageSnapshot = f.usage
         case .lspStatus(let f): lspBridges[f.session ?? ""]?.handleStatus(f)
         case .lspReady(let f): lspBridges[f.session]?.handleReady(f.serverId)
         case .lspError(let f): lspBridges[f.session ?? ""]?.handleError(f.serverId)
@@ -728,7 +733,21 @@ final class BrokerSession {
     }
 
     // Usage (typed), device mint/revoke, proxy privacy — mirror the web pages.
-    func usage() async -> UsageResponse? { try? await api.usage() }
+    func usage() async -> UsageResponse? {
+        if let result = try? await api.usage() {
+            usageSnapshot = result
+            return result
+        }
+        return usageSnapshot
+    }
+    /// POST /usage/refresh — force a live fetch; returns the current snapshot immediately.
+    func refreshUsage(providers: [String]? = nil, force: Bool = true) async -> UsageResponse? {
+        if let result = try? await api.refreshUsage(providers: providers, force: force) {
+            usageSnapshot = result
+            return result
+        }
+        return usageSnapshot
+    }
     func redeemCodexReset() async -> CodexResetResult? { try? await api.redeemCodexReset() }
     func addDevice(_ name: String) async -> AddDeviceResponse? { try? await api.addDevice(name: name) }
     func revokeDevice(_ name: String) async { try? await api.revokeDevice(name: name) }

@@ -55,6 +55,10 @@ import type { SpawnResult } from "./spawn-helper"
 import type { WorkspaceDto } from "../workspace/dto"
 import type { ProviderName } from "../display/types"
 import { makeLogger } from "../../shared/log"
+import { computeWorkdirDiff } from "../editor/workdir-diff"
+import type { ReviewStore } from "../review/store"
+import type { WalkthroughStore } from "../walkthrough/store"
+import { authorSteps, toWalkthroughDto, type ToolStepInput } from "../walkthrough/author"
 
 const log = makeLogger("session-manager")
 
@@ -142,12 +146,16 @@ export type SessionManagerPorts = {
     exposedProxyLinksBaseUrl(): string | undefined
     proxyWsPayload(entry: ProxyEntry, status?: ProxyStatus): object
     proxyLiveness: { getStatus(domain: string): ProxyStatus; refresh(): Promise<void> }
+    /** Broker-authored chat card (walkthrough ready, etc.). */
+    postBrokerInbound(sessionId: string, text: string): void
   }
   stores: {
     fileStore: FileStore
     messageLog: Pick<MessageStore, "get" | "update" | "addReaction" | "findByChannelMessageId">
     searchStore: Pick<SearchStore, "searchKnowledge" | "searchSessions">
     db: Db
+    reviewStore: Pick<ReviewStore, "add" | "get" | "update">
+    walkthroughStore: Pick<WalkthroughStore, "replaceCurrent" | "getCurrent">
   }
   /** Resume-flow collaborators that stay in main.ts (the rest are module imports). */
   resume: {
@@ -528,7 +536,7 @@ export class SessionManager {
     const fromSession = msg.session_id
     const s = this.registry.get(fromSession)  // Look up by UUID
     const op = msg.op
-    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session"])
+    const NO_ORCHESTRATE_REQUIRED = new Set(["rename_session", "expose_port", "unexpose_port", "set_proxy_public", "start_display", "stop_display", "list_devices", "rpc_resolve", "rpc_reject", "memory_search", "find_sessions", "read_session", "walkthrough", "reply_comment"])
     if (!s?.can_orchestrate && !NO_ORCHESTRATE_REQUIRED.has(op.name)) {
       return { ok: false, error: "permission denied (can_orchestrate=false)" }
     }
@@ -734,6 +742,88 @@ export class SessionManager {
       }
       case "rpc_resolve": { this.ports.getAgentRpc().settle(String(op.args.request_id), op.args.data); return { ok: true, value: "ok" } }
       case "rpc_reject":  { this.ports.getAgentRpc().fail(String(op.args.request_id), String(op.args.error ?? "rejected")); return { ok: true, value: "ok" } }
+      case "walkthrough": {
+        if (!s) return { ok: false, error: "unknown session" }
+        const title = stringArg(op.args, "title")
+        const base = optionalStringArg(op.args, "base") ?? ""
+        const rawSteps = op.args.steps
+        if (!Array.isArray(rawSteps)) return { ok: false, error: "steps must be an array" }
+        const inputs: ToolStepInput[] = rawSteps.map((raw, i) => {
+          if (!raw || typeof raw !== "object") throw new Error(`steps[${i}] must be an object`)
+          const step = raw as Record<string, unknown>
+          if (typeof step.title !== "string" || typeof step.body !== "string") {
+            throw new Error(`steps[${i}] needs title and body strings`)
+          }
+          return {
+            title: step.title,
+            body: step.body,
+            file: typeof step.file === "string" ? step.file : undefined,
+            repo: typeof step.repo === "string" ? step.repo : undefined,
+            lines: typeof step.lines === "string" ? step.lines : undefined,
+          }
+        })
+        const repos = await computeWorkdirDiff(s.workdir, s.base_commits ?? {}, s.created_at, base || undefined)
+        const { steps, results } = authorSteps(s.workdir, repos, inputs)
+        const wt = this.ports.stores.walkthroughStore.replaceCurrent(s.id, title, base, steps)
+        this.ports.getWebChannel()?.broadcastToAll({
+          type: "walkthrough_updated",
+          sessionId: s.id,
+          walkthrough: toWalkthroughDto(wt),
+        })
+        const n = steps.length
+        this.ports.orchestration.postBrokerInbound(
+          s.id,
+          `📖 Walkthrough ready — ${title} (${n} step${n === 1 ? "" : "s"})`,
+        )
+        return { ok: true, value: { id: wt.id, revision: wt.revision, steps: results } }
+      }
+      case "reply_comment": {
+        const commentId = stringArg(op.args, "comment_id")
+        const body = stringArg(op.args, "body")
+        const resolve = optionalBooleanArg(op.args, "resolve")
+        const parent = this.ports.stores.reviewStore.get(commentId)
+        if (!parent) return { ok: false, error: `unknown comment_id: ${commentId}` }
+        const reply = this.ports.stores.reviewStore.add({
+          sessionId: parent.sessionId,
+          repo: parent.repo,
+          path: parent.path,
+          side: parent.side,
+          baseSha: parent.baseSha,
+          headBlobSha: parent.headBlobSha,
+          anchorLine: parent.anchorLine,
+          rangeStart: parent.rangeStart,
+          rangeEnd: parent.rangeEnd,
+          anchorContext: parent.anchorContext,
+          diffHunkHeader: parent.diffHunkHeader,
+          parentId: commentId,
+          body,
+          author: "agent",
+          createdAt: new Date().toISOString(),
+        })
+        this.ports.getWebChannel()?.broadcastToAll({
+          type: "review_comment",
+          sessionId: parent.sessionId,
+          comment: reply,
+        })
+        if (resolve === true) {
+          let root = parent
+          while (root.parentId) {
+            const up = this.ports.stores.reviewStore.get(root.parentId)
+            if (!up) break
+            root = up
+          }
+          this.ports.stores.reviewStore.update(root.id, { status: "resolved", resolvedBy: "agent" })
+          const updated = this.ports.stores.reviewStore.get(root.id)
+          if (updated) {
+            this.ports.getWebChannel()?.broadcastToAll({
+              type: "review_comment",
+              sessionId: updated.sessionId,
+              comment: updated,
+            })
+          }
+        }
+        return { ok: true, value: { id: reply.id, parent_id: commentId, resolved: resolve === true } }
+      }
     }
     return { ok: false, error: "unknown orchestration op" }
     } catch (err) {

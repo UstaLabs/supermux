@@ -98,6 +98,12 @@ fun ViewHost(
      * path tapped in a chat transcript. The workspace decides which group it lands in.
      */
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit = { _, _, _ -> },
+    /** Reveal/create the singleton Changes pane and switch it into walkthrough mode. */
+    onOpenWalkthrough: (sessionId: String, stepId: String?) -> Unit = { _, _ -> },
+    /** Session whose walkthrough the singleton Changes pane currently presents. */
+    walkthroughSessionId: String? = null,
+    onWalkthroughClosed: () -> Unit = {},
+    appForSession: (String) -> DesktopAppState = { app },
     /** Markdown preview per view id — the file's TAB owns the toggle now, so the state is hoisted. */
     previewModeFor: (String) -> Boolean = { false },
     /** Close THIS view — the diff pane's close button is a tab close, not a mode toggle. */
@@ -160,6 +166,7 @@ fun ViewHost(
                 drafts = drafts,
                 onSelectSession = onSelectSession,
                 onOpenFile = onOpenFile,
+                onOpenWalkthrough = { stepId -> onOpenWalkthrough(sessionId, stepId) },
                 nativeContent = chatNativeContent,
                 loadProxies = loadProxies,
                 forceLinksMenu = forceLinksMenuFor == sessionId,
@@ -215,10 +222,14 @@ fun ViewHost(
                     )
                 "diff" -> DiffPaneForWorkspace(
                     app = app,
+                    appForSession = appForSession,
                     workspaceId = workspaceId,
                     base = view.stateString("diffBase"),
                     lspSessionId = primarySessionId,
+                    walkthroughSessionId = walkthroughSessionId,
+                    onWalkthroughClosed = onWalkthroughClosed,
                     onClose = onCloseView,
+                    onOpenFile = onOpenFile,
                     modifier = modifier.testTag("editor-$workdir"),
                 )
                 else -> ExplorerPaneForWorkspace(
@@ -250,6 +261,7 @@ private fun ChatPanelForSession(
     drafts: SnapshotStateMap<String, String>,
     onSelectSession: (String) -> Unit,
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
+    onOpenWalkthrough: (stepId: String?) -> Unit,
     nativeContent: @Composable (connect: () -> TerminalClient, onExit: () -> Unit) -> Unit,
     loadProxies: (suspend () -> List<ProxyDto>)?,
     forceLinksMenu: Boolean,
@@ -276,6 +288,7 @@ private fun ChatPanelForSession(
         modifier = modifier.fillMaxSize().testTag("view_chat"),
         showHeader = true,
         onSelectSession = onSelectSession,
+        onOpenWalkthrough = onOpenWalkthrough,
         // The globe (links) menu + the Chat⇄Native pill, both moved here off the deleted session
         // header. Each belongs to ONE session, which is exactly what a chat view is.
         loadProxies = loadProxies ?: { app.proxies() },
@@ -456,24 +469,54 @@ private fun FilePaneForWorkspace(
 @Composable
 private fun DiffPaneForWorkspace(
     app: DesktopAppState,
+    appForSession: (String) -> DesktopAppState,
     workspaceId: String,
     base: String?,
     lspSessionId: String?,
+    walkthroughSessionId: String?,
+    onWalkthroughClosed: () -> Unit,
     onClose: () -> Unit,
+    onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
 ) {
     val sessions by app.sessions.collectAsState()
     val reviewSession = lspSessionId?.let { id -> sessions.firstOrNull { it.id == id } }
+    val selectedWalkthroughId = walkthroughSessionId ?: lspSessionId
+    val walkthroughApp = selectedWalkthroughId?.let(appForSession) ?: app
+    val walkthroughSessions by walkthroughApp.sessions.collectAsState()
+    val walkthroughSession = selectedWalkthroughId?.let { id -> walkthroughSessions.firstOrNull { it.id == id } }
     // Per-diff-pane state, seeded from the view's own `diffBase` so a saved row reopens on the
     // base it was looking at.
     val diff = remember(workspaceId, base) { DiffState().apply { base?.let { diffBase = it } } }
+    val walkthrough = walkthroughSession?.let { walkthroughApp.walkthroughState(it.id) }
+    val reviewWalkthrough = reviewSession?.let { app.walkthroughState(it.id) }
     DiffPane(
         diff = diff,
+        walkthrough = walkthrough,
+        reviewWalkthrough = reviewWalkthrough,
         fsDiff = { spec -> app.workspaceFsDiff(workspaceId, spec) },
         fsRefs = { app.workspaceFsRefs(workspaceId) },
+        getWalkthrough = { if (walkthroughSession != null) walkthroughApp.getWalkthrough(walkthroughSession) else null },
+        getWalkthroughComments = {
+            if (walkthroughSession != null) walkthroughApp.reviewComments(walkthroughSession) else emptyList()
+        },
+        getReviewComments = { if (reviewSession != null) app.reviewComments(reviewSession) else emptyList() },
+        readWalkthroughFile = { repo, path ->
+            app.workspaceFsRead(workspaceId, if (repo.isBlank()) path else "$repo/$path")
+        },
+        onOpenWalkthroughFile = { repo, path, line ->
+            onOpenFile(if (repo.isBlank()) path else "$repo/$path", line, null)
+        },
         // Review stays session-keyed; only available when we have a primary chat.
         onReviewAddComment = { body -> if (reviewSession != null) app.reviewAddComment(reviewSession, body) else null },
         onReviewResolve = { commentId -> if (reviewSession != null) app.reviewResolve(reviewSession, commentId) else false },
+        onWalkthroughAddComment = { body ->
+            if (walkthroughSession != null) walkthroughApp.reviewAddComment(walkthroughSession, body) else null
+        },
+        onWalkthroughResolve = { commentId ->
+            if (walkthroughSession != null) walkthroughApp.reviewResolve(walkthroughSession, commentId) else false
+        },
+        onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { if (reviewSession != null) app.reviewSubmit(reviewSession) else null },
         onClose = onClose,
         modifier = modifier.fillMaxSize(),

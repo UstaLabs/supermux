@@ -1,0 +1,180 @@
+package dev.supermux.desktop.ui
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import dev.supermux.desktop.theme.Stroke
+
+/**
+ * One menu look for the whole desktop app — the popup surface AND the rows in it.
+ *
+ * ── Why this exists ─────────────────────────────────────────────────────────
+ *
+ * Ahmet: "in kmp desktop the menus are very ugly".
+ *
+ * Every menu in the app was raw Material 3 with nothing passed: 48dp rows sized
+ * for a thumb, 16sp `bodyLarge`, a 4dp corner, tonal elevation, a full-bleed
+ * ripple. That is the Android phone default, and on a Mac — next to a native
+ * menu bar drawn by AppKit two pixels above it — it reads as a phone app in a
+ * window. Nothing was wrong with the code; the defaults were simply for another
+ * platform.
+ *
+ * These tokens aim at the macOS menu instead: a compact row, 13sp text, a 10dp
+ * container with a hairline edge and a soft shadow, and — the detail that does
+ * most of the work — a highlight that is an INSET ROUNDED RECT rather than a
+ * full-width band, so the accent floats inside the menu instead of touching its
+ * walls. Two consumers share them, which is the point:
+ *
+ *   • [DropdownMenu] (ModalSurfaces.kt) — every in-app menu, one choke point.
+ *   • [SupermuxContextMenuRepresentation] — the right-click / text menus, which
+ *     Compose draws itself and which otherwise look nothing like the app.
+ *
+ * Sizes stay in dp (not sp) so a menu row keeps its proportions under the
+ * Appearance ▸ Text size multiplier; only the label scales, which is the same
+ * thing the platform does.
+ */
+object MenuStyle {
+    /** Container corner. macOS menus are ~6pt; ours is softer to match [dev.supermux.desktop.theme.Radii]. */
+    val Shape: Shape = RoundedCornerShape(10.dp)
+
+    /** The hover/selection highlight behind one row. */
+    val ItemShape: Shape = RoundedCornerShape(6.dp)
+
+    /** Row height — a pointer target, not a 48dp thumb target. */
+    val ItemHeight = 28.dp
+
+    /** How far the highlight is inset from the menu's own edge. */
+    val ItemInset = 5.dp
+
+    /** Gap between rows: enough to read the inset highlight as a separate chip. */
+    val ItemGap = 1.dp
+
+    /** Text inset INSIDE the highlight. */
+    val ItemPadding = 9.dp
+
+    /** Gap between a leading/trailing icon and the label. */
+    val IconGap = 8.dp
+
+    /** Longest a label may make a menu before it wraps instead of growing wider. */
+    val ItemMaxTextWidth = 320.dp
+
+    /** Vertical padding of the row list inside the container (context menus). */
+    val ListPadding = 4.dp
+
+    /** Big and soft, like a floating panel — not M3's tight 3dp component shadow. */
+    val ShadowElevation = 16.dp
+
+    /** Content padding for the container of a context menu's row list. */
+    val ListPaddingValues = PaddingValues(vertical = ListPadding)
+
+    /** A shade above the panel it opens over, so the menu reads as floating in both modes. */
+    val containerColor: Color
+        @Composable get() = MaterialTheme.colorScheme.surfaceContainerHigh
+
+    /** Hairline edge. The shadow alone is not enough separation in dark mode. */
+    val border: BorderStroke
+        @Composable get() = BorderStroke(Stroke.hairline, MaterialTheme.colorScheme.outlineVariant)
+
+    /** 13sp compact body — the desktop type scale's menu size. */
+    val itemTextStyle: TextStyle
+        @Composable get() = MaterialTheme.typography.bodyMedium
+}
+
+/**
+ * Compact, macOS-flavoured drop-in for `androidx.compose.material3.DropdownMenuItem`.
+ *
+ * Same drop-in contract as the surfaces in ModalSurfaces.kt: it carries the SAME
+ * NAME as the original, so a call site opts in by changing one import line —
+ *
+ *     -import androidx.compose.material3.DropdownMenuItem
+ *     +import dev.supermux.desktop.ui.DropdownMenuItem
+ *
+ * — and nothing else. Only the parameters this app actually passes exist here;
+ * M3's `colors` and `contentPadding` are deliberately absent because the whole
+ * point is that no call site styles a menu row any more.
+ *
+ * This is a reimplementation rather than a wrapper because M3 pins the row at
+ * `sizeIn(minHeight = 48.dp)` and fills the entire width with its indication —
+ * the two things that make the menus look wrong — and neither is reachable
+ * through a parameter. Semantics are unchanged: a clickable row with the label's
+ * text, so every existing `onNodeWithText(...)` / `testTag` assertion still
+ * matches.
+ */
+@Composable
+fun DropdownMenuItem(
+    text: @Composable () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true,
+) {
+    val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    // clickable() already feeds hover into the source, so no separate hoverable().
+    val hovered by interaction.collectIsHoveredAsState()
+    val active = hovered && enabled
+    val contentColor = when {
+        !enabled -> cs.onSurfaceVariant.copy(alpha = 0.5f)
+        active -> cs.onPrimary
+        else -> cs.onSurface
+    }
+    // Provided AROUND the Row, not inside it: CompositionLocalProvider's content is a
+    // plain lambda, and nesting it would drop the RowScope that `weight` needs.
+    CompositionLocalProvider(LocalContentColor provides contentColor) {
+        Row(
+            modifier
+                .fillMaxWidth()
+                .padding(horizontal = MenuStyle.ItemInset, vertical = MenuStyle.ItemGap)
+                .clip(MenuStyle.ItemShape)
+                .background(if (active) cs.primary else Color.Transparent)
+                // No indication: a macOS menu row highlights on hover and then just
+                // closes — a ripple expanding under the cursor belongs to touch.
+                .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+                .heightIn(min = MenuStyle.ItemHeight)
+                .padding(horizontal = MenuStyle.ItemPadding),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (leadingIcon != null) {
+                leadingIcon()
+                Spacer(Modifier.width(MenuStyle.IconGap))
+            }
+            Box(Modifier.widthIn(max = MenuStyle.ItemMaxTextWidth)) {
+                ProvideTextStyle(MenuStyle.itemTextStyle.copy(color = contentColor)) { text() }
+            }
+            if (trailingIcon != null) {
+                // Weighted so the trailing mark pins to the right edge; the min width
+                // keeps a sane gap when the menu is only as wide as its longest label.
+                Spacer(Modifier.weight(1f).defaultMinSize(minWidth = MenuStyle.IconGap * 2))
+                trailingIcon()
+            }
+        }
+    }
+}

@@ -76,6 +76,19 @@ class DesktopEditorEngine(
     var onFontSize: (Int) -> Unit = {}
     /** Outbound LSP JSON-RPC from cm6's `LSPClient`, parsed to (serverId, message). */
     var onLspOut: (serverId: String, message: String) -> Unit = { _, _ -> }
+    var onDiffLineClick: (Int) -> Unit = {}
+    var onDiffExpand: (String) -> Unit = {}
+    var onDiffPage: (String) -> Unit = {}
+
+    // ── In-editor walkthrough comments (the CodeMirror block widgets) ────────
+    /** The composer submitted a root comment on a 1-indexed new-side line. */
+    var onCommentSubmit: (line: Int, text: String) -> Unit = { _, _ -> }
+    /** A reply typed into a thread widget. */
+    var onReplySubmit: (threadId: String, text: String) -> Unit = { _, _ -> }
+    /** "Resolve" pressed on an open thread widget. */
+    var onResolveThread: (threadId: String) -> Unit = {}
+    /** Composer draft persistence; line == 0 means the composer closed. */
+    var onComposerState: (line: Int, text: String) -> Unit = { _, _ -> }
 
     private val planner = EditorPushPlanner(lineWrap, fontSize)
 
@@ -84,6 +97,7 @@ class DesktopEditorEngine(
     private var browser: CefBrowser? = null
     private val nextEvaluationId = AtomicLong(1)
     private val pendingEvaluations = mutableMapOf<Long, (String) -> Unit>()
+    private var pendingDiffRegion: DiffRegionRequest? = null
 
     /** The AWT child to embed in a SwingPanel; null until [load]. */
     fun uiComponent(): Component? = browser?.uiComponent
@@ -123,6 +137,31 @@ class DesktopEditorEngine(
     fun setFontSize(px: Int) = emit(planner.setFontSize(px))
     fun setLineWrap(on: Boolean) = emit(planner.setLineWrap(on))
     fun setScrollTop(px: Int) = emit(planner.setScrollTop(px))
+
+    /** Switch CodeMirror into the read-only walkthrough renderer. Calls before onReady are queued. */
+    fun showDiffRegion(
+        path: String,
+        content: String,
+        ranges: List<DiffRegionRange>,
+        language: String,
+        restoreScrollTop: Int? = null,
+        threads: List<DiffRegionThread> = emptyList(),
+        composer: DiffRegionComposer? = null,
+    ) {
+        pendingDiffRegion = DiffRegionRequest(path, content, ranges, language, restoreScrollTop, threads, composer)
+        if (_ready.value) emitDiffRegion()
+    }
+
+    /**
+     * Push refreshed threads / composer into the SAME region — no restoreScrollTop, so the bundle's
+     * own scroll preservation (and its expand-context, keyed on the unchanged slice signature) wins.
+     * A no-op before [showDiffRegion] has established a region.
+     */
+    fun updateDiffThreads(threads: List<DiffRegionThread>, composer: DiffRegionComposer?) {
+        val current = pendingDiffRegion ?: return
+        pendingDiffRegion = current.copy(restoreScrollTop = null, threads = threads, composer = composer)
+        if (_ready.value) emitDiffRegion()
+    }
 
     // ── JS → Kotlin reads (async; result marshalled to the EDT) ──────────────
 
@@ -292,6 +331,7 @@ class DesktopEditorEngine(
             BridgeEvent.Ready -> {
                 emit(planner.onReady()) // flush the queued document + pending reveal
                 _ready.value = true
+                emitDiffRegion()
                 onReady()
             }
             // The user zoom already applied in-page; keep our copy in sync + persist (no loop-back).
@@ -305,8 +345,28 @@ class DesktopEditorEngine(
                     onLspOut(parsed.first, parsed.second)
                 }
             }
+            is BridgeEvent.DiffLineClick -> onDiffLineClick(event.line)
+            is BridgeEvent.DiffExpand -> onDiffExpand(event.direction)
+            is BridgeEvent.DiffPage -> onDiffPage(event.direction)
+            is BridgeEvent.CommentSubmit -> onCommentSubmit(event.line, event.text)
+            is BridgeEvent.ReplySubmit -> onReplySubmit(event.threadId, event.text)
+            is BridgeEvent.ResolveThread -> onResolveThread(event.threadId)
+            is BridgeEvent.ComposerState -> onComposerState(event.line, event.text)
             is BridgeEvent.EvalResult -> pendingEvaluations.remove(event.id)?.invoke(event.value)
         }
+    }
+
+    private fun emitDiffRegion() {
+        val request = pendingDiffRegion ?: return
+        val b = browser ?: return
+        b.executeJavaScript(
+            showDiffRegionJs(
+                request.path, request.content, request.ranges, request.language,
+                request.restoreScrollTop, request.threads, request.composer,
+            ),
+            b.url ?: "",
+            0,
+        )
     }
 
     /** Execute one internal expression and return its string value through [QUERY_FN]. */
@@ -336,3 +396,13 @@ class DesktopEditorEngine(
         const val QUERY_CANCEL_FN: String = "smxEditorQueryCancel"
     }
 }
+
+private data class DiffRegionRequest(
+    val path: String,
+    val content: String,
+    val ranges: List<DiffRegionRange>,
+    val language: String,
+    val restoreScrollTop: Int?,
+    val threads: List<DiffRegionThread> = emptyList(),
+    val composer: DiffRegionComposer? = null,
+)

@@ -2,6 +2,9 @@ package dev.supermux.proto
 
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishResult
+import dev.supermux.net.ReviewComment
+import dev.supermux.net.UsageResponse
+import dev.supermux.net.Walkthrough
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -391,6 +394,20 @@ sealed interface ServerFrame {
         val paths: List<String> = emptyList(),
     ) : ServerFrame
 
+    /** The session's current walkthrough was created, replaced, or re-anchored. */
+    @Serializable @SerialName("walkthrough_updated")
+    data class WalkthroughUpdated(
+        val sessionId: String,
+        val walkthrough: Walkthrough,
+    ) : ServerFrame
+
+    /** One review-thread mutation, including live agent replies. */
+    @Serializable @SerialName("review_comment")
+    data class ReviewCommentFrame(
+        val sessionId: String,
+        val comment: ReviewComment,
+    ) : ServerFrame
+
     // Finish job lifecycle: the broker broadcasts `{type:"finish_job",session,job}`
     // on every job state change (running → done|failed) — src/main.ts:onUpdate.
     @Serializable @SerialName("finish_job")
@@ -408,6 +425,12 @@ sealed interface ServerFrame {
 
     @Serializable @SerialName("display_removed")
     data class DisplayRemoved(val id: String) : ServerFrame
+
+    // Usage snapshot: the broker broadcasts `{type:"usage_updated",usage}` to every web
+    // client whenever the in-memory snapshot changes (any source). `usage` is the same
+    // shape as GET /usage (UsageResponse + fetchedAt/source/refreshing).
+    @Serializable @SerialName("usage_updated")
+    data class UsageUpdated(val usage: UsageResponse) : ServerFrame
 
     @Serializable @SerialName("lsp_status")
     data class LspStatus(

@@ -4,6 +4,7 @@ import { isPersistentRuntimeSession } from "./session-manager/types"
 import type { MessageStore } from "./session-manager/messages"
 import { fetchAllUsage } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
+import { getUsageStore } from "./usage/store"
 import { AGENT_KINDS, AgentKind, isAgentKind, spawnCommandForAgent } from "../shared/agents"
 import { buildProxyPublicUrl } from "../channels/web/proxy"
 
@@ -286,6 +287,7 @@ function cmdGrantOrch(rest: string, ctx: CommandCtx): SlashReply {
 
 async function cmdUsage(): Promise<SlashReply> {
   const data = await fetchAllUsage()
+  getUsageStore().applyResponse(data)
   return { text: formatUsageTelegram(data) }
 }
 

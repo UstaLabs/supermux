@@ -1,6 +1,7 @@
 // Ported from apps/android/src/main/kotlin/dev/supermux/android/theme/SupermuxTheme.kt — keep in sync until a shared UI module exists (spec 2026-07-09, Decision 1).
 package dev.supermux.desktop.theme
 
+import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
@@ -9,12 +10,14 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.SupermuxColors
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
@@ -153,10 +156,17 @@ fun SupermuxTheme(
     val scale = textScale.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX)
     val scaledDensity =
         if (scale == 1f) density else Density(density.density, density.fontScale * scale)
+    // Desktop-only, so it has no counterpart in the Android file this one mirrors:
+    // right-click menus are drawn by Compose Desktop itself and the only supported
+    // way to restyle them is to replace the representation. Provided at the theme
+    // root so every window (main, detached, dialogs) gets the same one.
+    // See ui/DesktopContextMenu.kt.
+    val contextMenu = remember { SupermuxContextMenuRepresentation() }
     CompositionLocalProvider(
         LocalPanes provides paneTones,
         LocalSemantics provides semantics,
         LocalDensity provides scaledDensity,
+        LocalContextMenuRepresentation provides contextMenu,
     ) {
         MaterialTheme(
             colorScheme = scheme,

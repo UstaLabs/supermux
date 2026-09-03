@@ -9,6 +9,7 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -17,8 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -52,15 +53,18 @@ fun AgentViewToggle(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Hairline-bordered chip rather than a filled track: at header scale a 1dp outline reads as
+    // "a control" just as clearly as a solid block, without adding a second filled shape to a row
+    // whose whole job is to be quiet.
     Row(
         modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(cs.surfaceContainerHighest)
+            .clip(RoundedCornerShape(8.dp))
+            .border(1.dp, cs.outlineVariant, RoundedCornerShape(8.dp))
             .padding(2.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Segment("Chat", Icons.Filled.AutoAwesome, selected = !nativeView, tag = "agent_view_chat") { onSetNative(false) }
-        Segment("Native", Icons.Filled.Terminal, selected = nativeView, tag = "agent_view_native") { onSetNative(true) }
+        Segment("Chat", Icons.Outlined.AutoAwesome, selected = !nativeView, tag = "agent_view_chat") { onSetNative(false) }
+        Segment("Native", Icons.Outlined.Terminal, selected = nativeView, tag = "agent_view_native") { onSetNative(true) }
     }
 }
 
@@ -76,11 +80,15 @@ private fun Segment(
     Row(
         Modifier
             .clip(RoundedCornerShape(7.dp))
-            .background(if (selected) cs.primary else Color.Transparent)
+            // macOS/M3 segmented-control convention: the SELECTED segment is a raised chip in
+            // the plain surface colour with full-strength label — not a saturated accent fill.
+            // Selection reads from the elevation step, so the header keeps one accent (the live
+            // status dot) instead of two competing ones.
+            .background(if (selected) cs.surfaceContainerHigh else Color.Transparent)
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
-            .height(28.dp)
-            .padding(horizontal = 10.dp)
+            .height(24.dp)
+            .padding(horizontal = 9.dp)
             .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -88,14 +96,14 @@ private fun Segment(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (selected) cs.onPrimary else cs.onSurfaceVariant,
+            tint = if (selected) cs.onSurface else cs.onSurfaceVariant,
             modifier = Modifier.size(13.dp),
         )
         Text(
             label,
-            color = if (selected) cs.onPrimary else cs.onSurfaceVariant,
+            color = if (selected) cs.onSurface else cs.onSurfaceVariant,
             fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
         )
     }
 }

@@ -220,6 +220,7 @@ internal fun WorkspacePanes(
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
     val localLayout = layoutSync.tree
+    var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
 
     PaneHost(
         layout = layout,
@@ -322,6 +323,7 @@ internal fun WorkspacePanes(
                     workspaceId = current.id,
                     workdir = current.workdir,
                     app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
+                    appForSession = appFor,
                     drafts = drafts,
                     documents = documents,
                     onOpenFile = { p, line, endLine ->
@@ -334,6 +336,25 @@ internal fun WorkspacePanes(
                             },
                         )
                     },
+                    onOpenWalkthrough = { sessionId, stepId ->
+                        walkthroughSessionId = sessionId
+                        appFor(sessionId).walkthroughState(sessionId).open(stepId)
+                        val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
+                        if (existing != null) {
+                            val (diffViewId, ownerGroup) = existing
+                            layoutSync.edit { setActiveViewInGroup(it, ownerGroup, diffViewId) }
+                            ui.windowHosts.expandClaim(hostId, setOf(diffViewId), layoutSync.tree)
+                        } else {
+                            val groupId = groupIdOf(layout, viewId)
+                            if (groupId != null) {
+                                app.addWorkspaceView(current.id, NewViewKind.DIFF, groupId) { newViewId ->
+                                    ui.windowHosts.expandClaim(hostId, setOf(newViewId), layoutSync.tree)
+                                }
+                            }
+                        }
+                    },
+                    walkthroughSessionId = walkthroughSessionId,
+                    onWalkthroughClosed = { walkthroughSessionId = null },
                     onCloseView = { onCloseCandidate(v) },
                     primarySessionId = current.primarySessionId,
                     onSelectSession = { ui.selectSession(it) },

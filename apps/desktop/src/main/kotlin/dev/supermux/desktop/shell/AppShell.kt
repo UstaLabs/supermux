@@ -34,7 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import dev.supermux.desktop.ui.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.desktop.ui.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -108,7 +108,6 @@ import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.desktop.usage.UsagePopover
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
-import dev.supermux.net.UsageResponse
 import dev.supermux.session.inferHomeDir
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
@@ -793,15 +792,16 @@ fun AppShell(
                     archivedLoading = false
                 }
             }
-            var usageData by remember { mutableStateOf<UsageResponse?>(null) }
+            val usageSnapshot by hostApp.usageSnapshot.collectAsState()
             var usageLoading by remember { mutableStateOf(false) }
             LaunchedEffect(ui.usageOpen, activeHostId) {
                 if (ui.usageOpen) {
-                    usageLoading = true
-                    usageData = hostApp.usage()
+                    // Paint the last held snapshot immediately; GET /usage only fills gaps /
+                    // picks up the broker's current snapshot (never blanks the popover).
+                    usageLoading = hostApp.usageSnapshot.value == null
+                    hostApp.usage()
                     usageLoading = false
                 } else {
-                    usageData = null
                     usageLoading = false
                 }
             }
@@ -810,15 +810,20 @@ fun AppShell(
                 Column(Modifier.fillMaxWidth()) {
                     HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
                     UsageScreen(
-                        usage = usageData,
+                        usage = usageSnapshot,
                         loading = usageLoading,
                         onBack = { ui.closeUsage() },
                         onRedeem = {
                             val r = hostApp.redeemCodexReset()
                             if (r?.code == "reset" && r.codex != null) {
-                                usageData = usageData?.copy(codex = r.codex)
+                                hostApp.usageSnapshot.value?.copy(codex = r.codex)?.let { hostApp.applyUsage(it) }
                             }
                             r
+                        },
+                        onRefresh = {
+                            usageLoading = hostApp.usageSnapshot.value == null
+                            hostApp.refreshUsage()
+                            usageLoading = false
                         },
                     )
                 }
@@ -1119,23 +1124,12 @@ fun AppShell(
                                     )
                                 }
                             }
-                            val gitSession = remember(sessions, current) {
-                                val sid = current.primarySessionId ?: current.chatSessionIds().firstOrNull()
-                                sessions.firstOrNull { it.id == sid }
-                            }
+                            // No workspace git strip: the branch + its Fetch/Pull/Push live on the
+                            // chat's composer footer now (ComposerFooter), where the branch you are
+                            // about to commit to is in view as you type. A second copy above every
+                            // pane was the same fact stated twice. Tear-out stays reachable from the
+                            // Window menu (Main.kt) and the sidebar's own context menu.
                             Column(Modifier.fillMaxSize()) {
-                            WorkspaceHeader(
-                                gitSession = gitSession,
-                                onFetch = { gitSession?.let { s -> appFor(s.id).gitFetch(s.id) } },
-                                onPull = { gitSession?.let { s -> appFor(s.id).gitPull(s.id) } },
-                                onPush = { gitSession?.let { s -> appFor(s.id).gitPush(s.id) } },
-                                onPublish = { gitSession?.let { s -> appFor(s.id).gitPublish(s.id) } },
-                                forceGitMenu = gitSession?.takeIf { isActive }?.let { s ->
-                                    ui.forceGitMenuFor?.takeIf { it.first == s.id }?.second
-                                },
-                                onForceGitMenuConsumed = { ui.forceGitMenuFor = null },
-                                onMoveWorkspaceToNewWindow = onTearOutWorkspace,
-                            )
                             val hostedLayout = ui.windowHosts.layoutFor(ui.windowHosts.main(), localLayout)
                                 ?: emptyHostLayout(localLayout)
                             WorkspacePanes(

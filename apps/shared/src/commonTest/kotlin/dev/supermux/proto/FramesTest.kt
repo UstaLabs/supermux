@@ -9,6 +9,28 @@ import kotlin.test.assertTrue
 private val json = Json { ignoreUnknownKeys = true; classDiscriminator = "type" }
 
 class FramesTest {
+    @Test fun parses_walkthrough_updated() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"walkthrough_updated","sessionId":"s1","walkthrough":{"id":"w1","title":"Tour","baseSpec":"session-start","revision":2,"steps":[{"id":"st1","ord":0,"title":"First","bodyMd":"Hello","repo":"","path":"src/A.kt","side":"RIGHT","anchorLine":7,"rangeStart":7,"rangeEnd":9,"anchorContext":"val x = 1","anchorStatus":"ok"}]}}""",
+        )
+        assertTrue(f is ServerFrame.WalkthroughUpdated)
+        val update = f as ServerFrame.WalkthroughUpdated
+        assertEquals("s1", update.sessionId)
+        assertEquals(2, update.walkthrough.revision)
+        assertEquals("src/A.kt", update.walkthrough.steps.single().path)
+        assertEquals(9, update.walkthrough.steps.single().rangeEnd)
+    }
+
+    @Test fun parses_review_comment_frame_with_thread_parent() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"review_comment","sessionId":"s1","comment":{"id":"r1","parentId":"c1","repo":"","path":"src/A.kt","side":"RIGHT","anchorLine":7,"body":"Fixed","author":"agent","status":"open"}}""",
+        )
+        assertTrue(f is ServerFrame.ReviewCommentFrame)
+        val reply = (f as ServerFrame.ReviewCommentFrame).comment
+        assertEquals("c1", reply.parentId)
+        assertEquals("agent", reply.author)
+    }
+
     @Test fun parses_agent_state_with_workingSince() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"agent_state","session":"editor","phase":"working","workingSince":1717200000000}""",
@@ -112,6 +134,20 @@ class FramesTest {
         assertEquals("d-1504c1bf", (f as ServerFrame.DisplayRemoved).id)
     }
 
+    // Usage snapshot: the broker broadcasts {type:"usage_updated",usage:{...}} whenever
+    // the in-memory snapshot changes (GET /usage shape, plus fetchedAt/source/refreshing).
+    @Test fun parses_usage_updated() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"usage_updated","usage":{"claude":{"fiveHour":{"used":12.0},"sevenDay":{"used":40.0}},"errors":{},"fetchedAt":{"claude":"2026-01-02T03:04:05.000Z"},"source":{"claude":"live"},"refreshing":["codex"]}}""",
+        )
+        assertTrue(f is ServerFrame.UsageUpdated)
+        val u = (f as ServerFrame.UsageUpdated).usage
+        assertEquals(12.0, u.claude?.fiveHour?.used)
+        assertEquals("2026-01-02T03:04:05.000Z", u.fetchedAt["claude"])
+        assertEquals("live", u.source["claude"])
+        assertEquals(listOf("codex"), u.refreshing)
+    }
+
     @Test fun decodesAgentStateWithNewFields() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"agent_state","session":"s1","state":"working","working":true,"detail":"running","tool":"Bash","since":5,"workingSince":4,"phase":"running"}""",
@@ -132,5 +168,17 @@ class FramesTest {
         assertNull(s.detail)
         assertNull(s.tool)
         assertNull(s.workingSince)
+    }
+
+    @Test fun parses_review_comment_frame() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"review_comment","sessionId":"s1","comment":{"id":"c1","repo":"","path":"a.ts","side":"RIGHT","anchorLine":4,"body":"why","author":"agent","status":"open","parentId":"c0"}}""",
+        )
+        assertTrue(f is ServerFrame.ReviewCommentFrame)
+        val c = (f as ServerFrame.ReviewCommentFrame).comment
+        assertEquals("s1", f.sessionId)
+        assertEquals("c1", c.id)
+        assertEquals("agent", c.author)
+        assertEquals("c0", c.parentId)
     }
 }
