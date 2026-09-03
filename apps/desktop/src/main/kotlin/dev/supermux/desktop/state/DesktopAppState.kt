@@ -11,9 +11,9 @@
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
 package dev.supermux.desktop.state
 
-import dev.supermux.desktop.notify.AgentReplyEvent
 import dev.supermux.desktop.editor.WalkthroughState
-import dev.supermux.desktop.session.StagedUpload
+import dev.supermux.state.AgentReplyEvent
+import dev.supermux.state.StagedUpload
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob

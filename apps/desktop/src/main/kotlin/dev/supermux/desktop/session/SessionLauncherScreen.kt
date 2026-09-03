@@ -116,6 +116,7 @@ import dev.supermux.desktop.theme.Size
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.Stroke
 import dev.supermux.desktop.upload.FileChunkSource
+import dev.supermux.state.StagedUpload
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse

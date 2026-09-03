@@ -39,6 +39,7 @@ kotlin {
             implementation(libs.ktor.client.websockets)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
+            api(libs.datetime)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -53,8 +54,11 @@ kotlin {
         // keeping the Apple framework free of it entirely.
         val nonAppleMain by creating { dependsOn(commonMain.get()) }
         val nonAppleTest by creating { dependsOn(commonTest.get()) }
-        nonAppleMain.dependencies { implementation(libs.markdown) }
-        jvmMain { dependsOn(nonAppleMain); dependencies { implementation(libs.ktor.client.cio) } }
+        nonAppleMain.dependencies {
+            implementation(libs.markdown)
+            implementation(libs.ktor.client.cio)
+        }
+        jvmMain { dependsOn(nonAppleMain) }
         jvmTest {
             dependsOn(nonAppleTest)
             // A throwaway local WebSocket server to drive VncClient end-to-end

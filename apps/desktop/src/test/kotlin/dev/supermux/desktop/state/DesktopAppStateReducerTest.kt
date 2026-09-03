@@ -179,7 +179,7 @@ class DesktopAppStateReducerTest {
     // ── M5-3 notifications: agent-reply broadcast ──────────────────────────────────────────
     @Test fun message_append_with_an_outbound_reply_is_broadcast_on_the_agent_replies_flow() {
         val s = state()
-        val received = mutableListOf<dev.supermux.desktop.notify.AgentReplyEvent>()
+        val received = mutableListOf<dev.supermux.state.AgentReplyEvent>()
         // UnconfinedTestDispatcher runs the collector eagerly → it subscribes before the reduce,
         // so the replay-0 SharedFlow delivers the pulse (same pattern as fs_changed's test).
         val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
@@ -199,7 +199,7 @@ class DesktopAppStateReducerTest {
 
     @Test fun message_append_with_a_user_echo_is_not_broadcast_on_the_agent_replies_flow() {
         val s = state()
-        val received = mutableListOf<dev.supermux.desktop.notify.AgentReplyEvent>()
+        val received = mutableListOf<dev.supermux.state.AgentReplyEvent>()
         val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
             s.agentReplies.collect { received.add(it) }
         }
@@ -215,7 +215,7 @@ class DesktopAppStateReducerTest {
 
     @Test fun message_append_with_a_non_reply_outbound_op_is_not_broadcast_on_the_agent_replies_flow() {
         val s = state()
-        val received = mutableListOf<dev.supermux.desktop.notify.AgentReplyEvent>()
+        val received = mutableListOf<dev.supermux.state.AgentReplyEvent>()
         val job = kotlinx.coroutines.CoroutineScope(UnconfinedTestDispatcher()).launch {
             s.agentReplies.collect { received.add(it) }
         }

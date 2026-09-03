@@ -1,6 +1,6 @@
 package dev.supermux.desktop.host
 
-import dev.supermux.desktop.notify.AgentReplyEvent
+import dev.supermux.state.AgentReplyEvent
 import dev.supermux.desktop.state.DesktopAppState
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore

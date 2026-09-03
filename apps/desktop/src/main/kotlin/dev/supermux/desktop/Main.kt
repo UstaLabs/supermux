@@ -799,7 +799,7 @@ fun main() {
                                 }
                                 val mime = runCatching { java.nio.file.Files.probeContentType(file.toPath()) }
                                     .getOrNull() ?: "application/octet-stream"
-                                listOf(dev.supermux.desktop.session.StagedUpload(
+                                listOf(dev.supermux.state.StagedUpload(
                                     dev.supermux.desktop.upload.FileChunkSource(file), file.name, mime,
                                 ))
                             } ?: emptyList()

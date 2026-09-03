@@ -1,6 +1,6 @@
 package dev.supermux.desktop.state
 
-import dev.supermux.desktop.session.StagedUpload
+import dev.supermux.state.StagedUpload
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.ByteArrayChunkSource
 import dev.supermux.net.SpawnRequest
