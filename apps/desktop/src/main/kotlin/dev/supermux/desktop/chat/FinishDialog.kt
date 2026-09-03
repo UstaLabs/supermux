@@ -131,7 +131,7 @@ private enum class FinishView { Menu, Running, Outcome }
  * The chat **Finish** dialog — native-M3 parity with iOS `FinishSheet.swift` / Android `FinishSheet`.
  *
  * A three-state machine driven entirely by [finishJob] (kept fresh by the WS `finish_job` frame via
- * the [dev.supermux.desktop.state.DesktopAppState.finishJobs] StateFlow): **Menu** (readiness
+ * the [dev.supermux.state.HostStore.finishJobs] StateFlow): **Menu** (readiness
  * preflight → Merge / Open PR / Keep / Discard) → **Running** (live `stage`) → **Outcome**
  * (per-status recovery). Because `finishJob` is a parameter, a WS flip `running → done|failed`
  * recomposes the body with no extra code.

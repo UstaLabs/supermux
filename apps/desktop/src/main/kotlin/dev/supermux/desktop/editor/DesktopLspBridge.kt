@@ -13,7 +13,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * LSP protocol (initialize, didOpen, completion, hover…) runs inside cm6's `LSPClient` in the
  * JCEF-hosted bundle.
  *
- * [DesktopAppState] already folds every inbound frame into app-wide flows ([lspStatus] keyed
+ * [HostStore] already folds every inbound frame into app-wide flows ([lspStatus] keyed
  * "session|path", [lspRpc] a SharedFlow) — so this bridge just sends the outbound control frames
  * and awaits the corresponding flow transition with the Android/iOS timeouts. It is constructed
  * per editor panel from session-bound lambdas; all RPC is filtered by `session` (the flows are
@@ -59,7 +59,7 @@ class DesktopLspBridge(
      *
      * The broker spawns the process and replies `lsp_ready` (or `lsp_error`/`lsp_exit`)
      * synchronously — see src/core/lsp/bridge.ts:onOpen. These fold into [lspStatus] via
-     * `markLspState` ([DesktopAppState]). BUT queryStatus already left the matching entries at
+     * `markLspState` ([HostStore]). BUT queryStatus already left the matching entries at
      * state="ready" (server *available*), and `lsp_ready` re-applies state="ready" → a
      * value-equal map that StateFlow DEDUPS, so a "ready" flip never emits. A failure, however,
      * flips state to "error"/"exited" → that DOES emit.

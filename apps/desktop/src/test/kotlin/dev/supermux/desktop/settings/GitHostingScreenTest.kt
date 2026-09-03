@@ -1,5 +1,7 @@
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -9,7 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.shell.SettingsSection
@@ -50,7 +52,7 @@ import kotlin.test.assertTrue
  * Desktop-parity Task 4: [GitHostingScreen] accounts UI + Settings hub wiring.
  *
  * Covers empty/list/error load, add dialog (PAT connect failure + success), disconnect confirm,
- * CLI import, pure helpers, and MockEngine-backed DesktopAppState forge wrappers.
+ * CLI import, pure helpers, and MockEngine-backed HostStore forge wrappers.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class GitHostingScreenTest {
@@ -575,7 +577,7 @@ class GitHostingScreenTest {
         return f
     }
 
-    private fun appWithForges(body: String): DesktopAppState {
+    private fun appWithForges(body: String): HostStore {
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when {
@@ -586,10 +588,11 @@ class GitHostingScreenTest {
                 else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
             }
         }
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),

@@ -9,9 +9,8 @@
 // verifySave/clearFinishJob). Still-out-of-scope frames (LSP, displays) and features (uploads beyond
 // Send args, dictation, models/reasoning, drafts, push, notifications) are deliberately no-op'd so the
 // reducer stays a faithful subset of AppViewModel's `when (frame)`.
-package dev.supermux.desktop.state
+package dev.supermux.state
 
-import dev.supermux.desktop.editor.WalkthroughState
 import dev.supermux.state.AgentReplyEvent
 import dev.supermux.state.StagedUpload
 import dev.supermux.net.AddCommentBody
@@ -87,8 +86,6 @@ import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.chatSessionIds
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.websocket.WebSockets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -106,7 +103,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.Instant
 
 /**
  * The Viewing frames to send for the currently visible chat views (spec §11).
@@ -149,18 +145,23 @@ fun viewingFramesFor(visibleChatSessionIds: List<String>): List<ClientFrame.View
  *   exercising HTTP paths construct a real BrokerApi against a ktor MockEngine HttpClient and
  *   pass it here.
  * @param onConnectionChange optional per-connection reachability signal (multi-host fleet UI —
- *   [dev.supermux.desktop.host.FleetState]): invoked `true` right after the control socket opens
+ *   [FleetStore]): invoked `true` right after the control socket opens
  *   and `false` when it drops, forwarded straight to [BrokerClient]. Default null keeps every
  *   existing single-host caller/test unchanged.
  */
-class DesktopAppState(
+class HostStore(
     val baseUrl: String,
     private val token: String,
     scope: CoroutineScope,
+    private val deps: HostStoreDeps,
     connectOnInit: Boolean = true,
     sendFrameOverride: (suspend (ClientFrame) -> Unit)? = null,
     apiOverride: BrokerApi? = null,
     onConnectionChange: ((Boolean) -> Unit)? = null,
+    private val bindTts: ((
+        resolveEngine: suspend () -> String,
+        speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
+    ) -> Unit)? = null,
 ) {
     /** Own child scope — supervised and parented to the caller's [scope] — so [close] can cancel
      *  the collector / WS run-loop / heartbeat without tearing down the caller's scope, and one
@@ -168,7 +169,7 @@ class DesktopAppState(
     private val stateScope =
         CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
 
-    private val http = HttpClient(CIO) { install(WebSockets) }
+    private val http = deps.httpFactory(null)
     val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)
     val api = apiOverride ?: BrokerApi(baseUrl, token, http)
 
@@ -181,7 +182,7 @@ class DesktopAppState(
     // bounded 120s timeout; every other call keeps [api]'s snappy CIO default. In tests, [apiOverride]
     // (a MockEngine-backed BrokerApi) backs BOTH [api] and [apiDictate] so a single fake covers the
     // whole surface, same as before this split.
-    private val httpDictate = HttpClient(CIO) { engine { requestTimeout = 120_000 } }
+    private val httpDictate = deps.httpFactory(120_000)
     private val apiDictate = apiOverride ?: BrokerApi(baseUrl, token, httpDictate)
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
@@ -216,11 +217,12 @@ class DesktopAppState(
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
     private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
-    /** Compose-owned per-session walkthrough state. The stable instance survives pane switches. */
-    private val walkthroughStates = mutableMapOf<String, WalkthroughState>()
+    /** Per-session walkthrough holders. Desktop supplies Compose [WalkthroughState] via [create]. */
+    private val walkthroughs = mutableMapOf<String, Any>()
 
-    fun walkthroughState(sessionId: String): WalkthroughState =
-        walkthroughStates.getOrPut(sessionId) { WalkthroughState(sessionId) }
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Any> walkthroughState(sessionId: String, create: (String) -> T): T =
+        walkthroughs.getOrPut(sessionId) { create(sessionId) } as T
     /**
      * Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
      * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
@@ -273,6 +275,12 @@ class DesktopAppState(
     )
     val agentReplies: SharedFlow<AgentReplyEvent> = _agentReplies.asSharedFlow()
 
+    private val _walkthroughFrames = MutableSharedFlow<ServerFrame>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val walkthroughFrames: SharedFlow<ServerFrame> = _walkthroughFrames.asSharedFlow()
+
     // ── LSP (M4g-3/M4g-4) ───────────────────────────────────────────────────────────
     // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
     // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
@@ -308,12 +316,10 @@ class DesktopAppState(
 
     init {
         // Read-aloud: platform OS TTS or ChatGPT /speak stream depending on app-config.
-        dev.supermux.desktop.chat.MessageTts.resolveEngine = {
-            runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform"
-        }
-        dev.supermux.desktop.chat.MessageTts.speakRemoteStream = { text, onChunk ->
-            api.speakStream(text = text, engine = "codex", onChunk = onChunk)
-        }
+        bindTts?.invoke(
+            { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
+            { text, onChunk -> api.speakStream(text = text, engine = "codex", onChunk = onChunk) },
+        )
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
             stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
@@ -325,7 +331,7 @@ class DesktopAppState(
     /** Run [block], swallowing (and logging) any failure — used to guard the frame collector so
      *  a throwing reducer branch never cancels the collecting coroutine. Internal for tests. */
     internal fun guarded(op: String, block: () -> Unit) {
-        runCatching(block).onFailure { e -> println("[DesktopAppState] $op error: $e") }
+        runCatching(block).onFailure { e -> println("[HostStore] $op error: $e") }
     }
 
     /**
@@ -346,10 +352,10 @@ class DesktopAppState(
             block()
         } catch (c: CancellationException) {
             currentCoroutineContext().ensureActive()
-            println("[DesktopAppState] $op failed: ${c.message}")
+            println("[HostStore] $op failed: ${c.message}")
             null
         } catch (e: Throwable) {
-            println("[DesktopAppState] $op failed: $e")
+            println("[HostStore] $op failed: $e")
             null
         }
 
@@ -423,7 +429,7 @@ class DesktopAppState(
             is ServerFrame.SessionRemoved -> {
                 _sessions.update { it.filterNot { s -> s.id == frame.id } }
                 _bgTasks.update { it - frame.id }
-                walkthroughStates.remove(frame.id)
+                walkthroughs.remove(frame.id)
             }
             is ServerFrame.SessionRenamed -> {
                 _sessions.update { current ->
@@ -552,9 +558,9 @@ class DesktopAppState(
                 _fsChanges.tryEmit(frame)
             }
             is ServerFrame.WalkthroughUpdated ->
-                walkthroughState(frame.sessionId).applyWalkthrough(frame.walkthrough)
+                _walkthroughFrames.tryEmit(frame)
             is ServerFrame.ReviewCommentFrame ->
-                walkthroughState(frame.sessionId).applyComment(frame.comment)
+                _walkthroughFrames.tryEmit(frame)
             // M4b finish flow: the async job's progress/outcome arrives here. Update the finishJobs
             // flow the FinishDialog drives AND write the job back onto the session's finish_job so a
             // list row (and any later snapshot round-trip) stays consistent (AppViewModel:275 parity).
@@ -657,7 +663,7 @@ class DesktopAppState(
 
     /** Optimistically advance this session's read pointer to now so the list un-bolds immediately. */
     fun markRead(sessionId: String) {
-        val now = Instant.now().toString()
+        val now = deps.nowIso()
         _lastRead.update { cur ->
             val next = dev.supermux.session.advanceLastRead(cur[sessionId], now)
             if (cur[sessionId] == next) cur else cur + (sessionId to next)
@@ -707,7 +713,7 @@ class DesktopAppState(
 
     /** ISO-8601 (UTC) timestamp so an optimistic entry sorts LAST under the broker's lexicographic
      *  `ts` ordering (the broker emits ISO-8601 too). */
-    private fun nowIso(): String = Instant.now().toString()
+    private fun nowIso(): String = deps.nowIso()
 
     /** Append an optimistic outbound bubble so the user's message shows instantly, before the
      *  broker echoes it back as an inbound message (iOS BrokerSession.send parity). Deduped in the
@@ -979,7 +985,7 @@ class DesktopAppState(
     // ── Scratch / agent terminals (Android AppViewModel:439-444 parity) ──────────────
 
     /** Factory for a scratch (shell) terminal client bound to one tmux terminal id. Called once
-     *  per tab and remembered by [dev.supermux.desktop.terminal.DesktopTerminalPanel]; the broker
+     *  per tab and remembered by the desktop terminal panel; the broker
      *  defaults [terminalId] to "main" when connecting a scratch kind. */
     fun connectTerminal(sessionId: String, terminalId: String): TerminalClient =
         TerminalClient(baseUrl, token, http, sessionId, terminalId = terminalId)
@@ -1243,7 +1249,7 @@ class DesktopAppState(
             dev.supermux.workspace.NewViewKind.TERMINAL -> buildJsonObject {
                 put("scope", JsonPrimitive("workspace"))
                 // Unique per tab so two terminals in one workspace are two shells.
-                put("terminalId", JsonPrimitive("t" + Instant.now().toEpochMilli().toString().takeLast(6)))
+                put("terminalId", JsonPrimitive("t" + deps.nowMs().toString().takeLast(6)))
             }
             dev.supermux.workspace.NewViewKind.EDITOR -> buildJsonObject { put("mode", JsonPrimitive("tree")) }
             // Same `editor` kind, different mode — a diff pane. No `diffBase`: the pane defaults to
@@ -1257,7 +1263,7 @@ class DesktopAppState(
         stateScope.launch {
             runCatching { api.addView(workspaceId, AddViewBody(kind = kind.wire, state = state, groupId = groupId)) }
                 .onSuccess { onCreated(it.id) }
-                .onFailure { println("[DesktopAppState] addWorkspaceView failed: $it") }
+                .onFailure { println("[HostStore] addWorkspaceView failed: $it") }
         }
     }
 
@@ -1268,7 +1274,7 @@ class DesktopAppState(
     fun closeWorkspaceView(workspaceId: String, viewId: String) {
         stateScope.launch {
             runCatching { api.closeView(workspaceId, viewId) }
-                .onFailure { println("[DesktopAppState] closeWorkspaceView failed: $it") }
+                .onFailure { println("[HostStore] closeWorkspaceView failed: $it") }
         }
     }
 
@@ -1284,7 +1290,7 @@ class DesktopAppState(
                     workspaceId, viewId,
                     PatchViewBody(state = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }),
                 )
-            }.onFailure { println("[DesktopAppState] bindChatView failed: $it") }
+            }.onFailure { println("[HostStore] bindChatView failed: $it") }
         }
     }
 
@@ -1309,7 +1315,7 @@ class DesktopAppState(
         }
         stateScope.launch {
             runCatching { api.archiveWorkspace(workspaceId) }
-                .onFailure { println("[DesktopAppState] archiveWorkspace failed: $it") }
+                .onFailure { println("[HostStore] archiveWorkspace failed: $it") }
         }
     }
 
@@ -1329,7 +1335,7 @@ class DesktopAppState(
         }
         stateScope.launch {
             runCatching { api.restoreWorkspace(workspaceId) }
-                .onFailure { println("[DesktopAppState] restoreWorkspace failed: $it") }
+                .onFailure { println("[HostStore] restoreWorkspace failed: $it") }
         }
     }
 
@@ -1345,7 +1351,7 @@ class DesktopAppState(
         stateScope.launch {
             runCatching {
                 api.moveView(viewId, MoveViewBody(toWorkspaceId = toWorkspaceId))
-            }.onFailure { println("[DesktopAppState] moveViewToWorkspace failed: $it") }
+            }.onFailure { println("[HostStore] moveViewToWorkspace failed: $it") }
         }
     }
 
@@ -1863,7 +1869,7 @@ class DesktopAppState(
         val validation = api.validatePath(workdir)
         val resolvedPath = validation.path
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
-            println("[DesktopAppState] createSessionWithFirstMessage: invalid workdir '$workdir': " +
+            println("[HostStore] createSessionWithFirstMessage: invalid workdir '$workdir': " +
                 (validation.error ?: "unknown"))
             return@runApi null
         }
@@ -1883,7 +1889,7 @@ class DesktopAppState(
         )
         val sessionId = resolveSpawnId(resp, _sessions.value)
         if (sessionId == null) {
-            println("[DesktopAppState] createSessionWithFirstMessage: spawn ok but id unavailable " +
+            println("[HostStore] createSessionWithFirstMessage: spawn ok but id unavailable " +
                 "(name='${resp.name}')")
             return@runApi null
         }
@@ -1955,7 +1961,7 @@ class DesktopAppState(
  * early (pre-register) session_added, so fall back to matching the response name against the known
  * session list (Android AppViewModel:593 pattern) — returns null when neither yields an id yet.
  *
- * Pure + top-level (no [DesktopAppState] state captured) so it's unit-testable without a broker.
+ * Pure + top-level (no [HostStore] state captured) so it's unit-testable without a broker.
  */
 internal fun resolveSpawnId(resp: SpawnResponse, sessions: List<SessionInfo>): String? =
     if (resp.id.isNotBlank()) resp.id

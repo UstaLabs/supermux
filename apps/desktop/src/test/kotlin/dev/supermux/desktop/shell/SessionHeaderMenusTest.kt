@@ -30,7 +30,7 @@ import kotlin.test.assertTrue
 
 /**
  * Unit + runComposeUiTest coverage for the three header menus (GitBadgeMenu / SessionLinksMenu /
- * OverflowMenu). The composables take pure callbacks + state, so no DesktopAppState / network is
+ * OverflowMenu). The composables take pure callbacks + state, so no HostStore / network is
  * needed. The pure decision bits (Publish-vs-Push, the proxy filter, the badge label, the op-result
  * label) are asserted directly.
  */

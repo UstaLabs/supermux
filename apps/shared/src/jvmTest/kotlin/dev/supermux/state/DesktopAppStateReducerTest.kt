@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
@@ -15,9 +15,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Reducer-only tests for [DesktopAppState] — no live WebSocket. The constructor's
+ * Reducer-only tests for [HostStore] — no live WebSocket. The constructor's
  * `connectOnInit = false` skips the frame-collect / client.run() / heartbeat launches, so
- * [DesktopAppState.reduce] and the send helpers can be exercised in isolation. Outbound
+ * [HostStore.reduce] and the send helpers can be exercised in isolation. Outbound
  * frames are captured through the injectable `sendFrameOverride` seam.
  *
  * Semantics mirror apps/android/.../AppViewModel.kt — where Android behaviour differs from
@@ -27,10 +27,11 @@ import kotlin.test.assertTrue
 class DesktopAppStateReducerTest {
     private val sent = mutableListOf<ClientFrame>()
 
-    private fun state() = DesktopAppState(
+    private fun state() = HostStore(
         baseUrl = "ws://test:9898",
         token = "t",
         scope = TestScope(UnconfinedTestDispatcher()),
+        deps = testDeps(),
         connectOnInit = false,
         sendFrameOverride = { sent.add(it) },
     )

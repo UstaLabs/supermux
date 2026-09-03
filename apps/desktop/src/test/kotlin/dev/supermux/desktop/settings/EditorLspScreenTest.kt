@@ -1,5 +1,7 @@
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -14,7 +16,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.shell.AppShell
@@ -347,8 +349,8 @@ class EditorLspScreenTest {
         tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
     }
 
-    /** A [DesktopAppState] whose HTTP serves GET /settings/editor. */
-    private fun appForLspSettings(): DesktopAppState {
+    /** A [HostStore] whose HTTP serves GET /settings/editor. */
+    private fun appForLspSettings(): HostStore {
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             if (req.method == HttpMethod.Get && req.url.encodedPath == "/settings/editor") {
@@ -366,10 +368,11 @@ class EditorLspScreenTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = api,

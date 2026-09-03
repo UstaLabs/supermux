@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.ServerFrame
@@ -11,18 +11,19 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Workspace/view frame reducer tests for [DesktopAppState].
+ * Workspace/view frame reducer tests for [HostStore].
  *
- * [DesktopAppState.forTest] does not exist; construction mirrors
+ * [HostStore.forTest] does not exist; construction mirrors
  * [DesktopAppStateReducerTest] (`connectOnInit = false`, no live WebSocket).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class WorkspaceReducerTest {
 
-    private fun app() = DesktopAppState(
+    private fun app() = HostStore(
         baseUrl = "ws://test:9898",
         token = "t",
         scope = TestScope(UnconfinedTestDispatcher()),
+        deps = testDeps(),
         connectOnInit = false,
     )
 

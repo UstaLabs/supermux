@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.FsRefsResult
@@ -20,8 +20,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * Diff-base-selector wrappers on [DesktopAppState]: the `?base=<spec>` query threaded through
- * [DesktopAppState.fsDiff] and the new [DesktopAppState.fsRefs] endpoint that feeds the picker's
+ * Diff-base-selector wrappers on [HostStore]: the `?base=<spec>` query threaded through
+ * [HostStore.fsDiff] and the new [HostStore.fsRefs] endpoint that feeds the picker's
  * "Previous commit…" / "Another branch…" submenus. Same MockEngine layer as [DesktopDiffReviewTest]
  * (BrokerApi built against a ktor MockEngine via the `apiOverride` seam — no live broker).
  */
@@ -37,16 +37,17 @@ class DesktopDiffBaseTest {
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"repos":[]}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath, req.url.parameters["base"]))
             respond(ByteReadChannel(body), status, headersOf(HttpHeaders.ContentType, "application/json"))
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

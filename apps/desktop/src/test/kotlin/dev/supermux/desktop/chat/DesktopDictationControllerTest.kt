@@ -27,7 +27,7 @@ private class FakeMicCapture(
  * through the [MicCapture]/transcribeAudio/onAppend seams. No real mic, no real broker: the
  * controller's own [CoroutineScope] is a [TestScope] backed by [UnconfinedTestDispatcher] so the
  * `scope.launch {}` inside [DesktopDictationController.stopMic] runs to completion synchronously
- * within the test body (same idiom [DesktopAppState] tests use for its `stateScope`).
+ * within the test body (same idiom [HostStore] tests use for its `stateScope`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DesktopDictationControllerTest {

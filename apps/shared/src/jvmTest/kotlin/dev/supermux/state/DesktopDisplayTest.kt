@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.DisplayStream
@@ -22,7 +22,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M5-2 Task 1: [DesktopAppState]'s display-stream state-wiring — the `displays` StateFlow, the
+ * M5-2 Task 1: [HostStore]'s display-stream state-wiring — the `displays` StateFlow, the
  * `display_added`/`display_removed` reducer branches (AppViewModel:286-289 parity), and the
  * `listDisplays`/`connectVnc`/`startDisplay`/`stopDisplay` wrappers (AppViewModel:446-470 parity).
  * Reducer tests mirror [DesktopAppStateReducerTest] (no MockEngine); wrapper tests mirror
@@ -32,10 +32,11 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class DesktopDisplayTest {
 
-    private fun reducerState() = DesktopAppState(
+    private fun reducerState() = HostStore(
         baseUrl = "ws://test:9898",
         token = "t",
         scope = TestScope(UnconfinedTestDispatcher()),
+        deps = testDeps(),
         connectOnInit = false,
     )
 
@@ -80,16 +81,17 @@ class DesktopDisplayTest {
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = "[]",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath))
             respond(ByteReadChannel(body), status, headersOf(HttpHeaders.ContentType, "application/json"))
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )
@@ -127,9 +129,10 @@ class DesktopDisplayTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898", token = "t",
             scope = TestScope(UnconfinedTestDispatcher()), connectOnInit = false, apiOverride = api,
+            deps = testDeps(),
         )
         app.listDisplays() // seed once successfully
 
@@ -173,9 +176,10 @@ class DesktopDisplayTest {
     }
 
     @Test fun connect_vnc_returns_a_vnc_client() {
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898", token = "t",
             scope = TestScope(UnconfinedTestDispatcher()), connectOnInit = false,
+            deps = testDeps(),
         )
 
         val client = app.connectVnc("stream-1")

@@ -1,6 +1,8 @@
 // Desktop-parity Task 5: Proxies section — list / create / toggle public / remove.
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -10,7 +12,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.shell.SettingsSection
@@ -337,7 +339,7 @@ class ProxiesSettingsScreenTest {
         onNodeWithTag("proxies_public_dialog").assertIsDisplayed()
     }
 
-    // ── DesktopAppState + BrokerApi (ktor mock) ─────────────────────────────────────────────────
+    // ── HostStore + BrokerApi (ktor mock) ─────────────────────────────────────────────────
 
     private fun appForProxies(
         listJson: String? = """[{"domain":"app.example.local","sessionName":"web","port":3000,"isPublic":false}]""",
@@ -345,7 +347,7 @@ class ProxiesSettingsScreenTest {
         createStatus: HttpStatusCode = HttpStatusCode.OK,
         patchStatus: HttpStatusCode = HttpStatusCode.OK,
         deleteStatus: HttpStatusCode = HttpStatusCode.OK,
-    ): Pair<DesktopAppState, CopyOnWriteArrayList<Pair<HttpMethod, String>>> {
+    ): Pair<HostStore, CopyOnWriteArrayList<Pair<HttpMethod, String>>> {
         val methods = CopyOnWriteArrayList<Pair<HttpMethod, String>>()
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
@@ -370,10 +372,11 @@ class ProxiesSettingsScreenTest {
             }
         }
         val client = HttpClient(engine)
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", client),

@@ -1,5 +1,7 @@
 package dev.supermux.desktop.terminal
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -14,7 +16,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.BrokerApi
@@ -64,22 +66,23 @@ class TerminalTabsTest {
         clients.clear()
     }
 
-    /** DesktopAppState over a given MockEngine (no WS / no real broker). */
-    private fun appWithEngine(engine: MockEngine): DesktopAppState {
+    /** HostStore over a given MockEngine (no WS / no real broker). */
+    private fun appWithEngine(engine: MockEngine): HostStore {
         val client = HttpClient(engine)
         clients.add(client)
         val api = BrokerApi("ws://test:9898", "t", client)
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )
     }
 
     /** BrokerApi whose /api/term/list returns exactly [terminalListJson] (deterministic ids). */
-    private fun appWithTerminals(terminalListJson: String): DesktopAppState =
+    private fun appWithTerminals(terminalListJson: String): HostStore =
         appWithEngine(MockEngine { req ->
             // Only the list endpoint is needed; answer everything else with empty JSON so a stray
             // call cannot hang on a mismatched body decode.
@@ -107,7 +110,7 @@ class TerminalTabsTest {
         }
 
     @Composable
-    private fun host(app: DesktopAppState, mounts: MutableList<String>, disposals: MutableList<String>) {
+    private fun host(app: HostStore, mounts: MutableList<String>, disposals: MutableList<String>) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             TerminalTabs(
                 app = app,

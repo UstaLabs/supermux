@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
@@ -20,12 +20,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M4g-4 Task 1: the `DesktopAppState` LSP-settings wrappers (lspLoad/lspToggle/lspInstall/
+ * M4g-4 Task 1: the `HostStore` LSP-settings wrappers (lspLoad/lspToggle/lspInstall/
  * lspAddCustom/lspRemoveCustom). Mirrors [DesktopDiffReviewTest]'s MockEngine layer: BrokerApi is a
  * final concrete class, so the `apiOverride` seam takes a real instance constructed against a ktor
  * [MockEngine] HttpClient — no live broker required. Each wrapper is asserted for its exact HTTP
  * method + path + (where relevant) request body, that a 2xx response decodes into the real DTO, and
- * that a 5xx degrades gracefully via [DesktopAppState.runApi] — AppViewModel.kt:736-747 parity
+ * that a 5xx degrades gracefully via [HostStore.runApi] — AppViewModel.kt:736-747 parity
  * (there via `runCatching{}.getOrNull()`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -38,23 +38,24 @@ class DesktopLspSettingsTest {
         else -> ""
     }
 
-    /** DesktopAppState whose BrokerApi answers every request with [body]/[status], recording
+    /** HostStore whose BrokerApi answers every request with [body]/[status], recording
      *  each request's method + path + raw body into [recorded]. */
     private fun appRecording(
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"status":"ok"}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath, bodyText(req.body)))
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             respond(ByteReadChannel(body), status, jsonHeaders)
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

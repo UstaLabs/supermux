@@ -1,12 +1,17 @@
 package dev.supermux.desktop.editor
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.WalkthroughStep
+import dev.supermux.proto.ServerFrame
+import dev.supermux.state.HostStore
 
 /** Per-session walkthrough UI state. Mutable maps are deliberately keyed by stable code anchors so
  * drafts and scroll survive a replacement walkthrough whose step indices or ids changed. */
@@ -84,6 +89,14 @@ class WalkthroughState(val sessionId: String) {
         if (selected >= 0) requestedStepId = null
     }
 
+    fun applyServerFrame(frame: ServerFrame) {
+        when (frame) {
+            is ServerFrame.WalkthroughUpdated -> if (frame.sessionId == sessionId) applyWalkthrough(frame.walkthrough)
+            is ServerFrame.ReviewCommentFrame -> if (frame.sessionId == sessionId) applyComment(frame.comment)
+            else -> Unit
+        }
+    }
+
     fun applyComment(comment: ReviewComment) {
         val wasNew = comments.none { it.id == comment.id }
         comments = if (!wasNew) {
@@ -137,6 +150,15 @@ data class CommentAnchor(
     val side: String,
     val line: Int,
 )
+
+@Composable
+fun rememberWalkthroughState(app: HostStore, sessionId: String): WalkthroughState {
+    val state = remember(app, sessionId) { app.walkthroughState(sessionId) { WalkthroughState(it) } }
+    LaunchedEffect(app, sessionId) {
+        app.walkthroughFrames.collect { state.applyServerFrame(it) }
+    }
+    return state
+}
 
 fun WalkthroughStep.commentAnchor(): CommentAnchor? {
     val file = path ?: return null

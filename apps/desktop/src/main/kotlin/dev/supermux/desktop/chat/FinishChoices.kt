@@ -13,7 +13,7 @@ fun canSkipTests(action: String, prRequiresGreen: Boolean): Boolean =
 
 /** Whether the header's unacked dot should show: a terminal (non-running) finish result the user
  *  hasn't opened/acked yet (Android SessionShellDetail parity). [acked] is whether THIS job's
- *  startedAt has been acked (see [DesktopAppState.isFinishAcked]). Pure + shared by SessionDetail
+ *  startedAt has been acked (see [HostStore.isFinishAcked]). Pure + shared by SessionDetail
  *  and its test. */
 fun isFinishUnacked(job: FinishJobDto?, acked: Boolean): Boolean =
     job != null && job.status != "running" && !acked

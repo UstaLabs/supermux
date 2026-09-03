@@ -146,7 +146,7 @@ enum class GitMenuForceOp { OPEN, FETCH, PULL }
  * pill that drops a menu of Fetch / Pull / Publish-or-Push. Renders NOTHING when `session.git` is
  * null (non-repo session) — the whole affordance is gated on a badge existing.
  *
- * Each op callback is a `suspend () -> GitOpResult?` (the DesktopAppState git wrappers); the menu
+ * Each op callback is a `suspend () -> GitOpResult?` (the HostStore git wrappers); the menu
  * awaits it and shows a small transient result label (tag `git_op_result`) next to the badge,
  * cleared the next time the menu opens. No snackbar host yet — see the file header.
  */

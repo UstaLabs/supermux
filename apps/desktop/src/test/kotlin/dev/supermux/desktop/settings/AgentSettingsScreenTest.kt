@@ -1,5 +1,7 @@
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,9 +17,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
-import dev.supermux.desktop.host.FleetState
+import dev.supermux.state.FleetStore
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.openInBrowserOverride
@@ -1082,7 +1084,7 @@ class AgentSettingsScreenTest {
         waitUntil(timeoutMillis = 5_000) { sent.get() == "login-enter" }
     }
 
-    // ── DesktopAppState + mocked BrokerApi ──────────────────────────────────────────────────────
+    // ── HostStore + mocked BrokerApi ──────────────────────────────────────────────────────
 
     private val tempFiles = mutableListOf<Path>()
 
@@ -1104,7 +1106,7 @@ class AgentSettingsScreenTest {
         installJson: String = """{"state":"running","log":"installing"}""",
         mutationStatus: HttpStatusCode = HttpStatusCode.OK,
         baseUrl: String = "ws://test:9898",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             val path = req.url.encodedPath
@@ -1125,7 +1127,7 @@ class AgentSettingsScreenTest {
                 path == "/opencode/providers" ->
                     respond("[]", HttpStatusCode.OK, jsonHeaders)
                 // Mutation endpoints: honor [mutationStatus] so non-2xx can be proven through
-                // DesktopAppState + BrokerApi (not injected booleans).
+                // HostStore + BrokerApi (not injected booleans).
                 path == "/settings/config" && req.method == HttpMethod.Put ->
                     respond("{}", mutationStatus, jsonHeaders)
                 path == "/opencode/auth/key" && req.method == HttpMethod.Post ->
@@ -1139,10 +1141,11 @@ class AgentSettingsScreenTest {
             }
         }
         val api = BrokerApi(baseUrl, "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = baseUrl,
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = api,
@@ -1293,10 +1296,11 @@ class AgentSettingsScreenTest {
 
     @Test fun rail_switches_to_editor_lsp_without_nested_back() = runComposeUiTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi(
@@ -1376,9 +1380,10 @@ class AgentSettingsScreenTest {
                 }
             },
         ) { "rec-unused" }
-        val fleet = FleetState(
+        val fleet = FleetStore(
             store = store,
             scope = scope,
+            deps = testDeps(),
             appFactory = { url, token, onConn ->
                 val statusJson = when {
                     url.contains("a.relay") -> statusA
@@ -1392,10 +1397,11 @@ class AgentSettingsScreenTest {
                         else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
                     }
                 }
-                DesktopAppState(
+                HostStore(
                     baseUrl = url,
                     token = token,
                     scope = scope,
+                    deps = testDeps(),
                     connectOnInit = false,
                     sendFrameOverride = { },
                     apiOverride = BrokerApi(url, token, HttpClient(engine)),
@@ -1438,7 +1444,7 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun desktop_app_state_mutation_non2xx_is_failure() = runBlocking {
-        // Real HTTP-level path through DesktopAppState + BrokerApi (not injected booleans).
+        // Real HTTP-level path through HostStore + BrokerApi (not injected booleans).
         // This is the gap that previously treated non-2xx as success.
         val app = appForAgents(
             statusJson = """[{"kind":"codex","installed":true,"authed":false}]""",

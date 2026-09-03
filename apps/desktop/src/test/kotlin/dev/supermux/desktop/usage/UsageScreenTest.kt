@@ -1,5 +1,7 @@
 package dev.supermux.desktop.usage
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
@@ -13,7 +15,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.shell.AppShell
@@ -415,8 +417,8 @@ class UsageScreenTest {
         tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
     }
 
-    /** A [DesktopAppState] whose HTTP serves GET /usage + POST /usage/codex/reset. */
-    private fun appForUsage(initialResetCredits: Int = 3, redeemedResetCredits: Int = 2): DesktopAppState {
+    /** A [HostStore] whose HTTP serves GET /usage + POST /usage/codex/reset. */
+    private fun appForUsage(initialResetCredits: Int = 3, redeemedResetCredits: Int = 2): HostStore {
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when {
@@ -460,10 +462,11 @@ class UsageScreenTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = api,

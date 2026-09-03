@@ -91,7 +91,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /** The 7 add-custom-LSP fields, mirroring BrokerApi.addCustomEditorLsp(...)/
- *  DesktopAppState.lspAddCustom so the screen -> app-state call carries a single bundle
+ *  HostStore.lspAddCustom so the screen -> app-state call carries a single bundle
  *  (Android SettingsShared.kt's AddCustomLspArgs parity). */
 data class AddCustomLspArgs(
     val id: String,
@@ -110,7 +110,7 @@ data class AddCustomLspArgs(
  * toggle/install-reload/add/remove) — unlike the Usage/Archived overlays, where AppShell owns
  * a single point-in-time snapshot, because every mutation here needs to patch the list in place
  * (mirrors Android's EditorLspSection exactly). [lspInstallLog]/[lspInstallDone] are the LIVE
- * per-server install stream (DesktopAppState, folded from lsp_install_progress/lsp_install_done
+ * per-server install stream (HostStore, folded from lsp_install_progress/lsp_install_done
  * frames) — not reloaded, just observed.
  */
 @Composable

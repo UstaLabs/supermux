@@ -1,5 +1,7 @@
 package dev.supermux.desktop.shell
 
+import dev.supermux.desktop.testDeps
+
 import dev.supermux.ui.TestIds
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -16,7 +18,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.proto.ClientFrame
@@ -46,7 +48,7 @@ import kotlin.test.assertTrue
  * M4a Task 5 — wiring the launcher into the app shell. [AppShell] wasn't previously
  * UI-tested (its detail pane, [SessionDetail], drags in the JCEF-backed editor); this suite adds
  * the minimal harness needed to exercise the launcher overlay without ever selecting a session
- * (so [SessionDetail]/JCEF never mounts): a real [DesktopAppState] (connectOnInit=false, HTTP via
+ * (so [SessionDetail]/JCEF never mounts): a real [HostStore] (connectOnInit=false, HTTP via
  * a ktor MockEngine, outbound WS frames captured through `sendFrameOverride`) and a real
  * [ShellUiState] + [ShellStateStore]/[LauncherStore] pointed at a scratch temp file each,
  * so no test ever touches the developer's real ~/.config/supermux-desktop.
@@ -73,9 +75,9 @@ class AppShellTest {
         tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
     }
 
-    /** A [DesktopAppState] whose HTTP answers /paths/validate and /sessions (spawn); outbound WS
+    /** A [HostStore] whose HTTP answers /paths/validate and /sessions (spawn); outbound WS
      *  frames (e.g. the first-message Send) land in [sent] instead of a live socket. */
-    private fun appFor(sent: MutableList<ClientFrame>, validateOk: Boolean = true, spawnId: String = "sess-new"): DesktopAppState {
+    private fun appFor(sent: MutableList<ClientFrame>, validateOk: Boolean = true, spawnId: String = "sess-new"): HostStore {
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when (req.url.encodedPath) {
@@ -91,17 +93,18 @@ class AppShellTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = CoroutineScope(Dispatchers.Default), // real clock: BrokerApi.spawn uses withTimeout
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { sent.add(it) },
             apiOverride = api,
         )
     }
 
-    private fun twoWorkspaceApp(sent: MutableList<ClientFrame> = mutableListOf()): DesktopAppState =
+    private fun twoWorkspaceApp(sent: MutableList<ClientFrame> = mutableListOf()): HostStore =
         appFor(sent).also { app ->
             val workspaceSessions = listOf("w1" to "s1", "w2" to "s2")
             app.reduce(

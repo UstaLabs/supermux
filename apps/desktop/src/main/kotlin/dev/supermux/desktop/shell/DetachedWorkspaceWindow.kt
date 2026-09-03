@@ -15,7 +15,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.desktop.editor.WalkthroughState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
@@ -59,8 +60,8 @@ internal class WorkspacePanesBind(
     current: WorkspaceDto,
     session: SessionInfo?,
     ws: WorkspaceSession,
-    app: DesktopAppState,
-    appFor: (String) -> DesktopAppState,
+    app: HostStore,
+    appFor: (String) -> HostStore,
     drafts: SnapshotStateMap<String, String>,
     overlayScope: CoroutineScope,
     launcherPane: @Composable (
@@ -89,8 +90,8 @@ internal fun KeepWorkspacePanesBinds(
     ui: ShellUiState,
     workspaces: List<WorkspaceDto>,
     sessions: List<SessionInfo>,
-    app: DesktopAppState,
-    appFor: (String) -> DesktopAppState,
+    app: HostStore,
+    appFor: (String) -> HostStore,
     drafts: SnapshotStateMap<String, String>,
     overlayScope: CoroutineScope,
     launcherPane: @Composable (
@@ -197,8 +198,8 @@ internal fun WorkspacePanes(
     current: WorkspaceDto,
     session: SessionInfo?,
     ws: WorkspaceSession,
-    app: DesktopAppState,
-    appFor: (String) -> DesktopAppState,
+    app: HostStore,
+    appFor: (String) -> HostStore,
     ui: ShellUiState,
     drafts: SnapshotStateMap<String, String>,
     overlayScope: CoroutineScope,
@@ -339,7 +340,7 @@ internal fun WorkspacePanes(
                     },
                     onOpenWalkthrough = { sessionId, stepId ->
                         walkthroughSessionId = sessionId
-                        appFor(sessionId).walkthroughState(sessionId).open(stepId)
+                        appFor(sessionId).walkthroughState(sessionId) { WalkthroughState(it) }.open(stepId)
                         val existing = openSingletonView(layout, viewsById, NewViewKind.DIFF)
                         if (existing != null) {
                             val (diffViewId, ownerGroup) = existing

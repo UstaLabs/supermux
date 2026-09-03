@@ -51,7 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.Space
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.VncClient
@@ -61,12 +61,12 @@ import kotlinx.coroutines.launch
 
 /**
  * Display pane for a session's running VNC stream. Resolves the newest running [DisplayStream]
- * for [session] from [DesktopAppState.displays] (seeded via [DesktopAppState.listDisplays]),
+ * for [session] from [HostStore.displays] (seeded via [HostStore.listDisplays]),
  * shows an empty state with a "Start display" button when none exists, and connects/paints/
  * forwards input via [VncCanvas] once one is running.
  */
 @Composable
-fun DisplayPanel(app: DesktopAppState, session: SessionInfo, modifier: Modifier = Modifier) {
+fun DisplayPanel(app: HostStore, session: SessionInfo, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val live by app.displays.collectAsState()

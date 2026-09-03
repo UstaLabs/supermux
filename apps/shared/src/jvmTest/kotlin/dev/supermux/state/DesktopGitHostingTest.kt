@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
@@ -21,7 +21,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Desktop-parity Task 4: DesktopAppState forge wrappers (settings accounts + launcher omnibox).
+ * Desktop-parity Task 4: HostStore forge wrappers (settings accounts + launcher omnibox).
  *
  * MockEngine-backed BrokerApi — asserts HTTP method/path and 2xx decode / 5xx degrade.
  */
@@ -38,7 +38,7 @@ class DesktopGitHostingTest {
     private fun appRecording(
         recorded: MutableList<Rec>,
         respondFor: (Rec) -> Pair<HttpStatusCode, String> = { HttpStatusCode.OK to "{}" },
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             val rec = Rec(req.method, req.url.encodedPath, bodyText(req.body))
             recorded.add(rec)
@@ -47,10 +47,11 @@ class DesktopGitHostingTest {
             respond(ByteReadChannel(payload), status, jsonHeaders)
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.UsageResponse
@@ -21,36 +21,37 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M4f Task 1: the `DesktopAppState` usage-panel (usage / redeemCodexReset) wrappers. Mirrors
+ * M4f Task 1: the `HostStore` usage-panel (usage / redeemCodexReset) wrappers. Mirrors
  * [DesktopArchivedTest]'s MockEngine layer: BrokerApi is a final concrete class, so the
  * `apiOverride` seam takes a real instance constructed against a ktor [MockEngine] HttpClient —
  * no live broker required. Each wrapper is asserted for its exact HTTP method + path (matching
  * [BrokerApi.usage]'s `GET /usage` and [BrokerApi.redeemCodexReset]'s `POST /usage/codex/reset`),
  * that a 2xx response decodes into the real DTO, and that a 5xx degrades gracefully to null via
- * [DesktopAppState.runApi] — same idiom as [DesktopAppState.archived]/[DesktopAppState.gitFetch].
+ * [HostStore.runApi] — same idiom as [HostStore.archived]/[HostStore.gitFetch].
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DesktopUsageTest {
 
     private data class Rec(val method: HttpMethod, val path: String)
 
-    /** DesktopAppState whose BrokerApi answers every request with [body]/[status], recording
+    /** HostStore whose BrokerApi answers every request with [body]/[status], recording
      *  each request's method + path into [recorded]. */
     private fun appRecording(
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"status":"ok"}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath))
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             respond(ByteReadChannel(body), status, jsonHeaders)
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )
@@ -190,10 +191,11 @@ class DesktopUsageTest {
     }
 
     @Test fun usage_updated_frame_replaces_the_held_snapshot() {
-        val s = DesktopAppState(
+        val s = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
         )
         val snap = UsageResponse(

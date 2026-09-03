@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.GitOpResult
@@ -21,7 +21,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M4c Task 1: the `DesktopAppState` git-op (fetch/pull/push/publish) + proxies wrappers.
+ * M4c Task 1: the `HostStore` git-op (fetch/pull/push/publish) + proxies wrappers.
  *
  * Mirrors [DesktopFinishTest]'s MockEngine layer: BrokerApi is a final concrete class, so the
  * `apiOverride` seam takes a real instance constructed against a ktor [MockEngine] HttpClient —
@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
  * [BrokerApi.gitFetch]/[BrokerApi.gitPull]/[BrokerApi.gitPush]/[BrokerApi.gitPublish], all bare
  * `POST /sessions/<id>/git/<op>` with no body, and [BrokerApi.proxies]'s `GET /proxies`), that a
  * 2xx response decodes into the real DTO, and that a 5xx degrades to null (or emptyList for
- * proxies) via [DesktopAppState.runApi] — Android AppViewModel:566-569/871 parity (there via an
+ * proxies) via [HostStore.runApi] — Android AppViewModel:566-569/871 parity (there via an
  * `onResult` callback + `runCatching{}.getOrNull()`; here as a plain suspend fun returning the
  * same getOrNull-degraded result).
  */
@@ -38,23 +38,24 @@ class DesktopGitTest {
 
     private data class Rec(val method: HttpMethod, val path: String)
 
-    /** DesktopAppState whose BrokerApi answers every request with [body]/[status], recording
+    /** HostStore whose BrokerApi answers every request with [body]/[status], recording
      *  each request's method + path into [recorded]. */
     private fun appRecording(
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"status":"ok"}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath))
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             respond(ByteReadChannel(body), status, jsonHeaders)
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

@@ -88,7 +88,7 @@ import dev.supermux.workspace.splitGroup
 
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.desktop.host.AddHostScreen
-import dev.supermux.desktop.host.FleetState
+import dev.supermux.state.FleetStore
 import dev.supermux.desktop.host.HostView
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.notify.NoopNotificationManager
@@ -104,7 +104,7 @@ import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.usage.UsagePopover
 import dev.supermux.desktop.usage.UsageScreen
 import dev.supermux.net.ArchivedDto
@@ -535,7 +535,7 @@ internal fun visibleWorkspaceChatIds(
 
 @Composable
 fun AppShell(
-    app: DesktopAppState,
+    app: HostStore,
     ui: ShellUiState,
     store: ShellStateStore,
     // Injected (not `remember`-ed internally) for the SAME reason as [store]: production (Main.kt)
@@ -550,7 +550,7 @@ fun AppShell(
     // `All · <host…> · +` chip row + add-host + per-session/active-host routing come from here.
     // Default null = single-host: EVERY flow/op falls back to `app`, so the existing behavior and
     // the whole WorkspaceRootTest suite are unchanged.
-    fleet: FleetState? = null,
+    fleet: FleetStore? = null,
     /** Appearance mode shown in the sidebar theme toggle; toggled via [onToggleTheme]. */
     appearance: AppearanceMode = AppearanceMode.DARK,
     onToggleTheme: () -> Unit = {},
@@ -592,7 +592,7 @@ fun AppShell(
         }
     }
     // The app owning a given session (per-session ops: rename/kill/mute/detail). Single-host → [app].
-    val appFor: (String) -> DesktopAppState = { id -> fleet?.appFor(id) ?: app }
+    val appFor: (String) -> HostStore = { id -> fleet?.appFor(id) ?: app }
 
     // Host filter chip selection (recordId, or null = All) + the add-host overlay flag.
     var hostFilter by remember { mutableStateOf<String?>(null) }

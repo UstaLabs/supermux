@@ -1,6 +1,8 @@
 // Desktop-parity Task 2: Devices section — list / add (QR) / revoke with confirm.
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -24,10 +26,10 @@ import com.google.zxing.DecodeHintType
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
-import dev.supermux.desktop.host.FleetState
+import dev.supermux.state.FleetStore
 import dev.supermux.desktop.host.encodeQr
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.shell.SettingsSection
@@ -69,7 +71,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
  *
  * Seeds [BrokerApi] via libs.ktor.client.mock; covers load Error vs Empty, mint pairing link,
  * revoke confirm/error/reload, null last-seen, QR decode, clipboard, autofocus, retry disposal,
- * multi-host isolation, and DesktopAppState GET/POST/DELETE status correctness.
+ * multi-host isolation, and HostStore GET/POST/DELETE status correctness.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class DevicesSettingsScreenTest {
@@ -584,10 +586,10 @@ class DevicesSettingsScreenTest {
         onNodeWithTag("device_row_macbook").assertIsDisplayed()
     }
 
-    // ── DesktopAppState + BrokerApi (ktor mock) ─────────────────────────────────────────────────
+    // ── HostStore + BrokerApi (ktor mock) ─────────────────────────────────────────────────
 
     private data class DevicesAppHarness(
-        val app: DesktopAppState,
+        val app: HostStore,
         val methods: CopyOnWriteArrayList<Pair<HttpMethod, String>>,
         val client: HttpClient,
     )
@@ -622,10 +624,11 @@ class DevicesSettingsScreenTest {
             }
         }
         val client = HttpClient(engine)
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", client),
@@ -818,10 +821,11 @@ class DevicesSettingsScreenTest {
             }
         }
         val client = HttpClient(engine)
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", client),
@@ -887,9 +891,10 @@ class DevicesSettingsScreenTest {
                 }
             },
         ) { "rec-unused" }
-        val fleet = FleetState(
+        val fleet = FleetStore(
             store = store,
             scope = scope,
+            deps = testDeps(),
             appFactory = { url, token, onConn ->
                 val devicesJson = when {
                     url.contains("a.relay") -> devicesA
@@ -903,10 +908,11 @@ class DevicesSettingsScreenTest {
                         else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
                     }
                 }
-                DesktopAppState(
+                HostStore(
                     baseUrl = url,
                     token = token,
                     scope = scope,
+                    deps = testDeps(),
                     connectOnInit = false,
                     sendFrameOverride = { },
                     apiOverride = BrokerApi(url, token, HttpClient(engine)),

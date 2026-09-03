@@ -1,11 +1,13 @@
-package dev.supermux.desktop.host
+package dev.supermux.state
 
 import dev.supermux.state.AgentReplyEvent
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.host.HostView
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.host.PairingPayload
+import dev.supermux.host.hostViewsFrom
 import dev.supermux.host.isLegacyHostDisplayName
+import dev.supermux.host.mergeSessions
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
@@ -13,7 +15,6 @@ import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -29,44 +30,36 @@ import kotlinx.coroutines.launch
 
 /**
  * Multi-host orchestrator for the desktop client (spec §5) — the desktop analogue of Android's
- * multi-host `AppViewModel`, built as a thin layer OVER the existing single-host [DesktopAppState]
- * rather than a rewrite of it. One [DesktopAppState] (its own BrokerApi + control WS + reducer) per
+ * multi-host `AppViewModel`, built as a thin layer OVER the existing single-host [HostStore]
+ * rather than a rewrite of it. One [HostStore] (its own BrokerApi + control WS + reducer) per
  * paired host in the [store]; their per-host `sessions`/`messages`/`agentState`/`agentReplies` flows
  * are folded into merged, recordId-tagged StateFlows the fleet list renders. Session ids are
  * globally unique across hosts, so the merge is a straight fold (see [mergeSessions]).
  *
- * Routing mirrors Android: per-session operations target the OWNING host's [DesktopAppState] (via
+ * Routing mirrors Android: per-session operations target the OWNING host's [HostStore] (via
  * [appFor]); host-global operations (spawn/settings) target the ACTIVE host ([activeApp]). Existing
  * single-host desktop users are migrated to `PairedHost[0]` before this is built (see
- * [DesktopHostStores.migrateFromLegacyIfNeeded]).
+ * host-store migration from a legacy single-host config).
  *
- * @param appFactory builds one host's [DesktopAppState] `(effectiveUrl, token, onConnectionChange)`;
+ * @param appFactory builds one host's [HostStore] `(effectiveUrl, token, onConnectionChange)`;
  *   the production default opens a live connection, tests inject `connectOnInit = false` apps.
- * @param claimOverride / hostProbeOverride injectable network seams for the add-host flow (mirror
- *   [dev.supermux.desktop.pairing.PairingState]'s probeOverride) so add-host logic unit-tests
- *   without a live broker; default to a throwaway [BrokerApi] over [http].
+ * @param claimOverride / hostProbeOverride injectable network seams for the add-host flow so
+ *   add-host logic unit-tests without a live broker; default to a throwaway [BrokerApi] over [http].
  */
-class FleetState(
+class FleetStore(
     val store: PairedHostStore,
     scope: CoroutineScope,
-    private val nowMs: () -> Long = { System.currentTimeMillis() },
-    private val http: HttpClient = HttpClient(CIO),
-    private val appFactory: (url: String, token: String, onConnectionChange: (Boolean) -> Unit) -> DesktopAppState =
-        { url, token, onConn -> DesktopAppState(url, token, scope, onConnectionChange = onConn) },
+    private val deps: HostStoreDeps,
+    private val nowMs: () -> Long = { deps.nowMs() },
+    private val http: HttpClient = deps.httpFactory(null),
+    private val appFactory: (url: String, token: String, onConnectionChange: (Boolean) -> Unit) -> HostStore =
+        { url, token, onConn -> HostStore(url, token, scope, deps, onConnectionChange = onConn) },
     private val claimOverride: (suspend (url: String, secret: String, deviceName: String) -> PairClaimResult?)? = null,
     private val hostProbeOverride: (suspend (url: String) -> HostIdentity?)? = null,
+    private val localHostDisplayName: () -> String = { "Host" },
 ) {
-    /** Outcome of an add-host attempt (spec §3.4 / §5) — the desktop mirror of Android's AddHostResult. */
-    sealed interface AddHostResult {
-        data class Added(val host: PairedHost) : AddHostResult
-        /** Typed-URL path reached a real supermux host, but it is already set up and needs a claim
-         *  minted from its own UI (paste that link instead). */
-        data class NeedsClaim(val identity: HostIdentity) : AddHostResult
-        data class Error(val message: String) : AddHostResult
-    }
-
-    /** One host's live connection: its [DesktopAppState] plus the flow-collector jobs folding it in. */
-    private class HostConn(val app: DesktopAppState, val jobs: MutableList<Job> = mutableListOf())
+    /** One host's live connection: its [HostStore] plus the flow-collector jobs folding it in. */
+    private class HostConn(val app: HostStore, val jobs: MutableList<Job> = mutableListOf())
 
     // Own child scope (supervised, parented to the caller's) so [close] stops the folds without
     // tearing down the caller's scope, and one failed fold never cancels its siblings.
@@ -108,7 +101,7 @@ class FleetState(
     val activeHost: StateFlow<String?> = _activeHost.asStateFlow()
 
     // Agent replies merged across every host, for AppShell's NotificationController. Same
-    // replay-0 + bounded-DROP_OLDEST shape as DesktopAppState.agentReplies.
+    // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.
     private val _agentReplies = MutableSharedFlow<AgentReplyEvent>(
         extraBufferCapacity = 64,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -125,7 +118,7 @@ class FleetState(
 
     // ── Connection lifecycle (mirror of Android HostConnections.sync) ────────────────
 
-    /** Reconcile live connections against [hosts]: open one [DesktopAppState] per newly-added host,
+    /** Reconcile live connections against [hosts]: open one [HostStore] per newly-added host,
      *  close the one for each removed host, rebuild a host whose effective URL or token changed.
      *  Idempotent. Hosts with a blank token or no reachable URL are kept in the store but not dialed. */
     private fun sync(hosts: List<PairedHost>) = synchronized(lock) {
@@ -206,7 +199,7 @@ class FleetState(
             val identity = runCatching { api.getHost() }.getOrNull() ?: return@launch
             val hostId = identity.hostId.takeIf { it.isNotBlank() } ?: return@launch
             val displayName = if (isLocalDirectUrl(current.directUrl)) {
-                DesktopHostBootstrap.defaultHostName()
+                localHostDisplayName()
             } else {
                 identity.name
             }
@@ -270,16 +263,16 @@ class FleetState(
 
     // ── Routing ──────────────────────────────────────────────────────────────────────
 
-    /** The [DesktopAppState] owning [sessionId] (per-session routing), or the active host as a
+    /** The [HostStore] owning [sessionId] (per-session routing), or the active host as a
      *  fallback when the owner is unknown (a state frame racing ahead of its session_added). */
-    fun appFor(sessionId: String): DesktopAppState? =
+    fun appFor(sessionId: String): HostStore? =
         _sessionHost.value[sessionId]?.let { conns[it]?.app } ?: activeApp()
 
-    /** The [DesktopAppState] for a host recordId, or null if it isn't connected/known. */
-    fun appForRecord(recordId: String?): DesktopAppState? = recordId?.let { conns[it]?.app }
+    /** The [HostStore] for a host recordId, or null if it isn't connected/known. */
+    fun appForRecord(recordId: String?): HostStore? = recordId?.let { conns[it]?.app }
 
     /** The active host's app (host-global ops), falling back to the first connected host. */
-    fun activeApp(): DesktopAppState? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
+    fun activeApp(): HostStore? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
 
     /** Route host-global operations to a chosen host — the launcher's host picker + opening a chat. */
     fun setActiveHost(recordId: String) { _activeHost.value = recordId }

@@ -238,7 +238,7 @@ private fun pickFiles(): List<File> {
 
 /**
  * The New-Session launcher screen. Broker access is injected as suspend-lambdas (Android's style —
- * no VM ref in the composable); the app shell (M4a Task 5) binds these to [DesktopAppState].
+ * no VM ref in the composable); the app shell (M4a Task 5) binds these to [HostStore].
  *
  * @param onSubmit spawns the session + stages the first message. On normal completion the draft is
  *   cleared ([onClearDraft]); a thrown exception surfaces as the inline error. The caller wires this

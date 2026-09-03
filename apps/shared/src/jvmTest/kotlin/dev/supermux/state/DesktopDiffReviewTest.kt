@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.BrokerApi
@@ -19,6 +19,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -29,16 +30,16 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M4g-2 Task 1: the `DesktopAppState` diff + inline-code-review wrappers (fsDiff/reviewAddComment/
+ * M4g-2 Task 1: the `HostStore` diff + inline-code-review wrappers (fsDiff/reviewAddComment/
  * reviewResolve/reviewSubmit). Mirrors [DesktopGitTest]'s MockEngine layer: BrokerApi is a final
  * concrete class, so the `apiOverride` seam takes a real instance constructed against a ktor
  * [MockEngine] HttpClient — no live broker required. Each wrapper is asserted for its exact HTTP
  * method + path + (where relevant) request body, that a 2xx response decodes into the real DTO, and
- * that a 5xx degrades gracefully (null / false) via [DesktopAppState.runApi] — Android
+ * that a 5xx degrades gracefully (null / false) via [HostStore.runApi] — Android
  * AppViewModel.kt:805-819 parity (there via `runCatching{}.getOrNull()`/`getOrDefault(false)`).
  *
  * These wrappers take a [SessionInfo] (not a bare session id) — mirroring the fsList/fsRead/fsWrite
- * idiom (DesktopAppState.kt:537-563), NOT the gitFetch/gitPull id-string idiom — because the
+ * idiom (HostStore.kt:537-563), NOT the gitFetch/gitPull id-string idiom — because the
  * DiffView call sites in SessionDetail.DesktopEditorPanel already have the SessionInfo in hand
  * (same wrapper shape the plan specifies).
  */
@@ -55,23 +56,24 @@ class DesktopDiffReviewTest {
         else -> ""
     }
 
-    /** DesktopAppState whose BrokerApi answers every request with [body]/[status], recording
+    /** HostStore whose BrokerApi answers every request with [body]/[status], recording
      *  each request's method + path + raw body into [recorded]. */
     private fun appRecording(
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"status":"ok"}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath, bodyText(req.body)))
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             respond(ByteReadChannel(body), status, jsonHeaders)
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )
@@ -200,12 +202,14 @@ class DesktopDiffReviewTest {
         assertEquals(4, result?.steps?.single()?.rangeEnd)
     }
 
-    @Test fun walkthrough_and_comment_frames_reduce_into_the_same_session_state() {
+    @Test fun walkthrough_and_comment_frames_reduce_into_the_same_session_state() = runTest {
         val app = appRecording(mutableListOf())
         val walkthrough = Walkthrough(
             id = "w1", sessionId = "sess-1", title = "Tour", revision = 1,
             steps = listOf(WalkthroughStep(id = "st1", ord = 0, title = "First", path = "a.txt", anchorLine = 3)),
         )
+        val frames = mutableListOf<ServerFrame>()
+        val job = launch(UnconfinedTestDispatcher()) { app.walkthroughFrames.collect { frames.add(it) } }
 
         app.reduce(ServerFrame.WalkthroughUpdated("sess-1", walkthrough))
         app.reduce(
@@ -218,10 +222,12 @@ class DesktopDiffReviewTest {
             ),
         )
 
-        val state = app.walkthroughState("sess-1")
-        assertEquals("Tour", state.walkthrough?.title)
-        assertEquals("r1", state.comments.single().id)
-        assertEquals(1, state.unreadReplies)
+        job.cancel()
+        assertEquals(2, frames.size)
+        assertTrue(frames[0] is ServerFrame.WalkthroughUpdated)
+        assertEquals("Tour", (frames[0] as ServerFrame.WalkthroughUpdated).walkthrough.title)
+        assertTrue(frames[1] is ServerFrame.ReviewCommentFrame)
+        assertEquals("r1", (frames[1] as ServerFrame.ReviewCommentFrame).comment.id)
     }
 
     // ── reviewResolve ──────────────────────────────────────────────────────────────

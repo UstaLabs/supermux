@@ -3,38 +3,19 @@ package dev.supermux.desktop.host
 import dev.supermux.host.PairedHost
 import dev.supermux.proto.SessionInfo
 
+typealias HostView = dev.supermux.host.HostView
+
 /**
  * Pure, framework-free fleet-view model (spec §5) — the desktop mirror of
  * `apps/android/.../host/FleetModel.kt`. Everything the merged multi-host session list needs that
  * ISN'T Compose: a per-host badge color slot, a compact badge label, an offline "last seen"
  * string, the host filter, and the per-host → merged session fold. Kept Compose/broker-free so it
  * unit-tests on the JVM ([FleetModelTest]) and so the UI layer only maps a [colorIndex] → a theme
- * Color and [FleetState] only wires flows to [mergeSessions]/[hostViewsFrom].
+ * Color and [FleetStore] only wires flows to [mergeSessions]/[hostViewsFrom].
  */
 
 /** Number of distinct badge colors the UI palette provides; [hostColorIndex] maps into `0 until` this. */
 const val HOST_PALETTE_SIZE = 6
-
-/**
- * One paired host as the fleet list renders it: identity + live reachability + a stable badge
- * color slot. [colorIndex]/[shortLabel] are derived so the same host always looks the same.
- */
-data class HostView(
-    val recordId: String,
-    val hostId: String?,
-    val displayName: String,
-    val online: Boolean,
-    val lastSeenAt: Long = 0L,
-) {
-    /** Stable 0..[HOST_PALETTE_SIZE)-1 color slot — seeded by the durable hostId when known,
-     *  else the recordId, so the dot color survives a hostId backfill. */
-    val colorIndex: Int get() = hostColorIndex(hostId ?: recordId)
-
-    val displayLabel: String get() = hostDisplayLabel(displayName)
-
-    /** Compact label for the per-row badge (first word, capped) — the chip row uses the full name. */
-    val shortLabel: String get() = hostShortLabel(displayName)
-}
 
 fun hostDisplayLabel(displayName: String): String {
     val trimmed = displayName.trim()

@@ -6,7 +6,7 @@
 //    `SessionListPanel` and trimmed to just the grouped session list. The overflow destinations
 //    (Archived/Usage/Proxies/Appearance/Settings/Devices) and the new-session flow
 //    (SessionLauncherScreen/ProjectPickerSheet) aren't ported to desktop yet — there is no router
-//    or session-creation API surface on DesktopAppState to wire them to. AppShell (M1 Task 9)
+//    or session-creation API surface on HostStore to wire them to. AppShell (M1 Task 9)
 //    will own the app-level chrome once those land.
 //  - Shared-element transition params (sharedScope/animScope) are dropped — desktop has no
 //    Android-style shared-element navigation.

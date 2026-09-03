@@ -20,7 +20,7 @@ private class ScriptedMicCapture(private val startsOk: Boolean, private val wav:
 
 /**
  * M5-1 Task 5: [SessionLauncherScreen]'s mic wiring — the pre-spawn composer, so `transcribeAudio`
- * always routes id-less (mirrors [dev.supermux.desktop.state.DesktopAppState.transcribeAudio]'s
+ * always routes id-less (mirrors [dev.supermux.state.HostStore.transcribeAudio]'s
  * `sessionId = null` path). Uses the SAME
  * [dev.supermux.desktop.chat.MicButton]/[dev.supermux.desktop.chat.DesktopDictationController]
  * Task 3/4 already proved — only the host composable + append target (the launcher's

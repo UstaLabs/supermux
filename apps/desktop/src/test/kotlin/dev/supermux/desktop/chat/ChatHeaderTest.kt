@@ -1,5 +1,7 @@
 package dev.supermux.desktop.chat
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -15,7 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.ProxyDto
@@ -40,14 +42,15 @@ import kotlin.test.assertEquals
  * `onExitFlipsBackToChatAndClearsNativeView` and `clickingNativePillPersistsPreference…`,
  * retargeted at their new owner.
  *
- * DesktopAppState is built with `connectOnInit = false` so no WebSocket/HTTP is opened.
+ * HostStore is built with `connectOnInit = false` so no WebSocket/HTTP is opened.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class ChatHeaderTest {
-    private fun app() = DesktopAppState(
+    private fun app() = HostStore(
         baseUrl = "ws://test:9898",
         token = "t",
         scope = TestScope(UnconfinedTestDispatcher()),
+        deps = testDeps(),
         connectOnInit = false,
     )
 

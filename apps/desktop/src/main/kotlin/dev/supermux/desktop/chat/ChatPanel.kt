@@ -51,13 +51,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
+import dev.supermux.desktop.editor.rememberWalkthroughState
 import dev.supermux.desktop.shell.AgentViewToggle
 import dev.supermux.desktop.shell.OverflowMenu
 import dev.supermux.desktop.shell.SessionLinksMenu
 import dev.supermux.desktop.theme.LocalSemantics
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.ui.KeepAlivePanel
 import dev.supermux.desktop.ui.keepAlivePanel
 import dev.supermux.net.ModelsResponse
@@ -110,7 +111,7 @@ private fun timelineItemKey(item: TimelineItem): String = when (item) {
  */
 @Composable
 fun ChatPanel(
-    app: DesktopAppState,
+    app: HostStore,
     session: SessionInfo,
     draft: String,
     onDraftChange: (String) -> Unit,
@@ -172,7 +173,7 @@ fun ChatPanel(
     val activityMap by app.activity.collectAsState()
     val agentMap by app.agentState.collectAsState()
     val pending by app.pendingSend.collectAsState()
-    val walkthrough = app.walkthroughState(session.id)
+    val walkthrough = rememberWalkthroughState(app, session.id)
 
     val agent = agentMap[session.id]
     val working = agent?.working == true

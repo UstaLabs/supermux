@@ -29,6 +29,7 @@ import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.chat.ComposerExternalAttach
 import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
+import dev.supermux.desktop.editor.rememberWalkthroughState
 import dev.supermux.desktop.editor.DiffPane
 import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.ExplorerPane
@@ -38,7 +39,7 @@ import dev.supermux.desktop.editor.JcefState
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Space
@@ -84,7 +85,7 @@ fun ViewHost(
     view: ViewDto,
     workspaceId: String,
     workdir: String,
-    app: DesktopAppState,
+    app: HostStore,
     drafts: SnapshotStateMap<String, String>,
     modifier: Modifier = Modifier,
     /**
@@ -103,7 +104,7 @@ fun ViewHost(
     /** Session whose walkthrough the singleton Changes pane currently presents. */
     walkthroughSessionId: String? = null,
     onWalkthroughClosed: () -> Unit = {},
-    appForSession: (String) -> DesktopAppState = { app },
+    appForSession: (String) -> HostStore = { app },
     /** Markdown preview per view id — the file's TAB owns the toggle now, so the state is hoisted. */
     previewModeFor: (String) -> Boolean = { false },
     /** Close THIS view — the diff pane's close button is a tab close, not a mode toggle. */
@@ -255,7 +256,7 @@ fun ViewHost(
  */
 @Composable
 private fun ChatPanelForSession(
-    app: DesktopAppState,
+    app: HostStore,
     sessionId: String,
     workdir: String,
     drafts: SnapshotStateMap<String, String>,
@@ -330,14 +331,14 @@ internal fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
 
 /**
  * Session-scoped terminal adapter. Mirrors SessionDetail's terminal / native wiring:
- * - terminalId "agent" → agent PTY via [DesktopAppState.connectAgentTerminal]
- * - any other id → scratch terminal via [DesktopAppState.connectTerminal]
+ * - terminalId "agent" → agent PTY via [HostStore.connectAgentTerminal]
+ * - any other id → scratch terminal via [HostStore.connectTerminal]
  *
  * key(sessionId, terminalId) so a view switch does not reuse the wrong JediTerm client.
  */
 @Composable
 private fun AgentTerminalForSession(
-    app: DesktopAppState,
+    app: HostStore,
     sessionId: String,
     terminalId: String,
     modifier: Modifier,
@@ -366,7 +367,7 @@ private fun AgentTerminalForSession(
  */
 @Composable
 private fun WorkspaceTerminalPanel(
-    app: DesktopAppState,
+    app: HostStore,
     workspaceId: String,
     terminalId: String,
     content: @Composable (connect: () -> TerminalClient, modifier: Modifier) -> Unit,
@@ -387,7 +388,7 @@ private fun WorkspaceTerminalPanel(
  * draws (rather than crashing) at any call site that has not been wired yet.
  */
 @Composable
-private fun rememberWorkspaceDocuments(app: DesktopAppState, workspaceId: String): DocumentStore {
+private fun rememberWorkspaceDocuments(app: HostStore, workspaceId: String): DocumentStore {
     val scope = rememberCoroutineScope()
     return remember(workspaceId) {
         DocumentStore(
@@ -401,7 +402,7 @@ private fun rememberWorkspaceDocuments(app: DesktopAppState, workspaceId: String
 /** Explorer adapter — the file tree + filename search over `/workspaces/:id/fs*`. */
 @Composable
 private fun ExplorerPaneForWorkspace(
-    app: DesktopAppState,
+    app: HostStore,
     workspaceId: String,
     onOpenFile: (String) -> Unit,
     modifier: Modifier,
@@ -426,7 +427,7 @@ private fun ExplorerPaneForWorkspace(
 @Composable
 private fun FilePaneForWorkspace(
     previewMode: Boolean,
-    app: DesktopAppState,
+    app: HostStore,
     workspaceId: String,
     workdir: String,
     path: String,
@@ -468,8 +469,8 @@ private fun FilePaneForWorkspace(
 /** Diff adapter — `/workspaces/:id/fs/diff` plus the session-keyed review endpoints. */
 @Composable
 private fun DiffPaneForWorkspace(
-    app: DesktopAppState,
-    appForSession: (String) -> DesktopAppState,
+    app: HostStore,
+    appForSession: (String) -> HostStore,
     workspaceId: String,
     base: String?,
     lspSessionId: String?,
@@ -488,8 +489,8 @@ private fun DiffPaneForWorkspace(
     // Per-diff-pane state, seeded from the view's own `diffBase` so a saved row reopens on the
     // base it was looking at.
     val diff = remember(workspaceId, base) { DiffState().apply { base?.let { diffBase = it } } }
-    val walkthrough = walkthroughSession?.let { walkthroughApp.walkthroughState(it.id) }
-    val reviewWalkthrough = reviewSession?.let { app.walkthroughState(it.id) }
+    val walkthrough = walkthroughSession?.let { rememberWalkthroughState(walkthroughApp, it.id) }
+    val reviewWalkthrough = reviewSession?.let { rememberWalkthroughState(app, it.id) }
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,
@@ -529,7 +530,7 @@ private fun DiffPaneForWorkspace(
  */
 @Composable
 private fun DisplayPanelForStream(
-    app: DesktopAppState,
+    app: HostStore,
     displayId: String,
     modifier: Modifier,
 ) {

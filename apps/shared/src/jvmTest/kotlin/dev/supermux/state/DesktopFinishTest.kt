@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.FinishReadiness
@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
 
 /**
  * M4b Finish flow: the `finish_job` + `session_git` reducer branches and the finish/verify
- * broker wrappers on [DesktopAppState].
+ * broker wrappers on [HostStore].
  *
  * Two layers (mirroring [DesktopLauncherTest]):
  *  1. Reducer branches — exercised through the `reduce()` seam with `connectOnInit = false`
@@ -45,10 +45,11 @@ class DesktopFinishTest {
 
     private val sent = mutableListOf<dev.supermux.proto.ClientFrame>()
 
-    private fun state() = DesktopAppState(
+    private fun state() = HostStore(
         baseUrl = "ws://test:9898",
         token = "t",
         scope = TestScope(UnconfinedTestDispatcher()),
+        deps = testDeps(),
         connectOnInit = false,
         sendFrameOverride = { sent.add(it) },
     )
@@ -166,12 +167,12 @@ class DesktopFinishTest {
         else -> ""
     }
 
-    /** DesktopAppState whose BrokerApi answers /finish (with [finishStatus]) and
+    /** HostStore whose BrokerApi answers /finish (with [finishStatus]) and
      *  /finish/readiness, appending each request to [recorded]. */
     private fun appRecording(
         recorded: MutableList<Rec>,
         finishStatus: HttpStatusCode = HttpStatusCode.OK,
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             val path = req.url.encodedPath
             recorded.add(Rec(path, bodyText(req.body)))
@@ -188,10 +189,11 @@ class DesktopFinishTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

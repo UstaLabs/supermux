@@ -1,6 +1,6 @@
 // Ported from apps/android/src/main/kotlin/dev/supermux/android/pairing/PairingViewModel.kt —
 // keep in sync (state machine + probe/persist semantics). Desktop swaps the androidx ViewModel
-// for a plain class driven by a caller-owned CoroutineScope (same seam DesktopAppState uses),
+// for a plain class driven by a caller-owned CoroutineScope (same seam HostStore uses),
 // and SecureTokenStore for the real on-disk DesktopTokenStore.
 package dev.supermux.desktop.pairing
 
@@ -36,7 +36,7 @@ sealed interface PairingUiState {
  * in a native-M3 presentation. Validation uses a throwaway [BrokerApi] built with the
  * candidate base+token; nothing is persisted until [confirmPersist].
  *
- * @param probeOverride injectable network seam (mirrors [dev.supermux.desktop.state.DesktopAppState]'s
+ * @param probeOverride injectable network seam (mirrors [dev.supermux.state.HostStore]'s
  *   `sendFrameOverride`/`apiOverride`) — tests inject a fake to assert state transitions without a
  *   live broker. Defaults to the real `/pair.json` → `/me` probe over a throwaway [HttpClient].
  */

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
@@ -20,7 +20,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The in-session model + reasoning wrappers on [DesktopAppState] (M-uxfix). Each is exercised
+ * The in-session model + reasoning wrappers on [HostStore] (M-uxfix). Each is exercised
  * against a real [BrokerApi] over a ktor [MockEngine] (BrokerApi is final — the `apiOverride` seam
  * takes a real instance). The engine records method + path + body so the tests assert the REST
  * SHAPE (GET the two catalogs, POST /model and POST /reasoning-level with the right body), and a
@@ -33,12 +33,12 @@ class DesktopModelSwitchTest {
 
     private fun bodyText(content: Any?): String = (content as? TextContent)?.text ?: ""
 
-    /** DesktopAppState whose BrokerApi answers the per-session model/reasoning endpoints, recording
+    /** HostStore whose BrokerApi answers the per-session model/reasoning endpoints, recording
      *  each request. [ok]=false makes every request throw a transport error so the runApi degrade
      *  paths are exercised (a plain non-2xx would NOT trip the fire-and-forget POST wrappers, which
      *  don't inspect status — only a thrown exception degrades them, mirroring Android's
      *  `runCatching { api.switch… }`). */
-    private fun app(recorded: MutableList<Rec>, ok: Boolean = true): DesktopAppState {
+    private fun app(recorded: MutableList<Rec>, ok: Boolean = true): HostStore {
         val engine = MockEngine { req ->
             val path = req.url.encodedPath
             recorded.add(Rec(req.method.value, path, bodyText(req.body)))
@@ -58,10 +58,11 @@ class DesktopModelSwitchTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

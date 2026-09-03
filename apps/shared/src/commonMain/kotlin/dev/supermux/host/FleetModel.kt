@@ -132,3 +132,47 @@ fun hostDotArgb(colorIndex: Int, dark: Boolean): Int {
     val h = hostHueDegrees(colorIndex)
     return if (dark) oklchToArgb(0.74, 0.135, h) else oklchToArgb(0.55, 0.15, h)
 }
+
+/** A merged fleet session list plus the sessionId → owning-host recordId map that drives per-row
+ *  badges and per-session routing. */
+data class MergedSessions(
+    val sessions: List<SessionInfo>,
+    val sessionHost: Map<String, String>,
+)
+
+/**
+ * Flatten the per-host session buckets into ONE merged list (in store [order], then any cached
+ * bucket whose host is no longer in the store) plus the sessionId → recordId owner map. Session
+ * ids are globally unique across hosts, so a duplicate id (should not happen) keeps its FIRST
+ * owner in store order rather than double-rendering. Mirrors Android AppViewModel.rebuildSessions.
+ */
+fun mergeSessions(
+    order: List<String>,
+    sessionsByHost: Map<String, List<SessionInfo>>,
+): MergedSessions {
+    val ids = LinkedHashSet(order).apply { addAll(sessionsByHost.keys) }
+    val flat = ArrayList<SessionInfo>()
+    val owner = LinkedHashMap<String, String>()
+    for (rid in ids) {
+        sessionsByHost[rid]?.forEach { s ->
+            if (owner[s.id] == null) {
+                flat += s
+                owner[s.id] = rid
+            }
+        }
+    }
+    return MergedSessions(flat, owner)
+}
+
+/** Derive the [HostView] list from the store's [hosts] (source of order + identity + lastSeenAt)
+ *  and the live [online] reachability map (recordId → connected). */
+fun hostViewsFrom(hosts: List<PairedHost>, online: Map<String, Boolean>): List<HostView> =
+    hosts.map { h ->
+        HostView(
+            recordId = h.recordId,
+            hostId = h.hostId,
+            displayName = h.displayName,
+            online = online[h.recordId] == true,
+            lastSeenAt = h.lastSeenAt,
+        )
+    }

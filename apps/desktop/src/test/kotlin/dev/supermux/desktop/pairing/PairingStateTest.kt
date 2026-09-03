@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
 
 /**
  * Pure-logic tests for [PairingState] — no live network. The `probeOverride` seam
- * (mirroring DesktopAppState's `sendFrameOverride`) lets us drive the Validating →
+ * (mirroring HostStore's `sendFrameOverride`) lets us drive the Validating →
  * Confirm/Error transition deterministically; the `UnconfinedTestDispatcher` runs the
  * launched coroutine synchronously so assertions can read `state.value` immediately.
  */

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.SessionListPanel
+import dev.supermux.state.AddHostResult
 import dev.supermux.host.PairingPayload
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
@@ -127,8 +128,8 @@ class FleetListUiTest {
             AddHostScreen(
                 onBack = {},
                 defaultDeviceName = "This desktop",
-                onClaim = { _, _ -> claimed = true; FleetState.AddHostResult.Error("x") },
-                onClaimByUrl = { _, _ -> FleetState.AddHostResult.Error("x") },
+                onClaim = { _, _ -> claimed = true; AddHostResult.Error("x") },
+                onClaimByUrl = { _, _ -> AddHostResult.Error("x") },
                 onAdded = {},
             )
         }
@@ -148,8 +149,8 @@ class FleetListUiTest {
             AddHostScreen(
                 onBack = {},
                 defaultDeviceName = "This desktop",
-                onClaim = { p, _ -> claimedHostId = p.hostId; FleetState.AddHostResult.Error("stop here") },
-                onClaimByUrl = { _, _ -> FleetState.AddHostResult.Error("x") },
+                onClaim = { p, _ -> claimedHostId = p.hostId; AddHostResult.Error("stop here") },
+                onClaimByUrl = { _, _ -> AddHostResult.Error("x") },
                 onAdded = {},
             )
         }

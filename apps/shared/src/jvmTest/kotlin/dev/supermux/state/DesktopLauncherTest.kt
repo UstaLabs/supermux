@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.state.StagedUpload
 import dev.supermux.net.BrokerApi
@@ -31,10 +31,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Launcher + spawn wrappers for [DesktopAppState] (M4a Task 3). Two layers:
+ * Launcher + spawn wrappers for [HostStore] (M4a Task 3). Two layers:
  *
  *  1. [resolveSpawnId] — the pure id-resolution helper — is unit-tested directly (no broker).
- *  2. [DesktopAppState.createSessionWithFirstMessage] is exercised against a real [BrokerApi] built
+ *  2. [HostStore.createSessionWithFirstMessage] is exercised against a real [BrokerApi] built
  *     over a ktor [MockEngine] (BrokerApi is final — the `apiOverride` seam takes a real instance,
  *     never a mock subclass). The engine records every request path + body so the test can assert
  *     the /sessions request SHAPE and that uploads fire strictly AFTER spawn.
@@ -81,7 +81,7 @@ class DesktopLauncherTest {
         else -> ""
     }
 
-    /** DesktopAppState whose BrokerApi answers /paths/validate, /sessions and /upload, appending
+    /** HostStore whose BrokerApi answers /paths/validate, /sessions and /upload, appending
      *  each request to [recorded] in order. [validateOk]/[resolvedPath] shape the validation reply;
      *  [spawnId] is the id the spawn returns (blank → the reducer-seeded session is matched by name). */
     private fun appRecording(
@@ -90,7 +90,7 @@ class DesktopLauncherTest {
         resolvedPath: String = "/resolved/dir",
         spawnId: String = "sess-1",
         spawnName: String = "feat-x",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             val path = req.url.encodedPath
             recorded.add(Rec(path, bodyText(req.body)))
@@ -112,10 +112,11 @@ class DesktopLauncherTest {
             }
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = CoroutineScope(Dispatchers.Default), // real clock: BrokerApi.spawn uses withTimeout
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

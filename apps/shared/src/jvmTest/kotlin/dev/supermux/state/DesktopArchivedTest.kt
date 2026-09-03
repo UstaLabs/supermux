@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
@@ -21,14 +21,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * M4e Task 1: the `DesktopAppState` archived-sessions (archived list / resume / archivedLogs)
+ * M4e Task 1: the `HostStore` archived-sessions (archived list / resume / archivedLogs)
  * wrappers. Mirrors [DesktopGitTest]'s MockEngine layer: BrokerApi is a final concrete class, so
  * the `apiOverride` seam takes a real instance constructed against a ktor [MockEngine] HttpClient
  * — no live broker required. Each wrapper is asserted for its exact HTTP method + path (matching
  * [BrokerApi.archived]'s `GET /archived-sessions`, [BrokerApi.resume]'s bare
  * `POST /sessions/<id>/resume`, and [BrokerApi.archivedLogs]'s `GET /sessions/<id>/messages`),
  * that a 2xx response decodes into the real DTO, and that a 5xx degrades gracefully via
- * [DesktopAppState.runApi] — Android AppViewModel:677-678/764-765 parity (there via
+ * [HostStore.runApi] — Android AppViewModel:677-678/764-765 parity (there via
  * `runCatching{}.getOrNull()` / `.getOrNull() ?: emptyList()`; here as plain suspend funs
  * returning the same getOrNull-degraded result).
  */
@@ -37,23 +37,24 @@ class DesktopArchivedTest {
 
     private data class Rec(val method: HttpMethod, val path: String)
 
-    /** DesktopAppState whose BrokerApi answers every request with [body]/[status], recording
+    /** HostStore whose BrokerApi answers every request with [body]/[status], recording
      *  each request's method + path into [recorded]. */
     private fun appRecording(
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"status":"ok"}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath))
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             respond(ByteReadChannel(body), status, jsonHeaders)
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )
@@ -115,7 +116,7 @@ class DesktopArchivedTest {
     /**
      * [BrokerApi.resume] is a bare `http.post` with no [BrokerApi.decode]/status check (unlike
      * e.g. `finish`, which decodes and so throws on non-2xx) — a 5xx from the broker completes
-     * the HTTP round-trip normally and does NOT throw, so [DesktopAppState.resume]'s
+     * the HTTP round-trip normally and does NOT throw, so [HostStore.resume]'s
      * `runCatching{}.isSuccess` stays true on a 5xx (verified below). The only thing that can
      * degrade it to false is a genuine transport failure (connection refused, timeout, ...),
      * covered by [resume_returns_false_on_a_transport_failure].
@@ -132,10 +133,11 @@ class DesktopArchivedTest {
     @Test fun resume_returns_false_on_a_transport_failure() = runTest {
         val engine = MockEngine { throw java.io.IOException("connection refused") }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

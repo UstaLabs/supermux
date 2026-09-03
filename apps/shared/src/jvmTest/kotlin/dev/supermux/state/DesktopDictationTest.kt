@@ -1,4 +1,4 @@
-package dev.supermux.desktop.state
+package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
@@ -19,7 +19,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * M5-1 Task 1: [DesktopAppState.transcribeAudio] — the desktop mic-dictation HTTP wrapper. Mirrors
+ * M5-1 Task 1: [HostStore.transcribeAudio] — the desktop mic-dictation HTTP wrapper. Mirrors
  * [DesktopLspSettingsTest]'s MockEngine layer: BrokerApi is a final concrete class, so the
  * `apiOverride` seam takes a real instance over a ktor [MockEngine] HttpClient — no live broker
  * required. The multipart wire shape (field "audio", filename/mime headers) is already pinned by
@@ -35,16 +35,17 @@ class DesktopDictationTest {
         recorded: MutableList<Rec>,
         status: HttpStatusCode = HttpStatusCode.OK,
         body: String = """{"text":"hello world","degraded":false}""",
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             recorded.add(Rec(req.method, req.url.encodedPath))
             respond(ByteReadChannel(body), status, headersOf(HttpHeaders.ContentType, "application/json"))
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = api,
         )

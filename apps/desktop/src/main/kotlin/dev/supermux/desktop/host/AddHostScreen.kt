@@ -4,6 +4,8 @@
 // Tailscale/VPN/reverse-proxy users. Native M3, mirrors the desktop OnboardingScreen.
 package dev.supermux.desktop.host
 
+import dev.supermux.state.AddHostResult
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -59,8 +61,8 @@ private enum class AddMode { Paste, Url }
 fun AddHostScreen(
     onBack: () -> Unit,
     defaultDeviceName: String,
-    onClaim: suspend (PairingPayload, deviceName: String) -> FleetState.AddHostResult,
-    onClaimByUrl: suspend (url: String, deviceName: String) -> FleetState.AddHostResult,
+    onClaim: suspend (PairingPayload, deviceName: String) -> AddHostResult,
+    onClaimByUrl: suspend (url: String, deviceName: String) -> AddHostResult,
     onAdded: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -74,14 +76,14 @@ fun AddHostScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
 
-    fun handle(result: FleetState.AddHostResult) {
+    fun handle(result: AddHostResult) {
         busy = false
         when (result) {
-            is FleetState.AddHostResult.Added -> onAdded()
-            is FleetState.AddHostResult.NeedsClaim ->
+            is AddHostResult.Added -> onAdded()
+            is AddHostResult.NeedsClaim ->
                 info = "Found ${result.identity.name.ifBlank { "the host" }}. It's already set up — " +
                     "run `mux pair` (or the host's Add-device screen) to mint a pairing link, then paste it above."
-            is FleetState.AddHostResult.Error -> error = result.message
+            is AddHostResult.Error -> error = result.message
         }
     }
 

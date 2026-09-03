@@ -1,5 +1,7 @@
 package dev.supermux.desktop.display
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -7,7 +9,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.net.BrokerApi
@@ -44,12 +46,13 @@ class DisplayPanelTest {
 
     private val session = SessionInfo(id = "s1", name = "demo", workdir = "/w/s1", agent = "claude")
 
-    private fun appWith(body: String, status: HttpStatusCode = HttpStatusCode.OK): DesktopAppState {
+    private fun appWith(body: String, status: HttpStatusCode = HttpStatusCode.OK): HostStore {
         val engine = MockEngine { respond(ByteReadChannel(body), status, headersOf(HttpHeaders.ContentType, "application/json")) }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898", token = "t",
             scope = TestScope(UnconfinedTestDispatcher()), connectOnInit = false, apiOverride = api,
+            deps = testDeps(),
         )
     }
 
@@ -97,9 +100,10 @@ class DisplayPanelTest {
             )
         }
         val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898", token = "t",
             scope = TestScope(UnconfinedTestDispatcher()), connectOnInit = false, apiOverride = api,
+            deps = testDeps(),
         )
         setContent {
             SupermuxTheme(appearance = AppearanceMode.DARK) { DisplayPanel(app = app, session = session) }

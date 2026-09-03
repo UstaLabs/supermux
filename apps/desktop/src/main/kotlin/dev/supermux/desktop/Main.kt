@@ -45,6 +45,7 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.desktop.chat.MessageTts
 import dev.supermux.desktop.chat.AssistantMessage
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.desktop.chat.loadMarkdownImageBitmap
@@ -52,7 +53,10 @@ import dev.supermux.desktop.chat.prunePasteCache
 import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
-import dev.supermux.desktop.host.FleetState
+import dev.supermux.desktop.settings.DesktopSettingsStore
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.state.cioHttpFactory
 import dev.supermux.desktop.host.HostWizard
 import dev.supermux.desktop.intro.FirstRunIntroOverlay
 import dev.supermux.desktop.intro.IntroStateStore
@@ -60,7 +64,7 @@ import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.Space
 import dev.supermux.desktop.theme.SupermuxTheme
@@ -81,6 +85,21 @@ import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
+
+private val desktopDeps: HostStoreDeps by lazy {
+    HostStoreDeps(
+        httpFactory = cioHttpFactory(),
+        settings = DesktopSettingsStore(DesktopHostStores.defaultDir().resolve("settings.json")),
+    )
+}
+
+private val desktopBindTts: (
+    resolveEngine: suspend () -> String,
+    speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
+) -> Unit = { resolve, speak ->
+    MessageTts.resolveEngine = resolve
+    MessageTts.speakRemoteStream = speak
+}
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
@@ -504,11 +523,25 @@ fun main() {
                 } else {
                     val scope = rememberCoroutineScope()
                     // The multi-host fleet: one connection per paired host, merged into AppShell.
-                    val fleet = remember { FleetState(hostStore, scope) }
+                    val fleet = remember {
+                        FleetStore(
+                            hostStore,
+                            scope,
+                            desktopDeps,
+                            appFactory = { url, token, onConn ->
+                                HostStore(
+                                    url, token, scope, desktopDeps,
+                                    onConnectionChange = onConn,
+                                    bindTts = desktopBindTts,
+                                )
+                            },
+                            localHostDisplayName = { DesktopHostBootstrap.defaultHostName() },
+                        )
+                    }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
                     // The active host's app backs the single-host headless hooks below and is
                     // AppShell's fallback; AppShell itself routes through `fleet`. Non-null
-                    // because `paired` ⟹ the store holds a host ⟹ FleetState opened its connection.
+                    // because `paired` ⟹ the store holds a host ⟹ FleetStore opened its connection.
                     val app = remember(fleet) { fleet.activeApp() } ?: return@Box
 
                     // Headless-verification hook (no input injection on CI boxes): SM_SMOKE_SEND=

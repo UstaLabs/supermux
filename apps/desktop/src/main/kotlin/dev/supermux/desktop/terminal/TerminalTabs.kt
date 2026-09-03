@@ -47,7 +47,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.desktop.theme.MonoFontFamily
 import dev.supermux.desktop.theme.Radii
@@ -93,7 +93,7 @@ private fun genTerminalId(): String {
  */
 @Composable
 fun TerminalTabs(
-    app: DesktopAppState,
+    app: HostStore,
     sessionId: String,
     modifier: Modifier = Modifier,
     active: Boolean = true,
@@ -162,7 +162,7 @@ fun TerminalTabs(
         tabs.removeAt(removedIdx)
         if (id == lastActiveId) lastActiveId = null
         if (id == activeId) pickActiveAfterRemoval(removedIdx)
-        // Best-effort tmux teardown (fire-and-forget inside DesktopAppState) — the tab is already
+        // Best-effort tmux teardown (fire-and-forget inside HostStore) — the tab is already
         // gone locally regardless of the outcome (web parity: the shell may already have exited).
         app.closeTerminal(sessionId, id)
     }

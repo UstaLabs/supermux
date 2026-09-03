@@ -30,6 +30,7 @@ dependencies {
     implementation(compose.materialIconsExtended)
     implementation(libs.coroutines.swing)
     implementation(libs.serialization.json)
+    implementation(libs.datetime)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
     implementation(libs.jediterm.core) // both jediterm modules: dual LGPLv3/Apache-2.0 — used under Apache-2.0
@@ -51,6 +52,7 @@ dependencies {
     // Archived, AppUpdate). Workspace shell stays outside the stack so chat/editor/term keep state.
     implementation(libs.jetbrains.navigation3.ui)
 
+    testImplementation(libs.datetime)
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))
     testImplementation(libs.ktor.client.mock) // seed BrokerApi responses (e.g. terminal-tab list) in UI tests
@@ -63,6 +65,14 @@ dependencies {
 }
 
 kotlin { jvmToolchain(17) }
+
+// HostStoreDeps uses kotlinx.datetime.Clock (0.6). Compose/media pull 0.7 which dropped Clock.class.
+configurations.configureEach {
+    resolutionStrategy {
+        force("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
+        force("org.jetbrains.kotlinx:kotlinx-datetime-jvm:0.6.1")
+    }
+}
 
 val hostOs = System.getProperty("os.name").orEmpty().lowercase()
 val hostArch = System.getProperty("os.arch").orEmpty().lowercase()

@@ -1,6 +1,8 @@
 // Desktop-parity Task 3: System / maintenance — broker update status + restart.
 package dev.supermux.desktop.settings
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -9,9 +11,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.host.FleetState
+import dev.supermux.state.FleetStore
 import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.state.cioHttpFactory
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.shell.SettingsSection
@@ -76,7 +80,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * Seeds [BrokerApi] via libs.ktor.client.mock; covers status display, last-checked text,
  * recheck via checkUpdate, update-broker path, restart confirm (kills connection), multi-host
- * isolation, and DesktopAppState GET/POST paths. Distinct from app self-update (AppUpdate).
+ * isolation, and HostStore GET/POST paths. Distinct from app self-update (AppUpdate).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class SystemSettingsScreenTest {
@@ -736,7 +740,7 @@ class SystemSettingsScreenTest {
         onNodeWithText("Couldn't restart the broker.").assertIsDisplayed()
     }
 
-    // ── DesktopAppState + BrokerApi (ktor mock) ─────────────────────────────────────────────────
+    // ── HostStore + BrokerApi (ktor mock) ─────────────────────────────────────────────────
 
     private fun appForSystem(
         statusJson: String? = """{"current":"1.2.3","commit":"abc12345","latest":null,"updateAvailable":false,"notesUrl":"https://n","mode":"binary","state":"idle","lastChecked":1717200000000,"lastError":null,"disabled":false}""",
@@ -748,7 +752,7 @@ class SystemSettingsScreenTest {
         checkCalls: AtomicInteger? = null,
         runCalls: AtomicInteger? = null,
         restartCalls: AtomicInteger? = null,
-    ): DesktopAppState {
+    ): HostStore {
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             val path = req.url.encodedPath
@@ -781,10 +785,11 @@ class SystemSettingsScreenTest {
                     respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
             }
         }
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
@@ -946,10 +951,13 @@ class SystemSettingsScreenTest {
         server.start(wait = false)
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://127.0.0.1:$port",
             token = "stub-token",
             scope = scope,
+            deps = testDeps().let { d ->
+                HostStoreDeps(httpFactory = cioHttpFactory(), settings = d.settings, clock = d.clock)
+            },
             connectOnInit = true,
         )
         try {
@@ -1029,10 +1037,11 @@ class SystemSettingsScreenTest {
                 else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
             }
         }
-        val app = DesktopAppState(
+        val app = HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
@@ -1097,9 +1106,10 @@ class SystemSettingsScreenTest {
                 }
             },
         ) { "rec-unused" }
-        val fleet = FleetState(
+        val fleet = FleetStore(
             store = store,
             scope = scope,
+            deps = testDeps(),
             appFactory = { url, token, onConn ->
                 val statusJson = when {
                     url.contains("a.relay") -> statusA
@@ -1113,10 +1123,11 @@ class SystemSettingsScreenTest {
                         else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
                     }
                 }
-                DesktopAppState(
+                HostStore(
                     baseUrl = url,
                     token = token,
                     scope = scope,
+                    deps = testDeps(),
                     connectOnInit = false,
                     sendFrameOverride = { },
                     apiOverride = BrokerApi(url, token, HttpClient(engine)),

@@ -1,7 +1,7 @@
 package dev.supermux.desktop.shell
 
 import androidx.compose.runtime.Composable
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.net.AddViewBody
 import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.proto.WorkspaceDto
@@ -14,7 +14,7 @@ import java.util.UUID
 @Composable
 internal fun rememberWorkspaceSession(
     workspace: WorkspaceDto,
-    wsApp: DesktopAppState,
+    wsApp: HostStore,
     overlayScope: CoroutineScope,
 ): WorkspaceSession = rememberWorkspaceSession(
     workspace = workspace,

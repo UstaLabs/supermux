@@ -1,5 +1,7 @@
 package dev.supermux.desktop.shell
 
+import dev.supermux.desktop.testDeps
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
@@ -18,7 +20,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.desktop.editor.JcefState
-import dev.supermux.desktop.state.DesktopAppState
+import dev.supermux.state.HostStore
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
@@ -48,7 +50,7 @@ private fun view(kind: String, state: Map<String, String>) = ViewDto(
 )
 
 /**
- * ViewHost on disk takes [DesktopAppState] + drafts (Phase 3). The plan's simplified
+ * ViewHost on disk takes [HostStore] + drafts (Phase 3). The plan's simplified
  * signature is adapted here — follow the disk.
  *
  * Workspace terminals inject a pure-Compose stand-in: SwingPanel/JediTerm cannot
@@ -61,7 +63,7 @@ private fun view(kind: String, state: Map<String, String>) = ViewDto(
 @OptIn(ExperimentalTestApi::class)
 class ViewHostTest {
 
-    private fun fakeApp(): DesktopAppState {
+    private fun fakeApp(): HostStore {
         val engine = MockEngine { req ->
             respond(
                 content = ByteReadChannel("[]"),
@@ -69,10 +71,11 @@ class ViewHostTest {
                 headers = headersOf(HttpHeaders.ContentType, "application/json"),
             )
         }
-        return DesktopAppState(
+        return HostStore(
             baseUrl = "ws://test:9898",
             token = "t",
             scope = CoroutineScope(Dispatchers.Default),
+            deps = testDeps(),
             connectOnInit = false,
             apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
         )
