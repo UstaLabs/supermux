@@ -28,6 +28,7 @@ import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.viewTitle
