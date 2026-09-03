@@ -98,8 +98,12 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -197,27 +201,29 @@ class HostStore(
     private var viewingHeartbeat: Job? = null
 
     // ── StateFlows (M1 read surface) ───────────────────────────────────────────────
-    private val _sessions = MutableStateFlow<List<SessionInfo>>(emptyList())
-    val sessions: StateFlow<List<SessionInfo>> = _sessions
-    private val _workspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
-    val workspaces: StateFlow<List<WorkspaceDto>> = _workspaces
-    private val _archivedWorkspaces = MutableStateFlow<List<WorkspaceDto>>(emptyList())
-    val archivedWorkspaces: StateFlow<List<WorkspaceDto>> = _archivedWorkspaces
-    private val _messages = MutableStateFlow<Map<String, List<LogEntry>>>(emptyMap())
-    val messages: StateFlow<Map<String, List<LogEntry>>> = _messages
-    private val _activity = MutableStateFlow<Map<String, List<ActivityEvent>>>(emptyMap())
-    val activity: StateFlow<Map<String, List<ActivityEvent>>> = _activity
-    private val _agentState = MutableStateFlow<Map<String, AgentStatus>>(emptyMap())
-    val agentState: StateFlow<Map<String, AgentStatus>> = _agentState
-    private val _bgTasks = MutableStateFlow<Map<String, List<ServerFrame.BgTask>>>(emptyMap())
-    val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> = _bgTasks
+    private val _state = MutableStateFlow(HostState())
+    val state: StateFlow<HostState> = _state.asStateFlow()
+    val sessions: StateFlow<List<SessionInfo>> =
+        _state.map { it.sessions }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+    val workspaces: StateFlow<List<WorkspaceDto>> =
+        _state.map { it.workspaces }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+    val archivedWorkspaces: StateFlow<List<WorkspaceDto>> =
+        _state.map { it.archivedWorkspaces }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
+    val messages: StateFlow<Map<String, List<LogEntry>>> =
+        _state.map { it.messages }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+    val activity: StateFlow<Map<String, List<ActivityEvent>>> =
+        _state.map { it.activity }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+    val agentState: StateFlow<Map<String, AgentStatus>> =
+        _state.map { it.agentState }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
+    val bgTasks: StateFlow<Map<String, List<ServerFrame.BgTask>>> =
+        _state.map { it.bgTasks }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
     private val _pendingSend = MutableStateFlow<Set<String>>(emptySet())
     val pendingSend: StateFlow<Set<String>> = _pendingSend
-    private val _commands = MutableStateFlow<Map<String, List<SlashCommand>>>(emptyMap())
-    val commands: StateFlow<Map<String, List<SlashCommand>>> = _commands
+    val commands: StateFlow<Map<String, List<SlashCommand>>> =
+        _state.map { it.commands }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session resolution state of the slash-command set (true = fully resolved). */
-    private val _commandsResolved = MutableStateFlow<Map<String, Boolean>>(emptyMap())
-    val commandsResolved: StateFlow<Map<String, Boolean>> = _commandsResolved
+    val commandsResolved: StateFlow<Map<String, Boolean>> =
+        _state.map { it.commandsResolved }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
     /** Per-session walkthrough holders. Created and updated by [walkthroughSeam] on first frame. */
     private val walkthroughs = mutableMapOf<String, Any>()
 
@@ -230,16 +236,16 @@ class HostStore(
      * Session id → ISO last_read_at. Seeded from snapshot `reads`, updated by `session_read`
      * frames and optimistic [markRead] when the user opens a chat (web/Android parity).
      */
-    private val _lastRead = MutableStateFlow<Map<String, String>>(emptyMap())
-    val lastRead: StateFlow<Map<String, String>> = _lastRead
+    val lastRead: StateFlow<Map<String, String>> =
+        _state.map { it.lastRead }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
 
     // ── Finish flow (M4b) ──────────────────────────────────────────────────────────
     // The last/in-flight finish job per session, keyed by session id (Android AppViewModel
     // parity). Seeded from each SessionInfo.finish_job in the Snapshot and kept current by the
     // FinishJobFrame reducer; the FinishDialog drives its 3-state machine (menu/running/outcome)
     // off this flow. clearFinishJob drops an entry client-side once the user dismisses the outcome.
-    private val _finishJobs = MutableStateFlow<Map<String, FinishJobDto>>(emptyMap())
-    val finishJobs: StateFlow<Map<String, FinishJobDto>> = _finishJobs
+    val finishJobs: StateFlow<Map<String, FinishJobDto>> =
+        _state.map { it.finishJobs }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
 
     // Which finish result the user has "seen" (acked), per session id → the job's startedAt. The
     // header's unacked dot derives from this vs the live finishJobs entry. It lives HERE (not as
@@ -282,25 +288,25 @@ class HostStore(
     // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
     // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
     // (inbound) is a raw relay SharedFlow — DesktopLspBridge (Task 2) filters it by session+serverId.
-    private val _lspStatus = MutableStateFlow<Map<String, ServerFrame.LspStatus>>(emptyMap())
-    val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = _lspStatus
+    val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> =
+        _state.map { it.lspStatus }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
 
     private val _lspRpc = MutableSharedFlow<ServerFrame.LspRpcIn>(extraBufferCapacity = 256)
     val lspRpc: SharedFlow<ServerFrame.LspRpcIn> = _lspRpc.asSharedFlow()
 
     // Live install progress/result per LSP serverId (M4g-4). Drives LspSettingsScreen's streamed
     // install log + terminal result row — mirrors AppViewModel:173-180.
-    private val _lspInstallLog = MutableStateFlow<Map<String, List<String>>>(emptyMap())
-    val lspInstallLog: StateFlow<Map<String, List<String>>> = _lspInstallLog
+    val lspInstallLog: StateFlow<Map<String, List<String>>> =
+        _state.map { it.lspInstallLog }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
 
-    private val _lspInstallDone = MutableStateFlow<Map<String, ServerFrame.LspInstallDone>>(emptyMap())
-    val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> = _lspInstallDone
+    val lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>> =
+        _state.map { it.lspInstallDone }.stateIn(stateScope, SharingStarted.Eagerly, emptyMap())
 
     // ── Displays (M5-2) ─────────────────────────────────────────────────────────────
     // Live display streams, kept in sync via display_added/display_removed frames (seeded on
     // demand by [listDisplays]) — mirrors AppViewModel:158-161.
-    private val _displays = MutableStateFlow<List<DisplayStream>>(emptyList())
-    val displays: StateFlow<List<DisplayStream>> = _displays
+    val displays: StateFlow<List<DisplayStream>> =
+        _state.map { it.displays }.stateIn(stateScope, SharingStarted.Eagerly, emptyList())
 
     // Last GET /usage (or usage_updated) snapshot. The Usage popover renders this immediately
     // on open and updates in place when a usage_updated frame arrives — never waits on the
@@ -364,270 +370,37 @@ class HostStore(
 
     // ── ServerFrame reducer (ported subset of AppViewModel's when(frame)) ──────────
 
-    /** Fold one inbound frame into the StateFlows. Public for reducer tests. All read-modify-
-     *  write mutations go through atomic `.update {}` — appendLocalEcho (caller thread) and the
-     *  reducer coroutine can race on [_messages], and a lost update here is a lost message. */
+    /** Fold one inbound frame into HostState plus side effects. Public for reducer tests. */
     fun reduce(frame: ServerFrame) {
+        _state.update { reduceHostFrame(it, frame) }
+        onFrameEffects(frame)
+    }
+
+    private fun onFrameEffects(frame: ServerFrame) {
         when (frame) {
             is ServerFrame.Snapshot -> {
-                // Straight replacement (not read-modify-write) — plain assignment is atomic.
-                _sessions.value = frame.sessions
-                _workspaces.value = frame.workspaces
-                _archivedWorkspaces.value = frame.archivedWorkspaces
-                _messages.value = frame.logs
-                _activity.value = frame.activity
-                _bgTasks.value = frame.bgTasks
-                _agentState.value = frame.agentState
-                _commands.value = frame.commands
-                _commandsResolved.value = frame.commandsResolved
-                // Monotonic merge of read pointers (web unread.seed / Android parity): never
-                // rewind an optimistic local mark with a slightly-older server timestamp.
-                if (frame.reads.isNotEmpty()) {
-                    _lastRead.update { cur ->
-                        val next = cur.toMutableMap()
-                        for ((id, ts) in frame.reads) {
-                            next[id] = dev.supermux.session.advanceLastRead(next[id], ts)
-                        }
-                        next
-                    }
-                }
-                // Seed finish jobs from each session's snapshot record (keyed by session id).
-                _finishJobs.value = frame.sessions
-                    .mapNotNull { s -> s.finish_job?.let { s.id to it } }
-                    .toMap()
-                // A (re)connect always begins with a snapshot; re-assert viewing presence so the
-                // broker's per-device tracker is current after a reconnect (reset the dedup cache).
                 lastSentViewing = null
                 sendViewingIfChanged()
             }
-            is ServerFrame.SessionAdded -> {
-                // The broker re-broadcasts session_added for the SAME session (early add on spawn,
-                // then the authoritative post-register add carrying repo_root / session_branch).
-                // Dedup by id and backfill omitted fields rather than appending a duplicate row.
-                val incoming = frame.session
-                _sessions.update { current ->
-                    if (current.none { it.id == incoming.id }) {
-                        current + incoming
-                    } else {
-                        current.map { s ->
-                            if (s.id != incoming.id) s
-                            else incoming.copy(
-                                status = incoming.status ?: s.status,
-                                mute = incoming.mute ?: s.mute,
-                                connected = incoming.connected ?: s.connected,
-                                model = incoming.model ?: s.model,
-                                repo_root = incoming.repo_root ?: s.repo_root,
-                                role = incoming.role ?: s.role,
-                                session_branch = incoming.session_branch ?: s.session_branch,
-                                git = incoming.git ?: s.git,
-                                finish_job = incoming.finish_job ?: s.finish_job,
-                            )
-                        }
-                    }
-                }
-                // A session resumed from archive can arrive carrying a finish_job — seed it
-                // (Android AppViewModel parity) so the FinishDialog sees it before the next snapshot.
-                incoming.finish_job?.let { job -> _finishJobs.update { it + (incoming.id to job) } }
-            }
-            is ServerFrame.SessionRemoved -> {
-                _sessions.update { it.filterNot { s -> s.id == frame.id } }
-                _bgTasks.update { it - frame.id }
-                walkthroughs.remove(frame.id)
-            }
-            is ServerFrame.SessionRenamed -> {
-                _sessions.update { current ->
-                    current.map { s -> if (s.id == frame.id) s.copy(name = frame.newName) else s }
-                }
-            }
-            is ServerFrame.SessionsReordered -> {
-                // Live fan-out of PATCH /sessions/reorder (peer clients re-sort).
-                val order = frame.orderedIds.withIndex().associate { (i, id) -> id to i }
-                if (order.isNotEmpty()) {
-                    _sessions.update { current ->
-                        current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }
-                    }
-                }
-            }
-            is ServerFrame.WorkspaceAdded -> {
-                // The broker re-broadcasts the same workspace (early add on spawn, then the
-                // authoritative one carrying repo_root / branch). Replace, never duplicate —
-                // the same trap SessionAdded documents above.
-                _archivedWorkspaces.update { cur -> cur.filter { it.id != frame.workspace.id } }
-                _workspaces.update { cur ->
-                    if (cur.none { it.id == frame.workspace.id }) cur + frame.workspace
-                    else cur.map { if (it.id == frame.workspace.id) frame.workspace else it }
-                }
-            }
-            is ServerFrame.WorkspaceChanged -> {
-                // Unknown id = a workspace this client never saw added. Ignore rather than
-                // append: appending would put it at the end, out of sort order.
-                _workspaces.update { cur ->
-                    cur.map { if (it.id == frame.workspace.id) frame.workspace else it }
-                }
-            }
-            is ServerFrame.WorkspaceRemoved -> {
-                val moving = _workspaces.value.find { it.id == frame.id }
-                _workspaces.update { cur -> cur.filter { it.id != frame.id } }
-                if (moving != null) {
-                    val archived = moving.copy(status = "archived")
-                    _archivedWorkspaces.update { cur ->
-                        if (cur.any { it.id == frame.id }) cur.map { if (it.id == frame.id) archived else it }
-                        else cur + archived
-                    }
-                }
-            }
-            is ServerFrame.WorkspacesReordered -> {
-                val rank = frame.orderedIds.withIndex().associate { (i, id) -> id to i }
-                _workspaces.update { cur ->
-                    cur.map { w -> rank[w.id]?.let { w.copy(sortOrder = it) } ?: w }
-                }
-            }
-            is ServerFrame.ViewAdded -> updateViews(frame.workspaceId) { it + frame.view }
-            is ServerFrame.ViewRemoved -> updateViews(frame.workspaceId) { vs -> vs.filter { it.id != frame.viewId } }
-            is ServerFrame.ViewChanged -> updateViews(frame.workspaceId) { vs ->
-                vs.map { if (it.id == frame.view.id) frame.view else it }
-            }
-            is ServerFrame.ViewMoved -> {
-                // Do NOT rebuild either workspace's layout. The broker sends workspace_changed
-                // for both workspaces right after view_moved, carrying the authoritative trees.
-                _workspaces.update { cur ->
-                    var moved: ViewDto? = null
-                    val stripped = cur.map { w ->
-                        if (w.id != frame.fromWorkspaceId) w
-                        else {
-                            moved = w.views.firstOrNull { it.id == frame.viewId }
-                            w.copy(views = w.views.filter { it.id != frame.viewId })
-                        }
-                    }
-                    val v = moved ?: return@update stripped
-                    stripped.map { w ->
-                        if (w.id != frame.toWorkspaceId) w
-                        else w.copy(views = w.views + v.copy(workspaceId = frame.toWorkspaceId))
-                    }
-                }
-            }
+            is ServerFrame.SessionRemoved -> walkthroughs.remove(frame.id)
             is ServerFrame.MessageAppend -> {
-                // Optimistic-echo dedup (iOS BrokerSession parity): when the real inbound message
-                // lands, drop the matching local-… placeholder we appended on send.
-                _messages.update { current ->
-                    val prev = current[frame.session] ?: emptyList()
-                    val pruned = if (frame.entry.direction.startsWith("in")) {
-                        prev.filterNot { it.id.startsWith("local-") && it.text == frame.entry.text }
-                    } else prev
-                    current + (frame.session to (pruned + frame.entry))
-                }
-                // M5-3: broadcast AGENT REPLIES ONLY (direction="outbound", op="reply" — mirrors
-                // the broker's push/hook.ts firePushForReply guard) so AppShell's
-                // NotificationController can decide whether to raise a tray toast. The user's own
-                // echoed message (direction="inbound") and non-reply outbound entries
-                // (op="react"/"edit_message") never reach this flow.
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
                 }
             }
-            is ServerFrame.SessionRead -> {
-                _lastRead.update { cur ->
-                    val next = dev.supermux.session.advanceLastRead(cur[frame.session], frame.lastReadAt)
-                    if (cur[frame.session] == next) cur else cur + (frame.session to next)
-                }
-            }
-            is ServerFrame.ActivityAppend -> {
-                _activity.update { current ->
-                    current + (frame.session to ((current[frame.session] ?: emptyList()) + frame.event))
-                }
-            }
-            is ServerFrame.BgTasks -> {
-                _bgTasks.update { it + (frame.session to frame.tasks) }
-            }
             is ServerFrame.AgentState -> {
-                _agentState.update { current ->
-                    current + (frame.session to AgentStatus(
-                        phase = frame.phase, state = frame.state, working = frame.working,
-                        detail = frame.detail, tool = frame.tool, since = frame.since,
-                        workingSince = frame.workingSince, waiting = frame.waiting, bgOpen = frame.bgOpen,
-                    ))
-                }
-                _pendingSend.update { it - frame.session }   // first real state clears the client-local "Sending…"
+                _pendingSend.update { it - frame.session }
             }
-            is ServerFrame.CommandsChanged -> {
-                _commands.update { it + (frame.session to frame.commands) }
-                _commandsResolved.update { it + (frame.session to frame.resolved) }
-            }
-            // M3 editor: broadcast the disk-change pulse to whichever EditorPanel is watching this
-            // session (it filters by session id). tryEmit never suspends the reducer; a full buffer
-            // (64) would drop the oldest pulse, harmless since the banner only needs "something
-            // changed", and editor_open/close bounds how long the watcher fires at all.
-            is ServerFrame.FsChanged -> {
-                _fsChanges.tryEmit(frame)
-            }
+            is ServerFrame.FsChanged -> _fsChanges.tryEmit(frame)
             is ServerFrame.WalkthroughUpdated -> applyWalkthroughFrame(frame.sessionId, frame)
             is ServerFrame.ReviewCommentFrame -> applyWalkthroughFrame(frame.sessionId, frame)
-            // M4b finish flow: the async job's progress/outcome arrives here. Update the finishJobs
-            // flow the FinishDialog drives AND write the job back onto the session's finish_job so a
-            // list row (and any later snapshot round-trip) stays consistent (AppViewModel:275 parity).
-            is ServerFrame.FinishJobFrame -> {
-                val job = frame.job
-                if (job != null) {
-                    _finishJobs.update { it + (frame.session to job) }
-                    _sessions.update { current ->
-                        current.map { s -> if (s.id == frame.session) s.copy(finish_job = job) else s }
-                    }
-                }
-            }
-            // M4b: live per-session git divergence delta → the sidebar/header git badge
-            // (AppViewModel:301 parity). Match on session id like every other session mutation.
-            is ServerFrame.SessionGit -> {
-                _sessions.update { current ->
-                    current.map { s -> if (s.id == frame.session) s.copy(git = frame.git) else s }
-                }
-            }
-            is ServerFrame.LspStatus ->
-                _lspStatus.update { it + ("${frame.session}|${frame.path}" to frame) }
-            is ServerFrame.LspReady -> markLspState(frame.session, frame.serverId, "ready")
-            is ServerFrame.LspError -> markLspState(frame.session, frame.serverId, "error", frame.error)
             is ServerFrame.LspRpcIn -> _lspRpc.tryEmit(frame)
-            is ServerFrame.LspExit -> markLspState(frame.session, frame.serverId, "exited")
-            is ServerFrame.LspInstallProgress ->
-                _lspInstallLog.update { it + (frame.serverId to ((it[frame.serverId] ?: emptyList()) + frame.line)) }
-            is ServerFrame.LspInstallDone -> _lspInstallDone.update { it + (frame.serverId to frame) }
-            // M5-2: display stream lifecycle — the broker broadcasts these as displays start/stop
-            // (via startDisplay/stopDisplay OR another device's own display action); dedup by id
-            // like SessionAdded rather than appending a duplicate (AppViewModel:286-289 parity).
-            is ServerFrame.DisplayAdded ->
-                _displays.update { list -> list.filterNot { it.id == frame.display.id } + frame.display }
-            is ServerFrame.DisplayRemoved ->
-                _displays.update { list -> list.filterNot { it.id == frame.id } }
             is ServerFrame.UsageUpdated -> _usage.value = frame.usage
-            // Out of M1/M3/M4b/M5-2 scope — reduced in later milestones: agent_error (see
-            // AppViewModel for the full reducer). Must still not crash.
             else -> {}
         }
     }
 
-    /** Replace one workspace's view list. A frame for an unknown workspace is a no-op. */
-    private fun updateViews(workspaceId: String, edit: (List<ViewDto>) -> List<ViewDto>) {
-        _workspaces.update { cur ->
-            cur.map { if (it.id == workspaceId) it.copy(views = edit(it.views)) else it }
-        }
-    }
-
-    /** Patch the `state` (and optionally `error`) of every [ServerFrame.LspStatus] entry matching
-     *  [session] + [serverId]; used by the lsp_ready/lsp_error/lsp_exit frames, which only carry
-     *  session+serverId while [_lspStatus] is keyed by "session|path" (AppViewModel:345-359 port). */
-    private fun markLspState(session: String?, serverId: String?, state: String, error: String? = null) {
-        if (serverId == null) return
-        _lspStatus.update { map ->
-            map.mapValues { (_, status) ->
-                if (status.session == session && status.serverId == serverId) {
-                    status.copy(state = state, error = error ?: status.error)
-                } else {
-                    status
-                }
-            }
-        }
-    }
-
-    // ── Viewing presence ───────────────────────────────────────────────────────────
+        // ── Viewing presence ───────────────────────────────────────────────────────────
 
     /**
      * Report the foreground chat (`null` = the session list) + whether the app is visible.
@@ -665,9 +438,9 @@ class HostStore(
     /** Optimistically advance this session's read pointer to now so the list un-bolds immediately. */
     fun markRead(sessionId: String) {
         val now = deps.nowIso()
-        _lastRead.update { cur ->
-            val next = dev.supermux.session.advanceLastRead(cur[sessionId], now)
-            if (cur[sessionId] == next) cur else cur + (sessionId to next)
+        _state.update { cur ->
+            val next = dev.supermux.session.advanceLastRead(cur.lastRead[sessionId], now)
+            if (cur.lastRead[sessionId] == next) cur else cur.copy(lastRead = cur.lastRead + (sessionId to next))
         }
     }
 
@@ -722,12 +495,14 @@ class HostStore(
     fun appendLocalEcho(sessionId: String, text: String) {
         if (text.isEmpty()) return
         val optimistic = LogEntry(
-            id = "local-${(_messages.value[sessionId]?.size ?: 0)}-${text.hashCode()}",
+            id = "local-${(_state.value.messages[sessionId]?.size ?: 0)}-${text.hashCode()}",
             ts = nowIso(),
             direction = "inbound",
             text = text,
         )
-        _messages.update { it + (sessionId to ((it[sessionId] ?: emptyList()) + optimistic)) }
+        _state.update {
+            it.copy(messages = it.messages + (sessionId to ((it.messages[sessionId] ?: emptyList()) + optimistic)))
+        }
     }
 
     /** Optimistic "Sending…" marker until the next agent_state clears it. */
@@ -970,7 +745,7 @@ class HostStore(
      *  The broker keeps its record — this only drops the local overlay so the dialog closes. Also
      *  drops the ack entry: the card is gone, so its acked-startedAt no longer needs remembering. */
     fun clearFinishJob(id: String) {
-        _finishJobs.update { it - id }
+        _state.update { it.copy(finishJobs = it.finishJobs - id) }
         _ackedFinish.update { it - id }
     }
 
@@ -1032,8 +807,8 @@ class HostStore(
      *  value rather than clobbering it with an empty list — a transient GET failure must not blank
      *  out streams the WS frames already told us are running. */
     suspend fun listDisplays(): List<DisplayStream> {
-        val list = runApi("listDisplays") { api.listDisplays() } ?: return _displays.value
-        _displays.value = list
+        val list = runApi("listDisplays") { api.listDisplays() } ?: return _state.value.displays
+        _state.update { it.copy(displays = list) }
         return list
     }
 
@@ -1211,9 +986,9 @@ class HostStore(
     fun reorderSessions(orderedIds: List<String>) {
         // Optimistic sort_order so the list doesn't snap back while the PATCH is
         // in flight. Peers re-sort from the sessions_reordered WS frame.
-        _sessions.update { current ->
+        _state.update { current ->
             val order = orderedIds.withIndex().associate { (i, id) -> id to i }
-            current.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s }
+            current.copy(sessions = current.sessions.map { s -> order[s.id]?.let { s.copy(sortOrder = it) } ?: s })
         }
         stateScope.launch {
             runCatching { api.reorderSessions(orderedIds) }
@@ -1224,8 +999,8 @@ class HostStore(
     fun reorderWorkspaces(orderedIds: List<String>) {
         val order = orderedIds.withIndex().associate { (i, id) -> id to i }
         if (order.isEmpty()) return
-        _workspaces.update { current ->
-            current.map { w -> order[w.id]?.let { w.copy(sortOrder = it) } ?: w }
+        _state.update { current ->
+            current.copy(workspaces = current.workspaces.map { w -> order[w.id]?.let { w.copy(sortOrder = it) } ?: w })
         }
         stateScope.launch {
             runCatching { api.reorderWorkspaces(orderedIds) }
@@ -1306,13 +1081,17 @@ class HostStore(
     fun archiveWorkspace(workspaceId: String) {
         // Optimistic: live list drops it, archived fold gains it. workspace_removed
         // is authoritative for peers (they still have the DTO in live list).
-        val moving = _workspaces.value.find { it.id == workspaceId }
-        _workspaces.update { cur -> cur.filter { it.id != workspaceId } }
-        if (moving != null) {
+        _state.update { st ->
+            val moving = st.workspaces.find { it.id == workspaceId } ?: return@update st
             val archived = moving.copy(status = "archived")
-            _archivedWorkspaces.update { cur ->
-                if (cur.any { it.id == workspaceId }) cur else cur + archived
-            }
+            st.copy(
+                workspaces = st.workspaces.filter { it.id != workspaceId },
+                archivedWorkspaces = if (st.archivedWorkspaces.any { it.id == workspaceId }) {
+                    st.archivedWorkspaces
+                } else {
+                    st.archivedWorkspaces + archived
+                },
+            )
         }
         stateScope.launch {
             runCatching { api.archiveWorkspace(workspaceId) }
@@ -1325,14 +1104,17 @@ class HostStore(
      * Optimistic move live; workspace_added is authoritative.
      */
     fun restoreWorkspace(workspaceId: String) {
-        val moving = _archivedWorkspaces.value.find { it.id == workspaceId }
-        _archivedWorkspaces.update { cur -> cur.filter { it.id != workspaceId } }
-        if (moving != null) {
+        _state.update { st ->
+            val moving = st.archivedWorkspaces.find { it.id == workspaceId } ?: return@update st
             val live = moving.copy(status = "active", archivedAt = null)
-            _workspaces.update { cur ->
-                if (cur.any { it.id == workspaceId }) cur.map { if (it.id == workspaceId) live else it }
-                else cur + live
-            }
+            st.copy(
+                archivedWorkspaces = st.archivedWorkspaces.filter { it.id != workspaceId },
+                workspaces = if (st.workspaces.any { it.id == workspaceId }) {
+                    st.workspaces.map { if (it.id == workspaceId) live else it }
+                } else {
+                    st.workspaces + live
+                },
+            )
         }
         stateScope.launch {
             runCatching { api.restoreWorkspace(workspaceId) }
@@ -1421,13 +1203,13 @@ class HostStore(
      * BrokerSession.ensureMessagesLoaded (GET /sessions/:id/messages).
      */
     fun ensureMessagesLoaded(sessionId: String) {
-        if (_messages.value[sessionId]?.isNotEmpty() == true) return
+        if (_state.value.messages[sessionId]?.isNotEmpty() == true) return
         stateScope.launch {
             val fetched = archivedLogs(sessionId)
             // Re-check after the await: a live MessageAppend / optimistic send / fresh snapshot may
             // have populated the buffer while the fetch was in flight — don't clobber it.
-            if (fetched.isNotEmpty() && _messages.value[sessionId]?.isNotEmpty() != true) {
-                _messages.update { it + (sessionId to fetched) }
+            if (fetched.isNotEmpty() && _state.value.messages[sessionId]?.isNotEmpty() != true) {
+                _state.update { it.copy(messages = it.messages + (sessionId to fetched)) }
             }
         }
     }
@@ -1888,7 +1670,7 @@ class HostStore(
                 firstMessage = firstMessage?.ifBlank { null },
             ),
         )
-        val sessionId = resolveSpawnId(resp, _sessions.value)
+        val sessionId = resolveSpawnId(resp, _state.value.sessions)
         if (sessionId == null) {
             println("[HostStore] createSessionWithFirstMessage: spawn ok but id unavailable " +
                 "(name='${resp.name}')")
@@ -1943,7 +1725,7 @@ class HostStore(
 
     /** Workspace that currently hosts [sessionId] as a chat view, if any. */
     internal fun workspaceIdForSession(sessionId: String): String? =
-        _workspaces.value.firstOrNull { w ->
+        _state.value.workspaces.firstOrNull { w ->
             w.status != "archived" && w.chatSessionIds().contains(sessionId)
         }?.id
 

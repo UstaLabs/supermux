@@ -54,8 +54,9 @@ class FleetStore(
     private val deps: HostStoreDeps,
     private val nowMs: () -> Long = { deps.nowMs() },
     private val http: HttpClient = deps.httpFactory(null),
+    walkthroughSeam: WalkthroughSeam<*>? = null,
     private val appFactory: (url: String, token: String, onConnectionChange: (Boolean) -> Unit) -> HostStore =
-        { url, token, onConn -> HostStore(url, token, scope, deps, onConnectionChange = onConn) },
+        { url, token, onConn -> HostStore(url, token, scope, deps, onConnectionChange = onConn, walkthroughSeam = walkthroughSeam) },
     private val claimOverride: (suspend (url: String, secret: String, deviceName: String) -> PairClaimResult?)? = null,
     private val hostProbeOverride: (suspend (url: String) -> HostIdentity?)? = null,
     private val localHostDisplayName: () -> String = { "Host" },
