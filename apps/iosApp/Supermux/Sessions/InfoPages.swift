@@ -471,23 +471,23 @@ private struct DisplayViewerSheet: View {
 /// bars — parity with the web UsageView (was raw JSON before).
 struct UsageView: View {
     let broker: BrokerSession
-    @State private var data: UsageResponse?
     @State private var loading = true
     @State private var redeeming = false
     @State private var showResetConfirm = false
     @State private var resetNote: String? = nil
 
     var body: some View {
+        let data = broker.usageSnapshot
         ScrollView {
             VStack(spacing: 14) {
                 if loading && data == nil {
                     ProgressView().tint(Theme.teal).frame(maxWidth: .infinity).padding(.top, 60)
                 } else if let d = data {
-                    claudeCard(d.claude, err: d.errors["claude"])
-                    codexCard(d.codex, err: d.errors["codex"])
-                    cursorCard(d.cursor, err: d.errors["cursor"])
-                    opencodeCard(d.opencode, err: d.errors["opencode"])
-                    grokCard(d.grok, err: d.errors["grok"])
+                    claudeCard(d.claude, err: d.errors["claude"], asOf: asOfCaption(d, "claude"), refreshing: isRefreshing(d, "claude"))
+                    codexCard(d.codex, err: d.errors["codex"], asOf: asOfCaption(d, "codex"), refreshing: isRefreshing(d, "codex"))
+                    cursorCard(d.cursor, err: d.errors["cursor"], asOf: asOfCaption(d, "cursor"), refreshing: isRefreshing(d, "cursor"))
+                    opencodeCard(d.opencode, err: d.errors["opencode"], asOf: asOfCaption(d, "opencode"), refreshing: isRefreshing(d, "opencode"))
+                    grokCard(d.grok, err: d.errors["grok"], asOf: asOfCaption(d, "grok"), refreshing: isRefreshing(d, "grok"))
                 } else {
                     ContentUnavailableView("Usage unavailable", systemImage: "chart.bar")
                         .padding(.top, 40)
@@ -498,17 +498,30 @@ struct UsageView: View {
         .navigationTitle("Usage").smInlineNavigationTitle()
         .toolbar {
             ToolbarItem(placement: .smTopTrailing) {
-                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                Button { Task { await load(force: true) } } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(loading)
             }
         }
-        .task { await load() }
+        .task { await load(force: false) }
     }
 
-    private func load() async {
-        loading = true
-        data = await broker.usage()
+    private func load(force: Bool) async {
+        if broker.usageSnapshot == nil { loading = true }
+        if force {
+            _ = await broker.refreshUsage()
+        } else {
+            _ = await broker.usage()
+        }
         loading = false
+    }
+
+    private func asOfCaption(_ d: UsageResponse, _ provider: String) -> String? {
+        guard let iso = d.fetchedAt[provider], !iso.isEmpty else { return nil }
+        return "as of \(relTime(iso))"
+    }
+
+    private func isRefreshing(_ d: UsageResponse, _ provider: String) -> Bool {
+        d.refreshing.contains(where: { $0 == provider })
     }
 
     /// Redeem one banked Codex rate-limit reset, then refresh the card. Gated behind the
@@ -519,7 +532,7 @@ struct UsageView: View {
         let res = await broker.redeemCodexReset()
         if let res {
             resetNote = codexResetNote(res.code, Int(res.windowsReset))
-            await load()
+            await load(force: false)
         } else {
             resetNote = "Reset failed"
         }
@@ -536,8 +549,8 @@ struct UsageView: View {
         }
     }
 
-    @ViewBuilder private func claudeCard(_ u: ClaudeUsage?, err: String?) -> some View {
-        UsageCard(title: "Claude", subtitle: "Pro plan", dimmed: u == nil) {
+    @ViewBuilder private func claudeCard(_ u: ClaudeUsage?, err: String?, asOf: String? = nil, refreshing: Bool = false) -> some View {
+        UsageCard(title: "Claude", subtitle: "Pro plan", dimmed: u == nil, asOf: asOf, refreshing: refreshing) {
             if let u {
                 usageBar("5-hour window", u.fiveHour.used, reset: resetClaude(u.fiveHour.resetsAt))
                 usageBar("7-day window", u.sevenDay.used, reset: resetClaude(u.sevenDay.resetsAt))
@@ -556,9 +569,10 @@ struct UsageView: View {
         }
     }
 
-    @ViewBuilder private func codexCard(_ u: CodexUsage?, err: String?) -> some View {
+    @ViewBuilder private func codexCard(_ u: CodexUsage?, err: String?, asOf: String? = nil, refreshing: Bool = false) -> some View {
         UsageCard(title: "Codex", subtitle: u?.plan ?? "unknown", dimmed: u == nil,
-                  badge: (u?.limitReached == true) ? "limit reached" : nil) {
+                  badge: (u?.limitReached == true) ? "limit reached" : nil,
+                  asOf: asOf, refreshing: refreshing) {
             if let u {
                 ForEach(u.windows, id: \.id) { window in
                     usageBar(window.label, window.used, reset: resetCodex(window.resetsAt))
@@ -589,8 +603,8 @@ struct UsageView: View {
         }
     }
 
-    @ViewBuilder private func cursorCard(_ u: CursorUsage?, err: String?) -> some View {
-        UsageCard(title: "Cursor", subtitle: "Billing cycle", dimmed: u == nil) {
+    @ViewBuilder private func cursorCard(_ u: CursorUsage?, err: String?, asOf: String? = nil, refreshing: Bool = false) -> some View {
+        UsageCard(title: "Cursor", subtitle: "Billing cycle", dimmed: u == nil, asOf: asOf, refreshing: refreshing) {
             if let u {
                 usageBar("Usage", u.totalPercentUsed, reset: resetCursor(u.billingCycleEnd))
                 if u.spendAvailable {
@@ -601,9 +615,10 @@ struct UsageView: View {
         }
     }
 
-    @ViewBuilder private func opencodeCard(_ u: OpenCodeUsage?, err: String?) -> some View {
+    @ViewBuilder private func opencodeCard(_ u: OpenCodeUsage?, err: String?, asOf: String? = nil, refreshing: Bool = false) -> some View {
         UsageCard(title: "opencode", subtitle: "Local usage · all time", dimmed: u == nil,
-                  trailing: u.map { String(format: "$%.2f", $0.totalCostUsd) }) {
+                  trailing: u.map { String(format: "$%.2f", $0.totalCostUsd) },
+                  asOf: asOf, refreshing: refreshing) {
             if let u {
                 HStack(spacing: 16) { tokenStat("Input", u.inputTokens); tokenStat("Output", u.outputTokens) }
                 HStack(spacing: 16) { tokenStat("Cache read", u.cacheReadTokens); tokenStat("Cache write", u.cacheWriteTokens) }
@@ -613,8 +628,8 @@ struct UsageView: View {
         }
     }
 
-    @ViewBuilder private func grokCard(_ u: GrokUsage?, err: String?) -> some View {
-        UsageCard(title: "Grok", subtitle: u?.plan ?? "unknown", dimmed: u == nil) {
+    @ViewBuilder private func grokCard(_ u: GrokUsage?, err: String?, asOf: String? = nil, refreshing: Bool = false) -> some View {
+        UsageCard(title: "Grok", subtitle: u?.plan ?? "unknown", dimmed: u == nil, asOf: asOf, refreshing: refreshing) {
             if let u {
                 usageBar("Monthly credits", u.percentUsed, reset: resetClaude(u.billingPeriodEnd))
                 if u.monthlyLimit > 0 {
@@ -701,6 +716,8 @@ private struct UsageCard<Content: View>: View {
     var dimmed: Bool = false
     var badge: String? = nil
     var trailing: String? = nil
+    var asOf: String? = nil
+    var refreshing: Bool = false
     @ViewBuilder let content: () -> Content
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -708,8 +725,10 @@ private struct UsageCard<Content: View>: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.subheadline.weight(.semibold))
                     Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+                    if let asOf { Text(asOf).font(.caption2).foregroundStyle(.tertiary) }
                 }
                 Spacer()
+                if refreshing { ProgressView().controlSize(.mini) }
                 if let badge {
                     Text(badge).font(.caption2.weight(.semibold)).foregroundStyle(.red)
                         .padding(.horizontal, 7).padding(.vertical, 3)

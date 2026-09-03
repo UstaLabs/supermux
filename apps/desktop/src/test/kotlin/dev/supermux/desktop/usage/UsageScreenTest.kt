@@ -271,6 +271,56 @@ class UsageScreenTest {
         onAllNodesWithText("Not available").assertCountEquals(5)
     }
 
+    @Test fun fetched_at_renders_a_per_provider_as_of_caption() = runComposeUiTest {
+        val now = java.time.Instant.parse("2026-07-09T12:00:00Z")
+        val usage = fixtureUsage().copy(
+            fetchedAt = mapOf("claude" to "2026-07-09T11:55:00Z", "codex" to "2026-07-09T10:00:00Z"),
+        )
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null }, now = now)
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_as_of_claude").assertExists()
+        onNodeWithText("as of 5m ago").assertExists()
+        onNodeWithTag("usage_as_of_codex").assertExists()
+        onNodeWithText("as of 2h ago").assertExists()
+        onNodeWithTag("usage_as_of_cursor").assertDoesNotExist()
+    }
+
+    @Test fun refreshing_providers_show_a_progress_indicator() = runComposeUiTest {
+        val usage = fixtureUsage().copy(refreshing = listOf("claude", "cursor"))
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_refreshing_claude").assertExists()
+        onNodeWithTag("usage_refreshing_cursor").assertExists()
+        onNodeWithTag("usage_refreshing_codex").assertDoesNotExist()
+    }
+
+    @Test fun refresh_button_calls_on_refresh() = runComposeUiTest {
+        var refreshed = false
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(),
+                    loading = false,
+                    onBack = {},
+                    onRedeem = { null },
+                    onRefresh = { refreshed = true },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_refresh").performClick()
+        waitForIdle()
+        assertTrue(refreshed)
+    }
+
     // ── (4) the Codex "Use a reset" button + confirm dialog ─────────────────────────────────────────
 
     @Test fun redeem_button_shown_only_when_reset_credits_positive() = runComposeUiTest {

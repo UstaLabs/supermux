@@ -58,6 +58,7 @@ class ContractTest {
                 is ServerFrame.LspInstallDone -> {}
                 is ServerFrame.DisplayAdded -> {}
                 is ServerFrame.DisplayRemoved -> {}
+                is ServerFrame.UsageUpdated -> {}
                 is ServerFrame.FinishJobFrame -> {}
                 is ServerFrame.SessionGit -> {}
                 is ServerFrame.WalkthroughUpdated -> {}

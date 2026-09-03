@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue"
-import { ChevronLeft, RefreshCw } from "@lucide/vue"
+import { ref, onMounted, onUnmounted, computed } from "vue"
+import { ChevronLeft, RefreshCw, Loader2 } from "@lucide/vue"
 import { api } from "@/api/client"
 import { codexResetNote } from "@/lib/codex-reset"
+import { formatAsOf } from "@/lib/format-relative-time"
+import { useUsage, type UsageProvider } from "@/stores/usage"
 
 interface UsageWindow { used: number; resetsAt: string | number | null; resetsAtIso?: string | null }
 interface ClaudeExtraUsage { enabled: boolean; monthlyLimit: number; usedCredits: number; currency: string }
@@ -12,25 +14,61 @@ interface CodexUsage { plan: string; windows: CodexWindow[]; credits: { hasCredi
 interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; spendAvailable: boolean; billingCycleStart: string; billingCycleEnd: string; billingCycleEndIso?: string | null }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
 interface GrokUsage { plan: string; percentUsed: number; used: number; monthlyLimit: number; onDemandCap: number; onDemandUsed: number; prepaidBalance: number; billingPeriodStart: string; billingPeriodEnd: string; billingPeriodEndIso?: string | null }
-interface UsageResponse { claude: ClaudeUsage | null; codex: CodexUsage | null; cursor: CursorUsage | null; opencode: OpenCodeUsage | null; grok: GrokUsage | null; errors: Record<string, string> }
+interface UsageResponse {
+  claude: ClaudeUsage | null
+  codex: CodexUsage | null
+  cursor: CursorUsage | null
+  opencode: OpenCodeUsage | null
+  grok: GrokUsage | null
+  errors: Record<string, string>
+  fetchedAt?: Partial<Record<UsageProvider, string | null>>
+  source?: Partial<Record<UsageProvider, "live" | "agent" | "local" | "cache" | null>>
+  refreshing?: string[]
+}
 
-const data = ref<UsageResponse | null>(null)
-const loading = ref(false)
+const usage = useUsage()
+const data = computed(() => usage.snapshot as UsageResponse | null)
+const initialLoad = ref(false)
 const error = ref<string | null>(null)
+const nowMs = ref(Date.now())
+let tickTimer: ReturnType<typeof setInterval> | null = null
 
-async function refresh() {
-  loading.value = true
+async function load() {
+  if (!usage.snapshot) initialLoad.value = true
   error.value = null
   try {
-    data.value = await api.getUsage()
+    usage.set(await api.getUsage())
   } catch (e: any) {
     error.value = e?.message ?? String(e)
   } finally {
-    loading.value = false
+    initialLoad.value = false
   }
 }
 
-onMounted(refresh)
+async function refresh() {
+  error.value = null
+  try {
+    usage.set(await api.refreshUsage())
+  } catch (e: any) {
+    error.value = e?.message ?? String(e)
+  }
+}
+
+function asOf(provider: UsageProvider): string {
+  return formatAsOf(usage.fetchedAt(provider), nowMs.value)
+}
+
+function isRefreshing(provider: UsageProvider): boolean {
+  return usage.isRefreshing(provider)
+}
+
+onMounted(() => {
+  tickTimer = setInterval(() => { nowMs.value = Date.now() }, 30_000)
+  void load()
+})
+onUnmounted(() => {
+  if (tickTimer) clearInterval(tickTimer)
+})
 
 function barColor(pct: number): string {
   if (pct >= 85) return "bg-red-500"
@@ -102,8 +140,8 @@ async function useReset() {
   resetNote.value = null
   try {
     const res = await api.redeemCodexReset()
-    if (res.codex && data.value) data.value.codex = res.codex as CodexUsage
-    else await refresh()
+    if (res.codex && usage.snapshot) usage.set({ ...usage.snapshot, codex: res.codex })
+    else await load()
     resetNote.value = codexResetNote(res.code, res.windowsReset)
   } catch (e: any) {
     resetNote.value = e?.message ?? "Reset failed"
@@ -128,11 +166,10 @@ async function useReset() {
       </div>
       <button
         @click="refresh"
-        :disabled="loading"
         class="text-muted-foreground hover:text-foreground transition p-1"
         aria-label="Refresh"
       >
-        <RefreshCw class="size-5" :class="{ 'animate-spin': loading }" />
+        <RefreshCw class="size-5" />
       </button>
     </header>
 
@@ -141,7 +178,7 @@ async function useReset() {
       <div v-if="error" class="text-sm text-red-400 text-center py-4">{{ error }}</div>
 
       <!-- Loading skeleton -->
-      <div v-if="loading && !data" class="space-y-4">
+      <div v-if="initialLoad && !data" class="space-y-4">
         <div v-for="i in 3" :key="i" class="rounded-xl border border-border bg-card p-4 animate-pulse">
           <div class="h-4 bg-muted rounded w-24 mb-3" />
           <div class="h-2 bg-muted rounded-full mb-2" />
@@ -156,6 +193,10 @@ async function useReset() {
             <div>
               <h2 class="font-semibold text-sm">Claude</h2>
               <p class="text-xs text-muted-foreground">Pro plan</p>
+              <p v-if="isRefreshing('claude') || asOf('claude')" class="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                <Loader2 v-if="isRefreshing('claude')" class="size-3 animate-spin" />
+                <span v-else>{{ asOf('claude') }}</span>
+              </p>
             </div>
           </div>
           <template v-if="claude">
@@ -210,6 +251,7 @@ async function useReset() {
                 <span>${{ claude.extraUsage.usedCredits.toFixed(2) }} / ${{ claude.extraUsage.monthlyLimit.toFixed(2) }}</span>
               </div>
             </div>
+            <p v-if="errors.claude" class="text-[11px] text-yellow-500 mt-2">{{ errors.claude }}</p>
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.claude || 'Not available' }}</p>
         </div>
@@ -220,6 +262,10 @@ async function useReset() {
             <div>
               <h2 class="font-semibold text-sm">Codex</h2>
               <p class="text-xs text-muted-foreground">{{ codex?.plan ?? 'unknown' }}</p>
+              <p v-if="isRefreshing('codex') || asOf('codex')" class="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                <Loader2 v-if="isRefreshing('codex')" class="size-3 animate-spin" />
+                <span v-else>{{ asOf('codex') }}</span>
+              </p>
             </div>
             <span v-if="codex?.limitReached" class="text-[10px] font-medium text-red-400 bg-red-500/10 px-2 py-0.5 rounded-full">limit reached</span>
           </div>
@@ -272,6 +318,7 @@ async function useReset() {
               </div>
               <p v-if="resetNote" class="text-[11px] text-muted-foreground mt-2">{{ resetNote }}</p>
             </div>
+            <p v-if="errors.codex" class="text-[11px] text-yellow-500 mt-2">{{ errors.codex }}</p>
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.codex || 'Not available' }}</p>
         </div>
@@ -282,6 +329,10 @@ async function useReset() {
             <div>
               <h2 class="font-semibold text-sm">Cursor</h2>
               <p class="text-xs text-muted-foreground">Billing cycle</p>
+              <p v-if="isRefreshing('cursor') || asOf('cursor')" class="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                <Loader2 v-if="isRefreshing('cursor')" class="size-3 animate-spin" />
+                <span v-else>{{ asOf('cursor') }}</span>
+              </p>
             </div>
           </div>
           <template v-if="cursor">
@@ -301,6 +352,7 @@ async function useReset() {
                 <span>${{ (cursor.totalSpendCents / 100).toFixed(2) }} / ${{ (cursor.includedCents / 100).toFixed(2) }} included</span>
               </div>
             </div>
+            <p v-if="errors.cursor" class="text-[11px] text-yellow-500 mt-2">{{ errors.cursor }}</p>
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.cursor || 'Not available' }}</p>
         </div>
@@ -311,6 +363,10 @@ async function useReset() {
             <div>
               <h2 class="font-semibold text-sm">opencode</h2>
               <p class="text-xs text-muted-foreground">Local usage · all time</p>
+              <p v-if="isRefreshing('opencode') || asOf('opencode')" class="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                <Loader2 v-if="isRefreshing('opencode')" class="size-3 animate-spin" />
+                <span v-else>{{ asOf('opencode') }}</span>
+              </p>
             </div>
             <span v-if="opencode" class="text-sm font-semibold">${{ opencode.totalCostUsd.toFixed(2) }}</span>
           </div>
@@ -336,6 +392,7 @@ async function useReset() {
             <div class="flex items-center justify-between text-[11px] text-muted-foreground pt-2 mt-2 border-t border-border">
               <span>{{ opencode.sessions }} sessions · {{ opencode.messages }} messages</span>
             </div>
+            <p v-if="errors.opencode" class="text-[11px] text-yellow-500 mt-2">{{ errors.opencode }}</p>
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.opencode || 'Not available' }}</p>
         </div>
@@ -346,6 +403,10 @@ async function useReset() {
             <div>
               <h2 class="font-semibold text-sm">Grok</h2>
               <p class="text-xs text-muted-foreground">{{ grok?.plan ?? 'unknown' }}</p>
+              <p v-if="isRefreshing('grok') || asOf('grok')" class="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                <Loader2 v-if="isRefreshing('grok')" class="size-3 animate-spin" />
+                <span v-else>{{ asOf('grok') }}</span>
+              </p>
             </div>
           </div>
           <template v-if="grok">
@@ -377,6 +438,7 @@ async function useReset() {
                 <span>{{ Math.round(grok.prepaidBalance) }}</span>
               </div>
             </div>
+            <p v-if="errors.grok" class="text-[11px] text-yellow-500 mt-2">{{ errors.grok }}</p>
           </template>
           <p v-else class="text-xs text-muted-foreground">{{ errors.grok || 'Not available' }}</p>
         </div>

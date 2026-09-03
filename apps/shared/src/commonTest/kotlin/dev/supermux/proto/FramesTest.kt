@@ -134,6 +134,20 @@ class FramesTest {
         assertEquals("d-1504c1bf", (f as ServerFrame.DisplayRemoved).id)
     }
 
+    // Usage snapshot: the broker broadcasts {type:"usage_updated",usage:{...}} whenever
+    // the in-memory snapshot changes (GET /usage shape, plus fetchedAt/source/refreshing).
+    @Test fun parses_usage_updated() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"usage_updated","usage":{"claude":{"fiveHour":{"used":12.0},"sevenDay":{"used":40.0}},"errors":{},"fetchedAt":{"claude":"2026-01-02T03:04:05.000Z"},"source":{"claude":"live"},"refreshing":["codex"]}}""",
+        )
+        assertTrue(f is ServerFrame.UsageUpdated)
+        val u = (f as ServerFrame.UsageUpdated).usage
+        assertEquals(12.0, u.claude?.fiveHour?.used)
+        assertEquals("2026-01-02T03:04:05.000Z", u.fetchedAt["claude"])
+        assertEquals("live", u.source["claude"])
+        assertEquals(listOf("codex"), u.refreshing)
+    }
+
     @Test fun decodesAgentStateWithNewFields() {
         val f = json.decodeFromString<ServerFrame>(
             """{"type":"agent_state","session":"s1","state":"working","working":true,"detail":"running","tool":"Bash","since":5,"workingSince":4,"phase":"running"}""",

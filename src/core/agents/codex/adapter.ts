@@ -1,6 +1,8 @@
 import { EventEmitter } from "events"
 import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
 import { makeLogger } from "../../../shared/log"
+import type { CodexUsage } from "../../usage/index"
+import { codexUsageFromRateLimits } from "../../usage/local"
 
 const log = makeLogger("agents/codex/adapter")
 
@@ -48,6 +50,10 @@ export type CodexAdapterOpts = {
    * items (so the model sees them), other files get their path folded into the
    * prompt text. Without this, codex sessions silently drop attachments. */
   resolveAttachment?: (file_id: string) => Promise<string>
+  /** Push-mapped Codex usage from `account/rateLimits/updated`. Injected so
+   * tests can assert the mapping without the usage-store singleton. */
+  onUsageUpdate?: (data: CodexUsage) => void
+  getPrevUsage?: () => CodexUsage | null
 }
 
 type CodexInputItem = { type: "text"; text: string } | { type: "localImage"; path: string }
@@ -68,6 +74,8 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   private persistThreadId: (id: string) => Promise<void>
   private initialThreadId?: string
   private resolveAttachment?: (file_id: string) => Promise<string>
+  onUsageUpdate?: (data: CodexUsage) => void
+  getPrevUsage?: () => CodexUsage | null
   private deferredWebSearchStarts = new Set<string>()
 
   /** The live app-server JSON-RPC client, for read-only queries like skills/list. */
@@ -83,6 +91,8 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     this.persistThreadId = opts.persistThreadId
     this.initialThreadId = opts.initialThreadId
     this.resolveAttachment = opts.resolveAttachment
+    this.onUsageUpdate = opts.onUsageUpdate
+    this.getPrevUsage = opts.getPrevUsage
     this.wireNotifications()
   }
 
@@ -141,6 +151,11 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
         case "error":
           this.emit("error", { kind: "error", error: new Error(params?.message ?? "codex error") })
           break
+        case "account/rateLimits/updated": {
+          const data = codexUsageFromRateLimits(params?.rateLimits ?? params, this.getPrevUsage?.() ?? null)
+          if (data) this.onUsageUpdate?.(data)
+          break
+        }
       }
     })
   }

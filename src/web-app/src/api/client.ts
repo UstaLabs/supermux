@@ -137,6 +137,8 @@ export const api = {
   addDevice:   (name: string) => request("POST", "/devices", { name }),
   revokeDevice: (name: string) => request("DELETE", `/devices/${encodeURIComponent(name)}`),
   getUsage:     () => request("GET", "/usage"),
+  refreshUsage: (providers?: string[], force = true) =>
+    request("POST", "/usage/refresh", { providers, force }),
   redeemCodexReset: () =>
     request("POST", "/usage/codex/reset", {}) as Promise<{
       code: string; windowsReset: number; codex: unknown
