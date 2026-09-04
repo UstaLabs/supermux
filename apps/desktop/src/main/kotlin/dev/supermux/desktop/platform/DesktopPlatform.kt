@@ -41,7 +41,7 @@ class DesktopPlatform : Platform {
 
     /** The direct-JCEF browser that hosts CodeMirror; one per app, wrapping the process-global
      *  [dev.supermux.desktop.editor.JcefRuntime]. */
-    override val editorEngine: EditorEngineFactory = DesktopEditorEngineFactory()
+    override val editorEngine: EditorEngineFactory = DesktopEditorEngineFactory.shared
 
     /** Delegates to [openInBrowser], which keeps the daemon-thread hand-off and the
      *  `openInBrowserOverride` / `supermux.tests` guards every desktop test relies on. */

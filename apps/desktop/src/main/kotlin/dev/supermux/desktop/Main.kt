@@ -1524,6 +1524,7 @@ fun main() {
     } finally {
         // No-op if the editor never started. Runs after every Compose window/interoperability child
         // has been disposed, but before JVM shutdown, so Chromium helper processes exit cleanly.
+        dev.supermux.desktop.editor.DesktopEditorEngineFactory.shared.dispose()
         dev.supermux.desktop.editor.JcefRuntime.dispose()
     }
 }

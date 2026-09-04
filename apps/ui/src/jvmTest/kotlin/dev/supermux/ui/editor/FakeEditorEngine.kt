@@ -95,6 +95,8 @@ internal class FakeEditorEngine(
 internal class FakeEditorEngineFactory(
     initial: EngineState = EngineState.Ready,
     private val startReady: Boolean = true,
+    /** Android's answer is true, desktop's false — see [EditorEngineFactory.prewarmHost]. */
+    override val prewarmHost: Boolean = false,
 ) : EditorEngineFactory {
     private val _state = MutableStateFlow(initial)
     override val state: StateFlow<EngineState> = _state.asStateFlow()

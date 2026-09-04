@@ -34,7 +34,7 @@ fun main() {
         var shuttingDown by remember { mutableStateOf(false) }
         var editorReady by remember { mutableStateOf(false) }
         val jcefState by JcefRuntime.state.collectAsState()
-        val engines = remember { DesktopEditorEngineFactory() }
+        val engines = DesktopEditorEngineFactory.shared
 
         LaunchedEffect(editorReady) {
             if (editorReady) {

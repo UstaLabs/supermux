@@ -49,8 +49,6 @@ import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.panes.PaneHost
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.StateFlow
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.workspace.viewTitle
 import dev.supermux.session.inferHomeDir

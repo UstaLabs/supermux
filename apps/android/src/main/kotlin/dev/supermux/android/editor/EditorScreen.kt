@@ -160,10 +160,10 @@ fun EditorPanel(
     }
 
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt), whose reads are
-    // asynchronous. `rememberEditorEngine` KEYS ON `lineWrap`, so mounting with the default and
-    // correcting one frame later would tear down and rebuild the WebView for anyone who had wrap
-    // off. Wait for the first value instead: nothing renders until the prefs have landed (a single
-    // DataStore read — the panel is already mounted asynchronously anyway).
+    // asynchronous. The engine no longer rebuilds on a wrap change (the surface pushes
+    // `cmSetLineWrap` into the live editor), so this wait is now only about not flashing the
+    // default: nothing renders until the persisted values have landed (a single DataStore read —
+    // the panel is already mounted asynchronously anyway).
     val prefs = LocalUiPrefs.current
     val loadedPrefs by produceState<Pair<Boolean, Int>?>(null, prefs) {
         value = prefs.editorLineWrap.first() to prefs.editorFontSize.first()

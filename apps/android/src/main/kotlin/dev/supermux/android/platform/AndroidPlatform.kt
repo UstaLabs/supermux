@@ -62,7 +62,7 @@ class AndroidPlatform(
 
     /** The WebView that hosts CodeMirror. Built from the ACTIVITY context so the editor's CSS px
      *  match the display the window is actually on (DeX / external displays differ in density). */
-    override val editorEngine: EditorEngineFactory = AndroidEditorEngineFactory(context)
+    override val editorEngine: EditorEngineFactory = AndroidEditorEngineFactory(context = { context })
 
     /** ACTION_VIEW into whatever the user set as their browser. Swallows the "no activity" case. */
     override fun openUrl(url: String) {

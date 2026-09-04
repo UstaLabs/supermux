@@ -223,16 +223,24 @@ fun EditorSurface(
             // so the "white-flash cover" is this Box's dark #282C34 backing plus cm6's dark HTML —
             // shown until the page first-paints.
             //
-            // The host is mounted only ONCE a document exists ([shownOnce] latch) so the browser is
-            // BORN into a realized, full-size window — the load-forever-if-detached trap. Thereafter
-            // it is kept composed and merely hidden when there is no active tab, so the empty-state
-            // prompt underneath shows instead and the browser + its document survive. `engine` keys
-            // BOTH the remember and the effect so the latch and its setter reset together.
+            // WHEN the host is mounted is the platform's call ([EditorEngineFactory.prewarmHost]).
+            // Desktop mounts only ONCE a document exists ([shownOnce] latch) so the browser is BORN
+            // into a realized, full-size window — a CEF browser born at 0×0 never loads its page.
+            // Android does the opposite and mounts immediately, because its expensive step is
+            // CREATING the WebView (hundreds of ms of Chromium bring-up) and doing that inside the
+            // frame that opens a file is the "first editor open flashes" bug.
+            //
+            // Either way the host is then kept composed and merely hidden when there is no active
+            // tab, so the empty-state prompt underneath shows and the browser + its document
+            // survive. `engine` keys BOTH the remember and the effect so the latch and its setter
+            // reset together.
             var shownOnce by remember(engine) { mutableStateOf(false) }
             LaunchedEffect(engine, hasDoc) { if (hasDoc) shownOnce = true }
             Box(modifier.fillMaxSize().background(EDITOR_BG).testTag("editor_web_area")) {
-                if (engine != null && shownOnce) {
-                    EditorEngineHost(engine, visible = hasDoc, modifier = Modifier.fillMaxSize())
+                if (engine != null && (factory.prewarmHost || shownOnce)) {
+                    Box(Modifier.fillMaxSize().testTag("editor_engine_host")) {
+                        EditorEngineHost(engine, visible = hasDoc, modifier = Modifier.fillMaxSize())
+                    }
                 }
             }
         }

@@ -129,6 +129,53 @@ class EditorSurfaceTest {
     }
 
     @Test
+    fun a_dead_renderer_fails_only_this_surface_and_a_remount_gets_a_fresh_engine() = runComposeUiTest {
+        val factory = FakeEditorEngineFactory()
+        var mounted by mutableStateOf(true)
+        setContent { if (mounted) Surface(factory) else Unit }
+        waitForIdle()
+        factory.engine!!.fail("renderer gone")
+        waitForIdle()
+        onNodeWithTag("editor_native_fallback").assertIsDisplayed()
+
+        // The runtime never failed — only that engine did — so remounting the pane builds another.
+        mounted = false
+        waitForIdle()
+        mounted = true
+        waitForIdle()
+
+        assertEquals(2, factory.created.size, "a remount must ask the factory for a fresh engine")
+        onNodeWithTag("editor_web_area").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_prewarming_platform_mounts_the_host_before_there_is_a_document() = runComposeUiTest {
+        val factory = FakeEditorEngineFactory(prewarmHost = true)
+        setContent { Surface(factory, filename = "") }
+        waitForIdle()
+
+        // Android: the expensive step is CREATING the WebView, so it happens while the pane is
+        // still empty (and stays invisible) instead of inside the frame that opens a file.
+        onNodeWithTag("editor_engine_host").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_non_prewarming_platform_waits_for_the_first_document() = runComposeUiTest {
+        val factory = FakeEditorEngineFactory(prewarmHost = false)
+        var name by mutableStateOf("")
+        setContent { Surface(factory, filename = name) }
+        waitForIdle()
+
+        // Desktop: a windowed CEF browser laid out at 0×0 never loads its page, so it must be born
+        // full-size — i.e. only once there is a document to fill it.
+        onNodeWithTag("editor_engine_host").assertDoesNotExist()
+
+        name = "a.kt"
+        waitForIdle()
+        onNodeWithTag("editor_engine_host").assertIsDisplayed()
+    }
+
+    @Test
     fun the_engine_is_disposed_when_the_surface_leaves() = runComposeUiTest {
         val factory = FakeEditorEngineFactory()
         var show by mutableStateOf(true)

@@ -120,6 +120,16 @@ interface EditorEngineFactory {
     /** Whether an engine can be built right now. */
     val state: StateFlow<EngineState>
 
+    /**
+     * Whether the surface should mount the engine's view host BEFORE there is a document to show.
+     *
+     * True on Android: creating a session's first WebView stalls the main thread for hundreds of ms
+     * (Chromium provider + GPU functor init), so it is pre-warmed while the panel is still empty and
+     * merely kept invisible. False on desktop, where it would be actively harmful — a windowed CEF
+     * browser laid out at 0×0 never loads its page at all, so it must be born full-size.
+     */
+    val prewarmHost: Boolean get() = false
+
     /** Idempotent: start the runtime if it has not started. Called from the surface's first mount. */
     fun ensureInit()
 

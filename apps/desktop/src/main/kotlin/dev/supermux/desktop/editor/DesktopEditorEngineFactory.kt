@@ -10,6 +10,7 @@ import dev.supermux.ui.editor.engine.EngineState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -41,6 +42,18 @@ class DesktopEditorEngineFactory(
     override fun create(lineWrap: Boolean, fontSize: Int): EditorEngine {
         val url = indexUrlProvider() ?: error("editor bundle unavailable")
         return DesktopEditorEngine(url, lineWrap, fontSize)
+    }
+
+    /** Stop mirroring the runtime state. Called at app shutdown, next to [JcefRuntime.dispose]. */
+    fun dispose() = scope.cancel()
+
+    companion object {
+        /**
+         * The ONE factory for the process. It wraps a process-global runtime and holds a
+         * long-lived scope for its state mirror, so a per-window instance would mean a per-window
+         * never-cancelled scope (detached workspace windows come and go) mirroring the same flow.
+         */
+        val shared: DesktopEditorEngineFactory by lazy { DesktopEditorEngineFactory() }
     }
 }
 
