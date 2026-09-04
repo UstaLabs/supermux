@@ -191,6 +191,10 @@ jobs:
 
       # :shared and :desktop always run together — :desktop depends on :shared,
       # so splitting them buys nothing and pays the Gradle startup cost twice.
+      - name: KMP sharing guardrail (non-blocking until the screens move into :ui)
+        continue-on-error: true
+        run: bash scripts/check-no-duplicate-kt.sh
+
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
         working-directory: apps
         run: xvfb-run -a ./gradlew :shared:jvmTest :ui:jvmTest :desktop:test --build-cache --console=plain
