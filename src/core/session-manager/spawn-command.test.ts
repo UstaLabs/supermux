@@ -22,6 +22,16 @@ test("codex spawn command invokes codex app-server with env vars", () => {
   expect(cmd).toContain('sandbox_mode="danger-full-access"')
 })
 
+// Regression: `bash -lc` is a LOGIN shell, and on Debian/Ubuntu /etc/profile
+// unconditionally resets PATH before ~/.bashrc runs — discarding any
+// ~/.local/bin (pants, cursor-agent's own binary), ~/.bun/bin, or
+// ~/.opencode/bin entries the broker itself can see. Each spawn command must
+// force PATH back in explicitly rather than rely on the login shell.
+test("codex spawn command forces the agent-bin-dir PATH back in ahead of the login shell reset", () => {
+  const cmd = buildCodexSpawnCommand({ name: "test-pa", sessionId: "sess-1" })
+  expect(cmd).toMatch(/PATH=\S*\.local\/bin/)
+})
+
 test("codex spawn command includes model flag when provided", () => {
   const cmd = buildCodexSpawnCommand({ name: "test-pa", sessionId: "sess-1", model: "gpt-4o" })
   expect(cmd).toContain('model="gpt-4o"')
@@ -39,6 +49,11 @@ test("cursor spawn command invokes cursor-agent with env vars", () => {
   expect(cmd).toContain("MUX_DISPLAY_NAME=test-pa")
 })
 
+test("cursor spawn command forces the agent-bin-dir PATH back in ahead of the login shell reset", () => {
+  const cmd = buildCursorSpawnCommand({ name: "test-pa", sessionId: "sess-1" })
+  expect(cmd).toMatch(/PATH=\S*\.local\/bin/)
+})
+
 test("cursor spawn command includes model flag when provided", () => {
   const cmd = buildCursorSpawnCommand({ name: "test-pa", sessionId: "sess-1", model: "cursor-fast" })
   expect(cmd).toContain("cursor-fast")
@@ -50,6 +65,11 @@ test("opencode spawn command invokes opencode serve with env vars", () => {
   expect(cmd).toContain("MUX_SESSION_ID=sess-1")
   expect(cmd).toContain("MUX_DISPLAY_NAME=test-pa")
   expect(cmd).toContain("--port 8080")
+})
+
+test("opencode spawn command forces the agent-bin-dir PATH back in ahead of the login shell reset", () => {
+  const cmd = buildOpenCodeSpawnCommand({ name: "test-pa", sessionId: "sess-1", port: 8080 })
+  expect(cmd).toMatch(/PATH=\S*\.opencode\/bin/)
 })
 
 test("opencode spawn command includes model flag when provided", () => {

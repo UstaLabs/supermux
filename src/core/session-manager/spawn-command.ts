@@ -1,17 +1,33 @@
 import { resolve, basename, join } from "path"
 import { writeFileSync, mkdirSync, existsSync } from "fs"
 import { createHash } from "node:crypto"
+import { homedir } from "os"
 import { buildMemoryPreamble } from "../memory/preamble"
 import type { AgentRole } from "../memory/injector"
 import type { SessionRole } from "./policy"
 import { STATE_DIR } from "../../shared/paths"
 import { CLAUDE_HOOKS_SETTINGS_PATH } from "../agents/claude/hooks-settings"
 import { claudeSpawnArgs, codexSpawnArgs, cursorSpawnArgs } from "../plugins"
+import { withAgentBinDirs } from "../agents/bin-dirs"
 import { environmentMdPath, promptsDir, replyFallbackPath } from "../runtime-assets"
 import { makeLogger } from "../../shared/log"
 import { renderPosixLoginShellCommand } from "../runtime/posix-login-shell"
 
 const log = makeLogger("spawn-command")
+
+// `bash -lc` (every spawn below) is a LOGIN shell: on Debian/Ubuntu,
+// /etc/profile unconditionally overwrites PATH with the bare OS default
+// before ~/.bashrc ever runs, discarding whatever PATH the broker itself
+// resolved (see main.ts, which patches process.env.PATH with this same
+// helper at startup). A CLI installed only under an agent-bin dir — the
+// scie-pants launcher included by `pants` installers, cursor-agent's own
+// binary, opencode's installer — is invisible inside the spawned session
+// even though the broker can see it. Recomputing the same PATH here and
+// forcing it into the spawned process's env (after the login shell has
+// already reset it) is what makes it visible again.
+function sessionPath(): string {
+  return withAgentBinDirs(process.env.PATH, homedir())
+}
 
 // environment.md (--append-system-prompt-file), reply-fallback.md
 // (--append-system-prompt-file, a safety-net appended only when the mux-core
@@ -67,6 +83,7 @@ export function buildClaudeSpawnSpec(opts: ClaudeSpawnOptions): ClaudeSpawnSpec 
   return {
     argv,
     env: {
+      PATH: sessionPath(),
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
       MUX_SESSION_ID: sessionId,
       MUX_DISPLAY_NAME: opts.name,
@@ -91,7 +108,7 @@ export function buildCodexSpawnCommand(opts: { name: string; sessionId?: string;
   const effortFlag = opts.effort ? ` -c model_reasoning_effort="${opts.effort}"` : ""
   const { args: pluginArgs } = codexSpawnArgs({ sessionName: opts.name, file: opts.pluginsFile, pluginsDir: opts.pluginsDir, onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
   const pluginFlags = pluginArgs.length ? ` ${pluginArgs.join(" ")}` : ""
-  return `bash -lc 'CODEX_HOME=${codexHome} MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} ` +
+  return `bash -lc 'PATH=${sessionPath()} CODEX_HOME=${codexHome} MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} ` +
     `codex app-server -c approval_policy="never" -c sandbox_mode="danger-full-access"${modelFlag}${effortFlag}${pluginFlags}'`
 }
 
@@ -103,7 +120,7 @@ export function buildCursorSpawnCommand(opts: { name: string; sessionId?: string
   const modelFlag = opts.model ? ` --model ${opts.model}` : ""
   const { args: pluginArgs } = cursorSpawnArgs({ sessionName: opts.name, file: opts.pluginsFile, pluginsDir: opts.pluginsDir, onError: (msg) => log.warn("plugins_registry_invalid", { err: msg }) })
   const pluginFlags = pluginArgs.length ? ` ${pluginArgs.join(" ")}` : ""
-  return `bash -lc 'HOME=${cursorHome} MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} cursor-agent${modelFlag}${pluginFlags}'`
+  return `bash -lc 'PATH=${sessionPath()} HOME=${cursorHome} MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} cursor-agent${modelFlag}${pluginFlags}'`
 }
 
 // Single source of truth for the opencode invocation broker spawns into a tmux
@@ -113,7 +130,7 @@ export function buildOpenCodeSpawnCommand(opts: { name: string; sessionId?: stri
   const configHome = opts.configHome ?? join(STATE_DIR, "agents", "opencode", opts.name)
   const port = opts.port ?? 0
   const modelFlag = opts.model ? ` --model ${opts.model}` : ""
-  return `bash -lc 'XDG_CONFIG_HOME=${configHome} MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} ` +
+  return `bash -lc 'PATH=${sessionPath()} XDG_CONFIG_HOME=${configHome} MUX_SESSION_ID=${sessionId} MUX_DISPLAY_NAME=${opts.name} ` +
     `opencode serve --hostname 127.0.0.1 --port ${port}${modelFlag}'`
 }
 

@@ -143,6 +143,20 @@ test("wraps in bash -lc so the env vars and flags are honoured", () => {
   expect(cmd.endsWith("'")).toBe(true)
 })
 
+// Regression: `bash -lc` is a LOGIN shell, and on Debian/Ubuntu /etc/profile
+// unconditionally resets PATH before ~/.bashrc runs — discarding whatever
+// ~/.local/bin (pants, cursor-agent's own binary), ~/.bun/bin, or
+// ~/.opencode/bin entries the broker resolved for itself at startup
+// (see withAgentBinDirs in main.ts). The spawned claude process must get
+// that PATH forced back in explicitly, since it can't rely on the login
+// shell's own init files to restore it.
+test("forces the agent-bin-dir PATH back into the spawned process's env", () => {
+  const spec = buildClaudeSpawnSpec({ name: "x" })
+  expect(spec.env.PATH).toMatch(/\.local\/bin/)
+  const cmd = buildClaudeSpawnCommand({ name: "x" })
+  expect(cmd).toContain("PATH=")
+})
+
 test("different names produce different commands", () => {
   const a = buildClaudeSpawnCommand({ name: "a" })
   const b = buildClaudeSpawnCommand({ name: "b" })
