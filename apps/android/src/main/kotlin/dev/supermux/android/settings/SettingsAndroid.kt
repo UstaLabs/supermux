@@ -15,21 +15,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 
 // The Android-only remainder of the old `settings/SettingsShared.kt`: everything that survives on
-// both platforms moved to `dev.supermux.ui.widgets.SettingsShared` in cluster A5, and these two are
-// the bits that cannot — one is a plain data class the Android VM signature uses, the other paints
-// an `R.drawable` through `painterResource(Int)`, which has no multiplatform equivalent.
-
-/** The 7 add-custom-LSP fields, mirroring BrokerApi.addCustomEditorLsp(...) so the
- *  page→VM lambda carries a single arg. Used by EditorLspSection + AppViewModel. */
-data class AddCustomLspArgs(
-    val id: String,
-    val label: String,
-    val command: String,
-    val extensions: List<String>,
-    val args: List<String> = emptyList(),
-    val languageId: String? = null,
-    val installCmd: String? = null,
-)
+// both platforms moved to `dev.supermux.ui.widgets.SettingsShared` in cluster A5 (and
+// `AddCustomLspArgs` to `:shared` `dev.supermux.net` in C1); what is left paints an `R.drawable`
+// through `painterResource(Int)`, which has no multiplatform equivalent.
 
 /** A 34dp rounded icon box used by the forge connection rows. */
 @Composable

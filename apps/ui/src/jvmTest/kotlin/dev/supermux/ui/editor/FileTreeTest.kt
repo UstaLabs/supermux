@@ -72,7 +72,7 @@ class FileTreeTest {
         val node = dirNode("src")
         e.treeLoadError = mapOf("src" to "stale error") // a prior error that success must clear
 
-        loadAndExpand(e.explorer, node) { listOf(TreeNode(entry("a.kt", "file"), "src/a.kt")) }
+        loadAndExpand(e.explorer, node) { Result.success(listOf(TreeNode(entry("a.kt", "file"), "src/a.kt"))) }
 
         assertTrue("src" in e.expandedPaths)
         assertTrue(node.loaded)
@@ -95,13 +95,51 @@ class FileTreeTest {
 
     // In-flight guard: a second tap while a slow listing is loading must not launch a duplicate
     // fsList (which would double the child rows on the shared node.children list).
+    // Follow-up (a) from cluster B: the listing failure now arrives as a Result.failure instead of
+    // a thrown exception, because HostStore.fsList used to swallow it into an empty list — which
+    // made the tree's inline error row unreachable (a failed listing looked like an empty dir).
+    @Test fun a_failing_listing_shows_the_error_row_and_does_not_expand() = runTest {
+        val e = editor(this)
+        val node = dirNode("src")
+
+        loadAndExpand(e.explorer, node) { Result.failure(RuntimeException("host offline")) }
+
+        assertEquals("host offline", e.treeLoadError["src"]) // the inline error row's text
+        assertFalse("src" in e.expandedPaths)                // and it did NOT expand into a blank dir
+        assertFalse(node.loaded)
+        assertFalse("src" in e.treeLoadingPaths)
+    }
+
+    // ── ExplorerState.reset (follow-up (b): a workdir change must drop the previous tree) ─────────
+
+    @Test fun reset_drops_every_listing_but_keeps_the_user_s_layout_and_filter_choices() = runTest {
+        val e = editor(this)
+        e.explorer.treeRoot.add(dirNode("src"))
+        e.explorer.treeRootLoaded = true
+        e.explorer.expandedPaths = setOf("src")
+        e.explorer.treeLoadingPaths = setOf("lib")
+        e.explorer.treeLoadError = mapOf("src" to "boom")
+        e.explorer.treeVisible = true
+        e.explorer.searchQuery = "foo"
+
+        e.explorer.reset()
+
+        assertTrue(e.explorer.treeRoot.isEmpty())
+        assertFalse(e.explorer.treeRootLoaded)
+        assertTrue(e.explorer.expandedPaths.isEmpty())
+        assertTrue(e.explorer.treeLoadingPaths.isEmpty())
+        assertTrue(e.explorer.treeLoadError.isEmpty())
+        assertEquals(true, e.explorer.treeVisible) // layout choice, not a listing
+        assertEquals("foo", e.explorer.searchQuery)
+    }
+
     @Test fun load_and_expand_is_a_no_op_when_the_dir_is_already_loading() = runTest {
         val e = editor(this)
         val node = dirNode("src")
         e.treeLoadingPaths = setOf("src") // a listing is already in flight for this path
 
         var listed = false
-        loadAndExpand(e.explorer, node) { listed = true; emptyList() }
+        loadAndExpand(e.explorer, node) { listed = true; Result.success(emptyList()) }
 
         assertFalse(listed) // guarded — no second listing was issued
         assertFalse("src" in e.expandedPaths) // and it did not expand off the in-flight load

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -8,7 +8,6 @@ import dev.supermux.net.ReviewComment
 import dev.supermux.net.Walkthrough
 import dev.supermux.net.WalkthroughStep
 import dev.supermux.proto.ServerFrame
-import dev.supermux.state.WalkthroughSeam
 
 /** Per-session walkthrough UI state. Mutable maps are deliberately keyed by stable code anchors so
  * drafts and scroll survive a replacement walkthrough whose step indices or ids changed. */
@@ -147,11 +146,6 @@ data class CommentAnchor(
     val side: String,
     val line: Int,
 )
-
-object DesktopWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
-    override fun create(sessionId: String) = WalkthroughState(sessionId)
-    override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
-}
 
 fun WalkthroughStep.commentAnchor(): CommentAnchor? {
     val file = path ?: return null

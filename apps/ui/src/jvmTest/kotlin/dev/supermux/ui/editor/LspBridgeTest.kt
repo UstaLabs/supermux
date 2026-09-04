@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -16,19 +16,19 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * Pure Flow-state-machine tests for [DesktopLspBridge] — no broker, no JCEF. Uses `runTest`'s
- * virtual clock so the 9s/1.5s/2s real-world timeouts in [DesktopLspBridge.queryStatus]/[DesktopLspBridge.open]
+ * Pure Flow-state-machine tests for [LspBridge] — no broker, no JCEF. Uses `runTest`'s
+ * virtual clock so the 9s/1.5s/2s real-world timeouts in [LspBridge.queryStatus]/[LspBridge.open]
  * resolve instantly.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class DesktopLspBridgeTest {
+class LspBridgeTest {
     private fun bridge(
         status: MutableStateFlow<Map<String, ServerFrame.LspStatus>>,
         rpc: MutableSharedFlow<ServerFrame.LspRpcIn>,
         queries: MutableList<Pair<String, String>> = mutableListOf(),
         opens: MutableList<Pair<String, String>> = mutableListOf(),
         rpcOuts: MutableList<Triple<String, String, String>> = mutableListOf(),
-    ) = DesktopLspBridge(
+    ) = LspBridge(
         sessionId = "s1",
         lspStatus = status,
         lspRpc = rpc,
@@ -68,7 +68,7 @@ class DesktopLspBridgeTest {
     @Test fun query_status_reuses_the_cached_value_when_the_broker_resends_an_identical_status() = runTest {
         // A re-response that's value-EQUAL to what's cached never re-emits on a StateFlow (dedup) —
         // queryStatus must fall back to the cached (correct) entry rather than mislabel it
-        // "unavailable" after the short 1.5s window. See AndroidLspBridge.queryStatus's KDoc.
+        // "unavailable" after the short 1.5s window. See LspBridge.queryStatus's KDoc.
         val cached = ServerFrame.LspStatus(
             session = "s1", path = "src/a.ts", state = "ready", serverId = "ts", supported = true,
         )

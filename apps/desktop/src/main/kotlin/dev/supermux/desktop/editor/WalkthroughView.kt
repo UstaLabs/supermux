@@ -63,6 +63,13 @@ import dev.supermux.net.WalkthroughStep
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.snapshotFlow
+import dev.supermux.ui.editor.engine.DiffRegionComment
+import dev.supermux.ui.editor.engine.DiffRegionComposer
+import dev.supermux.ui.editor.engine.DiffRegionRange
+import dev.supermux.ui.editor.engine.DiffRegionThread
+import dev.supermux.ui.editor.CommentAnchor
+import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.editor.commentAnchor
 
 private val WalkthroughBlue = Color(0xFF5C8FEF)
 

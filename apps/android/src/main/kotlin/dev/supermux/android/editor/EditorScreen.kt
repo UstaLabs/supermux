@@ -77,6 +77,11 @@ import dev.supermux.ui.editor.EditorSearchField
 import dev.supermux.ui.editor.EditorSearchOverlay
 import dev.supermux.ui.editor.EditorTabs
 import dev.supermux.ui.editor.FileTree
+import dev.supermux.ui.editor.LspBridge
+import dev.supermux.ui.editor.dirUri
+import dev.supermux.ui.editor.isMarkdownPath
+import dev.supermux.ui.editor.joinPath
+import dev.supermux.ui.editor.pathToUri
 
 /** A chat-initiated request to open a workdir-relative [path] at an optional [line]. */
 data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?)
@@ -89,7 +94,7 @@ data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?
 fun EditorPanel(
     sessionId: String,
     workdir: String,
-    fsList: suspend (String) -> List<FsEntry>,
+    fsList: suspend (String) -> Result<List<FsEntry>>,
     fsRead: suspend (String) -> Result<String>,
     fsWrite: suspend (String, String) -> Boolean,
     fsSearch: suspend (String) -> List<FsSearchResult>,
@@ -166,7 +171,7 @@ fun EditorPanel(
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, lspStatus, lspRpc) {
-        AndroidLspBridge(
+        LspBridge(
             sessionId = sessionId,
             lspStatus = lspStatus,
             lspRpc = lspRpc,
@@ -408,7 +413,7 @@ fun EditorPanel(
                                 .fillMaxHeight()
                                 .background(cs.surfaceContainerHigh),
                         ) {
-                            FileTree(fsList = fsList, explorer = editor.explorer, onOpenFile = { revealFile(it) })
+                            FileTree(fsList = fsList, explorer = editor.explorer, workdir = workdir, onOpenFile = { revealFile(it) })
                         }
                         Box(
                             Modifier
@@ -573,7 +578,7 @@ fun EditorPanel(
                                 .width(280.dp)
                                 .background(cs.surfaceContainerHigh),
                         ) {
-                            FileTree(fsList = fsList, explorer = editor.explorer, onOpenFile = { revealFile(it) })
+                            FileTree(fsList = fsList, explorer = editor.explorer, workdir = workdir, onOpenFile = { revealFile(it) })
                         }
                     }
                 }
@@ -599,10 +604,6 @@ fun EditorPanel(
 
 // ─── Editor helpers (markdown detection, LSP-out parsing, file URIs) ───────────
 
-/** `.md` / `.markdown` → markdown preview eligible (parity EditorPane.swift:30-33). */
-private fun isMarkdownPath(path: String): Boolean =
-    path.lowercase().let { it.endsWith(".md") || it.endsWith(".markdown") }
-
 /** Parse cm6's outbound `{serverId,message}` JSON payload → (serverId, message). */
 private fun parseLspOut(payload: String): Pair<String, String>? = runCatching {
     val o = org.json.JSONObject(payload)
@@ -610,15 +611,3 @@ private fun parseLspOut(payload: String): Pair<String, String>? = runCatching {
     val message = o.optString("message")
     if (serverId.isEmpty()) null else serverId to message
 }.getOrNull()
-
-// file:// URI construction (port EditorPane.swift:120-131). Uri.encode keeps "/" so path
-// separators survive, matching iOS's .urlPathAllowed percent-encoding.
-private fun joinPath(dir: String, rel: String): String {
-    val d = dir.removeSuffix("/")
-    val r = rel.removePrefix("/")
-    return "$d/$r"
-}
-
-private fun pathToUri(abs: String): String = "file://" + android.net.Uri.encode(abs, "/")
-
-private fun dirUri(workdir: String): String = pathToUri(workdir.removeSuffix("/")) + "/"

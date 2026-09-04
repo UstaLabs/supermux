@@ -29,7 +29,7 @@ import dev.supermux.desktop.chat.ChatPanel
 import dev.supermux.desktop.chat.ComposerExternalAttach
 import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
-import dev.supermux.desktop.editor.WalkthroughState
+import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.desktop.editor.DiffPane
 import dev.supermux.desktop.editor.ExplorerPane
 import dev.supermux.desktop.editor.FilePane
@@ -239,6 +239,7 @@ fun ViewHost(
                 else -> ExplorerPaneForWorkspace(
                     app = app,
                     workspaceId = workspaceId,
+                    workdir = workdir,
                     onOpenFile = { p -> onOpenFile(p, null, null) },
                     modifier = modifier.testTag("editor-$workdir"),
                 )
@@ -407,6 +408,7 @@ private fun rememberWorkspaceDocuments(app: HostStore, workspaceId: String): Doc
 private fun ExplorerPaneForWorkspace(
     app: HostStore,
     workspaceId: String,
+    workdir: String,
     onOpenFile: (String) -> Unit,
     modifier: Modifier,
 ) {
@@ -414,8 +416,9 @@ private fun ExplorerPaneForWorkspace(
     // fine — the tree is a view of the disk, not of anything the workspace owns.
     val explorer = remember(workspaceId) { ExplorerState() }
     ExplorerPane(
-        fsList = { p -> app.workspaceFsList(workspaceId, p) },
+        fsList = { p -> app.workspaceFsListResult(workspaceId, p) },
         explorer = explorer,
+        workdir = workdir,
         onOpenFile = onOpenFile,
         fsSearch = { q -> app.workspaceFsSearch(workspaceId, q) },
         modifier = modifier.fillMaxSize(),

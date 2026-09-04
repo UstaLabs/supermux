@@ -56,6 +56,7 @@ import kotlinx.coroutines.launch
 import dev.supermux.ui.widgets.SettingsSectionHeader
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.net.AddCustomLspArgs
 
 // ─── Editor / Language-servers section ──────────────────────────────────────────
 //

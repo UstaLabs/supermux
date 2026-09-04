@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
-import dev.supermux.desktop.editor.WalkthroughState
+import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.shell.AgentViewToggle
 import dev.supermux.desktop.shell.OverflowMenu
 import dev.supermux.desktop.shell.SessionLinksMenu

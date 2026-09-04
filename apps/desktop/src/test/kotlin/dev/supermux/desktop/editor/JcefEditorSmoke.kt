@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
+import dev.supermux.ui.editor.engine.DiffRegionRange
 
 /**
  * Live, test-source-only smoke for the complete editor path: bundled JBR/JCEF, file:// extraction,

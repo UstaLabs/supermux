@@ -165,7 +165,7 @@ fun ChatScreen(
     loadDraft: suspend (String) -> String = { "" },
     saveDraft: (String, String) -> Unit = { _, _ -> },
     loadBytes: suspend (String) -> ByteArray? = { null },
-    fsList: suspend (String) -> List<dev.supermux.net.FsEntry> = { emptyList() },
+    fsList: suspend (String) -> Result<List<dev.supermux.net.FsEntry>> = { Result.success(emptyList()) },
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },

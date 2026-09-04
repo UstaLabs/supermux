@@ -74,6 +74,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.flow.StateFlow
+import dev.supermux.net.AddCustomLspArgs
 
 /**
  * Full-pane Settings hub. [section] selects the detail; the rail lists all shipped sections.

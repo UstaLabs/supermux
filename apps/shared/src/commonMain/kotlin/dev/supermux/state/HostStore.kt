@@ -278,7 +278,7 @@ class HostStore(
     // ── LSP (M4g-3/M4g-4) ───────────────────────────────────────────────────────────
     // lsp_status keyed "session|path" (mirrors AppViewModel:163-166); lsp_ready/lsp_error/lsp_exit
     // patch matching entries via [markLspState] since they only carry session+serverId. lsp_rpc
-    // (inbound) is a raw relay SharedFlow — DesktopLspBridge (Task 2) filters it by session+serverId.
+    // (inbound) is a raw relay SharedFlow — LspBridge (Task 2) filters it by session+serverId.
     val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> =
         _state.map { it.lspStatus }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
 
@@ -963,13 +963,42 @@ class HostStore(
     // ChatScreen binds the AppViewModel wrappers. All broker calls run through [runApi] EXCEPT
     // [fsRead] (see its note — it must preserve the FsException message for the editor's error UI).
 
-    /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure. */
+    /** GET /sessions/<id>/fs → directory listing (workdir-relative). Empty on any failure — use
+     *  [fsListResult] where a failed listing must be TOLD APART from an empty directory. */
     suspend fun fsList(session: SessionInfo, path: String): List<FsEntry> =
-        runApi("fsList") { api.fsList(session.id, path) } ?: emptyList()
+        fsListResult(session, path).getOrElse { emptyList() }
 
-    /** GET /workspaces/<id>/fs → directory listing (workspace workdir). Empty on any failure. */
+    /**
+     * GET /sessions/<id>/fs as a Result — same shape and rationale as [fsRead]: NOT run through
+     * [runApi], because the failure message has to reach the file tree's error row (a swallowed
+     * failure renders as an empty directory, which is what made that row unreachable until cluster
+     * C1). runApi's cancellation discipline is preserved inline.
+     */
+    suspend fun fsListResult(session: SessionInfo, path: String): Result<List<FsEntry>> =
+        try {
+            Result.success(api.fsList(session.id, path))
+        } catch (c: CancellationException) {
+            currentCoroutineContext().ensureActive() // real cancel → propagate
+            Result.failure(c)
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+
+    /** GET /workspaces/<id>/fs → directory listing (workspace workdir). Empty on any failure — use
+     *  [workspaceFsListResult] where a failed listing must be told apart from an empty directory. */
     suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
-        runApi("workspaceFsList") { api.workspaceFsList(workspaceId, path) } ?: emptyList()
+        workspaceFsListResult(workspaceId, path).getOrElse { emptyList() }
+
+    /** GET /workspaces/<id>/fs as a Result — the workspace twin of [fsListResult]. */
+    suspend fun workspaceFsListResult(workspaceId: String, path: String): Result<List<FsEntry>> =
+        try {
+            Result.success(api.workspaceFsList(workspaceId, path))
+        } catch (c: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            Result.failure(c)
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
 
     /**
      * GET /workspaces/<id>/fs/read → file text. Same Result shape as [fsRead] (preserves

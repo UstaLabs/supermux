@@ -267,8 +267,9 @@ private fun ExplorerViewPane(
 ) {
     val explorer = remember(workspace.id) { ExplorerState() }
     FileTree(
-        fsList = { p -> vm.fleet.workspaceFsList(workspace.id, p) },
+        fsList = { p -> vm.fleet.workspaceFsListResult(workspace.id, p) },
         explorer = explorer,
+        workdir = workspace.workdir,
         onOpenFile = { p -> session.fileOpener.open(p) },
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )

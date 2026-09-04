@@ -525,7 +525,7 @@ private fun SessionChatLayer(
             loadDraft = { vm.fleet.loadDraft(it) },
             saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
             loadBytes = { vm.fleet.fileBytes(it) },
-            fsList = { vm.fleet.fsList(session.id, it) },
+            fsList = { vm.fleet.fsListResult(session.id, it) },
             fsRead = { vm.fleet.fsRead(session.id, it) },
             fsWrite = { p, ct -> vm.fleet.fsWrite(session.id, p, ct) },
             fsSearch = { vm.fleet.fsSearch(session.id, it) },

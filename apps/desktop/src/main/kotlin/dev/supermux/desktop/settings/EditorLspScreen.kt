@@ -89,19 +89,7 @@ import dev.supermux.net.LspServer
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-
-/** The 7 add-custom-LSP fields, mirroring BrokerApi.addCustomEditorLsp(...)/
- *  HostStore.lspAddCustom so the screen -> app-state call carries a single bundle
- *  (Android SettingsShared.kt's AddCustomLspArgs parity). */
-data class AddCustomLspArgs(
-    val id: String,
-    val label: String,
-    val command: String,
-    val extensions: List<String>,
-    val args: List<String> = emptyList(),
-    val languageId: String? = null,
-    val installCmd: String? = null,
-)
+import dev.supermux.net.AddCustomLspArgs
 
 /**
  * The LSP settings overlay: a back row + title, then per-server rows (enable Switch + state badge

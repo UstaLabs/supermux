@@ -15,7 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import dev.supermux.desktop.editor.WalkthroughState
+import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.proto.SessionInfo

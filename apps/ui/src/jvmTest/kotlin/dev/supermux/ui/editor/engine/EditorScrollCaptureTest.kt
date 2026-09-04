@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor.engine
 
 import dev.supermux.ui.editor.EditorState
 import kotlinx.coroutines.test.TestScope

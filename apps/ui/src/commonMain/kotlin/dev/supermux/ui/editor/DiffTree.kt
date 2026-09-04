@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import dev.supermux.net.DiffFile
 
@@ -34,7 +34,7 @@ private class MutableFolder(val name: String, val path: String) {
     }
 }
 
-internal fun buildDiffTree(files: List<DiffFile>): List<DiffTreeNode> {
+fun buildDiffTree(files: List<DiffFile>): List<DiffTreeNode> {
     val rootFolders = linkedMapOf<String, MutableFolder>()
     val rootFiles = mutableListOf<DiffTreeNode.File>()
 
@@ -57,7 +57,7 @@ internal fun buildDiffTree(files: List<DiffFile>): List<DiffTreeNode> {
     return (rootFolders.values.map { it.freeze() } + rootFiles).sortedWith(diffTreeOrder)
 }
 
-internal fun flattenVisible(nodes: List<DiffTreeNode>, expanded: Set<String>): List<DiffTreeRow> {
+fun flattenVisible(nodes: List<DiffTreeNode>, expanded: Set<String>): List<DiffTreeRow> {
     val out = mutableListOf<DiffTreeRow>()
     fun walk(list: List<DiffTreeNode>, depth: Int) {
         for (node in list) {
@@ -69,7 +69,7 @@ internal fun flattenVisible(nodes: List<DiffTreeNode>, expanded: Set<String>): L
     return out
 }
 
-internal fun allFolderPaths(nodes: List<DiffTreeNode>): Set<String> {
+fun allFolderPaths(nodes: List<DiffTreeNode>): Set<String> {
     val out = mutableSetOf<String>()
     fun walk(node: DiffTreeNode) {
         if (node is DiffTreeNode.Folder) {
@@ -81,7 +81,22 @@ internal fun allFolderPaths(nodes: List<DiffTreeNode>): Set<String> {
     return out
 }
 
-internal fun folderDiffStats(folder: DiffTreeNode.Folder): Pair<Int, Int> {
+/**
+ * +/- counts, ignoring the `+++`/`---` file headers (parity with web `diffStats`). Moved here from
+ * desktop's `DiffView.kt` in cluster C1 because [folderDiffStats] needs it; the diff VIEW itself
+ * (and Android's byte-identical copy of this function) follows in C3.
+ */
+fun diffStats(diff: String): Pair<Int, Int> {
+    var added = 0
+    var deleted = 0
+    for (line in diff.split("\n")) {
+        if (line.startsWith("+") && !line.startsWith("+++")) added += 1
+        else if (line.startsWith("-") && !line.startsWith("---")) deleted += 1
+    }
+    return added to deleted
+}
+
+fun folderDiffStats(folder: DiffTreeNode.Folder): Pair<Int, Int> {
     var add = 0
     var del = 0
     fun walk(node: DiffTreeNode) {

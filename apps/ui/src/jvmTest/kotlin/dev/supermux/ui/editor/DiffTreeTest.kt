@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import dev.supermux.net.DiffFile
 import kotlin.test.Test

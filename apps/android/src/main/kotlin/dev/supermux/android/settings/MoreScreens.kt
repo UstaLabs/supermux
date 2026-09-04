@@ -102,6 +102,7 @@ import dev.supermux.ui.prefs.EDITOR_FONT_MIN
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
 import kotlinx.coroutines.flow.first
+import dev.supermux.net.AddCustomLspArgs
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 //

@@ -52,7 +52,6 @@ import dev.supermux.desktop.chat.AssistantMessage
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.desktop.chat.loadMarkdownImageBitmap
 import dev.supermux.desktop.chat.prunePasteCache
-import dev.supermux.desktop.editor.DesktopWalkthroughSeam
 import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
@@ -94,6 +93,18 @@ import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
 import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.proto.ServerFrame
+import dev.supermux.state.WalkthroughSeam
+import dev.supermux.ui.editor.WalkthroughState
+
+/** The desktop half of the walkthrough seam: `:shared`'s [WalkthroughSeam] over `:ui`'s
+ *  [WalkthroughState]. Five lines, kept beside the DI that installs it (see the `HostStore`
+ *  construction below) rather than in `:ui`, because the store's generic parameter is chosen
+ *  per app. */
+object DesktopWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
+    override fun create(sessionId: String) = WalkthroughState(sessionId)
+    override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
+}
 
 private val desktopDeps: HostStoreDeps by lazy {
     HostStoreDeps(

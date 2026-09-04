@@ -1,17 +1,20 @@
-// M3 editor bridge — the PURE half of the JCEF↔CodeMirror wiring, split out from [DesktopEditorEngine]
-// so every decision it makes (JS quoting, the injected shim JS, the JS→Kotlin payload parse, and the
-// push/echo-skip/reveal-queue ordering) is unit-testable WITHOUT booting Chromium (JCEF can't run in
-// `kotlin.test`). The engine is a thin adapter: it forwards the JS strings these helpers return to
-// `browser.executeJavaScript` and feeds `onQuery` requests through [parseBridgeEvent].
+// The editor bridge — the PURE half of the host↔CodeMirror wiring, kept out of the per-platform
+// engines (JCEF on desktop, `WebView` on Android) so every decision it makes (JS quoting, the
+// injected shim JS, the JS→Kotlin payload parse, and the push/echo-skip/reveal-queue ordering) is
+// unit-testable WITHOUT booting a browser (JCEF can't run in `kotlin.test`). Each engine is a thin
+// adapter: it forwards the JS strings these helpers return to its `executeJavaScript` and feeds
+// inbound bridge requests through [parseBridgeEvent].
 //
-// WHY the bundle runs UNMODIFIED: the committed cm6 bundle (apps/android/.../assets/editor/) calls a
-// host bridge via `window.AndroidEditor.{onChange,onSave,onReady,onFontSize}` and posts LSP via
-// `window.webkit.messageHandlers.lsp.postMessage` — both shaped for the mobile WebViews. On desktop
-// there is no WebView bridge; instead [bridgeShimJs] DEFINES those globals in the page, each routing
-// through CEF's message-router query function (see [DesktopEditorEngine] for why the query function
-// is renamed off the default `cefQuery`). So the exact same cm6.js the phones ship boots here too.
-package dev.supermux.desktop.editor
+// WHY the bundle runs UNMODIFIED everywhere: the committed cm6 bundle
+// (apps/android/src/main/assets/editor/) calls a host bridge via
+// `window.AndroidEditor.{onChange,onSave,onReady,onFontSize}` and posts LSP via
+// `window.webkit.messageHandlers.lsp.postMessage` — both shaped for the mobile WebViews. Where the
+// host has no such bridge (desktop's JCEF), [bridgeShimJs] DEFINES those globals in the page, each
+// routing through the host's query function. So the exact same cm6.js the phones ship boots there
+// too.
+package dev.supermux.ui.editor.engine
 
+import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -27,7 +30,7 @@ import dev.supermux.ui.prefs.EDITOR_FONT_MIN
  * pass through literally — safe here because we inject via `executeJavaScript`, never into an HTML
  * `<script>` context, and the literal is double-quoted (a backtick is an ordinary char inside it).
  */
-internal fun jsQuote(s: String): String = JsonPrimitive(s).toString()
+fun jsQuote(s: String): String = JsonPrimitive(s).toString()
 
 /**
  * The shim JS injected into the page right before `cmInit`. Defines the bridge globals the committed
@@ -38,7 +41,7 @@ internal fun jsQuote(s: String): String = JsonPrimitive(s).toString()
  * the time any page script runs. Every arg is stringified (the payload's `arg` is always a string;
  * `onFontSize` gets the number as a decimal string, re-parsed in [parseBridgeEvent]).
  */
-internal fun bridgeShimJs(queryFn: String): String = """
+fun bridgeShimJs(queryFn: String): String = """
     (function () {
       function post(fn, arg) {
         try { if (window.$queryFn) window.$queryFn({ request: JSON.stringify({ fn: fn, arg: arg }) }); } catch (e) {}
@@ -69,7 +72,7 @@ internal fun bridgeShimJs(queryFn: String): String = """
  * (cm6-entry.mjs:193). Splitting into two evals would rely on CEF preserving call order across evals;
  * one eval removes the question entirely.
  */
-internal fun initScript(
+fun initScript(
     queryFn: String,
     content: String,
     filename: String,
@@ -81,7 +84,7 @@ internal fun initScript(
 // ── JS→Kotlin payload ────────────────────────────────────────────────────────
 
 /** A parsed `window.$queryFn({request})` payload from the bundle. Unknown `fn` → parse returns null. */
-internal sealed interface BridgeEvent {
+sealed interface BridgeEvent {
     /** cm6 doc changed — [content] is the full document. Drives the echo-skip (see [EditorPushPlanner]). */
     data class Change(val content: String) : BridgeEvent
 
@@ -95,7 +98,7 @@ internal sealed interface BridgeEvent {
     data class FontSize(val px: Int) : BridgeEvent
 
     /** Outbound LSP JSON-RPC (`{serverId,message}`); parsed by [parseLspOut] and forwarded to the
-     *  DesktopLspBridge via the engine's `onLspOut` callback (M4g-3). */
+     *  LspBridge via the engine's `onLspOut` callback (M4g-3). */
     data class LspOut(val payload: String) : BridgeEvent
 
     /** A 1-indexed ORIGINAL-file line clicked in walkthrough diff mode. */
@@ -131,7 +134,7 @@ private val bridgeJson = Json { ignoreUnknownKeys = true; isLenient = true }
  * missing/unknown `fn`, or an `onFontSize` whose `arg` isn't numeric — the engine logs-and-ignores
  * a null (never throws on a CEF thread). Pure + total: safe to unit-test with any input.
  */
-internal fun parseBridgeEvent(request: String): BridgeEvent? {
+fun parseBridgeEvent(request: String): BridgeEvent? {
     val payload = try {
         bridgeJson.decodeFromString<BridgePayload>(request)
     } catch (_: SerializationException) {
@@ -203,10 +206,10 @@ private fun parseEvalResult(payload: String): EvalResultPayload? {
 }
 
 /**
- * Direct JCEF exposes fire-and-forget `executeJavaScript`, so reads return through the same message
- * router as editor events. [expression] is always an internal cm6 call, never user-provided source.
+ * A fire-and-forget `executeJavaScript` host (direct JCEF) cannot return a value, so reads come back
+ * through the same bridge as editor events. [expression] is always an internal cm6 call, never user-provided source.
  */
-internal fun evalResultJs(queryFn: String, id: Long, expression: String): String = """
+fun evalResultJs(queryFn: String, id: Long, expression: String): String = """
     (function () {
       function send(value) {
         try {
@@ -224,11 +227,11 @@ internal fun evalResultJs(queryFn: String, id: Long, expression: String): String
 
 /**
  * Parse cm6's outbound `{serverId,message}` JSON payload (posted via the shim's `lspOut` hook — see
- * [bridgeShimJs]) → (serverId, message). Uses kotlinx.serialization (NOT `org.json`, unlike Android's
- * `parseLspOut` in `EditorScreen.kt:586-591` — desktop convention throughout this module). Returns
+ * [bridgeShimJs]) → (serverId, message). Uses kotlinx.serialization, the only JSON
+ * library `:ui` may depend on (Android's private twin used a platform JSON type). Returns
  * null for malformed JSON or a missing/blank `serverId`; a missing `message` defaults to "".
  */
-internal fun parseLspOut(payload: String): Pair<String, String>? {
+fun parseLspOut(payload: String): Pair<String, String>? {
     val parsed = try {
         bridgeJson.decodeFromString<LspOutPayload>(payload)
     } catch (_: SerializationException) {
@@ -288,7 +291,7 @@ private data class DiffRegionPayload(
 private val diffRegionJson = Json { encodeDefaults = true; explicitNulls = true }
 
 /** Pure builder used by the engine and smoke tests. JSON is a valid JS object expression. */
-internal fun showDiffRegionJs(
+fun showDiffRegionJs(
     path: String,
     content: String,
     ranges: List<DiffRegionRange>,
@@ -306,30 +309,30 @@ internal fun showDiffRegionJs(
 // ── LSP JS-statement builders (pure — mirrors EditorPushPlanner's cmSet* builders; the engine
 //    forwards these strings verbatim to `browser.executeJavaScript`) ──────────────────────────
 
-/** JS to connect cm6's LSP client for the active file (port of Android EditorEngine.kt:247-252). */
-internal fun lspConnectJs(serverId: String, rootUri: String, fileUri: String, languageId: String): String =
+/** JS to connect cm6's LSP client for the active file . */
+fun lspConnectJs(serverId: String, rootUri: String, fileUri: String, languageId: String): String =
     "window.cmLspConnect(${jsQuote(serverId)},${jsQuote(rootUri)},${jsQuote(fileUri)},${jsQuote(languageId)})"
 
 /** JS to deliver an inbound JSON-RPC message string to the cm6 LSP client for [serverId]. */
-internal fun lspMessageJs(serverId: String, message: String): String =
+fun lspMessageJs(serverId: String, message: String): String =
     "window.cmLspMessage(${jsQuote(serverId)},${jsQuote(message)})"
 
-/** JS to tear down all cm6 LSP connections and revert to a plain editor. Guarded (`&&`) exactly
- *  like Android's `EditorEngine.lspDisconnect` — `window.cmLspDisconnect` may not exist if cm6
+/** JS to tear down all cm6 LSP connections and revert to a plain editor. Guarded (`&&`) because
+ *  `window.cmLspDisconnect` may not exist if cm6
  *  never finished booting the LSP client machinery. */
-internal fun lspDisconnectJs(): String = "window.cmLspDisconnect && window.cmLspDisconnect()"
+fun lspDisconnectJs(): String = "window.cmLspDisconnect && window.cmLspDisconnect()"
 
 // ── Push ordering / echo-skip / reveal-queue (pure state machine) ─────────────
 
 /**
  * Models WHAT `cm*` JS the engine should emit for each Kotlin→JS call, given the ready state and the
- * last-pushed document — the desktop analog of Android EditorEngine's pushToView/setDocument/
- * reveal-queue logic (EditorEngine.kt:101-130,233-241). Emits a `List<String>` of JS statements (in
+ * last-pushed document — the shared form of the per-engine pushToView/setDocument/
+ * reveal-queue logic both apps grew independently. Emits a `List<String>` of JS statements (in
  * order) that the engine forwards to `browser.executeJavaScript`; returns an empty list when a call
  * must be deferred until [onReady] (e.g. a reveal before cm6 first-paints). Pure — no JCEF — so the
  * ordering, the echo-skip, and the queue-until-ready are all unit-tested directly.
  */
-internal class EditorPushPlanner(
+class EditorPushPlanner(
     lineWrap: Boolean,
     fontSize: Int,
 ) {
@@ -351,7 +354,7 @@ internal class EditorPushPlanner(
 
     /**
      * A new document (tab switch / disk reload / echo of our own edit). On a path change, push the
-     * whole document + language + wrap + font + scroll (parity EditorEngine.kt:104-109). On a
+     * whole document + language + wrap + font + scroll . On a
      * same-file content change, push ONLY the text — re-pushing scroll/lang/font every keystroke
      * yanks the caret back (cmSetScrollTop is not a no-op). Records lastContent BEFORE emitting so a
      * later echo of the same text is a no-op.
@@ -412,7 +415,7 @@ internal class EditorPushPlanner(
 
     /** Echo-skip: record an inbound onChange as last-known BEFORE it round-trips back through Compose
      *  state, so the resulting [setDocument] sees `content == lastContent` and skips the re-push
-     *  (parity EditorEngine.kt:175). Without this, fast typing can shove a stale snapshot back. */
+     *  . Without this, fast typing can shove a stale snapshot back. */
     fun recordEcho(content: String) {
         lastContent = content
     }
@@ -438,3 +441,14 @@ internal class EditorPushPlanner(
         return listOf("cmRevealLine(${r.first}, ${r.second ?: -1})")
     }
 }
+
+// ── Shared engine constants ──────────────────────────────────────────────────
+
+/** How long to wait for cm6's first paint before dropping to the native fallback editor. */
+const val EDITOR_READY_TIMEOUT_MS: Long = 8_000L
+
+/** The dark backing (One-Dark #282C34) the cm6 bundle paints on — used as the white-flash cover. */
+val EDITOR_BG: Color = Color(0xFF282C34)
+
+/** One-Dark's default foreground, for text drawn over [EDITOR_BG] before cm6 first-paints. */
+val EDITOR_FG: Color = Color(0xFFABB2BF)

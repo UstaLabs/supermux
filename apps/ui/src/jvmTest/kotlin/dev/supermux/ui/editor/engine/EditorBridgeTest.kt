@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor.engine
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -6,7 +6,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The pure half of the JCEF bridge: JS quoting, shim/init script shape, payload parse, push plan. */
-class EditorBridgeShimsTest {
+class EditorBridgeTest {
 
     // ── jsQuote ──────────────────────────────────────────────────────────────
 
@@ -233,14 +233,15 @@ class EditorBridgeShimsTest {
     fun parse_content_with_escaped_quotes_and_newlines_round_trips() {
         // The shim does JSON.stringify({fn,arg}); a content arg with quotes+newlines arrives escaped.
         val content = "a \"quoted\" line\nand another"
-        val request = kotlinx.serialization.json.Json.encodeToString(
-            kotlinx.serialization.json.JsonObject(
-                mapOf(
-                    "fn" to kotlinx.serialization.json.JsonPrimitive("onChange"),
-                    "arg" to kotlinx.serialization.json.JsonPrimitive(content),
-                ),
+        // `JsonObject.toString()` IS its JSON encoding — used directly here because the reified
+        // `Json.encodeToString(value)` overload does not resolve against a `JsonElement` on :ui's
+        // serialization classpath.
+        val request = kotlinx.serialization.json.JsonObject(
+            mapOf(
+                "fn" to kotlinx.serialization.json.JsonPrimitive("onChange"),
+                "arg" to kotlinx.serialization.json.JsonPrimitive(content),
             ),
-        )
+        ).toString()
         assertEquals(BridgeEvent.Change(content), parseBridgeEvent(request))
     }
 

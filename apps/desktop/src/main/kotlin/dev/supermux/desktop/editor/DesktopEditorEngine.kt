@@ -48,6 +48,19 @@ import org.cef.handler.CefRequestHandlerAdapter
 import java.awt.Component
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
+import dev.supermux.ui.editor.engine.BridgeEvent
+import dev.supermux.ui.editor.engine.DiffRegionComposer
+import dev.supermux.ui.editor.engine.DiffRegionRange
+import dev.supermux.ui.editor.engine.DiffRegionThread
+import dev.supermux.ui.editor.engine.EditorPushPlanner
+import dev.supermux.ui.editor.engine.evalResultJs
+import dev.supermux.ui.editor.engine.initScript
+import dev.supermux.ui.editor.engine.lspConnectJs
+import dev.supermux.ui.editor.engine.lspDisconnectJs
+import dev.supermux.ui.editor.engine.lspMessageJs
+import dev.supermux.ui.editor.engine.parseBridgeEvent
+import dev.supermux.ui.editor.engine.parseLspOut
+import dev.supermux.ui.editor.engine.showDiffRegionJs
 
 /**
  * Drives one CodeMirror browser. Construct, set the callbacks, then [load] once JCEF is

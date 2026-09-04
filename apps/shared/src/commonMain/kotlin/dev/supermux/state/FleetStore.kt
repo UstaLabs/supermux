@@ -788,6 +788,9 @@ class FleetStore(
     // Session-scoped filesystem / editor / review (id → SessionInfo on the owning host) ------
     suspend fun fsList(sessionId: String, path: String): List<FsEntry> =
         withSession(sessionId) { app, s -> app.fsList(s, path) }.orEmpty()
+    suspend fun fsListResult(sessionId: String, path: String): Result<List<FsEntry>> =
+        withSession(sessionId) { app, s -> app.fsListResult(s, path) }
+            ?: Result.failure(IllegalStateException("host offline"))
     suspend fun fsRead(sessionId: String, path: String): Result<String> =
         withSession(sessionId) { app, s -> app.fsRead(s, path) } ?: Result.failure(IllegalStateException("host offline"))
     suspend fun fsWrite(sessionId: String, path: String, content: String): Boolean =
@@ -869,6 +872,9 @@ class FleetStore(
         appForWorkspace(workspaceId)?.listWorkspaceTerminals(workspaceId).orEmpty()
     suspend fun workspaceFsList(workspaceId: String, path: String): List<FsEntry> =
         appForWorkspace(workspaceId)?.workspaceFsList(workspaceId, path).orEmpty()
+    suspend fun workspaceFsListResult(workspaceId: String, path: String): Result<List<FsEntry>> =
+        appForWorkspace(workspaceId)?.workspaceFsListResult(workspaceId, path)
+            ?: Result.failure(IllegalStateException("host offline"))
     suspend fun workspaceFsRead(workspaceId: String, path: String): Result<String> =
         appForWorkspace(workspaceId)?.workspaceFsRead(workspaceId, path)
             ?: Result.failure(IllegalStateException("host offline"))

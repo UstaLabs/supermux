@@ -87,6 +87,12 @@ import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.EDITOR_DIFF_TREE_VIEW_DEFAULT
+import dev.supermux.ui.editor.DiffTreeNode
+import dev.supermux.ui.editor.allFolderPaths
+import dev.supermux.ui.editor.buildDiffTree
+import dev.supermux.ui.editor.diffStats
+import dev.supermux.ui.editor.flattenVisible
+import dev.supermux.ui.editor.folderDiffStats
 import androidx.compose.runtime.collectAsState
 
 // ─── Diff colours — same semantic palette as iOS DiffView.swift:38-41 (emerald/red/
@@ -1113,17 +1119,6 @@ private fun newSideStart(hunk: String): Int? {
         i += 1
     }
     return null
-}
-
-/** +/- counts, ignoring the `+++`/`---` file headers (parity with web `diffStats`). */
-fun diffStats(diff: String): Pair<Int, Int> {
-    var added = 0
-    var deleted = 0
-    for (line in diff.split("\n")) {
-        if (line.startsWith("+") && !line.startsWith("+++")) added += 1
-        else if (line.startsWith("-") && !line.startsWith("---")) deleted += 1
-    }
-    return added to deleted
 }
 
 private fun statusColor(status: String): Color = when (status) {

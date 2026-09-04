@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import dev.supermux.ui.editor.engine.EditorPushPlanner
 
 /**
  * M3-T5 "zoom persistence confirmation" — pins the two guarantees at the seam level (no JCEF):

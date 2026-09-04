@@ -89,6 +89,13 @@ import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.editor.EditorSearchField
 import dev.supermux.ui.editor.EditorSearchOverlay
 import dev.supermux.ui.editor.FileTree
+import dev.supermux.ui.editor.LspBridge
+import dev.supermux.ui.editor.engine.EditorScrollReader
+import dev.supermux.ui.editor.dirUri
+import dev.supermux.ui.editor.editorPreviewGate
+import dev.supermux.ui.editor.joinPath
+import dev.supermux.ui.editor.pathToUri
+import dev.supermux.ui.editor.WalkthroughState
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
@@ -104,8 +111,9 @@ import dev.supermux.ui.editor.FileTree
  */
 @Composable
 fun ExplorerPane(
-    fsList: suspend (String) -> List<FsEntry>,
+    fsList: suspend (String) -> Result<List<FsEntry>>,
     explorer: ExplorerState,
+    workdir: String,
     onOpenFile: (String) -> Unit,
     modifier: Modifier = Modifier,
     fsSearch: suspend (String) -> List<FsSearchResult> = { emptyList() },
@@ -150,7 +158,7 @@ fun ExplorerPane(
             }
             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
             Box(Modifier.weight(1f).fillMaxWidth().testTag("editor_tree")) {
-                FileTree(fsList = fsList, explorer = explorer, onOpenFile = { open(it) })
+                FileTree(fsList = fsList, explorer = explorer, workdir = workdir, onOpenFile = { open(it) })
             }
         }
         if (searchResults.isNotEmpty()) {
@@ -225,7 +233,7 @@ fun FilePane(
     var engineReady by remember(lspSessionId) { mutableStateOf(false) }
     val bridge = remember(lspSessionId, lspStatus, lspRpc) {
         lspSessionId?.let {
-            DesktopLspBridge(
+            LspBridge(
                 sessionId = it,
                 lspStatus = lspStatus,
                 lspRpc = lspRpc,

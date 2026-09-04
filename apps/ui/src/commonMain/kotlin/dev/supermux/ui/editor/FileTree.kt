@@ -30,6 +30,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,15 +61,20 @@ internal fun List<FsEntry>.sortedForTree(): List<FsEntry> =
 
 /**
  * Load [node]'s children via [loadDir] and, ON SUCCESS ONLY, mark it expanded. Split out of the
- * composable so its failure path is unit-testable without Compose: an fsList failure does NOT add
+ * composable so its failure path is unit-testable without Compose: a listing failure does NOT add
  * the node to `expandedPaths` (an empty dir would look identical to a failed one otherwise),
  * records the message in `explorer.treeLoadError` for an inline error row, and logs.
  * A success clears any prior error for the path. `treeLoadingPaths` is always cleared in `finally`.
+ *
+ * [loadDir] returns a `Result` (cluster C1): the broker error used to be swallowed into an empty
+ * list by `HostStore.fsList`, which made the error row below unreachable — a failed listing was
+ * indistinguishable from an empty directory. A thrown failure is still handled, so either shape
+ * reaches the same error state.
  */
 internal suspend fun loadAndExpand(
     explorer: ExplorerState,
     node: TreeNode,
-    loadDir: suspend (String) -> List<TreeNode>,
+    loadDir: suspend (String) -> Result<List<TreeNode>>,
 ) {
     // In-flight guard: a second tap while the listing is loading must NOT launch a duplicate fsList
     // (the expand-only-on-success change means the path isn't yet in expandedPaths / node.loaded, so
@@ -75,7 +84,13 @@ internal suspend fun loadAndExpand(
     if (node.path in explorer.treeLoadingPaths) return
     explorer.treeLoadingPaths = explorer.treeLoadingPaths + node.path
     try {
-        val children = loadDir(node.path)
+        val children = loadDir(node.path).getOrElse { err ->
+            if (err is CancellationException) throw err
+            explorer.treeLoadError =
+                explorer.treeLoadError + (node.path to (err.message ?: "Could not list directory"))
+            println("[FileTree] loadDir('${node.path}') failed: $err")
+            return@loadAndExpand // no expand: an error row, not a blank directory
+        }
         node.children?.apply { clear(); addAll(children) }
         node.loaded = true
         explorer.treeLoadError = explorer.treeLoadError - node.path
@@ -92,27 +107,48 @@ internal suspend fun loadAndExpand(
 
 @Composable
 fun FileTree(
-    fsList: suspend (String) -> List<FsEntry>,
+    fsList: suspend (String) -> Result<List<FsEntry>>,
     explorer: ExplorerState,
+    workdir: String,
     onOpenFile: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
 
-    suspend fun loadDir(path: String): List<TreeNode> =
-        fsList(path).sortedForTree().map { entry ->
-            TreeNode(
-                entry = entry,
-                path = childPath(path, entry.name),
-                children = if (entry.type == "dir") mutableListOf() else null,
-            )
+    suspend fun loadDir(path: String): Result<List<TreeNode>> =
+        fsList(path).map { entries ->
+            entries.sortedForTree().map { entry ->
+                TreeNode(
+                    entry = entry,
+                    path = childPath(path, entry.name),
+                    children = if (entry.type == "dir") mutableListOf() else null,
+                )
+            }
         }
 
-    LaunchedEffect(Unit) {
+    // The hosts `remember(workspaceId)` the ExplorerState, so a workdir change under the same
+    // workspace used to leave the PREVIOUS checkout's tree on screen. `seenWorkdir` starts null so
+    // the FIRST composition only loads (no reset → no doubled root listing); every later change
+    // resets and re-lists in the same effect, which is what makes the reload happen at all (a
+    // separate `LaunchedEffect(Unit)` root load would never re-run).
+    var seenWorkdir by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(workdir) {
+        if (seenWorkdir != null && seenWorkdir != workdir) explorer.reset()
+        seenWorkdir = workdir
         if (!explorer.treeRootLoaded) {
-            explorer.treeRoot.clear()
-            explorer.treeRoot.addAll(loadDir("."))
-            explorer.treeRootLoaded = true
+            loadDir(".")
+                .onSuccess { roots ->
+                    explorer.treeRoot.clear()
+                    explorer.treeRoot.addAll(roots)
+                    explorer.treeLoadError = explorer.treeLoadError - "."
+                    explorer.treeRootLoaded = true // only on success, so a retry is still possible
+                }
+                .onFailure { err ->
+                    if (err is CancellationException) throw err
+                    explorer.treeLoadError =
+                        explorer.treeLoadError + ("." to (err.message ?: "Could not list directory"))
+                    println("[FileTree] loadDir('.') failed: $err")
+                }
         }
     }
 

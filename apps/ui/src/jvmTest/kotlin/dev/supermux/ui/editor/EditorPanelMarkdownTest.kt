@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import kotlin.test.Test
 import kotlin.test.assertFalse

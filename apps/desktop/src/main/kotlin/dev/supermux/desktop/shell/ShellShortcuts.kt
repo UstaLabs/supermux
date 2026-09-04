@@ -5,7 +5,7 @@
 // M3-T5 conflict check (Ctrl+E vs. the cm6 bundle's own Ctrl+/−/0 font-zoom): NO conflict, for two
 // independent reasons —
 //   1. Different keys entirely. Ctrl+E toggles the editor PANE (this file); the bundle's own zoom
-//      binds Ctrl+Plus/Minus/0 (EDITOR_FONT_MIN..MAX, see EditorBridgeShims.kt) inside its own JS
+//      binds Ctrl+Plus/Minus/0 (EDITOR_FONT_MIN..MAX, see :ui editor/engine/EditorBridge.kt) inside its own JS
 //      keydown handler. No letter/symbol overlaps.
 //   2. Even if they DID share a key, [Modifier.shellShortcuts] is attached to the outer Compose
 //      window and only fires via `onKeyEvent`'s BUBBLE phase — i.e. only for chords a focused

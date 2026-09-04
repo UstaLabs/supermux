@@ -1,17 +1,17 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import dev.supermux.proto.ServerFrame
-import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Flow-based LSP control-plane + relay — the desktop counterpart to Android `AndroidLspBridge.kt`
- * / iOS `LspBridge.swift` / the web `stores/lsp.ts`. The broker is a dumb JSON-RPC pipe; the real
- * LSP protocol (initialize, didOpen, completion, hover…) runs inside cm6's `LSPClient` in the
- * JCEF-hosted bundle.
+ * Flow-based LSP control-plane + relay — the shared counterpart to iOS `LspBridge.swift` / the
+ * web `stores/lsp.ts`. The broker is a dumb JSON-RPC pipe; the real LSP protocol (initialize,
+ * didOpen, completion, hover…) runs inside cm6's `LSPClient` in the editor engine's web view
+ * (JCEF on desktop, `WebView` on Android).
  *
  * [HostStore] already folds every inbound frame into app-wide flows ([lspStatus] keyed
  * "session|path", [lspRpc] a SharedFlow) — so this bridge just sends the outbound control frames
@@ -19,10 +19,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * per editor panel from session-bound lambdas; all RPC is filtered by `session` (the flows are
  * app-wide — never cross-wire another session's server).
  */
-class DesktopLspBridge(
+class LspBridge(
     private val sessionId: String,
     private val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>>,
-    private val lspRpc: SharedFlow<ServerFrame.LspRpcIn>,
+    private val lspRpc: Flow<ServerFrame.LspRpcIn>,
     private val lspStatusQuery: (sessionId: String, path: String) -> Unit,
     private val lspOpen: (sessionId: String, serverId: String) -> Unit,
     private val lspRpcOut: (sessionId: String, serverId: String, message: String) -> Unit,
@@ -32,7 +32,7 @@ class DesktopLspBridge(
     /**
      * Query the language-server status for [path]: send `lsp_status_query`, then await the
      * `lsp_status` frame the broker replies with (9s timeout → "unavailable", parity
-     * LspBridge.swift:36-48 / AndroidLspBridge.kt:37-53). Skips a stale retained value so we wait
+     * LspBridge.swift:36-48). Skips a stale retained value so we wait
      * for a fresh response.
      */
     suspend fun queryStatus(path: String): ServerFrame.LspStatus {
@@ -55,7 +55,7 @@ class DesktopLspBridge(
 
     /**
      * Open the server [serverId]: send `lsp_open`, then confirm it didn't fail (parity
-     * LspBridge.swift:50-61 / AndroidLspBridge.kt:72-83 — both await lsp_ready/lsp_error).
+     * LspBridge.swift:50-61 — iOS awaits lsp_ready/lsp_error).
      *
      * The broker spawns the process and replies `lsp_ready` (or `lsp_error`/`lsp_exit`)
      * synchronously — see src/core/lsp/bridge.ts:onOpen. These fold into [lspStatus] via

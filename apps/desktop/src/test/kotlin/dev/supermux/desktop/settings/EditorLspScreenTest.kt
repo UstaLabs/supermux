@@ -47,6 +47,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import dev.supermux.net.AddCustomLspArgs
 
 /**
  * M4g-4 Task 2: [LspSettingsScreen] + [LspServerRow]/[AddLspForm], a port of Android

@@ -61,6 +61,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.editor.EditorState
+import dev.supermux.ui.editor.engine.EDITOR_BG
+import dev.supermux.ui.editor.engine.EDITOR_FG
+import dev.supermux.ui.editor.engine.EDITOR_READY_TIMEOUT_MS
+import dev.supermux.ui.editor.engine.EditorScrollReader
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield
@@ -70,24 +74,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import java.awt.BorderLayout
 import javax.swing.JPanel
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
-
-/** The dark backing (One-Dark #282C34) the cm6 bundle paints on — used as the white-flash cover. */
-private val EDITOR_BG = Color(0xFF282C34)
-private val EDITOR_FG = Color(0xFFABB2BF)
-
-/** How long to wait for cm6's first paint before dropping to the native fallback (WebCodeEditor:55). */
-private const val READY_MISS_MS = 8_000L
-
-/**
- * Seam letting the panel read the live editor's scroll offset without owning the engine (which is
- * encapsulated in [EditorSurface]): the surface installs the real reader once its engine exists; the
- * default fires 0 so callers degrade to "no capture" before then. Used via [captureOutgoingScroll]
- * right before a tab switch / reveal (Android EditorScreen.kt:406-408 + :216 parity).
- */
-class EditorScrollReader {
-    internal var read: ((Int) -> Unit) -> Unit = { it(0) }
-    operator fun invoke(cb: (Int) -> Unit) = read(cb)
-}
+import dev.supermux.ui.editor.engine.DiffRegionComposer
+import dev.supermux.ui.editor.engine.DiffRegionRange
+import dev.supermux.ui.editor.engine.DiffRegionThread
 
 /**
  * Seam letting the panel drive the live engine's LSP bridge (connect/message/disconnect) without
@@ -110,18 +99,6 @@ class EditorLspHandle {
         onConnect(serverId, rootUri, fileUri, languageId)
     fun message(serverId: String, message: String) = onMessage(serverId, message)
     fun disconnect() = onDisconnect()
-}
-
-/**
- * Capture the CURRENT (outgoing) tab's scroll before a tab switch/reveal. DELIBERATE divergence from
- * Android's `engine.readScrollTop { editor.captureActiveScroll(it) }`: the read is async, so by the
- * time its callback lands `selectTab` has already flipped `activeTab` and captureActiveScroll would
- * mis-attribute the offset to the INCOMING tab. Snapshotting the outgoing tab at call time makes the
- * late callback always land on the right tab (backport candidate).
- */
-internal fun captureOutgoingScroll(editor: EditorState, reader: EditorScrollReader) {
-    val outgoing = editor.activeTab ?: return
-    reader { scroll -> outgoing.scrollTop = scroll }
 }
 
 /**
@@ -228,7 +205,7 @@ fun EditorSurface(
     var missedReady by remember(engine) { mutableStateOf(false) }
     LaunchedEffect(engine, engineReady, hasDoc) {
         if (engine == null || engineReady || !hasDoc) return@LaunchedEffect
-        delay(READY_MISS_MS)
+        delay(EDITOR_READY_TIMEOUT_MS)
         if (!engine.ready.value) missedReady = true
     }
 
@@ -339,7 +316,7 @@ fun DiffRegionSurface(
     var missedReady by remember(engine) { mutableStateOf(false) }
     LaunchedEffect(engine, ready) {
         if (engine == null || ready) return@LaunchedEffect
-        delay(READY_MISS_MS)
+        delay(EDITOR_READY_TIMEOUT_MS)
         if (!engine.ready.value) missedReady = true
     }
     when {

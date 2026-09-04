@@ -30,7 +30,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.editor.isMarkdownPath
+import dev.supermux.ui.editor.isMarkdownPath
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.panes.TabSlotState
 

@@ -19,7 +19,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.editor.DocumentStore
-import dev.supermux.desktop.editor.DesktopWalkthroughSeam
+import dev.supermux.desktop.DesktopWalkthroughSeam
 import dev.supermux.desktop.editor.JcefState
 import dev.supermux.state.HostStore
 import dev.supermux.net.BrokerApi
