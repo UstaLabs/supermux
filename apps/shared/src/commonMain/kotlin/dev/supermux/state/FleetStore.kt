@@ -6,6 +6,7 @@ import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.host.PairingPayload
 import dev.supermux.host.WorkspaceViewingSnapshot
+import dev.supermux.host.framesForSnapshot
 import dev.supermux.host.hostViewsFrom
 import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
@@ -16,6 +17,7 @@ import dev.supermux.util.TransportPolicy
 import dev.supermux.net.HostIdentity
 import dev.supermux.net.PairClaimResult
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import io.ktor.client.HttpClient
@@ -24,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -105,7 +108,7 @@ class FleetStore(
     private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
     val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions.asStateFlow()
 
-    val hostFilter: Flow<String?> = deps.settings.string(SettingsKeys.HOST_FILTER)
+    val hostFilter: Flow<String?> = deps.settings.string(SettingsKeys.HOST_FILTER).map { it?.takeIf(String::isNotBlank) }
 
     /** The paired fleet as the list/chips render it (identity + reachability + badge slot). */
     private val _hostViews = MutableStateFlow<List<HostView>>(emptyList())
@@ -164,7 +167,7 @@ class FleetStore(
         conns[recordId] = conn
     }
 
-    private fun close(recordId: String) {
+    fun close(recordId: String) {
         val c = conns.remove(recordId) ?: return
         c.jobs.forEach { it.cancel() }
         c.app.close()
@@ -343,12 +346,20 @@ class FleetStore(
         }
         val owner = ids.firstOrNull()?.let { _sessionHost.value[it] }
         val dest = owner?.let { conns[it]?.app } ?: activeApp()
-        when {
-            snapshot == null || !snapshot.appForeground -> dest?.updateViewing(null, false)
-            ids.isEmpty() -> dest?.updateViewing(null, true)
-            else -> dest?.updateViewingSessions(ids, true)
+        dest?.let { app ->
+            for (frame in framesForSnapshot(snapshot)) {
+                applyViewingFrame(app, frame)
+            }
         }
         lastViewingHost = owner
+    }
+
+    private fun applyViewingFrame(app: HostStore, frame: ClientFrame.Viewing) {
+        val sessions = frame.sessions
+        when {
+            sessions != null && sessions.isNotEmpty() -> app.updateViewingSessions(sessions, frame.visible)
+            else -> app.updateViewing(frame.session, frame.visible)
+        }
     }
 
     fun saveHostFilter(recordId: String?) {

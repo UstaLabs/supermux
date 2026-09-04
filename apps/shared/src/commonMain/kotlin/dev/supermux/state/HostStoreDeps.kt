@@ -13,7 +13,7 @@ interface SettingsStore {
 /** Every key both apps persist, in one place so they store the same thing. */
 object SettingsKeys {
     fun draft(sessionId: String) = "draft:$sessionId"
-    fun launcherDraft(workdir: String) = "launcher:draft:$workdir"
+    const val LAUNCHER_DRAFT = "launcher:draft"
     const val LAUNCHER_PREFS = "launcher:prefs"
     const val HOST_FILTER = "host:filter"
     const val EDITOR_PREFS = "editor:prefs"

@@ -5,5 +5,5 @@ import kotlin.test.assertEquals
 
 class SettingsKeysTest {
     @Test fun draftKeyIsScopedBySession() { assertEquals("draft:abc", SettingsKeys.draft("abc")) }
-    @Test fun launcherDraftKeyIsScopedByWorkdir() { assertEquals("launcher:draft:/home/x", SettingsKeys.launcherDraft("/home/x")) }
+    @Test fun launcherDraftIsASingleGlobalKey() { assertEquals("launcher:draft", SettingsKeys.LAUNCHER_DRAFT) }
 }

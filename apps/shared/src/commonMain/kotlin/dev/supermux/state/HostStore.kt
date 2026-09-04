@@ -152,17 +152,13 @@ class HostStore(
     private val stateScope =
         CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     /**
-     * Collectors for [stateIn] projections. [close] must NOT cancel this: the public flows must
-     * keep tracking [_state] after the WS/heartbeat jobs die. Dies with the caller via
-     * [invokeOnCompletion] on the caller's Job (not as a structured child, so [close] does not
-     * stall `runTest` while the caller is still alive).
+     * Collectors for [stateIn] projections. Sibling of [stateScope] (both children of the caller's
+     * Job) so [close] can cancel WS/heartbeat without freezing projections, and so the caller
+     * cancelling still tears projections down as a structured child.
      */
-    private val projectionJob = SupervisorJob()
+    private val projectionJob = SupervisorJob(scope.coroutineContext[Job])
     private val projectionScope = CoroutineScope(Dispatchers.Unconfined + projectionJob)
-
-    init {
-        scope.coroutineContext[Job]?.invokeOnCompletion { projectionJob.cancel() }
-    }
+    internal val projectionsActive: Boolean get() = projectionJob.isActive
     private val settingsJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val http = deps.httpFactory(null)
@@ -315,11 +311,7 @@ class HostStore(
     val connected: Boolean get() = client.sync.synced
 
     init {
-        // Read-aloud: platform OS TTS or ChatGPT /speak stream depending on app-config.
-        bindTts?.invoke(
-            { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
-            { text, onChunk -> api.speakStream(text = text, engine = "codex", onChunk = onChunk) },
-        )
+        attachMessageTts()
         if (connectOnInit) {
             // Guarded per-frame: one poison frame drops one update, never the whole collector.
             stateScope.launch { client.frames.collect { guarded("reduce") { reduce(it) } } }
@@ -379,7 +371,10 @@ class HostStore(
                 lastSentViewing = null
                 sendViewingIfChanged()
             }
-            is ServerFrame.SessionRemoved -> walkthroughs.remove(frame.id)
+            is ServerFrame.SessionRemoved -> {
+                walkthroughs.remove(frame.id)
+                refreshArchived()
+            }
             is ServerFrame.MessageAppend -> {
                 if (frame.entry.direction == "outbound" && frame.entry.op == "reply") {
                     _agentReplies.tryEmit(AgentReplyEvent(frame.session, frame.entry))
@@ -551,8 +546,8 @@ class HostStore(
             runApi("spawn") {
                 api.spawn(
                     SpawnRequest(
-                        workdir = workdir,
-                        name = name?.ifBlank { null },
+                        workdir = workdir.trim(),
+                        name = name?.trim()?.ifBlank { null },
                         agent = agent,
                         model = model?.ifBlank { null },
                     ),
@@ -593,7 +588,7 @@ class HostStore(
     }
 
     fun agentSaveSecret(kind: String, value: String) {
-        stateScope.launch { runApi("agentSaveSecret") { saveAgentSecret(kind, value) } }
+        stateScope.launch { saveAgentSecret(kind, value) }
     }
 
     fun openCodeSetKey(providerId: String, key: String) {
@@ -605,7 +600,9 @@ class HostStore(
     }
 
     /** Re-bind read-aloud using GET /settings/config + POST /speak. No-op without [bindTts]. */
-    fun bindMessageTts() {
+    fun bindMessageTts() = attachMessageTts()
+
+    private fun attachMessageTts() {
         bindTts?.invoke(
             { runCatching { api.getConfig().voiceTtsEngine }.getOrNull()?.ifBlank { null } ?: "platform" },
             { text, onChunk -> api.speakStream(text = text, engine = "codex", onChunk = onChunk) },
@@ -630,19 +627,22 @@ class HostStore(
                 ?: LauncherPrefs()
         }
 
-    fun saveLauncherDraft(workdir: String, draft: LauncherDraft) {
+    fun saveLauncherDraft(draft: LauncherDraft) {
         stateScope.launch {
-            deps.settings.putString(
-                SettingsKeys.launcherDraft(workdir),
-                settingsJson.encodeToString(draft),
-            )
+            val encoded = if (draft == LauncherDraft()) null else settingsJson.encodeToString(draft)
+            deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, encoded)
         }
     }
 
-    fun launcherDraft(workdir: String): Flow<LauncherDraft?> =
-        deps.settings.string(SettingsKeys.launcherDraft(workdir)).map { raw ->
+    val launcherDraft: Flow<LauncherDraft> =
+        deps.settings.string(SettingsKeys.LAUNCHER_DRAFT).map { raw ->
             raw?.let { runCatching { settingsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() }
+                ?: LauncherDraft()
         }
+
+    fun clearLauncherDraft() {
+        stateScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, null) }
+    }
 
     // ── Session controls (HTTP via BrokerApi) ───────────────────────────────────────
 
@@ -1857,8 +1857,9 @@ class HostStore(
     /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release
      *  the shared HttpClients (WS + HTTP, and the dictation-only long-timeout client). Counterpart
      *  of AppViewModel.onCleared, plus the explicit scope cancel a plain (non-ViewModel) class needs. */
-    fun close() {
+    fun close(cancelProjections: Boolean = true) {
         stateScope.cancel()
+        if (cancelProjections) projectionJob.cancel()
         http.close()
         httpDictate.close()
     }
