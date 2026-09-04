@@ -57,6 +57,7 @@ import dev.supermux.util.proxyUrl
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.supermux.ui.prefs.LocalUiPrefs
 import kotlinx.coroutines.launch
+import dev.supermux.ui.shell.AgentViewToggle
 
 fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
     null -> "Failed"

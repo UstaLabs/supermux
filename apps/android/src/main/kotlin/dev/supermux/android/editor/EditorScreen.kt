@@ -73,6 +73,10 @@ import androidx.compose.runtime.collectAsState
 import dev.supermux.ui.prefs.LocalUiPrefs
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.flow.first
+import dev.supermux.ui.editor.EditorSearchField
+import dev.supermux.ui.editor.EditorSearchOverlay
+import dev.supermux.ui.editor.EditorTabs
+import dev.supermux.ui.editor.FileTree
 
 /** A chat-initiated request to open a workdir-relative [path] at an optional [line]. */
 data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?)

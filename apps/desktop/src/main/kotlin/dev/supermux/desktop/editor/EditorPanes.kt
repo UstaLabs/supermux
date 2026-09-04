@@ -86,6 +86,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import dev.supermux.ui.editor.EditorSearchField
+import dev.supermux.ui.editor.EditorSearchOverlay
+import dev.supermux.ui.editor.FileTree
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 

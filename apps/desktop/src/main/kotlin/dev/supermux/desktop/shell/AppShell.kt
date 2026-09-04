@@ -118,6 +118,8 @@ import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.shell.SessionsRail
+import dev.supermux.ui.shell.SidebarDivider
+import dev.supermux.ui.shell.SidebarDividerCenterOffset
 
 /**
  * macOS title-bar sidebar collapse control — next to the traffic lights (live JBR left

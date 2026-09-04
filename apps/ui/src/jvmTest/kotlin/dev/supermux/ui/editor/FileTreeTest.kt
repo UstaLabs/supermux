@@ -1,7 +1,6 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import dev.supermux.net.FsEntry
-import dev.supermux.ui.editor.EditorState
 import dev.supermux.workspace.TreeNode
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
@@ -11,10 +10,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Pure-logic port of Android's FileTree.kt sort/path-join helpers (M3 plan Task 3: "tree-node
- * sorting (dirs-first) tests"). Neither the Swift `TreeNode` type nor its test suite has an
- * equivalent helper, so this coverage is authored directly against Android's
- * `sortedForTree`/`childPath` semantics (apps/android/.../editor/FileTree.kt:42-49).
+ * Pure-logic cover for the shared file tree's sort/path-join helpers and for `loadAndExpand`'s
+ * state transitions (moved here from desktop with the code in UI cluster B / task B3). Neither the
+ * Swift `TreeNode` type nor its test suite has an equivalent helper, so this coverage is authored
+ * directly against `sortedForTree`/`childPath` semantics (apps/ui/.../ui/editor/FileTree.kt).
  */
 class FileTreeTest {
 

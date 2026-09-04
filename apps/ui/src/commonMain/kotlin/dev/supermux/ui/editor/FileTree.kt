@@ -1,23 +1,13 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/editor/FileTree.kt — keep in sync
-// until a shared UI module exists.
+// Shared file-tree explorer (UI cluster B, task B3): one implementation for both apps.
 //
-// Desktop adaptations vs. the Android source:
-//   - Bundled drawables → compose.materialIconsExtended:
-//       ic_chevron_right → Icons.Filled.ChevronRight  (reuses the SessionsRail.kt mapping for the
-//         same drawable)
-//       ic_chevron_down  → Icons.Filled.KeyboardArrowDown     (Material has no distinct "chevron down"
-//         glyph; KeyboardArrowDown is the same chevron family, just pointing down, so it pairs visually
-//         with ChevronRight for the collapsed/expanded pair)
-//       ic_folder_open   → Icons.Filled.FolderOpen
-//       ic_file          → Icons.Filled.InsertDriveFile
-//     Directories always render the FolderOpen glyph regardless of expanded state — that mirrors
-//     Android exactly (a pre-existing simplification there, not something introduced here).
-//   - `rememberHaptics().perform(HapticKind.Tick)` on node click dropped — no haptic actuator on desktop,
-//     and no other ported desktop file wires the no-op haptics stub at a call site (theme/Haptics.kt
-//     exists but is uncalled), so this follows that established convention.
-//   - `pointerHoverIcon(PointerIcon.Hand)` added to the clickable node row (desktop mouse
-//     affordance; Android is touch-only).
-package dev.supermux.desktop.editor
+// Desktop's copy won the body — `loadAndExpand` with its in-flight guard over
+// `ExplorerState.treeLoadingPaths`, expand-ONLY-on-success, `CancellationException` rethrown, and
+// the inline `treeLoadError` row that a re-tap retries — plus Material icons in place of the
+// bundled drawables (ic_chevron_right → ChevronRight, ic_chevron_down → KeyboardArrowDown,
+// ic_folder_open → FolderOpen, ic_file → InsertDriveFile) and `pointerHoverIcon(Hand)` on the row.
+// Android's `rememberHaptics().perform(HapticKind.Tick)` on node click is folded back in (the
+// desktop haptics implementation is a no-op).
+package dev.supermux.ui.editor
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,9 +21,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,9 +38,10 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.net.FsEntry
-import dev.supermux.ui.editor.ExplorerState
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.workspace.TreeNode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -66,9 +57,9 @@ internal fun List<FsEntry>.sortedForTree(): List<FsEntry> =
 
 /**
  * Load [node]'s children via [loadDir] and, ON SUCCESS ONLY, mark it expanded. Split out of the
- * composable so its failure path is unit-testable without Compose (M3-T4 obligation): an fsList
- * failure does NOT add the node to `expandedPaths` (an empty dir would look identical to a failed
- * one otherwise), records the message in `explorer.treeLoadError` for an inline error row, and logs.
+ * composable so its failure path is unit-testable without Compose: an fsList failure does NOT add
+ * the node to `expandedPaths` (an empty dir would look identical to a failed one otherwise),
+ * records the message in `explorer.treeLoadError` for an inline error row, and logs.
  * A success clears any prior error for the path. `treeLoadingPaths` is always cleared in `finally`.
  */
 internal suspend fun loadAndExpand(
@@ -168,6 +159,7 @@ private fun TreeNodeRow(
     onClick: (TreeNode) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val haptic = rememberHaptics()
     val isDir = node.entry.type == "dir"
     val isOpen = expanded.contains(node.path)
     val isLoading = loading.contains(node.path)
@@ -177,7 +169,10 @@ private fun TreeNodeRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { onClick(node) }
+            .clickable {
+                haptic.perform(HapticKind.Tick)
+                onClick(node)
+            }
             .pointerHoverIcon(PointerIcon.Hand)
             .padding(start = (depth * 14 + 10).dp, end = SpaceEnd, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -215,8 +210,8 @@ private fun TreeNodeRow(
         )
     }
 
-    // Inline listing-error row (M3-T4): a failed fsList leaves the dir collapsed and shows why here,
-    // just under the offending directory row. Tapping the dir again retries the listing.
+    // Inline listing-error row: a failed fsList leaves the dir collapsed and shows why here, just
+    // under the offending directory row. Tapping the dir again retries the listing.
     if (isDir && loadError != null) {
         Text(
             loadError,

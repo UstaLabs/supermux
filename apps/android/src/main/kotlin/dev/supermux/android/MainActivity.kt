@@ -81,7 +81,7 @@ import dev.supermux.android.workspace.chatActivationDecision
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
 import dev.supermux.ui.shell.SessionsRail
-import dev.supermux.android.workspace.SidebarDivider
+import dev.supermux.ui.shell.CompactSidebarDivider
 import dev.supermux.android.workspace.SidebarState
 import dev.supermux.proto.chatSessionId
 import dev.supermux.android.workspace.addViewState
@@ -618,7 +618,7 @@ class MainActivity : ComponentActivity() {
                                           .background(cs.outlineVariant),
                                   )
                               } else {
-                                  SidebarDivider(
+                                  CompactSidebarDivider(
                                       modifier = Modifier.offset(x = sidebarWidth - 7.dp),
                                       onDragDelta = { d ->
                                           sidebarState.setSidebarWidth(sidebarState.sidebarWidth + d)

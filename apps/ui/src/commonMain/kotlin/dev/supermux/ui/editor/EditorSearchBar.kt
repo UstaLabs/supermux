@@ -1,4 +1,8 @@
-package dev.supermux.android.editor
+// Shared editor file-search chrome (UI cluster B, task B3): one implementation for both apps.
+// Desktop's copy won the body (Material `Search` icon, `pointerHoverIcon(Hand)` on the scrim and
+// each result row — harmless on touch); Android's `rememberHaptics().perform(HapticKind.Tick)` on
+// scrim-dismiss and result-tap is folded back in (the desktop haptics implementation is a no-op).
+package dev.supermux.ui.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +18,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -24,19 +30,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import dev.supermux.android.R
+import dev.supermux.net.FsSearchResult
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
-import dev.supermux.net.FsSearchResult
 
 @Composable
 fun EditorSearchField(
@@ -55,7 +61,7 @@ fun EditorSearchField(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            painter = painterResource(R.drawable.ic_search),
+            Icons.Filled.Search,
             contentDescription = null,
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(14.dp),
@@ -110,7 +116,8 @@ fun EditorSearchOverlay(
                 .clickable {
                     haptic.perform(HapticKind.Tick)
                     onDismiss()
-                },
+                }
+                .pointerHoverIcon(PointerIcon.Hand),
         )
         Column(
             Modifier
@@ -139,6 +146,7 @@ fun EditorSearchOverlay(
                             haptic.perform(HapticKind.Tick)
                             onSelect(result.path)
                         }
+                        .pointerHoverIcon(PointerIcon.Hand)
                         .padding(horizontal = Space.md, vertical = 10.dp),
                 )
             }
