@@ -2,6 +2,7 @@ package dev.supermux.state
 
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.ServerFrame
+import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.WorkspaceDto
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -9,7 +10,9 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -59,6 +62,34 @@ class HostStoreWorkspaceActionsTest {
         assertEquals("active", s.workspaces.value.single().status)
         assertNull(s.workspaces.value.single().archivedAt)
         assertEquals(listOf("w2"), s.archivedWorkspaces.value.map { it.id })
+        advanceUntilIdle(); s.close()
+    }
+
+    @Test fun switchModelPatchesTheSessionRowOptimistically() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(this)
+        s.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(
+                    SessionInfo(id = "s1", name = "S", agent = "claude", workdir = "/w", model = "old"),
+                ),
+            ),
+        )
+        withContext(Dispatchers.Default) { s.switchModel("s1", "opus-5") }
+        assertEquals("opus-5", s.sessions.value.single().model)
+        advanceUntilIdle(); s.close()
+    }
+
+    @Test fun switchReasoningPatchesTheSessionRowOptimistically() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(this)
+        s.reduce(
+            ServerFrame.Snapshot(
+                sessions = listOf(
+                    SessionInfo(id = "s1", name = "S", agent = "claude", workdir = "/w", reasoningLevel = "low"),
+                ),
+            ),
+        )
+        withContext(Dispatchers.Default) { s.switchReasoning("s1", "high") }
+        assertEquals("high", s.sessions.value.single().reasoningLevel)
         advanceUntilIdle(); s.close()
     }
 

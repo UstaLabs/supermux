@@ -42,6 +42,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             store = HostStores.store(appContext),
             scope = viewModelScope,
             deps = deps,
+            snapshots = snapshotStore,
             appFactory = { url, token, onConn ->
                 HostStore(
                     url, token, viewModelScope, deps,
@@ -74,6 +75,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        super.onCleared()
         fleet.close()
     }
 

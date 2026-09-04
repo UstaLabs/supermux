@@ -1653,13 +1653,29 @@ class HostStore(
 
     /** POST /sessions/<id>/model {"model"} — switch the session's model (persists broker-side).
      *  Returns true on success, false on any failure. */
-    suspend fun switchModel(id: String, model: String): Boolean =
-        runApi("switchModel") { api.switchModel(id, model); true } ?: false
+    /** Optimistic local update (web parity): the pill flips as soon as the PUT succeeds; the
+     *  broker's session_state broadcast confirms it (or rolls it back on a failed live switch). */
+    suspend fun switchModel(id: String, model: String): Boolean {
+        val ok = runApi("switchModel") { api.switchModel(id, model); true } ?: false
+        if (ok) patchSession(id) { it.copy(model = model) }
+        return ok
+    }
 
     /** POST /sessions/<id>/reasoning-level {"reasoningLevel"} — switch the session's thinking level.
      *  Returns true on success, false on any failure. */
-    suspend fun switchReasoning(id: String, level: String): Boolean =
-        runApi("switchReasoning") { api.switchReasoning(id, level); true } ?: false
+    suspend fun switchReasoning(id: String, level: String): Boolean {
+        val ok = runApi("switchReasoning") { api.switchReasoning(id, level); true } ?: false
+        if (ok) patchSession(id) { it.copy(reasoningLevel = level) }
+        return ok
+    }
+
+    /** Patch one session row in place (optimistic pill updates). No-op for an unknown id. */
+    private fun patchSession(id: String, f: (SessionInfo) -> SessionInfo) {
+        _state.update { st ->
+            if (st.sessions.none { it.id == id }) st
+            else st.copy(sessions = st.sessions.map { if (it.id == id) f(it) else it })
+        }
+    }
 
     // ── Voice dictation (M5-1) ──────────────────────────────────────────────────────────────
     // Backs DesktopComposer's MicButton (chat) and SessionLauncherScreen's MicButton (launcher,
@@ -1763,6 +1779,34 @@ class HostStore(
         worktree: Boolean,
         baseBranch: String?,
         replaceDraftId: String? = null,
+        workspaceId: String? = null,
+        name: String? = null,
+        inheritFrom: String? = null,
+        firstMessage: String? = null,
+    ): String? = runApi("createSessionWithFirstMessage") {
+        createSessionWithFirstMessageOrThrow(
+            workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+        )
+    }
+
+    /**
+     * Throwing twin of [createSessionWithFirstMessage] for the launcher, which shows the broker's
+     * OWN reason instead of a generic "couldn't create the session": an unusable workdir raises
+     * [IllegalArgumentException] carrying [PathValidation.error], and a refused POST /sessions goes
+     * through [remapSpawnFailure] so the JSON `error` field surfaces. Same side effects otherwise
+     * (draft replaced, staged files uploaded after spawn, [consumeFirstUploads] armed).
+     */
+    suspend fun createSessionWithFirstMessageOrThrow(
+        workdir: String,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+        text: String,
+        staged: List<StagedUpload>,
+        worktree: Boolean,
+        baseBranch: String?,
+        replaceDraftId: String? = null,
         /** Join this workspace rather than creating a new one (spec decision 5). */
         workspaceId: String? = null,
         /** Display-name seed (e.g. Continue handoff reuses the source session's name base). */
@@ -1771,44 +1815,43 @@ class HostStore(
         inheritFrom: String? = null,
         /** Broker delivers this after spawn (continue handoff). Not sent on the client WS. */
         firstMessage: String? = null,
-    ): String? = runApi("createSessionWithFirstMessage") {
+    ): String {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
         }
-        val validation = api.validatePath(workdir)
+        val validation = runCatching { api.validatePath(workdir) }.getOrNull()
+            ?: throw IllegalArgumentException("Could not validate path")
         val resolvedPath = validation.path
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
-            println("[HostStore] createSessionWithFirstMessage: invalid workdir '$workdir': " +
-                (validation.error ?: "unknown"))
-            return@runApi null
+            throw IllegalArgumentException(validation.error ?: "Invalid working directory")
         }
-        val resp = api.spawn(
-            SpawnRequest(
-                workdir = resolvedPath,
-                name = name?.ifBlank { null },
-                agent = agent,
-                model = model?.ifBlank { null },
-                worktree = if (worktree) true else null,
-                baseBranch = baseBranch?.ifBlank { null },
-                reasoningLevel = reasoningLevel?.ifBlank { null },
-                workspaceId = workspaceId,
-                inheritFrom = inheritFrom?.ifBlank { null },
-                firstMessage = firstMessage?.ifBlank { null },
-            ),
-        )
+        val resp = try {
+            api.spawn(
+                SpawnRequest(
+                    workdir = resolvedPath,
+                    name = name?.ifBlank { null },
+                    agent = agent,
+                    model = model?.ifBlank { null },
+                    worktree = if (worktree) true else null,
+                    baseBranch = baseBranch?.ifBlank { null },
+                    reasoningLevel = reasoningLevel?.ifBlank { null },
+                    workspaceId = workspaceId,
+                    inheritFrom = inheritFrom?.ifBlank { null },
+                    firstMessage = firstMessage?.ifBlank { null },
+                ),
+            )
+        } catch (t: Throwable) {
+            remapSpawnFailure(t)
+        }
         val sessionId = resolveSpawnId(resp, _state.value.sessions)
-        if (sessionId == null) {
-            println("[HostStore] createSessionWithFirstMessage: spawn ok but id unavailable " +
-                "(name='${resp.name}')")
-            return@runApi null
-        }
+            ?: throw IllegalStateException("Session created but id not available yet")
         // Attachments need a session id, so they upload *after* spawn (mirrors iOS
         // NewSessionView.spawn() and the web launcher). A file that fails to upload is skipped.
         val attachmentIds = staged.mapNotNull { s ->
             uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }
         }
         firstUploads = sessionId to attachmentIds
-        sessionId
+        return sessionId
     }
 
     /**

@@ -123,6 +123,22 @@ class FleetStoreRoutingTest {
         f.fleet.close()
     }
 
+    @Test fun resumeAlsoRefreshesThatHostsArchivedList() = runTest(UnconfinedTestDispatcher()) {
+        val f = fixture(this)
+        advanceUntilIdle()
+        f.calls.values.forEach { it.clear() }
+
+        f.fleet.resume("s-b")
+        advanceUntilIdle()
+
+        await("resume must POST then re-pull archived, got ${f.calls.getValue("b")}") {
+            f.calls.getValue("b").any { it.contains("/sessions/s-b/resume") } &&
+                f.calls.getValue("b").any { it.contains("/archived-sessions") }
+        }
+        assertEquals(emptyList(), f.calls.getValue("a").toList())
+        f.fleet.close()
+    }
+
     @Test fun hostGlobalActionGoesToTheActiveHost() = runTest(UnconfinedTestDispatcher()) {
         val f = fixture(this)
         advanceUntilIdle()

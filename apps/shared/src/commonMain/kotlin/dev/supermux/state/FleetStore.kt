@@ -1,6 +1,7 @@
 package dev.supermux.state
 
 import dev.supermux.state.AgentReplyEvent
+import dev.supermux.host.HostSnapshotStore
 import dev.supermux.host.HostView
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -132,6 +133,11 @@ class FleetStore(
     private val claimOverride: (suspend (url: String, secret: String, deviceName: String) -> PairClaimResult?)? = null,
     private val hostProbeOverride: (suspend (url: String) -> HostIdentity?)? = null,
     private val localHostDisplayName: () -> String = { "Host" },
+    /** Per-host offline-session cache (spec §5). When present, each host's last-known live
+     *  sessions seed the merged list BEFORE any socket opens, so a host that is offline at
+     *  launch renders its last snapshot instead of an empty group; the first live Snapshot
+     *  overwrites the seed, and a forgotten host's cache is dropped. */
+    private val snapshots: HostSnapshotStore? = null,
 ) {
     /** One host's live connection: its [HostStore] plus the flow-collector jobs folding it in. */
     private class HostConn(val app: HostStore, val jobs: MutableList<Job> = mutableListOf())
@@ -248,6 +254,14 @@ class FleetStore(
     init {
         synchronized(lock) {
             _activeHost.value = store.list().firstOrNull()?.recordId
+            // Seed from the offline cache BEFORE dialing: an offline host shows its last-known
+            // sessions rather than nothing. Prune caches for hosts forgotten while the app was dead.
+            snapshots?.let { cache ->
+                cache.retainOnly(store.list().map { it.recordId })
+                cache.all().forEach { snap ->
+                    if (snap.sessions.isNotEmpty()) sessionsByHost[snap.recordId] = snap.sessions
+                }
+            }
             sync(store.list())
             recomputeAll()
         }
@@ -292,12 +306,21 @@ class FleetStore(
         c.jobs.forEach { it.cancel() }
         c.app.close()
         onlineHosts[recordId] = false
+        // Only when the record is really gone — a URL/token rebuild closes and reopens the same host.
+        if (store.list().none { it.recordId == recordId }) snapshots?.remove(recordId)
         publishApps()
     }
 
     // ── Per-host fold callbacks ──────────────────────────────────────────────────────
 
     private fun onHostSessions(recordId: String, sessions: List<SessionInfo>) = synchronized(lock) {
+        // A freshly opened HostStore emits an empty list before its first Snapshot; that must not
+        // wipe a bucket seeded from the offline cache. Once the host is online its list is
+        // authoritative, empty included.
+        val seedHolds = sessions.isEmpty() &&
+            onlineHosts[recordId] != true &&
+            sessionsByHost[recordId]?.isNotEmpty() == true
+        if (seedHolds) return@synchronized
         sessionsByHost[recordId] = sessions
         recomputeSessions()
     }
@@ -596,6 +619,7 @@ class FleetStore(
             lastReadByHost.remove(recordId)
             archivedByHost.remove(recordId)
             onlineHosts.remove(recordId)
+            snapshots?.remove(recordId)
             if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
         }
         onHostsChanged()
@@ -670,11 +694,14 @@ class FleetStore(
     fun consumePendingFirst(sessionId: String): HostStore.PendingFirstMessage? =
         appFor(sessionId)?.consumePendingFirst(sessionId)
     fun ensureMessagesLoaded(sessionId: String) { appFor(sessionId)?.ensureMessagesLoaded(sessionId) }
-    fun saveDraft(sessionId: String, text: String) { appFor(sessionId)?.saveDraft(sessionId, text) }
+    // Settings writes go straight to [HostStoreDeps.settings] — the same place the reads below come
+    // from — so a draft typed while every host is offline is still persisted.
+    fun saveDraft(sessionId: String, text: String) {
+        fleetScope.launch { deps.settings.putString(SettingsKeys.draft(sessionId), text.ifBlank { null }) }
+    }
     /** One-shot read of the persisted draft (the composer restores it on open). */
     suspend fun loadDraft(sessionId: String): String = draft(sessionId).first().orEmpty()
-    fun draft(sessionId: String): Flow<String?> =
-        appFor(sessionId)?.draft(sessionId) ?: deps.settings.string(SettingsKeys.draft(sessionId))
+    fun draft(sessionId: String): Flow<String?> = deps.settings.string(SettingsKeys.draft(sessionId))
     fun clearFinishJob(id: String) { appFor(id)?.clearFinishJob(id) }
     fun ackFinish(id: String, startedAt: Double) { appFor(id)?.ackFinish(id, startedAt) }
     fun isFinishAcked(id: String, startedAt: Double): Boolean = appFor(id)?.isFinishAcked(id, startedAt) == true
@@ -732,8 +759,15 @@ class FleetStore(
     fun switchModel(id: String, model: String) { fleetScope.launch { appFor(id)?.switchModel(id, model) } }
     fun switchReasoning(id: String, level: String) { fleetScope.launch { appFor(id)?.switchReasoning(id, level) } }
 
-    /** Fire-and-forget resume-from-archive; the store refreshes the archived list on its own. */
-    fun resume(id: String) { fleetScope.launch { (appFor(id) ?: activeApp())?.resume(id) } }
+    /** Fire-and-forget resume-from-archive, then re-pull that host's archived list so the row
+     *  leaves the Archived screen (the resume produces no session_removed frame). */
+    fun resume(id: String) {
+        fleetScope.launch {
+            val app = appFor(id) ?: activeApp() ?: return@launch
+            app.resume(id)
+            app.refreshArchived()
+        }
+    }
     suspend fun archivedLogs(sessionId: String): List<LogEntry> = appFor(sessionId)?.archivedLogs(sessionId).orEmpty()
 
     suspend fun uploadResumable(
@@ -874,17 +908,26 @@ class FleetStore(
     fun setProxyPublic(domain: String, isPublic: Boolean) { fleetScope.launch { activeApp()?.setProxyPublic(domain, isPublic) } }
     fun removeProxy(domain: String) { fleetScope.launch { activeApp()?.removeProxy(domain) } }
 
-    fun saveLauncherPrefs(prefs: LauncherPrefs) { activeApp()?.saveLauncherPrefs(prefs) }
+    fun saveLauncherPrefs(prefs: LauncherPrefs) {
+        fleetScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_PREFS, settingsJson.encodeToString(prefs)) }
+    }
     val launcherPrefs: Flow<LauncherPrefs> =
         deps.settings.string(SettingsKeys.LAUNCHER_PREFS).map { raw ->
             raw?.let { runCatching { settingsJson.decodeFromString<LauncherPrefs>(it) }.getOrNull() } ?: LauncherPrefs()
         }
-    fun saveLauncherDraft(draft: LauncherDraft) { activeApp()?.saveLauncherDraft(draft) }
+    fun saveLauncherDraft(draft: LauncherDraft) {
+        fleetScope.launch {
+            val encoded = if (draft == LauncherDraft()) null else settingsJson.encodeToString(draft)
+            deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, encoded)
+        }
+    }
     val launcherDraft: Flow<LauncherDraft> =
         deps.settings.string(SettingsKeys.LAUNCHER_DRAFT).map { raw ->
             raw?.let { runCatching { settingsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() } ?: LauncherDraft()
         }
-    fun clearLauncherDraft() { activeApp()?.clearLauncherDraft() }
+    fun clearLauncherDraft() {
+        fleetScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, null) }
+    }
 
     suspend fun appConfig(): AppConfigDto? = activeApp()?.appConfig()
     suspend fun usageRaw(): String? = activeApp()?.usageRaw()
@@ -997,10 +1040,57 @@ class FleetStore(
         inheritFrom: String? = null,
         firstMessage: String? = null,
         hostRecordId: String? = null,
-    ): String? = (appForRecord(hostRecordId) ?: activeApp())?.createSessionWithFirstMessage(
-        workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-        replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
-    )
+    ): String? {
+        val app = appForRecord(hostRecordId) ?: activeApp() ?: return null
+        val newId = app.createSessionWithFirstMessage(
+            workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+        ) ?: return null
+        armPendingFirst(app, newId, text, firstMessage)
+        return newId
+    }
+
+    /**
+     * Throwing twin used by the launcher so the broker's own refusal reaches the screen
+     * (invalid workdir / spawn 4xx) instead of a generic failure. Same side effects.
+     */
+    suspend fun createSessionWithFirstMessageOrThrow(
+        workdir: String,
+        agent: String,
+        model: String?,
+        reasoningLevel: String?,
+        text: String,
+        staged: List<StagedUpload>,
+        worktree: Boolean,
+        baseBranch: String?,
+        replaceDraftId: String? = null,
+        workspaceId: String? = null,
+        name: String? = null,
+        inheritFrom: String? = null,
+        firstMessage: String? = null,
+        hostRecordId: String? = null,
+    ): String {
+        val app = appForRecord(hostRecordId) ?: activeApp() ?: throw IllegalStateException("No host connected")
+        val newId = app.createSessionWithFirstMessageOrThrow(
+            workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+        )
+        armPendingFirst(app, newId, text, firstMessage)
+        return newId
+    }
+
+    /**
+     * Hand the composer the first message + its uploaded attachment ids so the chat sends them on
+     * open. Skipped when [firstMessage] is set: the BROKER delivers that one after spawn, and a
+     * client Send would duplicate it.
+     */
+    private fun armPendingFirst(app: HostStore, sessionId: String, text: String, firstMessage: String?) {
+        if (!firstMessage.isNullOrBlank()) return
+        app.setPendingFirst(
+            sessionId,
+            HostStore.PendingFirstMessage(text, app.consumeFirstUploads(sessionId)),
+        )
+    }
 
     /**
      * "Continue in a new conversation" on [recordId]: build the shared spawn request from the source

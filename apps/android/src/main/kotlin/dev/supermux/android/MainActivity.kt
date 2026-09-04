@@ -702,8 +702,7 @@ class MainActivity : ComponentActivity() {
                                         loadLauncherDraft = { vm.fleet.launcherDraft.first() },
                                         onLauncherDraftChange = { vm.fleet.saveLauncherDraft(it) },
                                         onSubmit = { wd, ag, md, rl, msg, wt, base, staged, replaceDraftId ->
-                                            vm.fleet.createSessionWithFirstMessage(wd, ag, md, rl, msg, staged, worktree = wt, baseBranch = base, replaceDraftId = replaceDraftId)
-                                                ?: error("Couldn't create the session")
+                                            vm.fleet.createSessionWithFirstMessageOrThrow(wd, ag, md, rl, msg, staged, worktree = wt, baseBranch = base, replaceDraftId = replaceDraftId)
                                         },
                                         onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
                                             vm.fleet.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
@@ -743,8 +742,7 @@ class MainActivity : ComponentActivity() {
                                 loadLauncherDraft = { vm.fleet.launcherDraft.first() },
                                 onLauncherDraftChange = { vm.fleet.saveLauncherDraft(it) },
                                 onSubmit = { wd, ag, md, rl, msg, wt, base, staged, replaceDraftId ->
-                                            vm.fleet.createSessionWithFirstMessage(wd, ag, md, rl, msg, staged, worktree = wt, baseBranch = base, replaceDraftId = replaceDraftId)
-                                                ?: error("Couldn't create the session")
+                                            vm.fleet.createSessionWithFirstMessageOrThrow(wd, ag, md, rl, msg, staged, worktree = wt, baseBranch = base, replaceDraftId = replaceDraftId)
                                         },
                                 onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
                                             vm.fleet.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
