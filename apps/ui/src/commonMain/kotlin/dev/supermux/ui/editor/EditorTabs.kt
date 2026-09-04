@@ -72,6 +72,7 @@ fun EditorTabs(
         tabs.forEach { tab ->
             TabChip(
                 path = tab.path,
+                tag = editorTabTag(tab.path),
                 label = tab.path.substringAfterLast('/'),
                 active = tab.path == activeTabPath,
                 dirty = isDirty(tab.path),
@@ -84,6 +85,7 @@ fun EditorTabs(
         if (loadingPath != null) {
             TabChip(
                 path = loadingPath,
+                tag = editorTabLoadingTag(loadingPath),
                 label = loadingPath.substringAfterLast('/'),
                 active = false,
                 dirty = false,
@@ -102,9 +104,16 @@ fun editorTabTag(path: String): String = "editor_tab_$path"
 /** Test tag on a tab chip's close glyph for [path]. */
 fun editorTabCloseTag(path: String): String = "editor_tab_close_$path"
 
+/**
+ * Test tag on the PENDING chip for [path] — distinct from [editorTabTag] because a path can be an
+ * open tab and the `loadingPath` at the same time, which would otherwise put one tag on two nodes.
+ */
+fun editorTabLoadingTag(path: String): String = "editor_tab_loading_$path"
+
 @Composable
 private fun TabChip(
     path: String,
+    tag: String,
     label: String,
     active: Boolean,
     dirty: Boolean,
@@ -127,7 +136,7 @@ private fun TabChip(
             // The loading chip stays non-interactive (default arrow).
             .pointerHoverIcon(if (loading) PointerIcon.Default else PointerIcon.Hand)
             .padding(horizontal = 10.dp)
-            .testTag(editorTabTag(path)),
+            .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {

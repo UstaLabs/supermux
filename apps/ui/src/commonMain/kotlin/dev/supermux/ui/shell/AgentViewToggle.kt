@@ -1,7 +1,7 @@
 // Shared Chat ⇄ Native main-view switch (UI cluster B, task B3): one implementation for both apps.
 // The signature was already identical on both sides; only the geometry differed, so it branches on
-// [LocalInputMode] — Touch keeps Android's filled 28dp pill, Pointer keeps desktop's bordered 24dp
-// one. Icons are Material (`Outlined.AutoAwesome` / `Outlined.Terminal`, replacing Android's
+// [LocalPointerAvailable] — no mouse/touchpad keeps Android's filled 28dp thumb pill, a real
+// pointer keeps desktop's bordered 24dp one. Icons are Material (`Outlined.AutoAwesome` / `Outlined.Terminal`, replacing Android's
 // bundled `ic_sparkle` / `ic_terminal`); the `pointerHoverIcon(Hand)` is harmless on touch.
 package dev.supermux.ui.shell
 
@@ -32,8 +32,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.ui.adaptive.InputMode
-import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 
 /**
  * The shell header's Chat ⇄ Native main-view switch — a two-segment rounded pill (native match for
@@ -45,12 +44,17 @@ import dev.supermux.ui.adaptive.LocalInputMode
  * sitting next to the terminal *pane* toggle — that adjacency was the "duplicate / ugly icons" the
  * tablet header showed before.
  *
- * Touch: Android's filled track (`surfaceContainerHighest`), 9dp pill, 28dp segments with 10dp
+ * No pointer device: Android's filled track (`surfaceContainerHighest`), 9dp pill, 28dp segments with 10dp
  * horizontal padding, the selected one an accent `primary`/`onPrimary` chip, labels always SemiBold
- * (thumb-scale legibility). Pointer: desktop's quieter hairline chip — a 1dp `outlineVariant`
+ * (thumb-scale legibility). With a mouse or touchpad: desktop's quieter hairline chip — a 1dp `outlineVariant`
  * border and no track fill, 8dp pill, 24dp segments with 9dp padding, and the macOS/M3
  * segmented-control convention that the SELECTED segment is a raised `surfaceContainerHigh` chip in
  * the plain `onSurface` label colour, so the header keeps one accent (the live status dot).
+ *
+ * The branch asks [LocalPointerAvailable], NOT [dev.supermux.ui.adaptive.LocalInputMode]: the latter
+ * folds a hardware keyboard in, and a touch tablet with a Bluetooth keyboard attached must still get
+ * thumb-sized segments (the repo contract in `ui/adaptive/InputMode.kt` — anything sizing a hit
+ * target asks this one).
  */
 @Composable
 fun AgentViewToggle(
@@ -59,7 +63,7 @@ fun AgentViewToggle(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    val touch = LocalInputMode.current == InputMode.Touch
+    val touch = !LocalPointerAvailable.current
     val trackShape = RoundedCornerShape(if (touch) 9.dp else 8.dp)
     Row(
         modifier

@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.AppearanceMode
@@ -22,17 +23,25 @@ import kotlin.test.assertTrue
 
 /**
  * The toggle's geometry is the one thing that differs between the two apps, so both branches are
- * pinned: Touch keeps Android's thumb-sized 28dp segments, Pointer keeps desktop's tighter 24dp
- * ones. The `agent_view_*` tags are load-bearing for the phone UI tests and desktop's
- * `ChatHeaderTest`, so they are asserted in both modes.
+ * pinned: no pointer device keeps Android's thumb-sized 28dp segments, a mouse/touchpad keeps
+ * desktop's tighter 24dp ones. The branch reads [LocalPointerAvailable], not [LocalInputMode] — a
+ * touch tablet with a Bluetooth keyboard reports `InputMode.Pointer` but must still get thumb-sized
+ * targets, which the keyboard-only case below pins. The `agent_view_*` tags are load-bearing for the
+ * phone UI tests and desktop's `ChatHeaderTest`, so they are asserted in both modes.
  */
 @OptIn(ExperimentalTestApi::class)
 class AgentViewToggleTest {
 
     @Composable
-    private fun host(mode: InputMode, nativeView: Boolean, onSetNative: (Boolean) -> Unit) {
+    private fun host(
+        mode: InputMode,
+        nativeView: Boolean,
+        pointer: Boolean = mode == InputMode.Pointer,
+        onSetNative: (Boolean) -> Unit,
+    ) {
         CompositionLocalProvider(
             LocalInputMode provides mode,
+            LocalPointerAvailable provides pointer,
             LocalWindowWidthClass provides
                 if (mode == InputMode.Touch) WindowWidthClass.Compact else WindowWidthClass.Expanded,
         ) {
@@ -78,5 +87,27 @@ class AgentViewToggleTest {
 
         onNodeWithTag("agent_view_chat", useUnmergedTree = true).performClick()
         assertEquals(listOf(false), seen)
+    }
+
+    // A touch tablet with a Bluetooth keyboard attached: InputMode is Pointer (shortcut hints are
+    // worth showing) but there is no mouse, so the segments must stay thumb-sized.
+    @Test fun a_keyboard_without_a_mouse_still_gets_the_thumb_sized_segments() = runComposeUiTest {
+        setContent { host(InputMode.Pointer, nativeView = false, pointer = false) {} }
+
+        assertEquals(
+            28.dp,
+            onNodeWithTag("agent_view_chat", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot().height,
+        )
+    }
+
+    @Test fun a_real_pointer_device_gets_the_tighter_segments() = runComposeUiTest {
+        setContent { host(InputMode.Pointer, nativeView = false, pointer = true) {} }
+
+        assertEquals(
+            24.dp,
+            onNodeWithTag("agent_view_chat", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot().height,
+        )
     }
 }

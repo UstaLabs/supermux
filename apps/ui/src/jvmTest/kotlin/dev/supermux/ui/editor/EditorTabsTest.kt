@@ -74,7 +74,7 @@ class EditorTabsTest {
         assertEquals(listOf("src/Main.kt"), closed)
     }
 
-    @Test fun the_pending_loading_chip_renders_without_a_close_glyph() = runComposeUiTest {
+    @Test fun the_pending_loading_chip_has_its_own_tag_and_no_close_glyph() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(
                 LocalInputMode provides InputMode.Touch,
@@ -92,7 +92,10 @@ class EditorTabsTest {
                 }
             }
         }
-        onNodeWithTag(editorTabTag("src/Slow.kt"), useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag(editorTabLoadingTag("src/Slow.kt"), useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag(editorTabCloseTag("src/Slow.kt"), useUnmergedTree = true).assertDoesNotExist()
+        // Distinct from the open-tab tag, so a path that is BOTH open and loading does not put one
+        // tag on two nodes (which would make every onNodeWithTag on it ambiguous).
+        onNodeWithTag(editorTabTag("src/Slow.kt"), useUnmergedTree = true).assertDoesNotExist()
     }
 }
