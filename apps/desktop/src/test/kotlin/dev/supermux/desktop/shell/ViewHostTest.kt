@@ -20,7 +20,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.desktop.DesktopWalkthroughSeam
-import dev.supermux.desktop.editor.JcefState
+import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.state.HostStore
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.LogEntry
@@ -62,7 +62,7 @@ private fun view(kind: String, state: Map<String, String>) = ViewDto(
  * Workspace terminals inject a pure-Compose stand-in: SwingPanel/JediTerm cannot
  * be hosted under runComposeUiTest (same pattern as SessionDetailTest's nativePanelContent).
  *
- * The `file` pane injects a JCEF state instead: an Error state makes [EditorSurface] draw its
+ * The `file` pane injects an engine factory instead: an unavailable one makes [EditorSurface] draw its
  * native BasicTextField fallback, which is pure Compose AND shows the document's text — so a
  * test can read the buffer a pane is displaying without booting Chromium.
  */
@@ -89,7 +89,7 @@ class ViewHostTest {
     }
 
     /** JCEF is never Ready in a test, so no engine is ever built. Error picks the visible fallback. */
-    private val noJcef = MutableStateFlow<JcefState>(JcefState.Error("no chromium under test"))
+    private val noJcef = UnavailableEditorEngineFactory("no chromium under test")
 
     /**
      * Unconfined so a non-suspending fsRead resolves inside [DocumentStore.open] itself — the
@@ -161,8 +161,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("editor-/some/dir").assertIsDisplayed()
@@ -181,8 +180,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
@@ -198,8 +196,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
@@ -216,8 +213,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
                 documents = store("fun main() {}"),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("editor_file_pane").assertIsDisplayed()
@@ -237,8 +233,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
                 documents = store(),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("view-unknown").assertIsDisplayed()
@@ -254,8 +249,7 @@ class ViewHostTest {
                 workdir = "/some/dir",
                 app = app,
                 drafts = mutableStateMapOf(),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("editor_diff_pane").assertIsDisplayed()
@@ -274,8 +268,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
                 documents = store(),
-                editorJcefState = noJcef,
-                editorEnsureInit = {},
+                editorEngineFactory = noJcef,
             )
         } }
         onNodeWithTag("editor-no-lsp").assertIsDisplayed()
@@ -296,8 +289,7 @@ class ViewHostTest {
                     app = app,
                     drafts = mutableStateMapOf(),
                     documents = documents,
-                    editorJcefState = noJcef,
-                    editorEnsureInit = {},
+                    editorEngineFactory = noJcef,
                     modifier = Modifier.testTag("left"),
                 )
                 ViewHost(
@@ -310,8 +302,7 @@ class ViewHostTest {
                     app = app,
                     drafts = mutableStateMapOf(),
                     documents = documents,
-                    editorJcefState = noJcef,
-                    editorEnsureInit = {},
+                    editorEngineFactory = noJcef,
                     modifier = Modifier.testTag("right"),
                 )
             }

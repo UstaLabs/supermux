@@ -26,6 +26,7 @@ import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -38,6 +39,7 @@ import kotlin.test.assertTrue
 class SettingsSharedTest {
 
     private class RecordingPlatform : Platform {
+        override val editorEngine = UnavailableEditorEngineFactory("no engine under test")
         override val caps = Caps(false, false, false, false, false, false, false, false)
         override val haptics: Haptics = NoHaptics
         val copied = mutableListOf<String>()

@@ -66,6 +66,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.editor.DiffState
+import dev.supermux.ui.editor.EditorLspHandle
+import dev.supermux.ui.editor.EditorSurface
+import dev.supermux.ui.editor.engine.EditorEngineFactory
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.theme.Space
@@ -209,8 +213,9 @@ fun FilePane(
     lineWrap: Boolean = EDITOR_LINE_WRAP_DEFAULT,
     fontSize: Int = EDITOR_FONT_DEFAULT,
     onFontSize: (Int) -> Unit = {},
-    jcefStateFlow: StateFlow<JcefState> = JcefRuntime.state,
-    onEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
+    /** The engine seam. Null → this platform's (`LocalPlatform.current.editorEngine`); tests inject
+     *  a factory that never boots a browser. */
+    engineFactory: EditorEngineFactory? = null,
     /**
      * Markdown preview, hoisted. It used to be local state driven by a button in this pane's action
      * row; that row is gone (the tab carries the per-file controls now), so the caller holds it.
@@ -220,7 +225,7 @@ fun FilePane(
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
-    val jcefState by jcefStateFlow.collectAsState()
+    val engines = engineFactory ?: LocalPlatform.current.editorEngine
 
     // Ask the store for the document. Already open (another pane, an earlier visit) → an immediate
     // hit and no read; otherwise the store's in-flight guard means two panes racing on one cold
@@ -327,7 +332,7 @@ fun FilePane(
                 }
             } else {
                 EditorSurface(
-                    jcefState = jcefState,
+                    factory = engines,
                     // An empty filename means "no document" to the surface, which lays the browser
                     // out at 0×0. Hold it back until the read lands so the engine is born full-size.
                     content = doc?.content ?: "",
@@ -340,7 +345,6 @@ fun FilePane(
                     onSave = { doc?.let { d -> documents.save(d) } },
                     onRevealConsumed = { doc?.revealLine = null },
                     onFontSize = onFontSize,
-                    onEnsureInit = onEnsureInit,
                     scrollReader = reader,
                     onLspOut = { serverId, message -> bridge?.rpcOut(serverId, message) },
                     onEngineReadyChange = { engineReady = it },

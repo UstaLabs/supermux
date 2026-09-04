@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import dev.supermux.desktop.platform.DesktopPlatform
+import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.ModalPresenceHost
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.platform.LocalPlatform
@@ -13,6 +14,7 @@ import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.editor.LocalHeavyweightShield
 import dev.supermux.ui.widgets.LocalModalHost
 
 /**
@@ -26,6 +28,10 @@ import dev.supermux.ui.widgets.LocalModalHost
  * `LocalModalHost`, and desktop's host is the AWT interop shield — `ModalOpen()` counts the surface
  * on `LocalModalPresence` so the heavyweight children (JediTerm, JCEF) lay themselves out at 0×0
  * and the modal is actually visible. See `ui/ModalPresence.kt`.
+ *
+ * The shared editor surface's JCEF host asks `LocalHeavyweightShield` to make the browser step
+ * aside while a modal is open — the same reason, for the one heavyweight child that lives inside
+ * shared code.
  *
  * The third: the persisted UI preferences (`ui/prefs/UiPrefs.kt`) are installed on `LocalUiPrefs`
  * here, so every window root gets them from one place. `Main.kt` passes the real store
@@ -52,6 +58,7 @@ fun DesktopTheme(
         LocalContextMenuRepresentation provides contextMenu,
         LocalPlatform provides platform,
         LocalModalHost provides ModalPresenceHost,
+        LocalHeavyweightShield provides HeavyweightShieldHost,
         LocalUiPrefs provides prefs,
     ) {
         SupermuxTheme(
@@ -60,4 +67,11 @@ fun DesktopTheme(
             content = content,
         )
     }
+}
+
+/** Desktop's `LocalHeavyweightShield`: hide the AWT child by layout while any modal is open. A
+ *  top-level val for the same reason as [ModalPresenceHost] — the local is static, so a fresh
+ *  lambda per recomposition would invalidate the whole app subtree. */
+private val HeavyweightShieldHost: @Composable (@Composable () -> Unit) -> Unit = { content ->
+    HeavyweightModalShield { content() }
 }

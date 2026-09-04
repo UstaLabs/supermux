@@ -24,6 +24,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.supermux.android.chat.ContentResolverChunkSource
+import dev.supermux.android.editor.AndroidEditorEngineFactory
+import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.PickKind
@@ -57,6 +59,10 @@ class AndroidPlatform(
 ) : Platform {
 
     override val caps: Caps get() = ANDROID_CAPS
+
+    /** The WebView that hosts CodeMirror. Built from the ACTIVITY context so the editor's CSS px
+     *  match the display the window is actually on (DeX / external displays differ in density). */
+    override val editorEngine: EditorEngineFactory = AndroidEditorEngineFactory(context)
 
     /** ACTION_VIEW into whatever the user set as their browser. Swallows the "no activity" case. */
     override fun openUrl(url: String) {

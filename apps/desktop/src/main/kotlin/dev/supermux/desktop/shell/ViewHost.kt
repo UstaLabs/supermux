@@ -33,8 +33,7 @@ import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.desktop.editor.DiffPane
 import dev.supermux.desktop.editor.ExplorerPane
 import dev.supermux.desktop.editor.FilePane
-import dev.supermux.desktop.editor.JcefRuntime
-import dev.supermux.desktop.editor.JcefState
+import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState
@@ -152,12 +151,10 @@ fun ViewHost(
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
     /**
-     * Test seams for the `file` pane's code surface, same shape [EditorSurface] uses: JCEF cannot
-     * boot under runComposeUiTest, so tests inject a state the engine is never built from (and an
-     * init that does nothing). Production uses the live runtime.
+     * Test seam for the `file` pane's code surface: JCEF cannot boot under runComposeUiTest, so
+     * tests inject a factory that never builds an engine. Null → this platform's own.
      */
-    editorJcefState: StateFlow<JcefState> = JcefRuntime.state,
-    editorEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
+    editorEngineFactory: EditorEngineFactory? = null,
 ) {
     when (view.kind) {
         "chat" -> {
@@ -220,8 +217,7 @@ fun ViewHost(
                         // LSP is still keyed by session (see the plan header). A workspace with
                         // no chat view gets no code intelligence — say so rather than looking broken.
                         lspSessionId = primarySessionId,
-                        jcefStateFlow = editorJcefState,
-                        onEnsureInit = editorEnsureInit,
+                        engineFactory = editorEngineFactory,
                         modifier = modifier.testTag("editor-$workdir"),
                     )
                 "diff" -> DiffPaneForWorkspace(
@@ -439,8 +435,7 @@ private fun FilePaneForWorkspace(
     path: String,
     documents: DocumentStore,
     lspSessionId: String?,
-    jcefStateFlow: StateFlow<JcefState>,
-    onEnsureInit: (CoroutineScope) -> Unit,
+    engineFactory: EditorEngineFactory?,
     modifier: Modifier,
 ) {
     val sessions by app.sessions.collectAsState()
@@ -467,8 +462,7 @@ private fun FilePaneForWorkspace(
         lineWrap = lineWrap,
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-        jcefStateFlow = jcefStateFlow,
-        onEnsureInit = onEnsureInit,
+        engineFactory = engineFactory,
         modifier = modifier.fillMaxSize(),
     )
 }

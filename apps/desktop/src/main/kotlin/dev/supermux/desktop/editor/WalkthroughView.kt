@@ -68,6 +68,9 @@ import dev.supermux.ui.editor.engine.DiffRegionComposer
 import dev.supermux.ui.editor.engine.DiffRegionRange
 import dev.supermux.ui.editor.engine.DiffRegionThread
 import dev.supermux.ui.editor.CommentAnchor
+import dev.supermux.ui.editor.DiffRegionSurface
+import dev.supermux.ui.editor.engine.EditorEngineFactory
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.editor.commentAnchor
 
@@ -87,7 +90,7 @@ fun WalkthroughView(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    val jcefState by JcefRuntime.state.collectAsState()
+    val engines = LocalPlatform.current.editorEngine
     val focusRequester = remember { FocusRequester() }
     var drawerOpen by remember { mutableStateOf(false) }
     var dragTotal by remember { mutableFloatStateOf(0f) }
@@ -138,7 +141,7 @@ fun WalkthroughView(
                 StepSlide(
                     state = state,
                     step = step,
-                    jcefState = jcefState,
+                    engines = engines,
                     repos = repos,
                     readFile = readFile,
                     onAddComment = onAddComment,
@@ -221,7 +224,7 @@ private fun StepDrawer(state: WalkthroughState, onSelect: (Int) -> Unit, modifie
 private fun StepSlide(
     state: WalkthroughState,
     step: WalkthroughStep,
-    jcefState: JcefState,
+    engines: EditorEngineFactory,
     repos: List<RepoDiff>,
     readFile: suspend (String, String) -> Result<String>,
     onAddComment: suspend (AddCommentBody) -> ReviewComment?,
@@ -306,7 +309,7 @@ private fun StepSlide(
                 val composer = selectedAnchor?.let { DiffRegionComposer(it.line, state.draft(it)) }
                 Box(Modifier.fillMaxWidth().weight(1f).heightIn(min = 240.dp)) {
                     DiffRegionSurface(
-                        jcefState = jcefState,
+                        factory = engines,
                         path = path,
                         content = text,
                         ranges = ranges,

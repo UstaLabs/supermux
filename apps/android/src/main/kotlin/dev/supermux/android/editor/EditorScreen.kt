@@ -48,6 +48,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.android.R
 import dev.supermux.android.chat.MarkdownBody
+import dev.supermux.ui.editor.EditorLspHandle
+import dev.supermux.ui.editor.EditorSurface
+import dev.supermux.ui.editor.engine.EditorScrollReader
+import dev.supermux.ui.editor.engine.captureOutgoingScroll
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.HapticKind
@@ -181,20 +185,11 @@ fun EditorPanel(
         )
     }
 
-    val engine = rememberEditorEngine(
-        lineWrap = lineWrap,
-        fontSize = fontSize,
-        onChange = { content -> editor.activeTab?.path?.let { editor.updateContent(it, content) } },
-        onSave = { editor.saveActive() },
-        // cm6 posts `{serverId,message}` JSON; forward it verbatim to the broker.
-        onLspOut = { payload ->
-            val (sid, msg) = parseLspOut(payload) ?: return@rememberEditorEngine
-            bridge.rpcOut(sid, msg)
-        },
-        // A pinch / keyboard zoom in the WebView persists here so it survives reopen.
-        // The engine already applied it live, so this only writes the pref (no rebuild).
-        onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
-    )
+    // The engine itself is owned by the shared [EditorSurface]; the panel reaches the live one
+    // through these seams (scroll reads for a tab switch, the LSP push channel, its ready gate).
+    val reader = remember { EditorScrollReader() }
+    val lspHandle = remember(sessionId) { EditorLspHandle() }
+    var engineReady by remember(sessionId) { mutableStateOf(false) }
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true
     val showPreviewToggle = activeIsMarkdown && !editor.showDiff
@@ -213,30 +208,30 @@ fun EditorPanel(
     }
 
     // (Re)wire code intelligence whenever the active file (or diff/preview mode) changes.
-    // LaunchedEffect cancellation tears down the prior client on a fast tab switch, and
-    // re-keying on engine.failed re-runs after a renderer crash recovers (parity §7.3).
-    LaunchedEffect(editor.activeTabPath, editor.showDiff, showPreview, engine.failed) {
-        engine.lspDisconnect()
+    // LaunchedEffect cancellation tears down the prior client on a fast tab switch, and the
+    // engine's OWN ready gate is a key — desktop's rule, replacing a fixed 1.2s "the WebView is
+    // probably up by now" sleep, so a slow first paint no longer loses code intelligence.
+    LaunchedEffect(editor.activeTabPath, editor.showDiff, showPreview, engineReady) {
+        lspHandle.disconnect()
         val tab = editor.activeTab
-        if (editor.showDiff || showPreview || tab == null || workdir.isEmpty() || engine.failed) {
+        if (editor.showDiff || showPreview || tab == null || workdir.isEmpty() || !engineReady) {
             return@LaunchedEffect
         }
-        delay(1_200) // let the WebView reach `ready` (parity EditorPane.swift:102)
         val status = bridge.queryStatus(tab.path)
         val serverId = status.serverId
         // Status.isReady: supported && serverId != null && state == "ready" (LspBridge.swift:18).
         if (!status.supported || serverId == null || status.state != "ready") return@LaunchedEffect
         // Pump inbound RPC for this server in a child coroutine (cancelled with this effect).
-        launch { bridge.pumpRpcIn(serverId) { sid, msg -> engine.lspMessage(sid, msg) } }
+        launch { bridge.pumpRpcIn(serverId) { sid, msg -> lspHandle.message(sid, msg) } }
         if (!bridge.open(serverId)) return@LaunchedEffect
         val rootUri = dirUri(workdir)
         val fileUri = pathToUri(joinPath(workdir, tab.path))
-        engine.lspConnect(serverId, rootUri, fileUri, status.languageId ?: "")
+        lspHandle.connect(serverId, rootUri, fileUri, status.languageId ?: "")
     }
 
     fun revealFile(path: String, line: Int? = null, endLine: Int? = null) {
         focusManager.clearFocus()
-        engine.readScrollTop { scroll -> editor.captureActiveScroll(scroll) }
+        captureOutgoingScroll(editor, reader)
         editor.openFileAtLine(path, line, endLine)
         editor.searchQuery = ""
         searchResults.clear()
@@ -430,7 +425,7 @@ fun EditorPanel(
                             loadingPath = if (loadingNew) editor.loadingPath else null,
                             isDirty = editor::isDirty,
                             onSelect = { path ->
-                                engine.readScrollTop { scroll -> editor.captureActiveScroll(scroll) }
+                                captureOutgoingScroll(editor, reader)
                                 editor.selectTab(path)
                             },
                             onClose = editor::closeTab,
@@ -469,11 +464,10 @@ fun EditorPanel(
                         }
 
                         Box(Modifier.weight(1f).fillMaxWidth()) {
-                            // Pre-warm WebView as soon as the editor panel opens.
-                            WebCodeEditor(
-                                engine = engine,
+                            EditorSurface(
                                 content = activeTab?.content ?: "",
                                 filename = activeTab?.path ?: "",
+                                lineWrap = lineWrap,
                                 fontSize = fontSize,
                                 scrollTop = activeTab?.scrollTop ?: 0,
                                 revealLine = activeTab?.revealLine,
@@ -482,6 +476,13 @@ fun EditorPanel(
                                     activeTab?.path?.let { editor.updateContent(it, content) }
                                 },
                                 onSave = { editor.saveActive() },
+                                // A pinch / keyboard zoom already applied itself in-page; this only
+                                // persists it so it survives reopen (no rebuild).
+                                onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
+                                scrollReader = reader,
+                                onLspOut = { sid, msg -> bridge.rpcOut(sid, msg) },
+                                onEngineReadyChange = { engineReady = it },
+                                lspHandle = lspHandle,
                                 modifier = Modifier.fillMaxSize(),
                             )
 
@@ -602,12 +603,7 @@ fun EditorPanel(
     }
 }
 
-// ─── Editor helpers (markdown detection, LSP-out parsing, file URIs) ───────────
-
-/** Parse cm6's outbound `{serverId,message}` JSON payload → (serverId, message). */
-private fun parseLspOut(payload: String): Pair<String, String>? = runCatching {
-    val o = org.json.JSONObject(payload)
-    val serverId = o.optString("serverId")
-    val message = o.optString("message")
-    if (serverId.isEmpty()) null else serverId to message
-}.getOrNull()
+// ─── Editor helpers (markdown detection, file URIs) ───────────────────────────
+//
+// cm6's outbound `{serverId,message}` payload is parsed by the engine now (the shared
+// `parseLspOut`, kotlinx.serialization) — this file no longer sees raw JSON.

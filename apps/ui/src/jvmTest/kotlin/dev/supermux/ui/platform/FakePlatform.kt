@@ -1,6 +1,8 @@
 package dev.supermux.ui.platform
 
 import dev.supermux.net.ByteArrayChunkSource
+import dev.supermux.ui.editor.engine.EditorEngineFactory
+import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 
@@ -16,6 +18,9 @@ internal class FakePlatform(
     override val haptics: Haptics = NoHaptics,
     /** What [scanQr] hands back; null = the user cancelled (or there is no camera). */
     var qrResult: String? = null,
+    /** The editor seam. Defaults to "this machine has no browser", which is what every screen test
+     *  that never opens an editor wants; an editor test passes its own recording factory. */
+    override val editorEngine: EditorEngineFactory = UnavailableEditorEngineFactory("no engine under test"),
 ) : Platform {
     val openedUrls = mutableListOf<String>()
     val copied = mutableListOf<String>()

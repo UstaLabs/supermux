@@ -1,6 +1,8 @@
 package dev.supermux.desktop.platform
 
+import dev.supermux.desktop.editor.DesktopEditorEngineFactory
 import dev.supermux.desktop.upload.FileChunkSource
+import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
@@ -36,6 +38,10 @@ class DesktopPlatform : Platform {
         multiWindow = true,
         fileSystem = true,
     )
+
+    /** The direct-JCEF browser that hosts CodeMirror; one per app, wrapping the process-global
+     *  [dev.supermux.desktop.editor.JcefRuntime]. */
+    override val editorEngine: EditorEngineFactory = DesktopEditorEngineFactory()
 
     /** Delegates to [openInBrowser], which keeps the daemon-thread hand-off and the
      *  `openInBrowserOverride` / `supermux.tests` guards every desktop test relies on. */

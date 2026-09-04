@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
  * Compose cannot paint over a heavyweight AWT child. The two in this app are
- * JediTerm (DesktopTerminalPanel) and JCEF (WebCodeEditor), and everything
+ * JediTerm (DesktopTerminalPanel) and JCEF (the shared EditorSurface), and everything
  * Compose draws in its own layer — all 22 AlertDialogs, both raw Dialogs, all 24
  * DropdownMenus — is simply invisible while one of them is on screen.
  *

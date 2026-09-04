@@ -1,4 +1,6 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
+
+import dev.supermux.ui.editor.engine.EngineState
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -31,7 +33,7 @@ class NativeFallbackLayoutTest {
         setContent {
             Box(Modifier.size(600.dp, 400.dp)) {
                 EditorSurface(
-                    jcefState = JcefState.Error("no browser here"),
+                    factory = FakeEditorEngineFactory(EngineState.Failed("no browser here")),
                     content = "line one\nline two\nline three",
                     filename = "a.kt",
                     lineWrap = false,
@@ -42,7 +44,6 @@ class NativeFallbackLayoutTest {
                     onSave = {},
                     onRevealConsumed = {},
                     onFontSize = {},
-                    onEnsureInit = {},
                 )
             }
         }
@@ -63,7 +64,7 @@ class NativeFallbackLayoutTest {
         setContent {
             Box(Modifier.size(600.dp, 400.dp)) {
                 EditorSurface(
-                    jcefState = JcefState.Error("no browser here"),
+                    factory = FakeEditorEngineFactory(EngineState.Failed("no browser here")),
                     content = "x",
                     filename = "a.kt",
                     lineWrap = false,
@@ -74,7 +75,6 @@ class NativeFallbackLayoutTest {
                     onSave = {},
                     onRevealConsumed = {},
                     onFontSize = {},
-                    onEnsureInit = {},
                 )
             }
         }

@@ -29,8 +29,7 @@ import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.android.editor.DiffView
 import dev.supermux.ui.editor.FileTree
-import dev.supermux.android.editor.WebCodeEditor
-import dev.supermux.android.editor.rememberEditorEngine
+import dev.supermux.ui.editor.EditorSurface
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.ui.theme.Space
@@ -286,36 +285,30 @@ private fun FileViewPane(
     val documents = session.documents
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
-    // `rememberEditorEngine` keys on `lineWrap`, so the pane waits for the persisted value rather
-    // than mounting on the default and rebuilding the WebView a frame later (see EditorScreen).
     val editorPrefs = LocalUiPrefs.current
     val loadedPrefs by produceState<Pair<Boolean, Int>?>(null, editorPrefs) {
         value = editorPrefs.editorLineWrap.first() to editorPrefs.editorFontSize.first()
     }
     val (lineWrap, initialFontSize) = loadedPrefs ?: return
     val fontSize by editorPrefs.editorFontSize.collectAsState(initialFontSize)
-    val engine = rememberEditorEngine(
-        lineWrap = lineWrap,
-        fontSize = fontSize,
-        onChange = { content -> documents.update(path, content) },
-        onSave = { documents.get(path)?.let { documents.save(it) } },
-    )
+    val scope = rememberCoroutineScope()
     if (doc == null) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Opening…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
         return
     }
-    WebCodeEditor(
-        engine = engine,
+    EditorSurface(
         content = doc.content,
         filename = path.substringAfterLast('/'),
+        lineWrap = lineWrap,
         fontSize = fontSize,
         scrollTop = doc.scrollTop,
         revealLine = doc.revealLine,
         onChange = { documents.update(path, it) },
         onSave = { documents.save(doc) },
         onRevealConsumed = { doc.revealLine = null },
+        onFontSize = { px -> scope.launch { editorPrefs.putEditorFontSize(px) } },
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )
 }

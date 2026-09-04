@@ -2,6 +2,7 @@ package dev.supermux.ui.platform
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.net.ChunkSource
+import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.theme.Haptics
 
 /**
@@ -20,7 +21,6 @@ import dev.supermux.ui.theme.Haptics
  *  - `val tts: TtsEngine` — `android.speech.tts` / desktop broker-stream player (cluster D, voice).
  *  - `val mic: MicCapture` — `AudioRecord` / `javax.sound` (cluster D, dictation).
  *  - `fun terminalView(): TerminalViewFactory` — termlib / jediterm (cluster C).
- *  - `fun editorEngine(): EditorEngineFactory` — WebView / JCEF (cluster C).
  *  - `fun videoDecoder(): VideoSurfaceFactory?` — MediaCodec / null (cluster D, displays).
  *  - `val updates: AppUpdater` — APK install / DMG-MSI download (cluster G).
  */
@@ -65,6 +65,14 @@ interface Platform {
 
     /** Platform haptics (Android's `View.performHapticFeedback`; a no-op where there is no actuator). */
     val haptics: Haptics
+
+    /**
+     * Builds the browser that hosts CodeMirror — a `WebView` on Android, a direct-JCEF browser on
+     * desktop. The shared editor surface reads this and never names either. A machine with no
+     * browser at all installs `UnavailableEditorEngineFactory`, and every editor pane degrades to
+     * its native fallback.
+     */
+    val editorEngine: EditorEngineFactory
 }
 
 /** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */
