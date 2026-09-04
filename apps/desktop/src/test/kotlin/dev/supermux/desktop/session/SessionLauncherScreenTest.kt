@@ -54,7 +54,7 @@ import kotlin.test.assertTrue
  * SessionLauncherScreen (M4a Task 4) — two layers:
  *
  *  1. The PURE settle-vs-change helpers ([shouldResetModelOnAgentChange] /
- *     [shouldResetBaseBranchOnWorkdirChange]) + [filterBranches] + [stagedUploadFor] are unit-tested
+ *     [shouldResetBaseBranchOnWorkdirChange]) + [filterBranches] are unit-tested
  *     directly (no Compose). These encode the subtle draft-restore-vs-genuine-change logic that
  *     caused a real device bug on iOS/Android — a restore-settle must NEVER reset the model or the
  *     base branch, a genuine later change MUST.
@@ -136,21 +136,6 @@ class SessionLauncherScreenTest {
         // against the displayed label, not just the raw path, so typing "~" still narrows the list.
         val all = listOf("/home/u/alpha", "/home/u/beta")
         assertEquals(all, filterProjects(all, home = "/home/u", query = "~"))
-    }
-
-    // ── stagedUploadFor (temp file) ─────────────────────────────────────────────────────────────
-
-    @Test fun staged_upload_streams_the_file_and_guesses_mime() {
-        val f = File.createTempFile("launcher", ".txt").apply { writeBytes(ByteArray(11) { 7 }) }
-        try {
-            val up = stagedUploadFor(f)
-            assertEquals(f.name, up.name)
-            assertEquals(11L, up.source.size) // streams from the file, not buffered
-            assertNull(up.kind) // non-audio leaves kind null (broker infers from MIME)
-            assertTrue(up.mime.isNotBlank())
-        } finally {
-            f.delete()
-        }
     }
 
     // ── (2) UI: fakes + harness ─────────────────────────────────────────────────────────────────

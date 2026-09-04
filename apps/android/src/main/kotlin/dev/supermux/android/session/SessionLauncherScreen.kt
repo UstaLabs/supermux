@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.android.platform.pickedFileFromUri
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
@@ -459,6 +460,10 @@ fun SessionLauncherScreen(
 
     // Files / Photos: the shared picker seam (registered once by AndroidTheme's PickerHost).
     val platform = LocalPlatform.current
+    // Claim a pick that completed while the activity was being re-created (see PickerHost rule 1).
+    LaunchedEffect(platform) {
+        (platform as? AndroidPlatform)?.claimPendingPick()?.let { stagePicked(it) }
+    }
 
     // Camera photo → our FileProvider URI, then staged back.
     var cameraUri by remember { mutableStateOf<Uri?>(null) }

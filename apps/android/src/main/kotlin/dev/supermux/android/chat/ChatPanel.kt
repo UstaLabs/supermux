@@ -100,6 +100,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
+import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.android.platform.pickedFileFromUri
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
@@ -274,6 +275,11 @@ fun ChatPanel(
     // Files / Photos: the shared picker seam (SAF GetContent + the visual-media picker live in
     // AndroidPlatform's PickerHost, registered once by AndroidTheme).
     val platform = LocalPlatform.current
+    // A pick the user started before an activity recreation (rotation) finishes with no coroutine
+    // left to await it; PickerHost stashes it and the re-created composer claims it here.
+    LaunchedEffect(platform) {
+        (platform as? AndroidPlatform)?.claimPendingPick()?.let { stagePicked(it) }
+    }
 
     // Camera: delegated capture to the system camera app, writing into our FileProvider URI.
     var cameraUri by remember { mutableStateOf<Uri?>(null) }

@@ -1,12 +1,17 @@
 package dev.supermux.desktop.platform
 
 import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.theme.NoHaptics
+import java.awt.FileDialog
 import java.awt.GraphicsEnvironment
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 import kotlin.test.Test
+import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -51,6 +56,44 @@ class DesktopPlatformTest {
         // A flaky X clipboard owner can hand back null; the contract under test is "no throw",
         // and when the read does work it must be exactly what we put there.
         if (read != null) assertEquals(text, read)
-        assertTrue(true)
+    }
+
+    /** The PickKind → dialog mapping, asserted on the configured-but-unshown dialog. */
+    @Test
+    fun `every pick kind opens a multi-select attach dialog in LOAD mode`() {
+        if (GraphicsEnvironment.isHeadless()) return
+        for (kind in PickKind.entries) {
+            val dialog = pickDialogFor(kind)
+            assertEquals("Attach files", dialog.title)
+            assertEquals(FileDialog.LOAD, dialog.mode)
+            assertTrue(dialog.isMultipleMode, "$kind must allow multi-select")
+        }
+    }
+
+    @Test
+    fun `Any installs no filter - Images and Media filter by extension`() {
+        if (GraphicsEnvironment.isHeadless()) return
+        val dir = File(".")
+        assertNull(pickDialogFor(PickKind.Any).filenameFilter)
+
+        val images = requireNotNull(pickDialogFor(PickKind.Images).filenameFilter)
+        assertTrue(images.accept(dir, "shot.PNG"))
+        assertFalse(images.accept(dir, "clip.mp4"))
+        assertFalse(images.accept(dir, "notes.txt"))
+
+        val media = requireNotNull(pickDialogFor(PickKind.Media).filenameFilter)
+        assertTrue(media.accept(dir, "shot.png"))
+        assertTrue(media.accept(dir, "clip.MOV"))
+        assertFalse(media.accept(dir, "notes.txt"))
+    }
+
+    @Test
+    fun `probeMime falls back to octet-stream for an unknown extension`() {
+        val f = File.createTempFile("probe", ".sm-unknown-ext")
+        try {
+            assertTrue(probeMime(f).isNotBlank())
+        } finally {
+            f.delete()
+        }
     }
 }

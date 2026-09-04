@@ -148,7 +148,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicLong
 
@@ -183,22 +182,6 @@ internal fun shouldResetBaseBranchOnWorkdirChange(
     restoring: Boolean,
 ): Boolean =
     !restoring && ((lastSeen != null && lastSeen != current) || baseBranch.isBlank())
-
-// ── Attachment staging (pure, unit-tested) ───────────────────────────────────────────────────────
-
-/** Best-effort MIME for a file (java.nio Files.probeContentType), octet-stream when unknown. */
-internal fun probeMime(file: File): String =
-    runCatching { Files.probeContentType(file.toPath()) }.getOrNull() ?: "application/octet-stream"
-
-/**
- * Stage one picked [file] as a [StagedUpload] over a streaming [FileChunkSource] (bounded RAM —
- * bytes are read on demand at upload time, never buffered). Audio → kind "voice"; everything else
- * leaves kind null so the broker infers it from the MIME (mirrors the Android launcher).
- */
-internal fun stagedUploadFor(file: File): StagedUpload {
-    val mime = probeMime(file)
-    return StagedUpload(FileChunkSource(file), file.name, mime, if (mime.startsWith("audio")) "voice" else null)
-}
 
 /** Local + remote branches from [RepoInfo], filtered by a case-insensitive [query] substring. */
 internal fun filterBranches(repoInfo: RepoInfo?, query: String): List<String> {

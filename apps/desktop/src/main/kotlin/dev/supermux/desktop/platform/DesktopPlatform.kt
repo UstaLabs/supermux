@@ -7,6 +7,9 @@ import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.Toolkit
@@ -46,9 +49,16 @@ class DesktopPlatform : Platform {
         }
     }
 
-    /** The AWT dialog, mapped to streaming [FileChunkSource]s. Multi-select (unlike Android). */
-    override suspend fun pickFiles(kind: PickKind): List<PickedFile> =
-        awtPickFiles(kind).map { file -> PickedFile(file.name, probeMimeOf(file), FileChunkSource(file)) }
+    /**
+     * The AWT dialog, mapped to streaming [FileChunkSource]s. Multi-select (unlike Android).
+     *
+     * Hopped onto [Dispatchers.Swing] explicitly: AWT requires the EDT, and a caller may well be on
+     * a background dispatcher (Compose Desktop's Main happens to be the EDT, but nothing in this
+     * signature promises the caller is on it).
+     */
+    override suspend fun pickFiles(kind: PickKind): List<PickedFile> = withContext(Dispatchers.Swing) {
+        awtPickFiles(kind).map { file -> PickedFile(file.name, probeMime(file), FileChunkSource(file)) }
+    }
 
     override val haptics: Haptics = NoHaptics
 }
@@ -66,6 +76,14 @@ class DesktopPlatform : Platform {
  * best-effort hint, never a guarantee, the same as the platform pickers.
  */
 internal fun awtPickFiles(kind: PickKind): List<File> {
+    val dialog = pickDialogFor(kind)
+    dialog.isVisible = true
+    return dialog.files?.toList() ?: emptyList()
+}
+
+/** The configured-but-not-yet-shown dialog, so the [PickKind] → title/mode/filter mapping is
+ *  assertable without a modal window. */
+internal fun pickDialogFor(kind: PickKind): FileDialog {
     val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
     dialog.isMultipleMode = true
     when (kind) {
@@ -75,8 +93,7 @@ internal fun awtPickFiles(kind: PickKind): List<File> {
             name.hasExtensionIn(IMAGE_EXTENSIONS) || name.hasExtensionIn(VIDEO_EXTENSIONS)
         }
     }
-    dialog.isVisible = true
-    return dialog.files?.toList() ?: emptyList()
+    return dialog
 }
 
 /**
@@ -94,8 +111,9 @@ internal fun awtSaveFile(defaultName: String): File? {
     return File(dir, fileName)
 }
 
-/** Best-effort content type; `application/octet-stream` when the OS cannot tell. */
-internal fun probeMimeOf(file: File): String =
+/** Best-effort content type; `application/octet-stream` when the OS cannot tell. The ONE mime
+ *  guess on desktop — the launcher and the composer both route through it. */
+internal fun probeMime(file: File): String =
     runCatching { Files.probeContentType(file.toPath()) }.getOrNull() ?: "application/octet-stream"
 
 private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif")

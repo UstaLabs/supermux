@@ -8,11 +8,14 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.view.View
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import dev.supermux.android.chat.ContentResolverChunkSource
@@ -34,7 +37,7 @@ import kotlinx.coroutines.withContext
  */
 class AndroidPlatform(
     private val context: Context,
-    private val pickerHost: PickerHost,
+    private val pickerHost: PickerHost<Uri>,
     override val haptics: Haptics,
 ) : Platform {
 
@@ -43,9 +46,9 @@ class AndroidPlatform(
     /** ACTION_VIEW into whatever the user set as their browser. Swallows the "no activity" case. */
     override fun openUrl(url: String) {
         runCatching {
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
+            // No FLAG_ACTIVITY_NEW_TASK: the browser must sit on top of our task so Back returns
+            // to supermux (the behaviour of every call site this replaced).
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }
     }
 
@@ -65,6 +68,17 @@ class AndroidPlatform(
     override suspend fun pickFiles(kind: PickKind): List<PickedFile> {
         val uri = pickerHost.pick(kind) ?: return emptyList()
         return listOfNotNull(pickedFileFromUri(context, uri))
+    }
+
+    /**
+     * The result of a pick the user started BEFORE the activity was recreated (rotation, dark-mode
+     * flip, process death → restore). The coroutine that was awaiting it died with the old
+     * composition, so the re-created screen claims the stashed URI here — exactly what the old
+     * per-screen `rememberLauncherForActivityResult` callbacks did for free.
+     */
+    suspend fun claimPendingPick(): PickedFile? {
+        val uri = pickerHost.drainUnclaimed() ?: return null
+        return pickedFileFromUri(context, uri)
     }
 
     private companion object {
@@ -88,63 +102,124 @@ val ANDROID_CAPS = Caps(
 )
 
 /**
- * The activity-scoped half of [AndroidPlatform.pickFiles].
+ * The activity-scoped half of [AndroidPlatform.pickFiles], as a `suspend` bridge over the
+ * callback-shaped activity-result API.
  *
  * `rememberLauncherForActivityResult` can only be called from a composition inside a
- * `ComponentActivity`, so a plain class can never own a picker. The host holds the launchers
- * (registered by [rememberPickerHost]) plus the deferred that [AndroidPlatform] awaits, bridging
- * the callback-shaped result API to a `suspend fun`.
+ * `ComponentActivity`, so a plain class can never own a picker. The host holds the launch hook
+ * (installed by [rememberPickerHost]) plus the deferred that [AndroidPlatform] awaits.
  *
- * One pick at a time: starting a second pick cancels the first with `null` (the same thing the OS
- * does — a new picker activity replaces the old result destination).
+ * It is deliberately free of Android types (the result type [R] is `Uri` in production) so the
+ * three behaviours that actually bite — recreation, stale results, cancel — are unit-testable
+ * without an activity: drive it through [pick] / [deliver] / [drainUnclaimed].
+ *
+ * Three rules:
+ *  1. **Recreation.** The OS keeps working on a launched pick across an activity restart, but the
+ *     coroutine awaiting it does not survive. [inFlightId] is mirrored into `rememberSaveable`, so
+ *     a result arriving with nobody waiting is stashed and the re-created screen claims it through
+ *     [drainUnclaimed] (`AndroidPlatform.claimPendingPick`) instead of silently losing the file.
+ *  2. **Stale results.** Every launch takes a monotonic request id, queued in launch order (the
+ *     order the OS delivers them). A result whose id is not the current request — a superseded
+ *     pick answering late — is dropped rather than resuming the wrong caller.
+ *  3. **One at a time.** Starting a pick cancels any previous one with `null` (an empty list).
  */
-class PickerHost {
-    internal var anyFileLauncher: ActivityResultLauncher<String>? = null
-    internal var visualMediaLauncher: ActivityResultLauncher<PickVisualMediaRequest>? = null
+class PickerHost<R : Any> {
 
-    private var pending: CompletableDeferred<Uri?>? = null
+    /** Installed by [rememberPickerHost]; `null` in a composition that never registered launchers. */
+    internal var onLaunch: ((PickKind) -> Unit)? = null
 
-    internal suspend fun pick(kind: PickKind): Uri? {
+    /**
+     * The request the OS is currently working on, or null. Mirrored into `rememberSaveable` by
+     * [rememberPickerHost] so it survives activity recreation — that is the whole recreation fix.
+     */
+    var inFlightId: Long? = null
+        internal set
+
+    private var nextId = 1L
+    private val launched = ArrayDeque<Long>()
+    private var pending: CompletableDeferred<R?>? = null
+    private var pendingId: Long? = null
+    private var unclaimed: R? = null
+
+    /** Launches a pick and suspends until its result (or `null` for cancel / no launcher). */
+    suspend fun pick(kind: PickKind): R? {
+        // A pick that completed while this caller's composition was being re-created: hand it over
+        // instead of opening a second picker.
+        drainUnclaimed()?.let { return it }
         pending?.complete(null)
-        val deferred = CompletableDeferred<Uri?>()
-        pending = deferred
-        val launched = when (kind) {
-            PickKind.Any -> anyFileLauncher?.let { it.launch("*/*"); true }
-            PickKind.Images -> visualMediaLauncher?.let {
-                it.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                true
-            }
-            PickKind.Media -> visualMediaLauncher?.let {
-                it.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                true
-            }
-        }
-        if (launched != true) {
-            // No launcher registered (a composition without rememberPickerHost) — behave like cancel.
+        val launch = onLaunch
+        if (launch == null) {
             pending = null
+            pendingId = null
+            inFlightId = null
             return null
         }
+        val id = nextId++
+        val deferred = CompletableDeferred<R?>()
+        pending = deferred
+        pendingId = id
+        inFlightId = id
+        launched.addLast(id)
+        launch(kind)
         return deferred.await()
     }
 
-    internal fun deliver(uri: Uri?) {
-        pending?.complete(uri)
-        pending = null
+    /**
+     * Called from the launcher callback with the picked result (`null` = cancelled). Attributes it
+     * to the oldest outstanding launch; after recreation nothing is outstanding, so it falls back
+     * to the id restored from `rememberSaveable`.
+     */
+    internal fun deliver(result: R?) {
+        val id = launched.removeFirstOrNull() ?: inFlightId ?: return
+        if (id != inFlightId) return // a superseded pick answering late — never resume on it
+        val deferred = pending
+        if (deferred != null && pendingId == id) {
+            pending = null
+            pendingId = null
+            inFlightId = null
+            deferred.complete(result)
+            return
+        }
+        // Nobody is waiting: the activity was re-created mid-pick. Stash for the new screen.
+        inFlightId = null
+        unclaimed = result
+    }
+
+    /** Takes the result stashed by rule 1, if any. Idempotent: a second call returns null. */
+    fun drainUnclaimed(): R? {
+        val stashed = unclaimed ?: return null
+        unclaimed = null
+        return stashed
     }
 }
 
 /** Registers the two picker launchers for the current activity and returns the host to hand to
  *  [AndroidPlatform]. Called once per entry point, from `AndroidTheme`. */
 @Composable
-fun rememberPickerHost(): PickerHost {
-    val host = remember { PickerHost() }
-    host.anyFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+fun rememberPickerHost(): PickerHost<Uri> {
+    val host = remember { PickerHost<Uri>() }
+    // Survives activity recreation, so a result arriving for a pick started before the restart is
+    // recognised (and stashed) rather than dropped. See PickerHost rule 1.
+    var savedInFlight by rememberSaveable { mutableStateOf(0L) }
+    remember(host) { host.inFlightId = savedInFlight.takeIf { it != 0L }; Unit }
+    val anyFile = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         host.deliver(uri)
+        savedInFlight = host.inFlightId ?: 0L
     }
-    host.visualMediaLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            host.deliver(uri)
+    val visualMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        host.deliver(uri)
+        savedInFlight = host.inFlightId ?: 0L
+    }
+    host.onLaunch = { kind ->
+        when (kind) {
+            PickKind.Any -> anyFile.launch("*/*")
+            PickKind.Images ->
+                visualMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            PickKind.Media ->
+                visualMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
         }
+        savedInFlight = host.inFlightId ?: 0L
+    }
     return host
 }
 

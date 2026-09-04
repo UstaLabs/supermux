@@ -102,6 +102,7 @@ import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.Radii
 import dev.supermux.desktop.ui.Speedometer
 import dev.supermux.desktop.platform.awtPickFiles
+import dev.supermux.desktop.platform.probeMime
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
 import dev.supermux.ui.platform.PickKind
@@ -198,10 +199,9 @@ data class ComposerExternalAttach(val filePath: String, val text: String)
  *  Set by the off-by-default `SM_DICTATE` headless hook in Main.kt. */
 data class ComposerExternalDictate(val wavPath: String)
 
-/** Best-effort MIME for a path (java.nio Files.probeContentType), octet-stream when unknown. Pure —
- *  mirrors the launcher's `probeMime` so chat + launcher guess identically. */
-internal fun composerMime(path: java.nio.file.Path): String =
-    runCatching { Files.probeContentType(path) }.getOrNull() ?: "application/octet-stream"
+/** Best-effort MIME for a path — delegates to the platform's single `probeMime`, so the composer,
+ *  the launcher and `DesktopPlatform.pickFiles` all guess identically. */
+internal fun composerMime(path: java.nio.file.Path): String = probeMime(path.toFile())
 
 /** Kind guess from a MIME: audio → "voice", else null (broker infers). Mirrors the launcher. */
 internal fun composerKind(mime: String): String? =
