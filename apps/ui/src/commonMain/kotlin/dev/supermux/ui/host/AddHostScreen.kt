@@ -1,4 +1,4 @@
-package dev.supermux.android.host
+package dev.supermux.ui.host
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -41,28 +42,34 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import dev.supermux.state.AddHostResult
-import dev.supermux.android.R
-import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.host.PairingPayload
 import dev.supermux.net.PairUrl
+import dev.supermux.state.AddHostResult
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.coroutines.launch
 
 private enum class AddMode { Scan, Paste, Url }
 
 /**
- * Add-host flow (spec §3.4 / §5): three ways to add a broker to the fleet.
- *  - **Scan** a current claim QR or a legacy `/pair?t=…` QR (reuses onboarding's scanner).
+ * Add-host flow (spec §3.4 / §5): up to three ways to add a broker to the fleet.
+ *  - **Scan** a current claim QR or a legacy `/pair?t=…` QR, through `Platform.scanQr()`. Offered
+ *    ONLY where [dev.supermux.ui.platform.Caps.camera] is true, so desktop (no camera) shows the
+ *    two-mode row it always had rather than a button that returns null.
  *  - **Paste** either pairing format.
  *  - **URL** — a plain typed host URL for Tailscale/VPN/reverse-proxy users: GET /host to confirm
  *    it's a supermux broker, then trust-on-first-connect claim (or "mint a claim on the host" hint).
  *
  * Current payloads use the one-time claim flow with the hostId mismatch guard. Legacy URLs already
  * contain a device bearer, so they are validated against `/pair.json` (then `/me`) before storage.
+ *
+ * @param needsInsecureOptIn true when a typed URL is plain HTTP to a non-loopback host → the
+ *   unencrypted opt-in (spec §3.5) must be ticked before it can be added. Defaults to
+ *   never-required for previews.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,12 +80,14 @@ fun AddHostScreen(
     onClaimLegacy: suspend (PairUrl) -> AddHostResult,
     onClaimByUrl: suspend (url: String, deviceName: String, allowInsecure: Boolean) -> AddHostResult,
     onAdded: () -> Unit,
-    // True when a typed URL is plain HTTP to a non-loopback host → the unencrypted opt-in is required
-    // before it can be added (spec §3.5). Defaults to never-required for single-arg callers/previews.
     needsInsecureOptIn: (String) -> Boolean = { false },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val platform = LocalPlatform.current
+    val canScan = platform.caps.camera
+    // Desktop's roomier gutter everywhere but a phone-width window.
+    val gutter = if (LocalWindowWidthClass.current == WindowWidthClass.Compact) 24.dp else 28.dp
 
     var mode by rememberSaveable { mutableStateOf(AddMode.Paste) }
     var pasteInput by rememberSaveable { mutableStateOf("") }
@@ -118,10 +127,6 @@ fun AddHostScreen(
         scope.launch { handle(onClaimLegacy(legacy)) }
     }
 
-    val qrLaunch = rememberQrScanLauncher { decoded ->
-        if (decoded != null) claimInput(decoded)
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -129,7 +134,7 @@ fun AddHostScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("add_host_back")) {
                         Icon(
-                            painter = painterResource(R.drawable.ic_arrow_left),
+                            Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
                             tint = cs.onSurface,
                             modifier = Modifier.size(18.dp),
@@ -147,7 +152,7 @@ fun AddHostScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = gutter, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -159,7 +164,11 @@ fun AddHostScreen(
             )
 
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                val modes = listOf(AddMode.Scan, AddMode.Paste, AddMode.Url)
+                val modes = buildList {
+                    if (canScan) add(AddMode.Scan)
+                    add(AddMode.Paste)
+                    add(AddMode.Url)
+                }
                 modes.forEachIndexed { i, m ->
                     SegmentedButton(
                         selected = mode == m,
@@ -182,9 +191,12 @@ fun AddHostScreen(
                 modifier = Modifier.fillMaxWidth().testTag("add_host_device_name"),
             )
 
-            when (mode) {
+            when (if (mode == AddMode.Scan && !canScan) AddMode.Paste else mode) {
                 AddMode.Scan -> Button(
-                    onClick = qrLaunch,
+                    onClick = {
+                        error = null; info = null
+                        scope.launch { platform.scanQr()?.let { claimInput(it) } }
+                    },
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth().testTag("add_host_scan"),
                 ) {

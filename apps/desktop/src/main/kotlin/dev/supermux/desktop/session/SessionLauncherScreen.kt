@@ -111,7 +111,7 @@ import dev.supermux.desktop.chat.MicCapture
 import dev.supermux.desktop.chat.MicRecorder
 import dev.supermux.desktop.chat.isComposerSendKey
 import dev.supermux.desktop.chat.rememberDesktopDictation
-import dev.supermux.desktop.host.HostDot
+import dev.supermux.ui.host.HostDot
 import dev.supermux.host.HostView
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Size

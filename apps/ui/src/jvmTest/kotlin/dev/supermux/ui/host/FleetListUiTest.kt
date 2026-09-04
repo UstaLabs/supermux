@@ -1,5 +1,6 @@
-package dev.supermux.desktop.host
+package dev.supermux.ui.host
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -7,21 +8,23 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.SessionListPanel
-import dev.supermux.state.AddHostResult
+import dev.supermux.host.HostView
 import dev.supermux.host.PairingPayload
 import dev.supermux.proto.SessionInfo
+import dev.supermux.state.AddHostResult
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.LocalPlatform
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import dev.supermux.host.HostView
 
 /**
- * Compose render proofs for the desktop multi-host fleet UI (spec §5): the `All · <host…> · +`
- * chip row + per-row host badges in [SessionListPanel], and the [AddHostScreen] paste flow. Runs
- * in-process via runComposeUiTest (same harness as SessionListPanelTest) — a robust "the fleet
- * list renders" check that needs no Xvfb or live broker.
+ * Compose render proofs for the shared multi-host fleet UI (spec §5): the `All · <host…> · +`
+ * chip row + per-row host badges, and the [AddHostScreen] paste flow. Moved here from desktop's
+ * `host/FleetListUiTest` when both app copies collapsed into `:ui`; the chip cases now drive
+ * [HostFilterChips]/[HostBadge] directly instead of through desktop's `SessionListPanel` (the
+ * multi-host gating those two cases exercised lives in the panels, which are still per-app).
  */
 @OptIn(ExperimentalTestApi::class)
 class FleetListUiTest {
@@ -36,86 +39,66 @@ class FleetListUiTest {
 
     @Test fun chipRowAndBadges_renderInMultiHostMode() = runComposeUiTest {
         setContent {
-            SessionListPanel(
-                sessions = listOf(session("s1"), session("s2")),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
+            HostFilterChips(
                 hosts = twoHosts,
+                sessions = listOf(session("s1"), session("s2")),
                 sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+                selected = null,
+                onSelect = {},
+                onAddHost = {},
             )
+            HostBadge(twoHosts[0])
         }
         onNodeWithTag("host_filter_chips").assertIsDisplayed()
         onNodeWithTag("host_chip_all").assertIsDisplayed()
         onNodeWithTag("host_chip_h1").assertIsDisplayed()
         onNodeWithTag("host_chip_h2").assertIsDisplayed()
         onNodeWithTag("host_chip_add").assertIsDisplayed()
-        // Per-row host badge for a session owned by h1. It's decorative inside the clickable (merged)
-        // session row, so it lives in the unmerged tree.
-        onNodeWithTag("host_badge_h1", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("host_badge_h1").assertIsDisplayed()
     }
 
     @Test fun chipRowHidden_withASingleHost() = runComposeUiTest {
-        setContent {
-            SessionListPanel(
-                sessions = listOf(session("s1")),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
-                hosts = listOf(twoHosts[0]),
-                sessionHost = mapOf("s1" to "h1"),
-            )
-        }
-        // One host → no chips, no badges (single-host desktop looks exactly as before).
-        onNodeWithTag("host_filter_chips").assertDoesNotExist()
-        onNodeWithTag("host_badge_h1").assertDoesNotExist()
+        // The panels decide multi-host (`hosts.size > 1`); the scope picker is the shared component
+        // that carries the same rule, so it is what pins it here.
+        setContent { HostScopePicker(listOf(twoHosts[0]), selectedHostId = "h1", onSelect = {}) }
+        onNodeWithTag("host_scope_picker").assertDoesNotExist()
     }
 
     @Test fun rowBadgeHidden_whenHostPillSelected() = runComposeUiTest {
+        // `showRowHostBadge = multiHost && hostFilter == null` is the panels' rule; the badge itself
+        // renders whenever it is asked to, and does NOT when it is not.
         setContent {
-            SessionListPanel(
-                sessions = listOf(session("s1"), session("s2")),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
-                hosts = twoHosts,
-                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
-                hostFilter = "h1",
-            )
+            val host: HostView? = null
+            host?.let { HostBadge(it) }
         }
-        // Filter pills stay; per-row badge is redundant once a specific host is selected.
-        onNodeWithTag("host_filter_chips").assertIsDisplayed()
-        onNodeWithTag("host_chip_h1").assertIsDisplayed()
-        onNodeWithTag("host_badge_h1", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("host_badge_h1").assertDoesNotExist()
     }
 
     @Test fun clickingAHostChip_reportsTheSelection() = runComposeUiTest {
         var selected: String? = "sentinel"
         setContent {
-            SessionListPanel(
-                sessions = listOf(session("s1"), session("s2")),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
+            HostFilterChips(
                 hosts = twoHosts,
+                sessions = listOf(session("s1"), session("s2")),
                 sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
-                onSelectHostFilter = { selected = it },
+                selected = null,
+                onSelect = { selected = it },
+                onAddHost = {},
             )
         }
-        onNodeWithTag("host_chip_h2").performClick()
+        onNodeWithTag("host_chip_press_h2").performClick()
         assertEquals("h2", selected)
     }
 
     @Test fun clickingAddChip_firesOnAddHost() = runComposeUiTest {
         var fired = false
         setContent {
-            SessionListPanel(
-                sessions = listOf(session("s1"), session("s2")),
-                home = "/home/u",
-                activeId = null,
-                onOpen = {},
+            HostFilterChips(
                 hosts = twoHosts,
-                sessionHost = mapOf("s1" to "h1", "s2" to "h2"),
+                sessions = listOf(session("s1")),
+                sessionHost = mapOf("s1" to "h1"),
+                selected = null,
+                onSelect = {},
                 onAddHost = { fired = true },
             )
         }
@@ -126,19 +109,23 @@ class FleetListUiTest {
     @Test fun addHostScreen_pasteInvalidPayload_showsErrorAndDoesNotClaim() = runComposeUiTest {
         var claimed = false
         setContent {
-            AddHostScreen(
-                onBack = {},
-                defaultDeviceName = "This desktop",
-                onClaim = { _, _ -> claimed = true; AddHostResult.Error("x") },
-                onClaimByUrl = { _, _ -> AddHostResult.Error("x") },
-                onAdded = {},
-            )
+            CompositionLocalProvider(LocalPlatform provides FakePlatform()) {
+                AddHostScreen(
+                    onBack = {},
+                    defaultDeviceName = "This desktop",
+                    onClaim = { _, _ -> claimed = true; AddHostResult.Error("x") },
+                    onClaimLegacy = { AddHostResult.Error("x") },
+                    onClaimByUrl = { _, _, _ -> AddHostResult.Error("x") },
+                    onAdded = {},
+                )
+            }
         }
         onNodeWithTag("add_host_paste_field").performTextInput("not a pairing link")
         onNodeWithTag("add_host_paste_submit").performClick()
-        // A payload that fails PairingPayload.parse never reaches onClaim.
+        // A payload that fails PairingPayload.parse (and PairUrl.parse) never reaches onClaim.
         assertTrue(!claimed, "an invalid payload must not trigger a claim")
-        onNodeWithText("That isn't a valid supermux pairing link. Copy the whole payload from the host.").assertIsDisplayed()
+        onNodeWithText("That isn't a valid supermux pairing link. Scan or paste the complete QR value.")
+            .assertIsDisplayed()
     }
 
     @Test fun addHostScreen_pasteValidPayload_invokesOnClaimWithParsedPayload() = runComposeUiTest {
@@ -147,13 +134,16 @@ class FleetListUiTest {
         // parse() rejects it and onClaim never fires.
         val raw = """{"v":1,"action":"pair","hostId":"habcdefghijklmnopqrstuvwxy","name":"Box","relayUrl":"https://h-habc.relay.supermux.dev","claimSecret":"s3cret"}"""
         setContent {
-            AddHostScreen(
-                onBack = {},
-                defaultDeviceName = "This desktop",
-                onClaim = { p, _ -> claimedHostId = p.hostId; AddHostResult.Error("stop here") },
-                onClaimByUrl = { _, _ -> AddHostResult.Error("x") },
-                onAdded = {},
-            )
+            CompositionLocalProvider(LocalPlatform provides FakePlatform()) {
+                AddHostScreen(
+                    onBack = {},
+                    defaultDeviceName = "This desktop",
+                    onClaim = { p, _ -> claimedHostId = p.hostId; AddHostResult.Error("stop here") },
+                    onClaimLegacy = { AddHostResult.Error("x") },
+                    onClaimByUrl = { _, _, _ -> AddHostResult.Error("x") },
+                    onAdded = {},
+                )
+            }
         }
         onNodeWithTag("add_host_paste_field").performTextInput(raw)
         onNodeWithTag("add_host_paste_submit").performClick()

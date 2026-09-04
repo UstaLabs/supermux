@@ -3,43 +3,12 @@ package dev.supermux.ui.platform
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.net.ByteArrayChunkSource
-import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.HapticKind
-import dev.supermux.ui.theme.NoHaptics
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-
-/** A recording [Platform] — the pattern every screen test uses to assert a platform call. */
-private class FakePlatform(
-    override val caps: Caps = Caps(
-        push = false,
-        camera = false,
-        tray = false,
-        externalDisplay = false,
-        hardwareVideoDecode = false,
-        localBroker = false,
-        multiWindow = false,
-        fileSystem = false,
-    ),
-    override val haptics: Haptics = NoHaptics,
-) : Platform {
-    val openedUrls = mutableListOf<String>()
-    val copied = mutableListOf<String>()
-    var pickedKind: PickKind? = null
-    var pickedRequester: String? = null
-
-    override fun openUrl(url: String) { openedUrls.add(url) }
-    override fun copyToClipboard(text: String) { copied.add(text) }
-    override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> {
-        pickedKind = kind
-        pickedRequester = requester
-        return listOf(PickedFile("a.txt", "text/plain", ByteArrayChunkSource(byteArrayOf(1, 2))))
-    }
-}
 
 class PlatformTest {
 
@@ -99,6 +68,15 @@ class PlatformTest {
     @Test
     fun `every pick kind is representable`() {
         assertEquals(listOf(PickKind.Any, PickKind.Images, PickKind.Media), PickKind.entries.toList())
+    }
+
+    @Test
+    fun `scanQr returns the decoded value, or null when the user cancels`() {
+        val fake = FakePlatform(qrResult = "https://host/pair?t=abc")
+        assertEquals("https://host/pair?t=abc", kotlinx.coroutines.runBlocking { fake.scanQr() })
+        fake.qrResult = null
+        assertEquals(null, kotlinx.coroutines.runBlocking { fake.scanQr() })
+        assertEquals(2, fake.scans)
     }
 
     @Test

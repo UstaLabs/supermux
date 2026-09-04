@@ -23,6 +23,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.supermux.android.chat.ContentResolverChunkSource
+import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
@@ -49,6 +50,7 @@ import kotlinx.coroutines.withContext
 class AndroidPlatform(
     private val context: Context,
     private val pickerHost: PickerHost<Uri>,
+    private val qrScanHost: QrScanHost,
     override val haptics: Haptics,
 ) : Platform {
 
@@ -80,6 +82,13 @@ class AndroidPlatform(
         val uri = pickerHost.pick(kind, requester) ?: return emptyList()
         return listOfNotNull(pickedFileFromUri(context, uri))
     }
+
+    /**
+     * Suspends on the ZXing capture activity registered by [rememberQrScanHost]. Cancelling the
+     * scanner, denying the camera permission, or a second scan while one is already up all return
+     * null (see [QrScanHost]).
+     */
+    override suspend fun scanQr(): String? = qrScanHost.scan()
 
     /**
      * Results of picks that completed with nobody left to await them — the user rotated the device
@@ -253,6 +262,62 @@ class PickerHost<R : Any> {
     }
 }
 
+/**
+ * The activity-scoped half of [AndroidPlatform.scanQr]: a `suspend` bridge over
+ * [dev.supermux.android.pairing.rememberQrScanLauncher]'s callback.
+ *
+ * Deliberately SIMPLER than [PickerHost]. A scan stages nothing — the decoded string is consumed
+ * on the spot — so there is no result worth rescuing across an activity recreation: a scan
+ * interrupted by a restart is just re-taken. Two rules:
+ *  1. **One scan at a time.** A second [scan] while the scanner is up returns null WITHOUT
+ *     launching, so a double-tapped button cannot leave two coroutines waiting on one camera.
+ *  2. **Cancel → null.** Backing out of the scanner, denying `CAMERA`, or leaving the composition
+ *     mid-scan all resume with null, which every caller already treats as "user said no".
+ */
+class QrScanHost {
+
+    /** Installed by [rememberQrScanHost]; null in a composition that never registered a launcher. */
+    internal var onLaunch: (() -> Unit)? = null
+
+    private var pending: CompletableDeferred<String?>? = null
+
+    /** True while the scanner is up — a second [scan] is refused until it resolves. */
+    val inFlight: Boolean get() = pending != null
+
+    /** Launches the scanner and suspends until it decodes or the user backs out. */
+    suspend fun scan(): String? {
+        if (pending != null) return null // rule 1
+        val launch = onLaunch ?: return null
+        val deferred = CompletableDeferred<String?>()
+        pending = deferred
+        launch()
+        return try {
+            deferred.await()
+        } finally {
+            // The caller went away mid-scan (its screen left the composition): drop the waiter so
+            // the next scan is not refused by rule 1 — there is nothing to stash.
+            if (pending === deferred) pending = null
+        }
+    }
+
+    /** Called from the launcher callback with the decoded value (null = cancelled/denied). */
+    internal fun deliver(decoded: String?) {
+        val deferred = pending ?: return
+        pending = null
+        deferred.complete(decoded)
+    }
+}
+
+/** Registers the QR capture launcher for the current activity and returns the host to hand to
+ *  [AndroidPlatform]. Called once per entry point, beside [rememberPickerHost]. */
+@Composable
+fun rememberQrScanHost(): QrScanHost {
+    val host = remember { QrScanHost() }
+    val launch = rememberQrScanLauncher { decoded -> host.deliver(decoded) }
+    host.onLaunch = launch
+    return host
+}
+
 /** Registers the two picker launchers for the current activity and returns the host to hand to
  *  [AndroidPlatform]. Called once per entry point, from `AndroidTheme`. */
 @Composable
@@ -315,8 +380,9 @@ fun rememberAndroidPlatform(): AndroidPlatform {
     val context = LocalContext.current
     val view = LocalView.current
     val host = rememberPickerHost()
+    val qrHost = rememberQrScanHost()
     val haptics = remember(view) { AndroidHaptics(view) }
-    return remember(context, host, haptics) { AndroidPlatform(context, host, haptics) }
+    return remember(context, host, qrHost, haptics) { AndroidPlatform(context, host, qrHost, haptics) }
 }
 
 /**

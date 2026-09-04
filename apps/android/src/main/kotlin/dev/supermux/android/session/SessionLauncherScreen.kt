@@ -1126,7 +1126,7 @@ private fun HostPickerPill(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            dev.supermux.android.host.HostDot(selected.colorIndex, size = 9.dp)
+            dev.supermux.ui.host.HostDot(selected.colorIndex, size = 9.dp)
             Text(
                 selected.shortLabel,
                 color = cs.onSurface,
@@ -1145,7 +1145,7 @@ private fun HostPickerPill(
             hosts.forEach { h ->
                 DropdownMenuItem(
                     text = { Text(h.displayLabel + if (!h.online) " (offline)" else "") },
-                    leadingIcon = { dev.supermux.android.host.HostDot(h.colorIndex, size = 10.dp) },
+                    leadingIcon = { dev.supermux.ui.host.HostDot(h.colorIndex, size = 10.dp) },
                     modifier = Modifier.testTag("launcher_host_${h.recordId}"),
                     onClick = { onSelect(h.recordId); menu = false },
                 )

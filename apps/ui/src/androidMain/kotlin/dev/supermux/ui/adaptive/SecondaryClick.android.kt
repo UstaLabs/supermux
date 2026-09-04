@@ -1,0 +1,8 @@
+package dev.supermux.ui.adaptive
+
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+
+internal actual fun PointerEvent.isSecondaryButtonPress(): Boolean =
+    type == PointerEventType.Press && buttons.isSecondaryPressed

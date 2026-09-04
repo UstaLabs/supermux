@@ -194,7 +194,7 @@ fun WorkspaceRow(
                                 }
                                 if (hostBadge != null) {
                                     Spacer(Modifier.width(Space.sm))
-                                    dev.supermux.android.host.HostBadge(hostBadge)
+                                    dev.supermux.ui.host.HostBadge(hostBadge)
                                 }
                                 Box {
                                     var menu by remember { mutableStateOf(false) }

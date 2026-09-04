@@ -50,6 +50,19 @@ interface Platform {
      */
     suspend fun pickFiles(kind: PickKind, requester: String = DEFAULT_REQUESTER): List<PickedFile>
 
+    /**
+     * Show the camera QR scanner and suspend until it decodes or the user backs out; cancelling —
+     * or a platform with no camera — returns `null`.
+     *
+     * Ask [Caps.camera] before offering a "Scan" affordance at all: desktop has no camera and
+     * returns `null` immediately, which would look like a broken button.
+     *
+     * One scan at a time: a second call while a scanner is up returns `null` without launching.
+     * Unlike [pickFiles] there is no recreation stash — a scan interrupted by an activity restart
+     * is simply re-taken, because nothing was staged and re-pointing the camera is cheap.
+     */
+    suspend fun scanQr(): String?
+
     /** Platform haptics (Android's `View.performHapticFeedback`; a no-op where there is no actuator). */
     val haptics: Haptics
 }

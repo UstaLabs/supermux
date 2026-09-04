@@ -86,8 +86,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.host.HostBadge
-import dev.supermux.desktop.host.HostFilterChips
+import dev.supermux.ui.host.HostBadge
+import dev.supermux.ui.host.HostFilterChips
 import dev.supermux.host.HostView
 import dev.supermux.host.filterSessions
 import dev.supermux.ui.theme.LocalPanes

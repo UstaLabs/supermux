@@ -367,7 +367,7 @@ fun SessionRow(
                             }
                             if (hostBadge != null) {
                                 Spacer(Modifier.width(Space.sm))
-                                dev.supermux.android.host.HostBadge(hostBadge)
+                                dev.supermux.ui.host.HostBadge(hostBadge)
                             }
                             val timeStr = relTime(preview?.ts)
                             if (timeStr.isNotEmpty()) {
@@ -865,7 +865,7 @@ fun SessionListScreen(
         ) {
             if (multiHost) {
                 item(key = "host_filter_chips") {
-                    dev.supermux.android.host.HostFilterChips(
+                    dev.supermux.ui.host.HostFilterChips(
                         hosts = hosts,
                         sessions = sessions,
                         sessionHost = sessionHost,
@@ -1457,7 +1457,7 @@ private fun OfflineHostHeader(host: dev.supermux.host.HostView) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        dev.supermux.android.host.HostDot(host.colorIndex, size = 8.dp)
+        dev.supermux.ui.host.HostDot(host.colorIndex, size = 8.dp)
         Text(
             host.displayLabel,
             color = cs.onSurfaceVariant,

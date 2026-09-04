@@ -63,6 +63,10 @@ class DesktopPlatform : Platform {
         awtPickFiles(kind).map { file -> PickedFile(file.name, probeMime(file), FileChunkSource(file)) }
     }
 
+    /** No camera on a desktop (`caps.camera == false`), so nothing offers this; null keeps the
+     *  contract total for a caller that asks anyway. */
+    override suspend fun scanQr(): String? = null
+
     override val haptics: Haptics = NoHaptics
 }
 

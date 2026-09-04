@@ -1,26 +1,25 @@
-package dev.supermux.android.host
+package dev.supermux.ui.host
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import dev.supermux.ui.widgets.AlertDialog
-import dev.supermux.ui.widgets.DropdownMenu
-import dev.supermux.ui.widgets.DropdownMenuItem
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -34,26 +33,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.android.R
+import dev.supermux.host.HostView
+import dev.supermux.host.formatLastSeen
 import dev.supermux.host.hostDotArgb
 import dev.supermux.proto.SessionInfo
-import dev.supermux.host.HostView
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.isSecondaryButtonPress
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
+import kotlin.time.Clock
 
 /**
  * Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact
- * per-row badge, and the `All · <host…> · +` filter chip row. Colors are authored in OKLCH (like
- * [dev.supermux.ui.theme.SupermuxSemantics]) and held FIXED across dynamic color so a host's
- * dot never gets repainted by the wallpaper — its color is its identity.
+ * per-row badge, the `All · <host…> · +` filter chip row, and the one-host scope picker.
  *
- * The pure slot/label/filter logic AND the OKLCH dot palette live in the shared [dev.supermux.host]
- * FleetModel (unit-tested on the JVM, reused verbatim by iOS); this file is only the Compose
- * rendering — `hostDotArgb` gives the exact same color per slot on every platform.
+ * The pure slot/label/filter logic AND the OKLCH dot palette live in the shared
+ * [dev.supermux.host] FleetModel (unit-tested on the JVM, reused verbatim by iOS); this file is
+ * only the Compose rendering — [hostDotArgb] gives the exact same color per slot on every
+ * platform, so a host's dot is its identity and dynamic color never repaints it.
  */
 
 /** The fixed dot color for a host color slot ([HostView.colorIndex]), theme-aware — resolved from
@@ -73,7 +79,7 @@ fun HostDot(colorIndex: Int, size: Dp = 8.dp, modifier: Modifier = Modifier) {
     Box(modifier.size(size).clip(CircleShape).background(hostDotColor(colorIndex)))
 }
 
-/** Compact per-row host badge: identity dot + short host name. Multi-host + "All" filter only. */
+/** Compact per-row host badge: identity dot + short host name; an offline host is dimmed. */
 @Composable
 fun HostBadge(host: HostView, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
@@ -85,14 +91,14 @@ fun HostBadge(host: HostView, modifier: Modifier = Modifier) {
         HostDot(host.colorIndex, size = 7.dp)
         Text(
             host.shortLabel,
-            color = cs.onSurfaceVariant,
+            color = if (host.online) cs.onSurfaceVariant else cs.onSurfaceVariant.copy(alpha = 0.6f),
             fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
         )
     }
 }
 
-/** Visible host scope for pages whose reads and actions target one broker. */
+/** Visible host scope for pages whose reads and actions target one broker. Hidden below two hosts. */
 @Composable
 fun HostScopePicker(
     hosts: List<HostView>,
@@ -110,6 +116,7 @@ fun HostScopePicker(
                 Modifier
                     .fillMaxWidth()
                     .clickable { expanded = true }
+                    .pointerHoverIcon(PointerIcon.Hand)
                     .padding(horizontal = 16.dp, vertical = 10.dp)
                     .testTag("host_scope_picker"),
                 verticalAlignment = Alignment.CenterVertically,
@@ -142,8 +149,17 @@ fun HostScopePicker(
 
 /**
  * The `All · <host…> · +` filter chip row (spec §5). Each host chip carries its color dot and a
- * live session count; the trailing `+` chip adds a host. [selected] is a recordId or null (= All).
- * Long-pressing a host chip opens a Rename / Forget menu ([onRenameHost] / [onForgetHost]).
+ * live session count; an OFFLINE host is greyed and carries its last-seen; the trailing `+` chip
+ * adds a host. [selected] is a recordId or null (= All).
+ *
+ * The Rename / Forget menu ([onRenameHost] / [onForgetHost]) opens the way the machine expects:
+ * a LONG-PRESS where there is no pointing device, a RIGHT-CLICK where there is one. Both paths are
+ * always wired — a docked tablet with a mouse gets the desktop gesture without losing the touch one
+ * for its screen — and they key on [LocalPointerAvailable], not the keyboard-inclusive input mode.
+ *
+ * [nowMs] is a parameter so the offline "· 5m ago" suffix is assertable; it defaults to the wall
+ * clock through the multiplatform `kotlin.time.Clock` (there is no platform wall-clock call in
+ * commonMain, and kotlinx-datetime's `Clock` is gone from the 0.7 line this build resolves).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -156,10 +172,12 @@ fun HostFilterChips(
     onAddHost: () -> Unit,
     onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
     onForgetHost: (recordId: String) -> Unit = {},
+    nowMs: Long = Clock.System.now().toEpochMilliseconds(),
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    // Long-press host-actions: which chip's menu is open, and the target of the rename/forget dialogs.
+    val pointer = LocalPointerAvailable.current
+    // Host-actions menu: which chip's menu is open, and the target of the rename/forget dialogs.
     var menuFor by remember { mutableStateOf<String?>(null) }
     var renameTarget by remember { mutableStateOf<HostView?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -177,14 +195,16 @@ fun HostFilterChips(
             selected = selected == null,
             onClick = { onSelect(null) },
             label = { Text("All") },
-            modifier = Modifier.testTag("host_chip_all"),
+            modifier = Modifier.testTag("host_chip_all").pointerHoverIcon(PointerIcon.Hand),
         )
         hosts.forEach { h ->
             val count = sessions.count { sessionHost[it.id] == h.recordId }
+            val lastSeen = if (!h.online) formatLastSeen(nowMs, h.lastSeenAt) else ""
             Box {
                 FilterChip(
                     selected = selected == h.recordId,
-                    // Tap + long-press are handled by the overlay below; keep the chip visual-only.
+                    // Tap / long-press / right-click are handled by the overlay below; the chip is
+                    // visual-only so one node cannot own two conflicting gesture detectors.
                     onClick = {},
                     leadingIcon = { HostDot(h.colorIndex, size = 9.dp) },
                     label = {
@@ -192,19 +212,44 @@ fun HostFilterChips(
                             buildString {
                                 append(h.shortLabel)
                                 if (count > 0) append("  $count")
+                                if (lastSeen.isNotEmpty()) append("  · $lastSeen")
                             },
                             color = if (h.online) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.7f),
                         )
                     },
-                    modifier = Modifier.testTag("host_chip_${h.recordId}"),
+                    modifier = Modifier.testTag("host_chip_${h.recordId}").pointerHoverIcon(PointerIcon.Hand),
                 )
                 Box(
                     Modifier
                         .matchParentSize()
                         .combinedClickable(
                             onClick = { onSelect(h.recordId) },
+                            // Touch gesture: kept live even with a pointer attached, because a
+                            // touchscreen does not stop working when a mouse is plugged in.
                             onLongClick = { menuFor = h.recordId },
                         )
+                        .then(
+                            // Pointer gesture: secondary-button press (through the
+                            // `isSecondaryButtonPress` seam, because Compose declares
+                            // `isSecondaryPressed` per platform). Only installed where a pointing
+                            // device exists, so a phone never carries a dead detector.
+                            if (pointer) {
+                                Modifier.pointerInput(h.recordId) {
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            if (event.isSecondaryButtonPress()) {
+                                                event.changes.forEach { it.consume() }
+                                                menuFor = h.recordId
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .pointerHoverIcon(PointerIcon.Hand)
                         .testTag("host_chip_press_${h.recordId}"),
                 )
                 DropdownMenu(expanded = menuFor == h.recordId, onDismissRequest = { menuFor = null }) {
@@ -223,15 +268,9 @@ fun HostFilterChips(
         FilterChip(
             selected = false,
             onClick = onAddHost,
-            leadingIcon = {
-                Icon(
-                    painter = painterResource(R.drawable.ic_plus),
-                    contentDescription = "Add host",
-                    modifier = Modifier.size(16.dp),
-                )
-            },
+            leadingIcon = { Icon(Icons.Filled.Add, contentDescription = "Add host", modifier = Modifier.size(16.dp)) },
             label = { Text("Add") },
-            modifier = Modifier.testTag("host_chip_add"),
+            modifier = Modifier.testTag("host_chip_add").pointerHoverIcon(PointerIcon.Hand),
         )
     }
 

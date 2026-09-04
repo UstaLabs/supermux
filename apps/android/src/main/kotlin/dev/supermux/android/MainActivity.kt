@@ -60,8 +60,8 @@ import androidx.navigation.toRoute
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import dev.supermux.android.host.AddHostScreen
-import dev.supermux.android.host.HostScopePicker
+import dev.supermux.ui.host.AddHostScreen
+import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.host.HostView
 import dev.supermux.host.ViewingSurface
 import dev.supermux.host.WorkspaceViewingSnapshot

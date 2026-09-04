@@ -45,6 +45,7 @@ class SettingsSharedTest {
         override fun copyToClipboard(text: String) { copied.add(text) }
         override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> =
             listOf(PickedFile("a", "text/plain", ByteArrayChunkSource(ByteArray(0))))
+        override suspend fun scanQr(): String? = null
     }
 
     @Test

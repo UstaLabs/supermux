@@ -87,10 +87,11 @@ import dev.supermux.workspace.setActiveViewInGroup
 import dev.supermux.workspace.splitGroup
 
 import dev.supermux.workspace.chatSessionIds
-import dev.supermux.desktop.host.AddHostScreen
+import dev.supermux.ui.host.AddHostScreen
 import dev.supermux.state.FleetStore
 import dev.supermux.host.HostView
-import dev.supermux.desktop.host.HostDot
+import dev.supermux.ui.host.HostDot
+import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.desktop.notify.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.session.ArchivedScreen
@@ -815,7 +816,7 @@ fun AppShell(
             // Body shared by the footer-anchored popover and the collapsed-rail fallback.
             val usagePopoverBody: @Composable () -> Unit = {
                 Column(Modifier.fillMaxWidth()) {
-                    HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                    HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
                     UsageScreen(
                         usage = usageSnapshot,
                         loading = usageLoading,
@@ -1324,7 +1325,7 @@ fun AppShell(
                                 },
                         ) {
                             Column(Modifier.fillMaxSize()) {
-                                HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                                HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
                                 Box(Modifier.weight(1f)) {
                                     androidx.compose.runtime.key(activeHostId, route.section) {
                                         SettingsHub(
@@ -1409,7 +1410,7 @@ fun AppShell(
                         metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                     ) {
                         Column(Modifier.fillMaxSize().testTag("archived_overlay")) {
-                            HostScopeBar(hostViews, activeHostId) { fleet?.setActiveHost(it) }
+                            HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
                             Box(Modifier.weight(1f)) {
                                 ArchivedScreen(
                                     archived = archivedList,
@@ -1495,8 +1496,12 @@ fun AppShell(
                         onBack = { addHostOpen = false },
                         defaultDeviceName = remember { runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "Desktop host" },
                         onClaim = { payload, name -> fleet.addHost(payload, name) },
-                        onClaimByUrl = { url, name -> fleet.addHostByUrl(url, name) },
+                        // The shared store already speaks the legacy `/pair?t=…` format, so desktop
+                        // GAINS the fallback Android had rather than declining it.
+                        onClaimLegacy = { pair -> fleet.addLegacyHost(pair) },
+                        onClaimByUrl = { url, name, allowInsecure -> fleet.addHostByUrl(url, name, allowInsecure) },
                         onAdded = { addHostOpen = false },
+                        needsInsecureOptIn = fleet::urlNeedsInsecureOptIn,
                     )
                 }
             }
@@ -1506,52 +1511,3 @@ fun AppShell(
     }
 }
 
-@Composable
-private fun HostScopeBar(
-    hosts: List<HostView>,
-    selectedHostId: String?,
-    onSelect: (String) -> Unit,
-) {
-    if (hosts.size < 2) return
-    val selected = hosts.firstOrNull { it.recordId == selectedHostId } ?: hosts.first()
-    val cs = MaterialTheme.colorScheme
-    var expanded by remember { mutableStateOf(false) }
-    // Compact control (not full-width) so DropdownMenu anchors to a chip-sized box
-    // instead of stretching across the settings pane.
-    Column(Modifier.fillMaxWidth().background(cs.surfaceContainer)) {
-        Row(
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Host", color = cs.onSurfaceVariant)
-            Box {
-                Row(
-                    Modifier
-                        .clickable { expanded = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                        .testTag("host_scope_picker"),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    HostDot(selected.colorIndex, size = 9.dp)
-                    Text(
-                        selected.displayLabel + if (!selected.online) " · Offline" else "",
-                        modifier = Modifier.padding(start = 7.dp, end = 5.dp),
-                        color = cs.onSurface,
-                    )
-                    Text("⌄", color = cs.onSurfaceVariant)
-                }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    hosts.forEach { host ->
-                        DropdownMenuItem(
-                            text = { Text(host.displayLabel + if (!host.online) " (offline)" else "") },
-                            leadingIcon = { HostDot(host.colorIndex, size = 10.dp) },
-                            onClick = { expanded = false; onSelect(host.recordId) },
-                        )
-                    }
-                }
-            }
-        }
-        HorizontalDivider()
-    }
-}
