@@ -93,6 +93,14 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import dev.supermux.ui.prefs.EDITOR_FONT_MAX
+import dev.supermux.ui.prefs.EDITOR_FONT_MIN
+import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 //
@@ -886,9 +894,10 @@ private fun EditorSettingsPage(
     val cs = MaterialTheme.colorScheme
     val app = LocalContext.current.applicationContext as Application
     val vm: AppViewModel = viewModel(factory = AppViewModel.factory(app))
-    val editorPrefs = vm.editorPrefs
-    val lineWrap = editorPrefs.lineWrap
-    val fontSize = editorPrefs.fontSize
+    val editorPrefs = LocalUiPrefs.current
+    val scope = rememberCoroutineScope()
+    val lineWrap by editorPrefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
+    val fontSize by editorPrefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
 
     BackHandler { onBack() }
 
@@ -925,7 +934,7 @@ private fun EditorSettingsPage(
             ) {
                 Switch(
                     checked = lineWrap,
-                    onCheckedChange = { editorPrefs.persistLineWrap(it) },
+                    onCheckedChange = { on -> scope.launch { editorPrefs.putEditorLineWrap(on) } },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = cs.onPrimary,
                         checkedTrackColor = cs.primary,
@@ -943,8 +952,8 @@ private fun EditorSettingsPage(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    StepperButton(text = "−", enabled = fontSize > 10) {
-                        editorPrefs.persistFontSize(fontSize - 1)
+                    StepperButton(text = "−", enabled = fontSize > EDITOR_FONT_MIN) {
+                        scope.launch { editorPrefs.putEditorFontSize(fontSize - 1) }
                     }
                     Text(
                         fontSize.toString(),
@@ -952,8 +961,8 @@ private fun EditorSettingsPage(
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace,
                     )
-                    StepperButton(text = "+", enabled = fontSize < 24) {
-                        editorPrefs.persistFontSize(fontSize + 1)
+                    StepperButton(text = "+", enabled = fontSize < EDITOR_FONT_MAX) {
+                        scope.launch { editorPrefs.putEditorFontSize(fontSize + 1) }
                     }
                 }
             }

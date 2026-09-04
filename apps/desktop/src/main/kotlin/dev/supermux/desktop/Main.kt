@@ -93,6 +93,7 @@ import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
+import dev.supermux.ui.prefs.UiPrefs
 
 private val desktopDeps: HostStoreDeps by lazy {
     HostStoreDeps(
@@ -100,6 +101,9 @@ private val desktopDeps: HostStoreDeps by lazy {
         settings = DesktopSettingsStore(DesktopHostStores.defaultDir().resolve("settings.json")),
     )
 }
+
+/** Editor + chat-detail preferences, on the same store as drafts / launcher prefs. */
+private val desktopUiPrefs: UiPrefs by lazy { UiPrefs(desktopDeps.settings) }
 
 private val desktopBindTts: (
     resolveEngine: suspend () -> String,
@@ -485,7 +489,7 @@ fun main() {
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
             ProvideDesktopAdaptiveLocals {
-            DesktopTheme(appearance = ui.appearance) {
+            DesktopTheme(appearance = ui.appearance, uiPrefs = desktopUiPrefs) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
@@ -1135,7 +1139,7 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Agents)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Agents)
                             println("[settings] opened the Settings hub (Agents)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
@@ -1152,7 +1156,7 @@ fun main() {
                     if (devicesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Devices)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Devices)
                             println("[devices] opened the Settings hub (Devices)")
                             val devices = app.devices()
                             println(
@@ -1171,7 +1175,7 @@ fun main() {
                     if (gitHostingHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.GitHosting)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.GitHosting)
                             println("[git-hosting] opened the Settings hub (Git hosting)")
                             val forges = app.forgesLoad()
                             val conns = forges?.connections.orEmpty()
@@ -1191,7 +1195,7 @@ fun main() {
                     if (proxiesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Proxies)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Proxies)
                             println("[proxies] opened the Settings hub (Proxies)")
                             val proxies = app.proxiesForSettings()
                             println(
@@ -1211,7 +1215,7 @@ fun main() {
                     if (systemHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.System)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.System)
                             println("[system] opened the Settings hub (System)")
                             val st = app.updateStatus()
                             println(
@@ -1230,7 +1234,7 @@ fun main() {
                     if (assistantHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Assistant)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Assistant)
                             println("[assistant] opened the Settings hub (Assistant)")
                             val pair = app.assistantLoad()
                             val curator = app.curatorSettings()
@@ -1249,7 +1253,7 @@ fun main() {
                     if (voiceHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Voice)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Voice)
                             println("[voice] opened the Settings hub (Voice)")
                             val cfg = app.appConfig()
                             val glossary = app.fetchGlossary()
@@ -1494,7 +1498,7 @@ fun main() {
                     val extraModal = remember { ModalPresence() }
                     CompositionLocalProvider(LocalModalPresence provides extraModal) {
                         ProvideDesktopAdaptiveLocals {
-                            DesktopTheme(appearance = ui.appearance) {
+                            DesktopTheme(appearance = ui.appearance, uiPrefs = desktopUiPrefs) {
                                 if (extraBind != null) {
                                     DetachedWorkspaceWindow(host, extraBind, ui)
                                 }

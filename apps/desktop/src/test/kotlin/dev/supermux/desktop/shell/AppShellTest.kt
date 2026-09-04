@@ -44,6 +44,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.ui.nav.Route
 
 /**
  * M4a Task 5 — wiring the launcher into the app shell. [AppShell] wasn't previously
@@ -441,7 +442,7 @@ class AppShellTest {
     @Test fun addHostOverlayHidesWorkspaceLayer() {
         assertFalse(
             workspaceLayerVisible(
-                currentRoute = DesktopRoute.Home,
+                currentRoute = Route.Home,
                 launcherOpen = false,
                 addHostOpen = true,
                 selectedSessionAvailable = true,

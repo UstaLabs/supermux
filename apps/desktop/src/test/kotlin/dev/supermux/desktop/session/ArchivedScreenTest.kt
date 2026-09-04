@@ -16,7 +16,7 @@ import androidx.compose.ui.test.withKeyDown
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.desktop.shell.DesktopRoute
+import dev.supermux.ui.nav.Route
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
@@ -324,7 +324,7 @@ class ArchivedScreenTest {
     }
 
     @Test fun overlay_opens_from_ui_archived_open_and_loads_the_list() = runComposeUiTest {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) }
+        val ui = ShellUiState().apply { navigate(Route.Archived) }
         val app = appForArchived()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -341,7 +341,7 @@ class ArchivedScreenTest {
     @Test fun workspace_shortcuts_are_gated_off_while_the_archived_overlay_is_up() = runComposeUiTest {
         // Mirrors the launcher gating test: Ctrl+B while the archived overlay is up must NOT toggle
         // the sidebar behind it (ui.overlayOpen gates workspaceShortcuts OFF).
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) } // sidebarCollapsed defaults false
+        val ui = ShellUiState().apply { navigate(Route.Archived) } // sidebarCollapsed defaults false
         val app = appForArchived()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
@@ -359,7 +359,7 @@ class ArchivedScreenTest {
     }
 
     @Test fun resume_from_the_overlay_closes_it() = runComposeUiTest {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) }
+        val ui = ShellUiState().apply { navigate(Route.Archived) }
         val app = appForArchived()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {

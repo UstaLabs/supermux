@@ -47,6 +47,9 @@ import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.ui.workspace.WorkspaceSession
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
 internal object WorkspaceChatPaneTestIds {
@@ -282,10 +285,12 @@ private fun FileViewPane(
     val documents = session.documents
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
-    val editorPrefs = vm.editorPrefs
+    val editorPrefs = LocalUiPrefs.current
+    val lineWrap by editorPrefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
+    val fontSize by editorPrefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
     val engine = rememberEditorEngine(
-        lineWrap = editorPrefs.lineWrap,
-        fontSize = editorPrefs.fontSize,
+        lineWrap = lineWrap,
+        fontSize = fontSize,
         onChange = { content -> documents.update(path, content) },
         onSave = { documents.get(path)?.let { documents.save(it) } },
     )
@@ -299,7 +304,7 @@ private fun FileViewPane(
         engine = engine,
         content = doc.content,
         filename = path.substringAfterLast('/'),
-        fontSize = editorPrefs.fontSize,
+        fontSize = fontSize,
         scrollTop = doc.scrollTop,
         revealLine = doc.revealLine,
         onChange = { documents.update(path, it) },

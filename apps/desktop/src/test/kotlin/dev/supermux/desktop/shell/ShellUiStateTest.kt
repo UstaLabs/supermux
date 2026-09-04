@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.ui.nav.Route
+import dev.supermux.ui.nav.SettingsSection
 
 /**
  * Regression tests for [ShellUiState.reconcileSessions] — the startup-order bug: app.sessions
@@ -63,7 +65,7 @@ class WorkspaceUiStateTest {
     // stale one surfacing when the other closes. openLauncher()/openArchived() enforce exclusivity.
 
     @Test fun openLauncherClosesTheArchivedOverlay() {
-        val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) }
+        val ui = ShellUiState().apply { navigate(Route.Archived) }
         ui.openLauncher()
         assertTrue(ui.launcherOpen)
         assertFalse(ui.archivedOpen)
@@ -88,11 +90,11 @@ class WorkspaceUiStateTest {
         assertFalse(ui.archivedOpen)
         assertTrue(ui.overlayOpen)
 
-        val ui2 = ShellUiState().apply { navigate(DesktopRoute.Archived) }
+        val ui2 = ShellUiState().apply { navigate(Route.Archived) }
         ui2.openUsage()
         assertTrue(ui2.usageOpen)
         assertFalse(ui2.archivedOpen)
-        assertEquals(listOf(DesktopRoute.Home), ui2.backStack.toList())
+        assertEquals(listOf(Route.Home), ui2.backStack.toList())
     }
 
     @Test fun openLauncherClosesTheUsageOverlay() {
@@ -114,7 +116,7 @@ class WorkspaceUiStateTest {
     @Test fun openPersonalAssistantsClosesEveryOtherOverlay() {
         val ui = ShellUiState().apply {
             launcherOpen = true
-            navigate(DesktopRoute.Archived)
+            navigate(Route.Archived)
             openUsage()
             openLspSettings()
         }
@@ -154,16 +156,16 @@ class WorkspaceUiStateTest {
 
     @Test fun backStackStartsAtHomeOnly() {
         val ui = ShellUiState()
-        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
-        assertEquals(DesktopRoute.Home, ui.currentRoute)
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
+        assertEquals(Route.Home, ui.currentRoute)
         assertFalse(ui.overlayOpen)
     }
 
     @Test fun navigatePushesOverlayAboveHome() {
         val ui = ShellUiState()
-        ui.navigate(DesktopRoute.Settings(SettingsSection.Devices))
+        ui.navigate(Route.Settings(SettingsSection.Devices))
         assertEquals(
-            listOf(DesktopRoute.Home, DesktopRoute.Settings(SettingsSection.Devices)),
+            listOf(Route.Home, Route.Settings(SettingsSection.Devices)),
             ui.backStack.toList(),
         )
         assertTrue(ui.overlayOpen)
@@ -173,20 +175,20 @@ class WorkspaceUiStateTest {
 
     @Test fun goBackPopsToHome() {
         val ui = ShellUiState()
-        ui.navigate(DesktopRoute.Archived)
+        ui.navigate(Route.Archived)
         assertTrue(ui.goBack())
-        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
         assertFalse(ui.goBack()) // already at Home
         assertFalse(ui.archivedOpen)
     }
 
     @Test fun navigateIsExclusiveSingleOverlay() {
         val ui = ShellUiState()
-        ui.navigate(DesktopRoute.Archived)
-        ui.navigate(DesktopRoute.Settings(SettingsSection.Agents))
+        ui.navigate(Route.Archived)
+        ui.navigate(Route.Settings(SettingsSection.Agents))
         // Exclusive policy: stack is [Home, Settings], not [Home, Archived, Settings]
         assertEquals(
-            listOf(DesktopRoute.Home, DesktopRoute.Settings(SettingsSection.Agents)),
+            listOf(Route.Home, Route.Settings(SettingsSection.Agents)),
             ui.backStack.toList(),
         )
         assertFalse(ui.archivedOpen)
@@ -197,7 +199,7 @@ class WorkspaceUiStateTest {
         val ui = ShellUiState()
         ui.openUsage()
         assertTrue(ui.usageOpen)
-        assertEquals(listOf(DesktopRoute.Home), ui.backStack.toList())
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
         ui.closeUsage()
         assertFalse(ui.usageOpen)
         assertFalse(ui.overlayOpen)

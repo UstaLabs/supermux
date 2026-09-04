@@ -15,7 +15,7 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.desktop.shell.SettingsSection
+import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState

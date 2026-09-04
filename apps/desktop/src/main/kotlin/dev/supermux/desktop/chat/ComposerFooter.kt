@@ -54,6 +54,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
 import dev.supermux.ui.ChatDetailLevel
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 /**
  * One 24dp line under the composer card. Renders nothing but the detail chip when the session has
@@ -70,7 +71,8 @@ fun ComposerFooter(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    val detail by ChatDetailPrefs.level.collectAsState()
+    val uiPrefs = LocalUiPrefs.current
+    val detail by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
     var detailOpen by remember { mutableStateOf(false) }
     var gitOpen by remember { mutableStateOf(false) }
     var gitResult by remember(session.id) { mutableStateOf<String?>(null) }
@@ -127,7 +129,7 @@ fun ComposerFooter(
                             }
                         },
                         modifier = Modifier.testTag("footer_detail_${level.wire}"),
-                        onClick = { ChatDetailPrefs.set(level); detailOpen = false },
+                        onClick = { scope.launch { uiPrefs.putChatDetailLevel(level) }; detailOpen = false },
                     )
                 }
             }

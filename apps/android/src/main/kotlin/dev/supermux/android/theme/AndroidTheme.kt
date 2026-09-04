@@ -21,6 +21,9 @@ import dev.supermux.ui.adaptive.widthClassFor
 import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.LocalHaptics
 import dev.supermux.ui.theme.SupermuxTheme
 
@@ -36,6 +39,10 @@ import dev.supermux.ui.theme.SupermuxTheme
  *    size class helper used; NOT `Configuration.screenWidthDp`, which excludes the system bars
  *    before API 35.
  *  - `LocalInputMode` = `Touch` unless a hardware keyboard or mouse/touchpad is attached.
+ *  - `LocalUiPrefs` — the persisted editor / chat-detail preferences (`ui/prefs/UiPrefs.kt`).
+ *    `MainActivity` passes the real one (`vm.uiPrefs`, on the app's DataStore); the debug preview
+ *    activities pass nothing and get a process-local store that behaves the same but persists
+ *    nothing.
  *
  * No typography is passed: the shared theme derives it from the width class alone.
  *
@@ -48,6 +55,7 @@ import dev.supermux.ui.theme.SupermuxTheme
 fun AndroidTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
     textScale: Float = 1f,
+    uiPrefs: UiPrefs? = null,
     content: @Composable () -> Unit,
 ) {
     val dark = when (appearance) {
@@ -68,6 +76,7 @@ fun AndroidTheme(
     // MainActivity and the debug preview activities all get it from one place; `LocalHaptics`
     // is just a shortcut onto `platform.haptics` for `rememberHaptics()` call sites.
     val platform = rememberAndroidPlatform()
+    val prefs = uiPrefs ?: remember { UiPrefs(InMemorySettingsStore()) }
     val widthPx = LocalWindowInfo.current.containerSize.width
     val density = LocalDensity.current.density
     // `containerSize` is 0 during the very first composition (composition precedes measure), and
@@ -84,6 +93,7 @@ fun AndroidTheme(
         // Hit-target sizing asks for a real mouse/touchpad, never the keyboard — a phone with a
         // Bluetooth keyboard is still a thumb device. See ui/adaptive/InputMode.kt.
         LocalPointerAvailable provides rememberPointerAvailable(),
+        LocalUiPrefs provides prefs,
     ) {
         SupermuxTheme(
             appearance = appearance,

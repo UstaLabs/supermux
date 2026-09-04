@@ -1,6 +1,10 @@
 package dev.supermux.desktop.editor
 
-import java.nio.file.Files
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.UiPrefs
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,9 +12,9 @@ import kotlin.test.assertFalse
 /**
  * M3-T5 "zoom persistence confirmation" — pins the two guarantees at the seam level (no JCEF):
  *
- *  1. The writeback path (DesktopEditorPanel's `onFontSize` — EditorPrefsStore.save) round-trips
+ *  1. The writeback path (DesktopEditorPanel's `onFontSize` — [UiPrefs.putEditorFontSize]) round-trips
  *     into a BRAND-NEW panel/engine's init push: a fresh [EditorPushPlanner] built from the persisted
- *     [EditorPrefs] carries the persisted size in its `onReady()` push, not the bundle default
+ *     prefs carries the persisted size in its `onReady()` push, not the bundle default
  *     (EDITOR_FONT_DEFAULT). This is the "survives reopen/relaunch" half of the plan item.
  *  2. A zoom change on an ALREADY-ready engine never re-sends `cmSetContent`/`cmSetLanguage` (i.e.
  *     never reloads the file) — only `cmSetFontSize` — which is also what keeps
@@ -19,25 +23,21 @@ import kotlin.test.assertFalse
  */
 class EditorZoomPersistenceTest {
 
-    private fun tempStore() =
-        EditorPrefsStore(Files.createTempDirectory("zoom-persist-test").resolve("editor-settings.json"))
-
     @Test
-    fun writeback_persists_and_a_brand_new_engine_init_pushes_the_persisted_size() {
-        val store = tempStore()
-        assertEquals(EDITOR_FONT_DEFAULT, store.load().fontSize) // first run: bundle default
+    fun writeback_persists_and_a_brand_new_engine_init_pushes_the_persisted_size() = runTest {
+        val store = InMemorySettingsStore()
+        val prefs = UiPrefs(store)
+        assertEquals(EDITOR_FONT_DEFAULT, prefs.editorFontSize.first()) // first run: bundle default
 
         // Simulate DesktopEditorPanel.onFontSize (SessionDetail.kt): the engine already applied the
         // zoom live (EditorSurface.onFontSize callback) — this is JUST the persistence writeback.
-        var prefs = store.load()
-        val onFontSize: (Int) -> Unit = { px -> prefs = prefs.copy(fontSize = px).clamped(); store.save(prefs) }
-        onFontSize(19)
-        assertEquals(19, store.load().fontSize)
+        prefs.putEditorFontSize(19)
+        assertEquals(19, prefs.editorFontSize.first())
 
-        // A brand-new panel/engine (session reopened, or the app relaunched) loads the persisted
+        // A brand-new panel/engine (session reopened, or the app relaunched) reads the persisted
         // prefs and seeds ITS planner from them — the init push must carry 19, not the default 13.
-        val freshPrefs = store.load()
-        val planner = EditorPushPlanner(freshPrefs.lineWrap, freshPrefs.fontSize)
+        val fresh = UiPrefs(store)
+        val planner = EditorPushPlanner(fresh.editorLineWrap.first(), fresh.editorFontSize.first())
         planner.setDocument("hello", "a.kt")
         val js = planner.onReady()
         assertEquals(

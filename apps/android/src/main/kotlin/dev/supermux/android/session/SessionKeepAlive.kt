@@ -567,7 +567,6 @@ private fun SessionChatLayer(
             loadContinueModels = { vm.fleet.launcherModels(it) },
             loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
             onContinued = onSelectSession,
-            editorPrefs = vm.editorPrefs,
             onEditorConsumesBackChange = { editorConsumesBack = it },
             finishJob = finishJob,
             onFinishReadiness = { vm.fleet.finishReadiness(session.id) },

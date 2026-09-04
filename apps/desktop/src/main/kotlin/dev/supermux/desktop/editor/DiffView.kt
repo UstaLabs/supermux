@@ -85,6 +85,9 @@ import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.EDITOR_DIFF_TREE_VIEW_DEFAULT
+import androidx.compose.runtime.collectAsState
 
 // ─── Diff colours — same semantic palette as iOS DiffView.swift:38-41 (emerald/red/
 //     blue/amber), applied as opacity tints so they read in light + dark. State is never
@@ -137,8 +140,8 @@ fun DiffView(
     var expandedFiles by remember { mutableStateOf(setOf<String>()) }
     var expandedRepos by remember { mutableStateOf(setOf<String>()) }
     var expandedFolders by remember { mutableStateOf(setOf<String>()) }
-    val prefsStore = remember { EditorPrefsStore() }
-    var treeView by remember { mutableStateOf(prefsStore.load().diffTreeView) }
+    val uiPrefs = LocalUiPrefs.current
+    val treeView by uiPrefs.editorDiffTreeView.collectAsState(EDITOR_DIFF_TREE_VIEW_DEFAULT)
     // `repo||path||newLine` of the line whose composer is open (null = none).
     var composerFor by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf("") }
@@ -202,10 +205,7 @@ fun DiffView(
             )
             Spacer(Modifier.width(Space.xs))
             IconButton(
-                onClick = {
-                    treeView = !treeView
-                    prefsStore.save(prefsStore.load().copy(diffTreeView = treeView))
-                },
+                onClick = { scope.launch { uiPrefs.putEditorDiffTreeView(!treeView) } },
                 modifier = Modifier.testTag("diff_tree_toggle"),
             ) {
                 Icon(

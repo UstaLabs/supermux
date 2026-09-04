@@ -74,6 +74,7 @@ import dev.supermux.ui.effectiveChatDetail
 import dev.supermux.ui.formatLowWorkingStatus
 import dev.supermux.ui.turnBoundaryMs
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 /** Reading-width cap for the timeline + composer so long lines wrap at a comfortable measure on a
  *  1440-wide window instead of stretching edge-to-edge (obligation 2). Content is centered under
@@ -194,7 +195,7 @@ fun ChatPanel(
     LaunchedEffect(session.id) { modelsData = app.sessionModels(session.id) }
     LaunchedEffect(session.id) { reasoningData = app.sessionReasoning(session.id) }
 
-    val chatDetail by ChatDetailPrefs.level.collectAsState()
+    val chatDetail by LocalUiPrefs.current.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
     val detailMode = effectiveChatDetail(chatDetail)
     val hideTools = detailMode == ChatDetailLevel.LOW
     val highDetail = detailMode == ChatDetailLevel.HIGH

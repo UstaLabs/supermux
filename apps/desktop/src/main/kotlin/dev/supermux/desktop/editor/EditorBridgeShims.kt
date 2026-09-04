@@ -17,11 +17,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
-
-/** Font-size clamp — mirrors the bundle's FONT_MIN/MAX/DEFAULT (cm6-entry.mjs:82). */
-internal const val EDITOR_FONT_MIN = 10
-internal const val EDITOR_FONT_MAX = 24
-internal const val EDITOR_FONT_DEFAULT = 13
+import dev.supermux.ui.prefs.EDITOR_FONT_MAX
+import dev.supermux.ui.prefs.EDITOR_FONT_MIN
 
 /**
  * Quote [s] as a JS string literal via kotlinx-serialization (NOT hand-rolled escaping). A JSON

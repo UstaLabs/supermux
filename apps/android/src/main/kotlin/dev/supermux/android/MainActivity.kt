@@ -73,16 +73,6 @@ import dev.supermux.host.viewingSurfaceVisible
 import dev.supermux.android.host.visibleChatIdsForAndroid
 import dev.supermux.host.visibleWorkspaceChatIds
 import dev.supermux.host.workspaceForSession
-import dev.supermux.android.nav.AddHost
-import dev.supermux.android.nav.Appearance
-import dev.supermux.android.nav.Archived
-import dev.supermux.android.nav.Devices
-import dev.supermux.android.nav.Displays
-import dev.supermux.android.nav.Home
-import dev.supermux.android.nav.NewSession
-import dev.supermux.android.nav.Proxies
-import dev.supermux.android.nav.Settings
-import dev.supermux.android.nav.Usage
 import dev.supermux.android.session.SessionKeepAlivePhoneHost
 import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
@@ -128,6 +118,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.SidebarReorderKind
 import dev.supermux.state.sidebarReorderKind
+import dev.supermux.ui.nav.Route
 
 class MainActivity : ComponentActivity() {
     // Current launch/deep-link intent, surfaced to Compose. Seeded in onCreate; updated by
@@ -169,7 +160,13 @@ class MainActivity : ComponentActivity() {
             // now — the brand palette is the only palette (see AndroidTheme).
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
             var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
-            AndroidTheme(appearance = appearance, textScale = textScale) {
+            // Multi-host (spec §5): the VM owns N per-host connections from the PairedHostStore,
+            // re-running the idempotent single-host→PairedHost[0] migration on init so existing
+            // users — and the session where onboarding just paired — always have a host to drive.
+            // Hoisted above the theme because the theme installs the VM's settings-backed
+            // `LocalUiPrefs` for every screen under it.
+            val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
+            AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = vm.uiPrefs) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
                 // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
@@ -211,10 +208,6 @@ class MainActivity : ComponentActivity() {
                     return@AndroidTheme
                 }
 
-                // Multi-host (spec §5): the VM owns N per-host connections from the PairedHostStore,
-                // re-running the idempotent single-host→PairedHost[0] migration on init so existing
-                // users — and the session where onboarding just paired — always have a host to drive.
-                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
                 val sessions by vm.fleet.sessions.collectAsStateWithLifecycle()
                 val archivedSessions by vm.fleet.archivedSessions.collectAsStateWithLifecycle()
                 val workspaces by vm.fleet.workspaces.collectAsStateWithLifecycle()
@@ -282,7 +275,7 @@ class MainActivity : ComponentActivity() {
 
                 val navController = rememberNavController()
                 val navEntry by navController.currentBackStackEntryAsState()
-                val homeRoute = navEntry?.destination?.hasRoute<Home>() == true
+                val homeRoute = navEntry?.destination?.hasRoute<Route.Home>() == true
                 val overlayOpen = navEntry != null && !homeRoute
 
                 // Report which chats are foreground so the broker suppresses a push (spec §11).
@@ -413,14 +406,14 @@ class MainActivity : ComponentActivity() {
                 // Maps the screens' legacy string-route callbacks to type-safe NavHost destinations.
                 val navTo: (String) -> Unit = { dest ->
                     when (dest) {
-                        "new" -> navController.navigate(NewSession())
-                        "settings" -> navController.navigate(Settings)
-                        "usage" -> navController.navigate(Usage)
-                        "devices" -> navController.navigate(Devices)
-                        "archived" -> navController.navigate(Archived)
-                        "proxies" -> navController.navigate(Proxies)
-                        "appearance" -> navController.navigate(Appearance)
-                        "addhost" -> navController.navigate(AddHost)
+                        "new" -> navController.navigate(Route.NewSession())
+                        "settings" -> navController.navigate(Route.Settings())
+                        "usage" -> navController.navigate(Route.Usage)
+                        "devices" -> navController.navigate(Route.Devices)
+                        "archived" -> navController.navigate(Route.Archived)
+                        "proxies" -> navController.navigate(Route.Proxies)
+                        "appearance" -> navController.navigate(Route.Appearance)
+                        "addhost" -> navController.navigate(Route.AddHost)
                         // "displays"/"theme"/"list" → no destinations (stubs)
                     }
                 }
@@ -428,11 +421,11 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxSize()) {
                 // App self-update strip (versions.json). One-tap install for sideloaded APKs.
                 AppUpdateBanner(
-                    onOpenPage = { navController.navigate(Settings) },
+                    onOpenPage = { navController.navigate(Route.Settings()) },
                 )
                 NavHost(
                     navController = navController,
-                    startDestination = Home,
+                    startDestination = Route.Home,
                     modifier = Modifier
                         .weight(1f)
                         .semantics { testTagsAsResourceId = true },
@@ -440,7 +433,7 @@ class MainActivity : ComponentActivity() {
                     // ── Home: list ↔ chat (keep-alive). Bodies are the old `else`-branch, verbatim,
                     //    with `route = …` swapped for nav. The keep-alive / shared-element / predictive-back
                     //    code lives inside the hosts below and is unchanged. ──
-                    composable<Home> {
+                    composable<Route.Home> {
                         if (wide) {
                             // Container focus so hardware-keyboard shortcuts (Ctrl/Cmd + …) are
                             // received; onPreviewKeyEvent still sees events when a descendant (chat
@@ -464,7 +457,7 @@ class MainActivity : ComponentActivity() {
                                     .workspaceShortcuts(
                                         sidebar = sidebarState,
                                         selectedId = selected,
-                                        onNewSession = { navController.navigate(NewSession()) },
+                                        onNewSession = { navController.navigate(Route.NewSession()) },
                                         onAddKind = { kind ->
                                             val sid = selected ?: return@workspaceShortcuts
                                             val hostId = sessionHost[sid] ?: vm.fleet.activeHost.value ?: return@workspaceShortcuts
@@ -502,7 +495,7 @@ class MainActivity : ComponentActivity() {
                                             agentState = agentState,
                                             onSelect = { selected = it },
                                             onExpand = { sidebarState.sidebarCollapsed = false },
-                                            onNewSession = { navController.navigate(NewSession()) },
+                                            onNewSession = { navController.navigate(Route.NewSession()) },
                                             lastBySession = lastBySession,
                                             lastRead = lastRead,
                                         )
@@ -518,7 +511,7 @@ class MainActivity : ComponentActivity() {
                                                 lastBySession = lastBySession,
                                                 lastRead = lastRead,
                                                 agentState = agentState,
-                                                onNewSession = { navController.navigate(NewSession()) },
+                                                onNewSession = { navController.navigate(Route.NewSession()) },
                                                 loadProjects = { vm.fleet.listProjects() },
                                                 validatePath = { vm.fleet.validatePath(it) },
                                                 onNavigate = navTo,
@@ -527,7 +520,7 @@ class MainActivity : ComponentActivity() {
                                                 onMute = { id, m -> vm.fleet.setMute(id, m) },
                                                 archived = archivedSessions,
                                                 onResume = { id -> vm.fleet.resume(id) },
-                                                onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
+                                                onOpenDraft = { id -> navController.navigate(Route.NewSession(draftId = id)) },
                                                 onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) vm.fleet.reorderSessions(ids) else vm.fleet.reorderWorkspaces(ids) },
                                                 workspaces = workspaces,
                                                 archivedWorkspaces = archivedWorkspaces,
@@ -538,7 +531,7 @@ class MainActivity : ComponentActivity() {
                                                 sessionHost = sessionHost,
                                                 hostFilter = hostFilter,
                                                 onHostFilter = setHostFilter,
-                                                onAddHost = { navController.navigate(AddHost) },
+                                                onAddHost = { navController.navigate(Route.AddHost) },
                                                 onRenameHost = { id, name -> vm.fleet.renameHost(id, name) },
                                                 onForgetHost = { id -> vm.fleet.forgetHost(id) },
                                             )
@@ -573,7 +566,7 @@ class MainActivity : ComponentActivity() {
                                         wide = true,
                                         workspaces = workspaces,
                                         onNavigate = navTo,
-                                        onOpenDisplays = { navController.navigate(Displays) },
+                                        onOpenDisplays = { navController.navigate(Route.Displays) },
                                         modifier = Modifier.fillMaxSize(),
                                     )
                                 }
@@ -620,21 +613,21 @@ class MainActivity : ComponentActivity() {
                                 archived = archivedSessions,
                                 vm = vm,
                                 onNavigate = navTo,
-                                onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                onOpenDisplays = { navController.navigate(Displays) },
+                                onOpenDraft = { id -> navController.navigate(Route.NewSession(draftId = id)) },
+                                onOpenDisplays = { navController.navigate(Route.Displays) },
                                 hosts = hostViews,
                                 sessionHost = sessionHost,
                                 hostFilter = hostFilter,
                                 onHostFilter = setHostFilter,
-                                onAddHost = { navController.navigate(AddHost) },
+                                onAddHost = { navController.navigate(Route.AddHost) },
                                 workspaces = workspaces,
                                 archivedWorkspaces = archivedWorkspaces,
                             )
                         }
                     }
                     // ── New-session launcher (old "new" branch, verbatim, route→nav) ──
-                    composable<NewSession> { entry ->
-                        val ns = entry.toRoute<NewSession>()
+                    composable<Route.NewSession> { entry ->
+                        val ns = entry.toRoute<Route.NewSession>()
                         val draftId = ns.draftId.takeIf { it.isNotBlank() }
                         val draftSession = draftId?.let { id -> sessions.find { it.id == id } }
                         if (wide) {
@@ -657,7 +650,7 @@ class MainActivity : ComponentActivity() {
                                         onMute = { id, m -> vm.fleet.setMute(id, m) },
                                         archived = archivedSessions,
                                         onResume = { id -> vm.fleet.resume(id) },
-                                        onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
+                                        onOpenDraft = { id -> navController.navigate(Route.NewSession(draftId = id)) },
                                         onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) vm.fleet.reorderSessions(ids) else vm.fleet.reorderWorkspaces(ids) },
                                         workspaces = workspaces,
                                         archivedWorkspaces = archivedWorkspaces,
@@ -668,7 +661,7 @@ class MainActivity : ComponentActivity() {
                                         sessionHost = sessionHost,
                                         hostFilter = hostFilter,
                                         onHostFilter = setHostFilter,
-                                        onAddHost = { navController.navigate(AddHost) },
+                                        onAddHost = { navController.navigate(Route.AddHost) },
                                         onRenameHost = { id, name -> vm.fleet.renameHost(id, name) },
                                         onForgetHost = { id -> vm.fleet.forgetHost(id) },
                                     )
@@ -759,7 +752,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    composable<AddHost> {
+                    composable<Route.AddHost> {
                         AddHostScreen(
                             onBack = { navController.popBackStack() },
                             defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
@@ -774,7 +767,7 @@ class MainActivity : ComponentActivity() {
                             needsInsecureOptIn = { vm.fleet.urlNeedsInsecureOptIn(it) },
                         )
                     }
-                    composable<Settings> {
+                    composable<Route.Settings> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { SettingsScreen(
                             onBack = { navController.popBackStack() },
                             // Personal assistants
@@ -830,14 +823,14 @@ class MainActivity : ComponentActivity() {
                             restartBroker = { vm.fleet.restartBroker() },
                         ) } }
                     }
-                    composable<Usage> {
+                    composable<Route.Usage> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { UsageScreen(
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.fleet.usageRaw() },
                             onRedeem = { vm.fleet.redeemCodexReset() },
                         ) } }
                     }
-                    composable<Devices> {
+                    composable<Route.Devices> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { DevicesScreen(
                             onBack = { navController.popBackStack() },
                             onLoad = { vm.fleet.devices() },
@@ -845,7 +838,7 @@ class MainActivity : ComponentActivity() {
                             onRevoke = { vm.fleet.revoke(it) },
                         ) } }
                     }
-                    composable<Archived> {
+                    composable<Route.Archived> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ArchivedScreen(
                             onBack = { navController.popBackStack() },
                             workspaces = archivedWorkspaces,
@@ -857,7 +850,7 @@ class MainActivity : ComponentActivity() {
                             loadLogs = { vm.fleet.archivedLogs(it) },
                         ) } }
                     }
-                    composable<Proxies> {
+                    composable<Route.Proxies> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ProxyScreen(
                             onLoad = { vm.fleet.proxies() },
                             sessions = activeHostSessions,
@@ -867,7 +860,7 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() },
                         ) } }
                     }
-                    composable<Displays> {
+                    composable<Route.Displays> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) {
                             LaunchedEffect(activeHost) { vm.fleet.listDisplays() }
                             DisplaysScreen(
@@ -880,7 +873,7 @@ class MainActivity : ComponentActivity() {
                             )
                         } }
                     }
-                    composable<Appearance> {
+                    composable<Route.Appearance> {
                         AppearanceSettingsPage(
                             appearance = appearance,
                             dynamicColor = dynamicColor,

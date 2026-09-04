@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.supermux.android.chat.MessageTts
-import dev.supermux.android.editor.EditorPrefs
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.settings.AndroidSettingsStore
 import dev.supermux.host.HostSnapshotStore
@@ -16,22 +15,24 @@ import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.cioHttpFactory
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.UiPrefs
 
 /**
  * Activity-scoped holder for the shared [FleetStore] (spec §5). All multi-host state and every
  * action live in [fleet]; this class only owns the Android-only pieces: the DataStore-backed
- * settings, the editor preferences, the read-aloud seam and the offline-snapshot publisher the
+ * settings, the read-aloud seam and the offline-snapshot publisher the
  * push service reads.
  */
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val appContext = application.applicationContext
 
-    val editorPrefs = EditorPrefs(appContext)
-
-    private val deps = HostStoreDeps(
+    val deps = HostStoreDeps(
         httpFactory = cioHttpFactory(),
         settings = AndroidSettingsStore(appContext),
     )
+
+    /** Editor + chat-detail preferences, on the same DataStore as drafts / launcher prefs. */
+    val uiPrefs = UiPrefs(deps.settings)
 
     /** Per-host offline-snapshot cache (spec §5), also read by the push service. */
     private val snapshotStore: HostSnapshotStore = HostStores.snapshotStore(appContext)

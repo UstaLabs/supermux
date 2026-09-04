@@ -81,7 +81,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.chat.ChatDetailPrefs
 import dev.supermux.desktop.session.AgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.MonoFontFamily
@@ -104,6 +103,7 @@ import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 // ── Pure, testable bits (no Compose) ──────────────────────────────────────────────────
 
@@ -428,7 +428,8 @@ fun OverflowMenu(
                 modifier = Modifier.size(18.dp),
             )
         }
-        val chatDetail by ChatDetailPrefs.level.collectAsState()
+        val uiPrefs = LocalUiPrefs.current
+        val chatDetail by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
         var detailSubmenu by remember { mutableStateOf(false) }
         DropdownMenu(
             expanded = expanded,
@@ -506,7 +507,7 @@ fun OverflowMenu(
                     modifier = Modifier.testTag("overflow_detail_${level.wire}"),
                     enabled = true,
                     onClick = {
-                        ChatDetailPrefs.set(level)
+                        scope.launch { uiPrefs.putChatDetailLevel(level) }
                         detailSubmenu = false
                         expanded = false
                     },

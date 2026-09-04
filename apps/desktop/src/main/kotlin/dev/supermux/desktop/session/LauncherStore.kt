@@ -1,5 +1,5 @@
 // Desktop launcher prefs/draft persistence: written to `launcher-state.json` next to the token /
-// ui-state / editor-settings stores (ShellStateStore/EditorPrefsStore precedent). Mirrors the
+// ui-state store (ShellStateStore precedent). Mirrors the
 // Android `session/LauncherState.kt` DTOs (dev.supermux.android.session.LauncherPrefs/LauncherDraft)
 // field-for-field — keep the two in sync when either changes.
 //
@@ -8,7 +8,7 @@
 // ShellStateStore uses for its (layout, selectedId) pair. clearDraft() resets only the draft
 // half of the blob and re-persists — prefs in the same file are untouched.
 //
-// Unlike EditorPrefsStore/ShellStateStore (plain writeString — their content isn't considered
+// Unlike ShellStateStore (plain writeString — its content is not considered
 // worth crash-safety), this store atomic-writes (temp file + ATOMIC_MOVE, falling back to a plain
 // move) following DesktopTokenStore's pattern: a draft in progress is more failure-sensitive to a
 // half-written file (a crash mid-save would otherwise risk truncating the user's typed message).

@@ -16,7 +16,7 @@ import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
 
 /**
- * Renders the top [NavEntry] as a full-size layer while [overlaidEntries] (typically [DesktopRoute.Home])
+ * Renders the top [NavEntry] as a full-size layer while [overlaidEntries] (typically [Route.Home])
  * stay in the composition underneath — so opening Settings does not tear down session panes.
  *
  * Mark entries with [fullPaneOverlay] metadata. Register this strategy **before** any non-overlay

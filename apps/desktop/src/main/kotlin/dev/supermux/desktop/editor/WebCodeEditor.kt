@@ -69,6 +69,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.awt.BorderLayout
 import javax.swing.JPanel
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 
 /** The dark backing (One-Dark #282C34) the cm6 bundle paints on — used as the white-flash cover. */
 private val EDITOR_BG = Color(0xFF282C34)

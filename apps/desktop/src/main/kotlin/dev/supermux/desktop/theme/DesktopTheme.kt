@@ -10,6 +10,9 @@ import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.widgets.LocalModalHost
 
 /**
@@ -24,6 +27,11 @@ import dev.supermux.ui.widgets.LocalModalHost
  * on `LocalModalPresence` so the heavyweight children (JediTerm, JCEF) lay themselves out at 0×0
  * and the modal is actually visible. See `ui/ModalPresence.kt`.
  *
+ * The third: the persisted UI preferences (`ui/prefs/UiPrefs.kt`) are installed on `LocalUiPrefs`
+ * here, so every window root gets them from one place. `Main.kt` passes the real store
+ * (`desktopDeps.settings`); anything else — tests, the interop probe — falls back to a
+ * process-local one, which behaves identically but persists nothing.
+ *
  * Haptics stay on the shared `NoHaptics` default (through `DesktopPlatform`) — no actuator here. No typography is
  * passed either: the shared theme reads `LocalWindowWidthClass`/`LocalInputMode` (provided at each
  * window root) and desktop is always Pointer, so it always resolves to the desktop scale.
@@ -32,16 +40,19 @@ import dev.supermux.ui.widgets.LocalModalHost
 fun DesktopTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
     textScale: Float = 1f,
+    uiPrefs: UiPrefs? = null,
     content: @Composable () -> Unit,
 ) {
     val contextMenu = remember { SupermuxContextMenuRepresentation() }
     // Platform services (links, clipboard, pickers, no-op haptics) — provided here so every
     // window root (main + detached) installs them from one place, as on Android.
     val platform = remember { DesktopPlatform() }
+    val prefs = uiPrefs ?: remember { UiPrefs(InMemorySettingsStore()) }
     CompositionLocalProvider(
         LocalContextMenuRepresentation provides contextMenu,
         LocalPlatform provides platform,
         LocalModalHost provides ModalPresenceHost,
+        LocalUiPrefs provides prefs,
     ) {
         SupermuxTheme(
             appearance = appearance,

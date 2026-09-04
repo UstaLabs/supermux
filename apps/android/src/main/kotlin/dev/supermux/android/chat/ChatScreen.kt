@@ -130,6 +130,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.gitBadge
 import dev.supermux.state.ContinueHandoff
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
 
@@ -205,7 +206,6 @@ fun ChatScreen(
     loadContinueModels: suspend (String) -> List<dev.supermux.net.ModelInfo> = { emptyList() },
     loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
     onContinued: (String) -> Unit = {},
-    editorPrefs: dev.supermux.android.editor.EditorPrefs? = null,
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
     // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
     finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
@@ -422,9 +422,9 @@ fun ChatScreen(
 
                 // Overflow menu (⋮): Detail + rename / mute / displays / kill
                 Box {
-                    val overflowContext = LocalContext.current
-                    ChatDetailPrefs.ensureLoaded(overflowContext)
-                    val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
+                    val uiPrefs = LocalUiPrefs.current
+                    val prefsScope = rememberCoroutineScope()
+                    val chatDetailLevel by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
                     var detailSubmenu by remember { mutableStateOf(false) }
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
@@ -557,7 +557,7 @@ fun ChatScreen(
                                 },
                                 enabled = true,
                                 onClick = {
-                                    ChatDetailPrefs.set(overflowContext, level)
+                                    prefsScope.launch { uiPrefs.putChatDetailLevel(level) }
                                     detailSubmenu = false
                                     headerMenuExpanded = false
                                 },
@@ -699,7 +699,6 @@ fun ChatScreen(
                     onConsumesBackChange = onEditorConsumesBackChange,
                     pendingOpen = pendingEditorOpen,
                     onPendingOpenConsumed = { pendingEditorOpen = null },
-                    editorPrefs = editorPrefs,
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }

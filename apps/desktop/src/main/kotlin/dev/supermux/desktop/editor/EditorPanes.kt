@@ -84,6 +84,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
@@ -193,7 +195,8 @@ fun FilePane(
     lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     lspOpen: (String, String) -> Unit = { _, _ -> },
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
-    prefs: EditorPrefs = EditorPrefs(),
+    lineWrap: Boolean = EDITOR_LINE_WRAP_DEFAULT,
+    fontSize: Int = EDITOR_FONT_DEFAULT,
     onFontSize: (Int) -> Unit = {},
     jcefStateFlow: StateFlow<JcefState> = JcefRuntime.state,
     onEnsureInit: (CoroutineScope) -> Unit = { JcefRuntime.ensureInit(it) },
@@ -318,8 +321,8 @@ fun FilePane(
                     // out at 0×0. Hold it back until the read lands so the engine is born full-size.
                     content = doc?.content ?: "",
                     filename = if (doc != null) path else "",
-                    lineWrap = prefs.lineWrap,
-                    fontSize = prefs.fontSize,
+                    lineWrap = lineWrap,
+                    fontSize = fontSize,
                     scrollTop = doc?.scrollTop ?: 0,
                     revealLine = doc?.revealLine,
                     onChange = { documents.update(path, it) },

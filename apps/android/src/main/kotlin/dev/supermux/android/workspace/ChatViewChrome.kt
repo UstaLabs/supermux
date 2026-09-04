@@ -33,7 +33,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.supermux.android.AppViewModel
 import dev.supermux.android.R
-import dev.supermux.android.chat.ChatDetailPrefs
 import dev.supermux.android.chat.ContinueConversationSheet
 import dev.supermux.state.ContinueHandoff
 import dev.supermux.android.chat.ContinueMenuItem
@@ -55,6 +54,9 @@ import dev.supermux.proto.gitBadge
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
+import androidx.compose.runtime.rememberCoroutineScope
+import dev.supermux.ui.prefs.LocalUiPrefs
+import kotlinx.coroutines.launch
 
 fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
     null -> "Failed"
@@ -220,9 +222,9 @@ internal fun ChatOverflowMenu(
     onContinued: (String) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
-    val overflowContext = LocalContext.current
-    ChatDetailPrefs.ensureLoaded(overflowContext)
-    val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
+    val uiPrefs = LocalUiPrefs.current
+    val prefsScope = rememberCoroutineScope()
+    val chatDetailLevel by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
     var showOverflow by remember { mutableStateOf(false) }
     var detailSubmenu by remember { mutableStateOf(false) }
     val showContinue = rememberContinueSheetState()
@@ -313,7 +315,7 @@ internal fun ChatOverflowMenu(
                         }
                     },
                     onClick = {
-                        ChatDetailPrefs.set(overflowContext, level)
+                        prefsScope.launch { uiPrefs.putChatDetailLevel(level) }
                         detailSubmenu = false
                         showOverflow = false
                     },

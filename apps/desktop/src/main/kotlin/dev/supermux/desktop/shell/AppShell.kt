@@ -115,6 +115,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
+import dev.supermux.ui.nav.Route
+import dev.supermux.ui.nav.SettingsSection
 
 /**
  * macOS title-bar sidebar collapse control — next to the traffic lights (live JBR left
@@ -154,23 +156,6 @@ private fun MacSidebarToggle(
     }
 }
 
-/**
- * Sections of the Settings hub (left rail), in rail order.
- */
-enum class SettingsSection(val label: String) {
-    Agents("Agents"),
-    Devices("Devices"),
-    System("System"),
-    GitHosting("Git hosting"),
-    Proxies("Proxies"),
-    /** PA name + soul.md — distinct from [PersonalAssistants] fleet and [Curator]. */
-    Assistant("Identity"),
-    /** Nightly ~/.mux curator schedule + run-now. */
-    Curator("Curator"),
-    Voice("Voice"),
-    EditorLsp("Editor / LSP"),
-    PersonalAssistants("Personal assistants"),
-}
 
 /**
  * Holder for the workspace UI state that both [AppShell] and the window MenuBar (Main.kt) act
@@ -255,59 +240,59 @@ class ShellUiState {
 
     /**
      * Whether the New-Session launcher is showing in the **detail pane** (sidebar stays mounted).
-     * Not a [DesktopRoute]: it is a side panel inside [DesktopRoute.Home], not a full-pane push.
+     * Not a [Route]: it is a side panel inside [Route.Home], not a full-pane push.
      */
     var launcherOpen by mutableStateOf(false)
     /** When set, the launcher reopens this draft session (web /new?draft=). */
     var launcherDraftId by mutableStateOf<String?>(null)
 
     /**
-     * Whether the Usage floating card is open. Not a [DesktopRoute] — Usage is a lightweight
+     * Whether the Usage floating card is open. Not a [Route] — Usage is a lightweight
      * popover over the workspace, not a full-pane Nav3 push (settings/archived stay routes).
      */
     var usageOpen by mutableStateOf(false)
 
     /**
      * Nav3 back stack — sole source of truth for full-pane destinations.
-     * Always starts with [DesktopRoute.Home]; overlays are pushed with [navigate].
+     * Always starts with [Route.Home]; overlays are pushed with [navigate].
      */
-    val backStack: SnapshotStateList<DesktopRoute> = mutableStateListOf(DesktopRoute.Home)
+    val backStack: SnapshotStateList<Route> = mutableStateListOf(Route.Home)
 
     /** Top of [backStack] (never null — Home is always present). */
-    val currentRoute: DesktopRoute get() = backStack.lastOrNull() ?: DesktopRoute.Home
+    val currentRoute: Route get() = backStack.lastOrNull() ?: Route.Home
 
     /** True when launcher, usage popover, or any full-pane route is up (gates workspace shortcuts). */
     val overlayOpen: Boolean get() = launcherOpen || usageOpen || backStack.size > 1
 
     // Read-only views of the stack (for load effects / assertions). Open via [navigate] / open*.
-    val archivedOpen: Boolean get() = currentRoute is DesktopRoute.Archived
-    val settingsOpen: Boolean get() = currentRoute is DesktopRoute.Settings
-    val appUpdateOpen: Boolean get() = currentRoute is DesktopRoute.AppUpdate
+    val archivedOpen: Boolean get() = currentRoute is Route.Archived
+    val settingsOpen: Boolean get() = currentRoute is Route.Settings
+    val appUpdateOpen: Boolean get() = currentRoute is Route.AppUpdate
     val lspSettingsOpen: Boolean
-        get() = (currentRoute as? DesktopRoute.Settings)?.section == SettingsSection.EditorLsp
+        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.EditorLsp
     val personalAssistantsOpen: Boolean
-        get() = (currentRoute as? DesktopRoute.Settings)?.section == SettingsSection.PersonalAssistants
+        get() = (currentRoute as? Route.Settings)?.section == SettingsSection.PersonalAssistants
 
     /**
-     * Settings rail section. When Settings is on the stack, reads/writes that route's [DesktopRoute.Settings.section];
+     * Settings rail section. When Settings is on the stack, reads/writes that route's [Route.Settings.section];
      * when closed, remembers the last section for the next open (and for tests).
      */
     var settingsSection: SettingsSection
-        get() = (currentRoute as? DesktopRoute.Settings)?.section ?: lastSettingsSection
+        get() = (currentRoute as? Route.Settings)?.section ?: lastSettingsSection
         set(value) {
             lastSettingsSection = value
-            val i = backStack.indexOfLast { it is DesktopRoute.Settings }
-            if (i >= 0) backStack[i] = DesktopRoute.Settings(value)
+            val i = backStack.indexOfLast { it is Route.Settings }
+            if (i >= 0) backStack[i] = Route.Settings(value)
         }
     private var lastSettingsSection by mutableStateOf(SettingsSection.Agents)
 
     /**
-     * Push [route]. [DesktopRoute.Home] clears full-pane overlays; other routes replace any open
+     * Push [route]. [Route.Home] clears full-pane overlays; other routes replace any open
      * full-pane (`[Home, route]`), and close the detail-pane launcher + usage popover.
      */
-    fun navigate(route: DesktopRoute) {
+    fun navigate(route: Route) {
         when (route) {
-            is DesktopRoute.Home -> {
+            is Route.Home -> {
                 usageOpen = false
                 popToHome()
             }
@@ -315,7 +300,7 @@ class ShellUiState {
                 launcherOpen = false
                 usageOpen = false
                 popToHome()
-                if (route is DesktopRoute.Settings) lastSettingsSection = route.section
+                if (route is Route.Settings) lastSettingsSection = route.section
                 backStack.add(route)
             }
         }
@@ -355,7 +340,7 @@ class ShellUiState {
     }
 
     // Menu / chrome conveniences → navigate / popover
-    fun openArchived() = navigate(DesktopRoute.Archived)
+    fun openArchived() = navigate(Route.Archived)
     /**
      * Icon-anchored Usage popover. Toggle when already open; otherwise open (closes
      * launcher + full-pane routes for mutual exclusion).
@@ -374,10 +359,10 @@ class ShellUiState {
         usageOpen = false
     }
     fun openSettings(section: SettingsSection = SettingsSection.Agents) =
-        navigate(DesktopRoute.Settings(section))
+        navigate(Route.Settings(section))
     fun openLspSettings() = openSettings(SettingsSection.EditorLsp)
     fun openPersonalAssistants() = openSettings(SettingsSection.PersonalAssistants)
-    fun openAppUpdate() = navigate(DesktopRoute.AppUpdate)
+    fun openAppUpdate() = navigate(Route.AppUpdate)
 
     /**
      * One-shot external "open this file" request (sessionId → ref), consumed by the workspace shell
@@ -501,13 +486,13 @@ internal data class WorkspaceViewingSnapshot(
 )
 
 internal fun workspaceLayerVisible(
-    currentRoute: DesktopRoute,
+    currentRoute: Route,
     launcherOpen: Boolean,
     addHostOpen: Boolean,
     selectedSessionAvailable: Boolean,
     activeWorkspaceAvailable: Boolean,
 ): Boolean =
-    currentRoute == DesktopRoute.Home &&
+    currentRoute == Route.Home &&
         !launcherOpen &&
         !addHostOpen &&
         selectedSessionAvailable &&
@@ -783,7 +768,7 @@ fun AppShell(
             var archivedList by remember { mutableStateOf<List<ArchivedDto>>(emptyList()) }
             var archivedLoading by remember { mutableStateOf(false) }
             LaunchedEffect(ui.currentRoute, activeHostId) {
-                if (ui.currentRoute is DesktopRoute.Archived) {
+                if (ui.currentRoute is Route.Archived) {
                     archivedLoading = true
                     archivedList = hostApp.archived()
                     archivedLoading = false
@@ -831,20 +816,20 @@ fun AppShell(
 
             // Settings dirty-soul close (SettingsHub); Esc / NavDisplay onBack honor it.
             var settingsTryClose by remember { mutableStateOf<(() -> Unit)?>(null) }
-            val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<DesktopRoute>() }
+            val fullPaneOverlay = remember { FullPaneOverlaySceneStrategy<Route>() }
 
             NavDisplay(
                 backStack = ui.backStack,
                 modifier = Modifier.fillMaxSize(),
                 onBack = {
                     when (ui.currentRoute) {
-                        is DesktopRoute.Settings -> settingsTryClose?.invoke() ?: run { ui.goBack() }
+                        is Route.Settings -> settingsTryClose?.invoke() ?: run { ui.goBack() }
                         else -> ui.goBack()
                     }
                 },
                 sceneStrategies = listOf(fullPaneOverlay),
                 entryProvider = entryProvider {
-                    entry<DesktopRoute.Home> {
+                    entry<Route.Home> {
                 Box(Modifier.fillMaxSize()) {
                 // macOS: no full-window dead strip under the transparent title bar. Detail content
                 // (tabs) runs to the top edge; only the sidebar body is padded under the traffic-
@@ -1293,7 +1278,7 @@ fun AppShell(
                 }
                     }
 
-                    entry<DesktopRoute.Settings>(
+                    entry<Route.Settings>(
                         metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                     ) { route ->
                         val settingsFocus = remember { FocusRequester() }
@@ -1398,7 +1383,7 @@ fun AppShell(
                         }
                     }
 
-                    entry<DesktopRoute.Archived>(
+                    entry<Route.Archived>(
                         metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                     ) {
                         Column(Modifier.fillMaxSize().testTag("archived_overlay")) {
@@ -1421,7 +1406,7 @@ fun AppShell(
                         }
                     }
 
-                    entry<DesktopRoute.AppUpdate>(
+                    entry<Route.AppUpdate>(
                         metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                     ) {
                         val updFocus = remember { FocusRequester() }

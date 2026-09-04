@@ -69,6 +69,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.collectAsState
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 /** A chat-initiated request to open a workdir-relative [path] at an optional [line]. */
 data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?)
@@ -105,7 +109,6 @@ fun EditorPanel(
     onConsumesBackChange: (Boolean) -> Unit = {},
     pendingOpen: PendingEditorOpen? = null,
     onPendingOpenConsumed: () -> Unit = {},
-    editorPrefs: EditorPrefs? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = LocalPanes.current
@@ -143,9 +146,11 @@ fun EditorPanel(
         searchResults.addAll(fsSearch(q))
     }
 
-    val prefs = editorPrefs ?: remember(context) { EditorPrefs(context) }
-    val lineWrap = prefs.lineWrap
-    val fontSize = prefs.fontSize
+    // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt): collected values start
+    // at the defaults for one frame, then settle on what was persisted.
+    val prefs = LocalUiPrefs.current
+    val lineWrap by prefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
+    val fontSize by prefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, lspStatus, lspRpc) {
@@ -171,7 +176,7 @@ fun EditorPanel(
         },
         // A pinch / keyboard zoom in the WebView persists here so it survives reopen.
         // The engine already applied it live, so this only writes the pref (no rebuild).
-        onFontSize = { px -> prefs.persistFontSize(px) },
+        onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
     )
 
     val activeIsMarkdown = editor.activeTab?.path?.let(::isMarkdownPath) == true

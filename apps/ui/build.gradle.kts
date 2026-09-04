@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
+    // ui/nav/Route.kt: @Serializable destinations (Android's type-safe navigation-compose reads the
+    // generated serializer's descriptor to build its route strings).
+    alias(libs.plugins.serialization)
 }
 
 // The pane layer: splits, tab strips, drag, drop zones. It knows nothing about what a pane

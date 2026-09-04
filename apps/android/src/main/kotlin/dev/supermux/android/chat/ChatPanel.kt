@@ -135,6 +135,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 
 /** Identifies this screen to `Platform.pickFiles`, so a pick that outlives an activity
@@ -404,8 +405,7 @@ fun ChatPanel(
         // 2. Timeline
         // ----------------------------------------------------------------
         // Chat detail (low/medium): hide tool cards in low; activity still arrives via [activity].
-        ChatDetailPrefs.ensureLoaded(context)
-        val chatDetail by ChatDetailPrefs.level.collectAsState()
+        val chatDetail by LocalUiPrefs.current.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
         val detailMode = effectiveChatDetail(chatDetail)
         val hideTools = detailMode == ChatDetailLevel.LOW
         val highDetail = detailMode == ChatDetailLevel.HIGH

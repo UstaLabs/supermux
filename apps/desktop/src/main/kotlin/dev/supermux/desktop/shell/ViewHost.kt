@@ -31,7 +31,6 @@ import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
 import dev.supermux.desktop.editor.WalkthroughState
 import dev.supermux.desktop.editor.DiffPane
-import dev.supermux.desktop.editor.EditorPrefsStore
 import dev.supermux.desktop.editor.ExplorerPane
 import dev.supermux.desktop.editor.FilePane
 import dev.supermux.desktop.editor.JcefRuntime
@@ -56,6 +55,10 @@ import kotlinx.coroutines.flow.StateFlow
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.workspace.viewTitle
 import dev.supermux.session.inferHomeDir
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
+import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
+import kotlinx.coroutines.launch
 
 /**
  * Draw one view's body.
@@ -439,8 +442,12 @@ private fun FilePaneForWorkspace(
 ) {
     val sessions by app.sessions.collectAsState()
     val lspSession = lspSessionId?.let { id -> sessions.firstOrNull { it.id == id } }
-    val prefsStore = remember { EditorPrefsStore() }
-    var prefs by remember { mutableStateOf(prefsStore.load()) }
+    // Editor prefs come from the shared SettingsStore now (ui/prefs/UiPrefs.kt): the collected
+    // values start at the defaults for one frame, then settle on what was persisted.
+    val prefs = LocalUiPrefs.current
+    val scope = rememberCoroutineScope()
+    val lineWrap by prefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
+    val fontSize by prefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
 
     FilePane(
         previewMode = previewMode,
@@ -454,12 +461,9 @@ private fun FilePaneForWorkspace(
         lspStatusQuery = { _, p -> if (lspSession != null) app.lspStatusQuery(lspSession, p) },
         lspOpen = { _, serverId -> if (lspSession != null) app.lspOpen(lspSession, serverId) },
         lspRpcOut = { _, serverId, message -> if (lspSession != null) app.lspRpcOut(lspSession, serverId, message) },
-        prefs = prefs,
-        onFontSize = { px ->
-            val next = prefs.copy(fontSize = px).clamped()
-            prefs = next
-            prefsStore.save(next)
-        },
+        lineWrap = lineWrap,
+        fontSize = fontSize,
+        onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
         jcefStateFlow = jcefStateFlow,
         onEnsureInit = onEnsureInit,
         modifier = modifier.fillMaxSize(),

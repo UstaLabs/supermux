@@ -44,6 +44,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
 
 private fun view(kind: String, state: Map<String, String>) = ViewDto(
     id = "v1", workspaceId = "w1", kind = kind,
@@ -99,7 +104,7 @@ class ViewHostTest {
     @Test
     fun aWorkspaceTerminalBuildsTheTerminalWidget() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("terminal", mapOf("scope" to "workspace", "terminalId" to "main")),
                 workspaceId = "w1",
@@ -110,14 +115,14 @@ class ViewHostTest {
                     Box(mod.fillMaxSize()) { Text("term-stand-in") }
                 },
             )
-        }
+        } }
         onNodeWithTag("terminal-w1-main").assertIsDisplayed()
     }
 
     @Test
     fun anUnknownKindDrawsAHintRatherThanCrashing() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("hologram", emptyMap()),
                 workspaceId = "w1",
@@ -125,14 +130,14 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
             )
-        }
+        } }
         onNodeWithTag("view-unknown").assertIsDisplayed()
     }
 
     @Test
     fun aChatViewWithNoSessionIdDrawsTheHint() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("chat", emptyMap()),
                 workspaceId = "w1",
@@ -140,7 +145,7 @@ class ViewHostTest {
                 app = app,
                 drafts = mutableStateMapOf(),
             )
-        }
+        } }
         onNodeWithTag("view-unknown").assertIsDisplayed()
     }
 
@@ -149,7 +154,7 @@ class ViewHostTest {
     @Test
     fun modeTreeDrawsTheExplorerPane() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", mapOf("mode" to "tree")),
                 workspaceId = "w1",
@@ -159,7 +164,7 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("editor-/some/dir").assertIsDisplayed()
         onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
         onNodeWithTag("editor_tree").assertIsDisplayed()
@@ -169,7 +174,7 @@ class ViewHostTest {
     @Test
     fun anEditorViewWithNoModeStillDrawsTheTree() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", emptyMap()),
                 workspaceId = "w1",
@@ -179,14 +184,14 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
     }
 
     @Test
     fun anUnknownModeFallsBackToTheTree() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", mapOf("mode" to "holodeck")),
                 workspaceId = "w1",
@@ -196,14 +201,14 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("editor_explorer_pane").assertIsDisplayed()
     }
 
     @Test
     fun modeFileDrawsOneDocumentFromTheStore() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", mapOf("mode" to "file", "path" to "src/Main.kt")),
                 workspaceId = "w1",
@@ -214,7 +219,7 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("editor_file_pane").assertIsDisplayed()
         // No tree and no tab row of its own — the group's strip is the tab row now.
         onNodeWithTag("editor_tree").assertDoesNotExist()
@@ -224,7 +229,7 @@ class ViewHostTest {
     @Test
     fun modeFileWithNoPathDrawsTheHintRatherThanAnEmptySurface() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", mapOf("mode" to "file")),
                 workspaceId = "w1",
@@ -235,14 +240,14 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("view-unknown").assertIsDisplayed()
     }
 
     @Test
     fun modeDiffDrawsTheDiffPane() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", mapOf("mode" to "diff")),
                 workspaceId = "w1",
@@ -252,7 +257,7 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("editor_diff_pane").assertIsDisplayed()
         onNodeWithTag("diff_view").assertIsDisplayed()
     }
@@ -261,7 +266,7 @@ class ViewHostTest {
     @Test
     fun aFilePaneInAChatlessWorkspaceSaysCodeIntelligenceIsOff() = runComposeUiTest {
         val app = fakeApp()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("editor", mapOf("mode" to "file", "path" to "a.txt")),
                 workspaceId = "w1",
@@ -272,7 +277,7 @@ class ViewHostTest {
                 editorJcefState = noJcef,
                 editorEnsureInit = {},
             )
-        }
+        } }
         onNodeWithTag("editor-no-lsp").assertIsDisplayed()
     }
 
@@ -282,7 +287,7 @@ class ViewHostTest {
     fun twoFilePanesOnOnePathShowOneBuffer() = runComposeUiTest {
         val app = fakeApp()
         val documents = store("original text")
-        setContent {
+        setContent { WithUiPrefs {
             Box(Modifier.fillMaxSize()) {
                 ViewHost(
                     view = view("editor", mapOf("mode" to "file", "path" to "a.kt")),
@@ -310,7 +315,7 @@ class ViewHostTest {
                     modifier = Modifier.testTag("right"),
                 )
             }
-        }
+        } }
         waitForIdle()
         // ONE document exists for the path, and both panes hold a reference to it — an edit made
         // through either pane's sink is the same edit.
@@ -372,7 +377,7 @@ class ViewHostTest {
             ),
         )
         val opened = mutableListOf<Triple<String, Int?, Int?>>()
-        setContent {
+        setContent { WithUiPrefs {
             ViewHost(
                 view = view("chat", mapOf("sessionId" to "s1")),
                 workspaceId = "w1",
@@ -382,9 +387,16 @@ class ViewHostTest {
                 loadProxies = { emptyList() },
                 onOpenFile = { p, line, endLine -> opened.add(Triple(p, line, endLine)) },
             )
-        }
+        } }
         onNodeWithText("src/main.kt:42").performTouchInput { click(Offset(4f, 4f)) }
         waitForIdle()
         assertEquals(listOf(Triple<String, Int?, Int?>("src/main.kt", 42, null)), opened.toList())
     }
+}
+
+/** `ViewHost`'s file/diff panes read `LocalUiPrefs` (editor font size, wrap, tree-vs-list); the
+ *  apps install it in their theme wrapper, so a bare `setContent` has to provide one itself. */
+@Composable
+private fun WithUiPrefs(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore()), content = content)
 }
