@@ -1,5 +1,6 @@
 package dev.supermux.ui.session
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -8,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import kotlin.test.Test
@@ -47,13 +50,41 @@ class AgentLogoTest {
         }
     }
 
-    @Test fun unknown_agent_falls_back_to_an_initial() = runComposeUiTest {
-        setContent {
-            SupermuxTheme(appearance = AppearanceMode.LIGHT) {
-                AgentLogo(agent = "aider", size = 24.dp, modifier = Modifier.testTag("logo_aider"))
+    @Test fun unknown_agent_falls_back_to_an_initial_in_both_input_modes() {
+        for (mode in listOf(InputMode.Touch, InputMode.Pointer)) {
+            runComposeUiTest {
+                setContent {
+                    CompositionLocalProvider(LocalInputMode provides mode) {
+                        SupermuxTheme(appearance = AppearanceMode.LIGHT) {
+                            AgentLogo(
+                                agent = "aider",
+                                size = 24.dp,
+                                modifier = Modifier.testTag("logo_aider"),
+                            )
+                        }
+                    }
+                }
+                onNodeWithTag("logo_aider", useUnmergedTree = true).assertIsDisplayed()
+                onNodeWithText("A", useUnmergedTree = true).assertIsDisplayed()
+                onNodeWithTag(AGENT_LOGO_TILE_TAG, useUnmergedTree = true).assertDoesNotExist()
             }
         }
-        onNodeWithTag("logo_aider", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithText("A", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    /** Touch tiles the mark (Android's look), Pointer shows it bare (desktop's). */
+    @Test fun the_tile_is_a_touch_only_affordance() {
+        for ((mode, tiled) in listOf(InputMode.Touch to true, InputMode.Pointer to false)) {
+            runComposeUiTest {
+                setContent {
+                    CompositionLocalProvider(LocalInputMode provides mode) {
+                        SupermuxTheme(appearance = AppearanceMode.DARK) {
+                            AgentLogo(agent = "grok", size = 20.dp)
+                        }
+                    }
+                }
+                val tile = onNodeWithTag(AGENT_LOGO_TILE_TAG, useUnmergedTree = true)
+                if (tiled) tile.assertIsDisplayed() else tile.assertDoesNotExist()
+            }
+        }
     }
 }

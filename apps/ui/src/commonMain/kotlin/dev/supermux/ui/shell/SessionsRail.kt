@@ -2,9 +2,11 @@
 //
 //   - Glyphs come from compose.materialIconsExtended (ic_chevron_right → Icons.Filled.ChevronRight,
 //     ic_plus → Icons.Filled.Add), which both apps already ship.
-//   - `statusBarsPadding()` is applied only in the Compact width class: that is the phone layout
-//     where the rail runs edge-to-edge under the system status bar. Desktop and tablets have no
-//     status bar inset to consume, so they keep the flush top.
+//   - The status-bar inset is consumed unconditionally. The rail is drawn edge-to-edge wherever
+//     the platform HAS a status bar — a phone AND a tablet/unfolded foldable, which is in fact
+//     the only place Android renders it — so gating it on a width class would put the chevron
+//     under the system bar on exactly the devices that show it. Desktop reports an empty inset,
+//     so this is a no-op there. [statusBarInset] exists to make the inset testable.
 //   - `pointerHoverIcon(PointerIcon.Hand)` on the tappable avatars is a mouse affordance and a
 //     no-op on touch.
 //   - No collapse chip on the rail itself. Collapse is a title-bar toggle (macOS, expanded only) /
@@ -24,7 +26,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -45,8 +49,6 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.session.SessionAvatar
 import dev.supermux.ui.session.SessionStatusRail
 import dev.supermux.ui.theme.Space
@@ -62,6 +64,9 @@ import dev.supermux.session.sessionsByUserOrder
  * new-session button ([onNewSession]); below, a vertical scrollable column of session
  * [SessionAvatar]s. Tapping one calls [onSelect]; the active session is ringed. Each avatar carries
  * its [SessionStatusRail] status at the bottom-end corner (working spinner / unread green / git).
+ *
+ * @param statusBarInset the inset the rail's top padding consumes. Defaults to the real status
+ *   bar (empty on desktop); a test injects a synthetic one to prove the rail sits below it.
  */
 @Composable
 fun SessionsRail(
@@ -73,16 +78,16 @@ fun SessionsRail(
     onNewSession: () -> Unit,
     lastBySession: Map<String, LogEntry?> = emptyMap(),
     lastRead: Map<String, String> = emptyMap(),
+    statusBarInset: WindowInsets = WindowInsets.statusBars,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     Column(
         modifier
             .fillMaxHeight()
             .width(64.dp)
             .background(cs.surfaceContainerHigh)
-            .then(if (compact) Modifier.statusBarsPadding() else Modifier)
+            .windowInsetsPadding(statusBarInset)
             .padding(vertical = Space.sm),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Space.xs),

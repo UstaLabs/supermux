@@ -18,6 +18,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
 
 /**
  * Session avatar: the real agent brand mark ([AgentLogo]) when the agent is recognised, otherwise
@@ -29,6 +31,10 @@ import androidx.compose.ui.unit.sp
  * When [sessionId], [sharedScope] and [animScope] are ALL non-null the avatar joins the
  * list→chat shared-element transition (Android's navigation animation); with any of them null it
  * renders as a plain avatar, which is what desktop does.
+ *
+ * The initials fallback follows the same Touch/Pointer rule as [AgentLogo]: touch keeps Android's
+ * fixed 12dp-ish corner and fixed 13sp initials (the avatar is a fixed 40dp there, and the phone
+ * type scale is not the desktop one), pointer keeps desktop's size-proportional metrics.
  */
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -55,6 +61,22 @@ fun SessionAvatar(
 
     if (hasAgentLogo(agent)) {
         AgentLogo(agent = agent, size = size, modifier = shared)
+    } else if (LocalInputMode.current == InputMode.Touch) {
+        Box(
+            shared
+                .size(size)
+                .clip(agentTileShape(size))
+                .background(cs.primary)
+                .border(1.dp, cs.outline.copy(alpha = 0.7f), agentTileShape(size)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                name.take(2).uppercase(),
+                color = cs.onPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+            )
+        }
     } else {
         Box(
             shared
