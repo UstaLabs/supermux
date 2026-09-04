@@ -12,11 +12,13 @@ import dev.supermux.android.platform.AndroidHaptics
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.LocalHaptics
 import dev.supermux.ui.theme.SupermuxTheme
-import dev.supermux.ui.theme.supermuxTouchTypography
 
 /**
  * Android's thin wrapper over the shared [SupermuxTheme]: edge-to-edge system-bar icon contrast
  * plus the platform haptics implementation.
+ *
+ * No typography is passed — the shared theme picks the touch or pointer scale from
+ * `LocalWindowWidthClass`/`LocalInputMode`, both provided at the `MainActivity` root.
  *
  * Dynamic color (Material You) is OFF and has no code path any more — the brand OKLCH palette is
  * the only palette on every platform (2026-07-04 decision, `ThemeDefaults.DYNAMIC_COLOR_ENABLED`
@@ -47,7 +49,6 @@ fun AndroidTheme(
     CompositionLocalProvider(LocalHaptics provides haptics) {
         SupermuxTheme(
             appearance = appearance,
-            typography = supermuxTouchTypography(),
             textScale = textScale,
             content = content,
         )

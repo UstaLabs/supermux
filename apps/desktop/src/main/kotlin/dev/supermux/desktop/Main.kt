@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
@@ -69,6 +71,9 @@ import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.ProvideWindowWidthClass
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
@@ -477,6 +482,7 @@ fun main() {
             // can show a terminal next to the pane the dialog came from.
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
+            ProvideDesktopAdaptiveLocals {
             DesktopTheme(appearance = ui.appearance) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
@@ -1410,6 +1416,7 @@ fun main() {
                 }
               }
             }
+            } // ProvideDesktopAdaptiveLocals
 
             // First-run intro cinematic ("mux boot": boot log → 2×2 agent-pane split → particle
             // converge → the logo mark draws itself → fade into the app). Emitted LAST inside
@@ -1484,9 +1491,11 @@ fun main() {
                 ) {
                     val extraModal = remember { ModalPresence() }
                     CompositionLocalProvider(LocalModalPresence provides extraModal) {
-                        DesktopTheme(appearance = ui.appearance) {
-                            if (extraBind != null) {
-                                DetachedWorkspaceWindow(host, extraBind, ui)
+                        ProvideDesktopAdaptiveLocals {
+                            DesktopTheme(appearance = ui.appearance) {
+                                if (extraBind != null) {
+                                    DetachedWorkspaceWindow(host, extraBind, ui)
+                                }
                             }
                         }
                     }
@@ -1570,5 +1579,20 @@ private fun MdImageVerifyOverlay(source: String) {
                 loadImage = loadImage,
             )
         }
+    }
+}
+
+/**
+ * Per-window adaptive locals (task A3). Desktop is always [InputMode.Pointer]; the width class
+ * comes from the window's own container size in dp and follows resizes — `containerSize` is
+ * window-scoped state, so a detached window classifies itself independently of the main one.
+ */
+@Composable
+private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
+    val density = LocalDensity.current.density
+    val widthPx = LocalWindowInfo.current.containerSize.width
+    val widthDp = (widthPx / density).toInt()
+    ProvideWindowWidthClass(widthDp) {
+        CompositionLocalProvider(LocalInputMode provides InputMode.Pointer, content = content)
     }
 }

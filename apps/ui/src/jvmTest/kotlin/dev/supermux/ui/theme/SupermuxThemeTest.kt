@@ -2,11 +2,15 @@ package dev.supermux.ui.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.ProvideWindowWidthClass
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
 import kotlin.test.Test
@@ -78,5 +82,59 @@ class SupermuxThemeTest {
             Text("no-haptics")
         }
         onNodeWithText("no-haptics").assertIsDisplayed()
+    }
+
+    // --- typography selection (task A3) ------------------------------------------------
+    // With no explicit `typography`, the theme picks the touch scale ONLY for a compact
+    // touch window (a phone); everything else — desktop, and an Android tablet/DeX — gets
+    // the pointer/desktop scale ("desktop wins for medium/expanded", spec §Foundations).
+
+    @Test
+    fun compactTouchGetsTheTouchTypeScale() = runComposeUiTest {
+        setContent {
+            val expected = supermuxTouchTypography().headlineSmall.fontSize
+            ProvideWindowWidthClass(widthDp = 411) {
+                CompositionLocalProvider(LocalInputMode provides InputMode.Touch) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) {
+                        assertEquals(expected, MaterialTheme.typography.headlineSmall.fontSize)
+                        Text("touch-scale")
+                    }
+                }
+            }
+        }
+        onNodeWithText("touch-scale").assertIsDisplayed()
+    }
+
+    @Test
+    fun expandedPointerGetsTheDesktopTypeScale() = runComposeUiTest {
+        setContent {
+            val expected = supermuxTypography().headlineSmall.fontSize
+            ProvideWindowWidthClass(widthDp = 1440) {
+                CompositionLocalProvider(LocalInputMode provides InputMode.Pointer) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) {
+                        assertEquals(expected, MaterialTheme.typography.headlineSmall.fontSize)
+                        Text("desktop-scale")
+                    }
+                }
+            }
+        }
+        onNodeWithText("desktop-scale").assertIsDisplayed()
+    }
+
+    @Test
+    fun mediumTouchGetsTheDesktopTypeScale() = runComposeUiTest {
+        setContent {
+            val expected = supermuxTypography().headlineSmall.fontSize
+            // Android tablet / unfolded foldable: touch, but Medium — desktop wins.
+            ProvideWindowWidthClass(widthDp = 800) {
+                CompositionLocalProvider(LocalInputMode provides InputMode.Touch) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) {
+                        assertEquals(expected, MaterialTheme.typography.headlineSmall.fontSize)
+                        Text("tablet-scale")
+                    }
+                }
+            }
+        }
+        onNodeWithText("tablet-scale").assertIsDisplayed()
     }
 }

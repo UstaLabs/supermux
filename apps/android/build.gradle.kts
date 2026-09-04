@@ -105,7 +105,6 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.reorderable)
     implementation("androidx.compose.material:material-icons-extended")
-    implementation(libs.compose.material3.windowsize)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.navigation.compose)

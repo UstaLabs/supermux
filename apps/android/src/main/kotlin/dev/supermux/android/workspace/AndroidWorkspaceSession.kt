@@ -17,25 +17,25 @@ import java.util.UUID
  * from [WorkspaceFileOpener] would violate D2. Wide still PATCHes through [onPatch].
  */
 fun androidLayoutPatch(
-    isWorkspaceWidth: Boolean,
+    wide: Boolean,
     onPatch: suspend (LayoutNode) -> Unit,
     onSkip: () -> Unit = {},
 ): suspend (LayoutNode) -> Unit = { tree ->
-    if (isWorkspaceWidth) onPatch(tree) else onSkip()
+    if (wide) onPatch(tree) else onSkip()
 }
 
 @Composable
 fun rememberWorkspaceSession(
     workspace: WorkspaceDto,
     vm: AppViewModel,
-    isWorkspaceWidth: Boolean,
+    wide: Boolean,
     overlayScope: CoroutineScope,
     newId: () -> String = { UUID.randomUUID().toString() },
 ): WorkspaceSession = rememberWorkspaceSession(
     workspace = workspace,
     overlayScope = overlayScope,
     patchLayout = androidLayoutPatch(
-        isWorkspaceWidth = isWorkspaceWidth,
+        wide = wide,
         onPatch = { tree -> vm.fleet.patchWorkspaceLayout(workspace.id, tree.toDto()) },
         onSkip = { Log.w("WorkspaceSession", "skipping layout PATCH on phone workspace=${workspace.id}") },
     ),
@@ -46,7 +46,7 @@ fun rememberWorkspaceSession(
             workspace.id,
             AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
         )?.id
-        if (created != null && !isWorkspaceWidth) {
+        if (created != null && !wide) {
             vm.fleet.setActiveView(workspace.id, created)
         }
         created

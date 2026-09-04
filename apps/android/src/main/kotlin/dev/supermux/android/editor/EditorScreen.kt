@@ -1,6 +1,5 @@
 package dev.supermux.android.editor
 
-import android.app.Activity
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -28,9 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
-import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
-import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +48,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.android.R
 import dev.supermux.android.chat.MarkdownBody
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.Space
@@ -79,7 +77,6 @@ data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?
  * Code editor panel: lazy file tree, multi-tab editing, filename search.
  * Tablet (Expanded): split sidebar. Phone: slide-over tree drawer.
  */
-@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
 fun EditorPanel(
     sessionId: String,
@@ -117,8 +114,7 @@ fun EditorPanel(
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val windowSizeClass = calculateWindowSizeClass(context as Activity)
-    val expanded = windowSizeClass.widthSizeClass == WindowWidthSizeClass.Expanded
+    val expanded = LocalWindowWidthClass.current == WindowWidthClass.Expanded
 
     // Own the editor state for the LIFETIME OF THE SESSION — deliberately NOT keyed on the
     // fs* lambdas. Those lambdas capture the whole `session` object, so every background

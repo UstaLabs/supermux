@@ -7,7 +7,6 @@ import androidx.compose.runtime.remember
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
-import dev.supermux.ui.theme.supermuxTypography
 
 /**
  * Desktop's thin wrapper over the shared [SupermuxTheme].
@@ -16,7 +15,9 @@ import dev.supermux.ui.theme.supermuxTypography
  * only supported way to restyle them is to replace the representation. Provided at the theme root
  * so every window (main, detached, dialogs) gets the same one. See `ui/DesktopContextMenu.kt`.
  *
- * Haptics stay on the shared `NoHaptics` default — desktop has no actuator.
+ * Haptics stay on the shared `NoHaptics` default — desktop has no actuator. No typography is
+ * passed either: the shared theme reads `LocalWindowWidthClass`/`LocalInputMode` (provided at each
+ * window root) and desktop is always Pointer, so it always resolves to the desktop scale.
  */
 @Composable
 fun DesktopTheme(
@@ -28,7 +29,6 @@ fun DesktopTheme(
     CompositionLocalProvider(LocalContextMenuRepresentation provides contextMenu) {
         SupermuxTheme(
             appearance = appearance,
-            typography = supermuxTypography(),
             textScale = textScale,
             content = content,
         )

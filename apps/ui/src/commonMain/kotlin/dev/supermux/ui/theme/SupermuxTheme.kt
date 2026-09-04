@@ -15,6 +15,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.SupermuxColors
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
 
@@ -118,21 +122,31 @@ const val TEXT_SCALE_MAX = 1.3f
  * Material You / dynamic color surface on any platform (2026-07-04 brand decision), so the scheme
  * is built from `supermuxDark()`/`supermuxLight()` and every M3 role is assigned explicitly.
  *
- * Each app wraps this with the platform bits it owns and passes its own [typography]:
- *  - Android's `AndroidTheme` — edge-to-edge system-bar contrast, the touch type scale
- *    (`supermuxTouchTypography()`) and the platform haptics implementation.
- *  - Desktop's `DesktopTheme` — the Compose Desktop context-menu representation and the pointer
- *    type scale (`supermuxTypography()`).
+ * Each app wraps this with the platform bits it owns:
+ *  - Android's `AndroidTheme` — edge-to-edge system-bar contrast and the platform haptics.
+ *  - Desktop's `DesktopTheme` — the Compose Desktop context-menu representation.
  *
- * The two type scales collapse into one once the width class lands (cluster A task A3).
+ * [typography] is chosen from the adaptive locals when the caller passes none: the roomier touch
+ * scale (`supermuxTouchTypography()`) only for a compact touch window (a phone), the denser
+ * pointer scale (`supermuxTypography()`) everywhere else — desktop, and an Android tablet / DeX /
+ * unfolded foldable, per the spec's "desktop wins for medium/expanded". Pass [typography]
+ * explicitly to override (tests, previews).
  */
 @Composable
 fun SupermuxTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
-    typography: Typography,
+    typography: Typography? = null,
     textScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
+    val resolvedTypography = typography ?: if (
+        LocalWindowWidthClass.current == WindowWidthClass.Compact &&
+        LocalInputMode.current == InputMode.Touch
+    ) {
+        supermuxTouchTypography()
+    } else {
+        supermuxTypography()
+    }
     val dark = when (appearance) {
         AppearanceMode.SYSTEM -> isSystemInDarkTheme()
         AppearanceMode.LIGHT -> false
@@ -158,7 +172,7 @@ fun SupermuxTheme(
     ) {
         MaterialTheme(
             colorScheme = scheme,
-            typography = typography,
+            typography = resolvedTypography,
             shapes = SupermuxShapes,
             content = content,
         )

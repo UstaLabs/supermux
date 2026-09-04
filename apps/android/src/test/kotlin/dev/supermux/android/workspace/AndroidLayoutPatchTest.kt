@@ -22,7 +22,7 @@ class AndroidLayoutPatchTest {
         var current = tree
         val provisional = mutableMapOf<String, ViewDto>()
         val patch = androidLayoutPatch(
-            isWorkspaceWidth = isWide,
+            wide = isWide,
             onPatch = { patchCalls += it },
         )
         val scope = CoroutineScope(Dispatchers.Unconfined)

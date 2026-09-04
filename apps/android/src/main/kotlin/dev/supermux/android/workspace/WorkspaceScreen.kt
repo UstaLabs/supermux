@@ -58,14 +58,14 @@ import java.util.UUID
 fun WorkspaceScreen(
     workspace: WorkspaceDto,
     vm: AppViewModel,
-    isWorkspaceWidth: Boolean,
+    wide: Boolean,
     modifier: Modifier = Modifier,
     onSelectSession: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val newId = remember { { UUID.randomUUID().toString() } }
-    val session = rememberWorkspaceSession(workspace, vm, isWorkspaceWidth, scope, newId)
-    if (isWorkspaceWidth) {
+    val session = rememberWorkspaceSession(workspace, vm, wide, scope, newId)
+    if (wide) {
         TabletWorkspace(workspace, session, vm, newId, modifier, onSelectSession)
     } else {
         PhoneWorkspace(workspace, session, vm, newId, modifier, onSelectSession)

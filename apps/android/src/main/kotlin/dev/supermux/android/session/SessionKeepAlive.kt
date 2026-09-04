@@ -170,7 +170,7 @@ fun SessionKeepAlivePhoneHost(
                     WorkspaceScreen(
                         workspace = ws,
                         vm = vm,
-                        isWorkspaceWidth = false,
+                        wide = false,
                         modifier = Modifier.fillMaxSize(),
                         onSelectSession = onSelect,
                     )
@@ -328,7 +328,7 @@ fun SessionKeepAliveTabletHost(
             WorkspaceScreen(
                 workspace = ws,
                 vm = vm,
-                isWorkspaceWidth = wide,
+                wide = wide,
                 modifier = Modifier.fillMaxSize(),
                 onSelectSession = onSelect,
             )
