@@ -43,7 +43,7 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ChatScreen
 import dev.supermux.android.ui.keepAlivePanel
-import dev.supermux.android.host.workspaceForSession
+import dev.supermux.host.workspaceForSession
 import dev.supermux.android.workspace.AndroidWorkspaceKeepAliveHost
 import dev.supermux.android.workspace.WorkspaceScreen
 import dev.supermux.android.workspace.rememberVisitedWorkspaces
@@ -56,6 +56,9 @@ import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.asSettledSession
+import dev.supermux.state.spawnFailureMessage
+import dev.supermux.state.SidebarReorderKind
+import dev.supermux.state.sidebarReorderKind
 
 /**
  * Tracks session ids the user has opened; pruned when the broker removes a live session.
@@ -117,7 +120,7 @@ fun SessionKeepAlivePhoneHost(
     onOpenDraft: (String) -> Unit = {},
     onOpenDisplays: () -> Unit,
     // Multi-host (spec §5): threaded straight to the phone SessionListScreen (chips + badges).
-    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    hosts: List<dev.supermux.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
@@ -136,13 +139,13 @@ fun SessionKeepAlivePhoneHost(
     val newChatScope = rememberCoroutineScope()
     val onNewChatInWorkspace: (dev.supermux.proto.WorkspaceDto) -> Unit = { w ->
         newChatScope.launch {
-            val recordId = vm.activeHost.value
+            val recordId = vm.fleet.activeHost.value
             if (recordId == null) {
                 Toast.makeText(context, "No host connected", Toast.LENGTH_SHORT).show()
                 return@launch
             }
             runCatching {
-                val id = vm.newChatInWorkspace(recordId, w.id, w.workdir)
+                val id = vm.fleet.newChatInWorkspace(recordId, w.id, w.workdir)
                 onSelect(id)
             }.onFailure {
                 Toast.makeText(context, spawnFailureMessage(it), Toast.LENGTH_SHORT).show()
@@ -190,7 +193,7 @@ fun SessionKeepAlivePhoneHost(
                         vm = vm,
                         onBack = onClearSelected,
                         onKill = {
-                            vm.kill(sessionId) {
+                            vm.fleet.kill(sessionId) {
                                 onRemoveVisited(sessionId)
                                 if (selected == sessionId) onClearSelected()
                             }
@@ -236,37 +239,37 @@ fun SessionKeepAlivePhoneHost(
                         lastRead = lastRead,
                         agentState = agentState,
                         onNewSession = { onNavigate("new") },
-                        loadProjects = { vm.listProjects() },
-                        validatePath = { vm.validatePath(it) },
+                        loadProjects = { vm.fleet.listProjects() },
+                        validatePath = { vm.fleet.validatePath(it) },
                         onNavigate = onNavigate,
                         // Long-press row actions were never wired on the phone list host, so
                         // Kill/Rename/Mute opened their dialogs but the confirm was a no-op
                         // (SessionListScreen defaults these to {}). Mirror the tablet host +
                         // MainActivity wiring; kill also prunes the kept-alive layer.
-                        onRename = { id, name -> vm.rename(id, name) },
+                        onRename = { id, name -> vm.fleet.rename(id, name) },
                         onKill = { id ->
-                            vm.kill(id) {
+                            vm.fleet.kill(id) {
                                 onRemoveVisited(id)
                                 if (selected == id) onClearSelected()
                             }
                         },
-                        onMute = { id, m -> vm.setMute(id, m) },
+                        onMute = { id, m -> vm.fleet.setMute(id, m) },
                         archived = archived,
-                        onResume = { id -> vm.resume(id) },
+                        onResume = { id -> vm.fleet.resume(id) },
                         onOpenDraft = onOpenDraft,
-                        onReorder = { ids -> vm.reorderRows(ids) },
+                        onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) vm.fleet.reorderSessions(ids) else vm.fleet.reorderWorkspaces(ids) },
                         workspaces = workspaces,
                         archivedWorkspaces = archivedWorkspaces,
-                        onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
-                        onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
+                        onArchiveWorkspace = { id -> vm.fleet.archiveWorkspace(id) },
+                        onRestoreWorkspace = { id -> vm.fleet.restoreWorkspace(id) },
                         onNewChatInWorkspace = onNewChatInWorkspace,
                         hosts = hosts,
                         sessionHost = sessionHost,
                         hostFilter = hostFilter,
                         onHostFilter = onHostFilter,
                         onAddHost = onAddHost,
-                        onRenameHost = { id, name -> vm.renameHost(id, name) },
-                        onForgetHost = { id -> vm.forgetHost(id) },
+                        onRenameHost = { id, name -> vm.fleet.renameHost(id, name) },
+                        onForgetHost = { id -> vm.fleet.forgetHost(id) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
                         listState = sessionListState,
@@ -349,7 +352,7 @@ fun SessionKeepAliveTabletHost(
                     onNavigate = onNavigate,
                     onBack = {},
                     onKill = {
-                        vm.kill(sessionId) {
+                        vm.fleet.kill(sessionId) {
                             onRemoveVisited(sessionId)
                         }
                     },
@@ -442,16 +445,16 @@ private fun SessionChatLayer(
 
     // Collect the finish-job flow once at this layer (consistent with messages/activity/agent);
     // the per-session value drives ChatScreen's Finish button + sheet.
-    val finishJobs by vm.finishJobs.collectAsState()
+    val finishJobs by vm.fleet.finishJobs.collectAsState()
     val finishJob = finishJobs[session.id]
 
     // Background tasks (bg shells / subagents / workflows) for the chips row + waiting state.
-    val bgTasksAll by vm.bgTasks.collectAsState()
+    val bgTasksAll by vm.fleet.bgTasks.collectAsState()
     val bgTasks = bgTasksAll[session.id] ?: emptyList()
 
     // Exposed proxy links for this session (iOS parity) — loaded on open, filtered by session name.
     var sessionLinks by remember(session.id) { mutableStateOf<List<ProxyDto>>(emptyList()) }
-    LaunchedEffect(session.id) { sessionLinks = vm.proxies().filter { it.sessionName == session.name } }
+    LaunchedEffect(session.id) { sessionLinks = vm.fleet.proxies().filter { it.sessionName == session.name } }
 
     if (visible) {
         // Soft keyboard up: Back must dismiss the IME only — not leave the session. An always-on
@@ -503,78 +506,78 @@ private fun SessionChatLayer(
             bgTasks = bgTasks,
             sending = sending,
             onBack = onBack,
-            onSendWith = { text, atts -> vm.sendWith(session.id, text, atts) },
-            onUpload = { source, name, mime, kind, onProgress -> vm.uploadResumable(session.id, source, name, mime, kind, onProgress) },
-            transcribeAudio = { bytes, name -> vm.transcribeAudio(session.id, bytes, name) },
-            transcribeDraft = { draft -> vm.transcribeDraft(session.id, draft) },
-            loadGlossary = { vm.fetchGlossary() },
-            onRename = { vm.rename(session.id, it) },
-            onMute = { vm.setMute(session.id, it) },
+            onSendWith = { text, atts -> vm.fleet.sendWith(session.id, text, atts) },
+            onUpload = { source, name, mime, kind, onProgress -> vm.fleet.uploadResumable(session.id, source, name, mime, kind, onProgress) },
+            transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(session.id, bytes, name) },
+            transcribeDraft = { draft -> vm.fleet.transcribeDraft(session.id, draft) },
+            loadGlossary = { vm.fleet.fetchGlossary() },
+            onRename = { vm.fleet.rename(session.id, it) },
+            onMute = { vm.fleet.setMute(session.id, it) },
             onKill = onKill,
             sessionLinks = sessionLinks,
-            vmModels = { vm.fetchModels(it) },
-            vmReasoning = { vm.fetchReasoning(it) },
-            onPickModel = { vm.switchModel(session.id, it) },
-            onPickEffort = { vm.switchReasoning(session.id, it) },
+            vmModels = { vm.fleet.sessionModels(it) },
+            vmReasoning = { vm.fleet.sessionReasoning(it) },
+            onPickModel = { vm.fleet.switchModel(session.id, it) },
+            onPickEffort = { vm.fleet.switchReasoning(session.id, it) },
             commands = commands,
             commandsResolved = commandsResolved,
-            onInterrupt = { vm.interrupt(session.id) },
-            loadDraft = { vm.loadDraft(it) },
-            saveDraft = { id, t -> vm.saveDraft(id, t) },
-            loadBytes = { vm.fileBytes(it) },
-            fsList = { vm.fsList(session.id, it) },
-            fsRead = { vm.fsRead(session.id, it) },
-            fsWrite = { p, ct -> vm.fsWrite(session.id, p, ct) },
-            fsSearch = { vm.fsSearch(session.id, it) },
+            onInterrupt = { vm.fleet.interrupt(session.id) },
+            loadDraft = { vm.fleet.loadDraft(it) },
+            saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
+            loadBytes = { vm.fleet.fileBytes(it) },
+            fsList = { vm.fleet.fsList(session.id, it) },
+            fsRead = { vm.fleet.fsRead(session.id, it) },
+            fsWrite = { p, ct -> vm.fleet.fsWrite(session.id, p, ct) },
+            fsSearch = { vm.fleet.fsSearch(session.id, it) },
             // Editor diff + inline code-review (bound to this session).
-            fsDiff = { base -> vm.fsDiff(session.id, base) },
-            fsRefs = { vm.fsRefs(session.id) },
-            reviewAddComment = { body -> vm.reviewAddComment(session.id, body) },
-            reviewResolve = { commentId -> vm.reviewResolve(session.id, commentId) },
-            reviewSubmit = { vm.reviewSubmit(session.id) },
+            fsDiff = { base -> vm.fleet.fsDiff(session.id, base) },
+            fsRefs = { vm.fleet.fsRefs(session.id) },
+            reviewAddComment = { body -> vm.fleet.reviewAddComment(session.id, body) },
+            reviewResolve = { commentId -> vm.fleet.reviewResolve(session.id, commentId) },
+            reviewSubmit = { vm.fleet.reviewSubmit(session.id) },
             // Editor LSP + live file-watch — app-wide flows + session-bound senders.
-            fsChanges = vm.fsChanges,
-            lspStatus = vm.lspStatus,
-            lspRpc = vm.lspRpc,
-            editorOpen = { vm.editorOpen(it) },
-            editorClose = { vm.editorClose(it) },
-            lspStatusQuery = { s, p -> vm.lspStatusQuery(s, p) },
-            lspOpen = { s, sid -> vm.lspOpen(s, sid) },
-            lspRpcOut = { s, sid, m -> vm.lspRpcOut(s, sid, m) },
-            lspClose = { s, sid -> vm.lspClose(s, sid) },
-            connectTerminal = { terminalId -> vm.connectTerminal(session.id, terminalId) },
-            listTerminals = { vm.listTerminals(session.id) },
-            closeTerminal = { terminalId -> vm.closeTerminal(session.id, terminalId) },
-            connectAgentTerminal = { vm.connectAgentTerminal(session.id) },
-            listDisplays = { vm.listDisplays() },
-            connectScrcpy = { vm.connectScrcpy(it) },
-            connectVnc = { vm.connectVnc(it) },
-            displays = vm.displays,
-            onStartDisplay = { vm.startDisplay(session.name) },
+            fsChanges = vm.fleet.fsChanges,
+            lspStatus = vm.fleet.lspStatus,
+            lspRpc = vm.fleet.lspRpc,
+            editorOpen = { vm.fleet.editorOpen(it) },
+            editorClose = { vm.fleet.editorClose(it) },
+            lspStatusQuery = { s, p -> vm.fleet.lspStatusQuery(s, p) },
+            lspOpen = { s, sid -> vm.fleet.lspOpen(s, sid) },
+            lspRpcOut = { s, sid, m -> vm.fleet.lspRpcOut(s, sid, m) },
+            lspClose = { s, sid -> vm.fleet.lspClose(s, sid) },
+            connectTerminal = { terminalId -> vm.fleet.connectTerminal(session.id, terminalId) },
+            listTerminals = { vm.fleet.listTerminals(session.id) },
+            closeTerminal = { terminalId -> vm.fleet.closeTerminal(session.id, terminalId) },
+            connectAgentTerminal = { vm.fleet.connectAgentTerminal(session.id) },
+            listDisplays = { vm.fleet.listDisplays() },
+            connectScrcpy = { vm.fleet.connectScrcpy(it) },
+            connectVnc = { vm.fleet.connectVnc(it) },
+            displays = vm.fleet.displays,
+            onStartDisplay = { vm.fleet.startDisplay(session.name) },
             onOpenDisplays = onOpenDisplays,
-            consumePendingFirst = { vm.consumePendingFirst(it) },
+            consumePendingFirst = { vm.fleet.consumePendingFirst(it) },
             onContinue = { handoff ->
-                val recordId = vm.sessionHost.value[session.id] ?: vm.activeHost.value
+                val recordId = vm.fleet.sessionHost.value[session.id] ?: vm.fleet.activeHost.value
                     ?: throw IllegalStateException("No host")
-                vm.continueInNewConversation(recordId, session.id, handoff)
+                vm.fleet.continueInNewConversation(recordId, session.id, handoff)
             },
             loadContinueAgents = {
-                vm.agentStatuses().filter { it.installed }.map { it.kind }
+                vm.fleet.agentStatuses().filter { it.installed }.map { it.kind }
             },
-            loadContinueModels = { vm.launcherModels(it) },
-            loadContinueReasoning = { ag, md -> vm.launcherReasoning(ag, md) },
+            loadContinueModels = { vm.fleet.launcherModels(it) },
+            loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
             onContinued = onSelectSession,
             editorPrefs = vm.editorPrefs,
             onEditorConsumesBackChange = { editorConsumesBack = it },
             finishJob = finishJob,
-            onFinishReadiness = { vm.finishReadiness(session.id) },
+            onFinishReadiness = { vm.fleet.finishReadiness(session.id) },
             onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                vm.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+                vm.fleet.finish(session.id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
             },
-            onClearFinishJob = { vm.clearFinishJob(session.id) },
-            onVerifySuggest = { vm.verifySuggest(session.id) },
-            onVerifySave = { vm.verifySave(session.id, it) },
-            onSendToAgent = { vm.sendMessage(session.id, it) },
+            onClearFinishJob = { vm.fleet.clearFinishJob(session.id) },
+            onVerifySuggest = { vm.fleet.verifySuggest(session.id) },
+            onVerifySave = { vm.fleet.verifySave(session.id, it) },
+            onSendToAgent = { vm.fleet.sendMessage(session.id, it) },
             sharedScope = sharedScope,
             animScope = animScope,
         )

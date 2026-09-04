@@ -15,7 +15,7 @@ import kotlinx.serialization.json.Json
  *
  * The "no token in the metadata blob" guarantee is STRUCTURALLY enforced here — [Meta] has no token
  * field, so [encodeMeta] cannot serialize one. Lives in commonMain so every native
- * [HostPersistence] reuses the exact same encoding (Android [dev.supermux.android.host], iOS Swift
+ * [HostPersistence] reuses the exact same encoding (the Android + iOS Swift
  * `KeychainHostPersistence` via the Shared framework) — no per-platform reimplementation.
  */
 object HostMetaCodec {

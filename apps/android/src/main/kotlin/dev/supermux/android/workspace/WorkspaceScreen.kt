@@ -90,7 +90,7 @@ private fun PhoneWorkspace(
 
     fun closeOrConfirm(view: ViewDto) {
         if (closeNeedsConfirm(view)) closeCandidate = view
-        else vm.closeWorkspaceView(workspace.id, view.id)
+        else vm.fleet.closeWorkspaceView(workspace.id, view.id)
     }
 
     Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
@@ -106,7 +106,7 @@ private fun PhoneWorkspace(
                         val title = view?.let { viewTitle(it) } ?: "view"
                         Tab(
                             selected = id == tabs.selectedId,
-                            onClick = { vm.setActiveView(workspace.id, id) },
+                            onClick = { vm.fleet.setActiveView(workspace.id, id) },
                             text = {
                                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             },
@@ -174,7 +174,7 @@ private fun PhoneWorkspace(
             }
         }
     }
-    val sessions by vm.sessions.collectAsState()
+    val sessions by vm.fleet.sessions.collectAsState()
     CloseViewDialog(
         view = closeCandidate,
         sessionName = closeCandidate?.chatSessionId()?.let { sid ->
@@ -182,7 +182,7 @@ private fun PhoneWorkspace(
         },
         onDismiss = { closeCandidate = null },
         onConfirm = { view ->
-            vm.closeWorkspaceView(workspace.id, view.id)
+            vm.fleet.closeWorkspaceView(workspace.id, view.id)
             closeCandidate = null
         },
     )
@@ -198,7 +198,7 @@ private fun addPhoneView(
     val tree = workspace.layout.toDomainOrNull() ?: session.layoutSync.tree
     val open = openSingletonView(tree, session.viewsById, kind)
     if (open != null) {
-        vm.setActiveView(workspace.id, open.first)
+        vm.fleet.setActiveView(workspace.id, open.first)
         return
     }
     val id = newId()
@@ -208,7 +208,7 @@ private fun addPhoneView(
         kind = kind.wire,
         state = addViewState(kind, System.currentTimeMillis()),
     )
-    vm.addWorkspaceView(workspace.id, kind.wire, addViewState(kind, System.currentTimeMillis()), id)
+    vm.fleet.addWorkspaceView(workspace.id, kind.wire, addViewState(kind, System.currentTimeMillis()), id)
 }
 
 @Composable
@@ -226,7 +226,7 @@ private fun TabletWorkspace(
 
     fun closeOrConfirm(view: ViewDto) {
         if (closeNeedsConfirm(view)) closeCandidate = view
-        else vm.closeWorkspaceView(workspace.id, view.id)
+        else vm.fleet.closeWorkspaceView(workspace.id, view.id)
     }
 
     PaneHost(
@@ -272,7 +272,7 @@ private fun TabletWorkspace(
             }
         },
     )
-    val sessions by vm.sessions.collectAsState()
+    val sessions by vm.fleet.sessions.collectAsState()
     CloseViewDialog(
         view = closeCandidate,
         sessionName = closeCandidate?.chatSessionId()?.let { sid ->
@@ -280,7 +280,7 @@ private fun TabletWorkspace(
         },
         onDismiss = { closeCandidate = null },
         onConfirm = { view ->
-            vm.closeWorkspaceView(workspace.id, view.id)
+            vm.fleet.closeWorkspaceView(workspace.id, view.id)
             closeCandidate = null
         },
     )
@@ -310,7 +310,7 @@ internal fun addTabletView(
         kind = kind.wire,
         state = state,
     )
-    vm.addWorkspaceView(workspace.id, kind.wire, state, id, groupId)
+    vm.fleet.addWorkspaceView(workspace.id, kind.wire, state, id, groupId)
     if (placement != NewViewPlacement.HERE) {
         val dir = if (placement == NewViewPlacement.SPLIT_RIGHT) "row" else "column"
         val newGroupId = newId()

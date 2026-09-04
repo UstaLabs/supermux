@@ -1,6 +1,8 @@
 package dev.supermux.host
 
 import dev.supermux.proto.SessionInfo
+import dev.supermux.proto.WorkspaceDto
+import dev.supermux.workspace.chatSessionIds
 import dev.supermux.ui.oklchToArgb
 
 /**
@@ -176,4 +178,11 @@ fun hostViewsFrom(hosts: List<PairedHost>, online: Map<String, Boolean>): List<H
             online = online[h.recordId] == true,
             lastSeenAt = h.lastSeenAt,
         )
+    }
+
+/** Workspace that currently hosts [sessionId] as a chat view, if any. Pure; shared by the
+ *  fleet routing (`FleetStore.workspaceForSession`) and by any screen holding a workspace list. */
+fun workspaceForSession(workspaces: List<WorkspaceDto>, sessionId: String): WorkspaceDto? =
+    workspaces.firstOrNull { w ->
+        w.status != "archived" && w.chatSessionIds().contains(sessionId)
     }

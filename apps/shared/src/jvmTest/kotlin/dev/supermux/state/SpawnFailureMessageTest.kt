@@ -1,4 +1,4 @@
-package dev.supermux.android.session
+package dev.supermux.state
 
 import kotlinx.coroutines.CancellationException
 import kotlin.test.Test

@@ -131,6 +131,7 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.gitBadge
+import dev.supermux.state.ContinueHandoff
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
 
@@ -176,11 +177,11 @@ fun ChatScreen(
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
     // Editor LSP + live file-watch — app-wide flows + session-bound senders.
-    fsChanges: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.FsChanged> =
+    fsChanges: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.FsChanged> =
         kotlinx.coroutines.flow.MutableSharedFlow(),
     lspStatus: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.ServerFrame.LspStatus>> =
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
-    lspRpc: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.LspRpcIn> =
+    lspRpc: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.LspRpcIn> =
         kotlinx.coroutines.flow.MutableSharedFlow(),
     editorOpen: (String) -> Unit = {},
     editorClose: (String) -> Unit = {},
@@ -200,7 +201,7 @@ fun ChatScreen(
         kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
     onStartDisplay: suspend () -> Unit = {},
     onOpenDisplays: () -> Unit = {},
-    consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
+    consumePendingFirst: (String) -> dev.supermux.state.HostStore.PendingFirstMessage? = { null },
     onContinue: (suspend (ContinueHandoff) -> String?)? = null,
     loadContinueAgents: suspend () -> List<String> = { emptyList() },
     loadContinueModels: suspend (String) -> List<dev.supermux.net.ModelInfo> = { emptyList() },
@@ -210,12 +211,12 @@ fun ChatScreen(
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
     // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
     finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
-    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.finishReadiness(id)
+    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.fleet.finishReadiness(id)
     onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit = { _, _, _, _, cb -> cb(false) },
-    onClearFinishJob: () -> Unit = {},                                                    // vm.clearFinishJob(id)
-    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.verifySuggest(id)
-    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.verifySave(id, content)
-    onSendToAgent: (String) -> Unit = {},                                                 // vm.sendMessage(id, text)
+    onClearFinishJob: () -> Unit = {},                                                    // vm.fleet.clearFinishJob(id)
+    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.fleet.verifySuggest(id)
+    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.fleet.verifySave(id, content)
+    onSendToAgent: (String) -> Unit = {},                                                 // vm.fleet.sendMessage(id, text)
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {

@@ -95,6 +95,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
+import dev.supermux.state.StagedUpload
 
 /** Sentinel id for the "Default" (null-model) row in the model picker — maps back to a null model. */
 private const val DEFAULT_MODEL_ID = "__default__"
@@ -149,7 +152,7 @@ fun SessionLauncherScreen(
     // ── Multi-host (spec §5). Default-empty/no-op so single-host callers are unchanged. ──
     // The host picker pill selects which host to spawn on; picking one retargets every loader below
     // (models/projects/agents/commands) to that host via the caller's onSelectHost → active host.
-    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    hosts: List<dev.supermux.host.HostView> = emptyList(),
     selectedHostId: String? = null,
     onSelectHost: (String) -> Unit = {},
     // The chosen host's installed/available agent kinds (GET /agents/status) — replaces the old
@@ -312,8 +315,8 @@ fun SessionLauncherScreen(
         launcherReasoning = prefs.reasoningLevels
         model = prefs.models[agent]
         val draft = loadLauncherDraft()
-        if (draft.workdir != null) {
-            workdir = draft.workdir
+        draft.workdir?.let {
+            workdir = it
             workdirTouched = true
         }
         useWorktree = draft.useWorktree
@@ -1157,7 +1160,7 @@ private fun AgentPill(agent: String, enabled: Boolean, onClick: () -> Unit) {
  */
 @Composable
 private fun HostPickerPill(
-    hosts: List<dev.supermux.android.host.HostView>,
+    hosts: List<dev.supermux.host.HostView>,
     selectedHostId: String?,
     onSelect: (String) -> Unit,
 ) {

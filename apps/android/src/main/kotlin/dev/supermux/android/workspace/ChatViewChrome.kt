@@ -35,7 +35,7 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.R
 import dev.supermux.android.chat.ChatDetailPrefs
 import dev.supermux.android.chat.ContinueConversationSheet
-import dev.supermux.android.chat.ContinueHandoff
+import dev.supermux.state.ContinueHandoff
 import dev.supermux.android.chat.ContinueMenuItem
 import dev.supermux.android.chat.rememberContinueSheetState
 import dev.supermux.android.chat.FinishButton
@@ -344,7 +344,7 @@ internal fun PhoneTabChatOverflow(
     vm: AppViewModel,
     onSelectSession: (String) -> Unit,
 ) {
-    val sessions by vm.sessions.collectAsState()
+    val sessions by vm.fleet.sessions.collectAsState()
     val session = sessions.firstOrNull { it.id == sessionId } ?: return
     val context = LocalContext.current
     ChatOverflowMenu(
@@ -352,20 +352,20 @@ internal fun PhoneTabChatOverflow(
         onGitOp = { op ->
             val cb: (GitOpResult?) -> Unit = { toastGitOp(context, it) }
             when (op) {
-                "fetch" -> vm.gitFetch(sessionId, cb)
-                "pull" -> vm.gitPull(sessionId, cb)
-                "push" -> vm.gitPush(sessionId, cb)
-                "publish" -> vm.gitPublish(sessionId, cb)
+                "fetch" -> vm.fleet.gitFetch(sessionId, cb)
+                "pull" -> vm.fleet.gitPull(sessionId, cb)
+                "push" -> vm.fleet.gitPush(sessionId, cb)
+                "publish" -> vm.fleet.gitPublish(sessionId, cb)
             }
         },
         onContinue = { handoff ->
-            val recordId = vm.sessionHost.value[sessionId] ?: vm.activeHost.value
+            val recordId = vm.fleet.sessionHost.value[sessionId] ?: vm.fleet.activeHost.value
                 ?: throw IllegalStateException("No host")
-            vm.continueInNewConversation(recordId, sessionId, handoff)
+            vm.fleet.continueInNewConversation(recordId, sessionId, handoff)
         },
-        loadContinueAgents = { vm.agentStatuses().filter { it.installed }.map { it.kind } },
-        loadContinueModels = { vm.launcherModels(it) },
-        loadContinueReasoning = { ag, md -> vm.launcherReasoning(ag, md) },
+        loadContinueAgents = { vm.fleet.agentStatuses().filter { it.installed }.map { it.kind } },
+        loadContinueModels = { vm.fleet.launcherModels(it) },
+        loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
         onContinued = onSelectSession,
     )
 }

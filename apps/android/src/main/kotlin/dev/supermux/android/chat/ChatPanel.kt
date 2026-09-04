@@ -176,7 +176,7 @@ fun ChatPanel(
     onPickEffort: (String) -> Unit,
     loadDraft: suspend (String) -> String,
     saveDraft: (String, String) -> Unit,
-    consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage?,
+    consumePendingFirst: (String) -> dev.supermux.state.HostStore.PendingFirstMessage?,
     onOpenFile: (FilePathRef) -> Unit,
     onRequestRename: () -> Unit,
     onRequestMute: () -> Unit,

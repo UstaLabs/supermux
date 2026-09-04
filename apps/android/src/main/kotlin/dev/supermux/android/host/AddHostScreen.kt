@@ -45,7 +45,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import dev.supermux.android.AddHostResult
+import dev.supermux.state.AddHostResult
 import dev.supermux.android.R
 import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.host.PairingPayload

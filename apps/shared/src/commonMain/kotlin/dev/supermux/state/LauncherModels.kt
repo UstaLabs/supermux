@@ -3,7 +3,7 @@ package dev.supermux.state
 import kotlinx.serialization.Serializable
 
 /** Sticky New Session launcher preferences — the agent + its last-used model, keyed per agent.
- *  Desktop copy of `dev.supermux.android.session.LauncherPrefs`. */
+ *  Shared by desktop and Android. */
 @Serializable
 data class LauncherPrefs(
     val agent: String = "claude",
@@ -12,7 +12,7 @@ data class LauncherPrefs(
 )
 
 /** In-progress New Session launcher draft — cleared once a session is actually created.
- *  Desktop copy of `dev.supermux.android.session.LauncherDraft`. `workdir` is null when nothing
+ *  Shared by desktop and Android. `workdir` is null when nothing
  *  was explicitly restored (so the screen's own most-recent-session fallback still applies). */
 @Serializable
 data class LauncherDraft(

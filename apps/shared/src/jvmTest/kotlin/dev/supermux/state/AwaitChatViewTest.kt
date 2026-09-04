@@ -1,7 +1,9 @@
-package dev.supermux.android.workspace
+package dev.supermux.state
 
-import dev.supermux.android.session.workspaceChatView
-import dev.supermux.android.session.workspaceDto
+import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -10,7 +12,20 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-class ActivateChatViewTest {
+private fun workspaceChatView(id: String, sessionId: String, workspaceId: String = "w") = ViewDto(
+    id = id,
+    workspaceId = workspaceId,
+    kind = "chat",
+    state = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) },
+)
+
+private fun workspaceDto(
+    id: String = "w1",
+    name: String = id,
+    views: List<ViewDto> = emptyList(),
+) = WorkspaceDto(id = id, name = name, status = "active", workdir = "/w", views = views)
+
+class AwaitChatViewTest {
 
     @Test
     fun viewArrivesLateThenActivates() = runTest {

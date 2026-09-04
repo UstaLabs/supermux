@@ -33,10 +33,11 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.showReasoningPicker
-import dev.supermux.android.session.spawnFailureMessage
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.HandoffPrefill
 import kotlinx.coroutines.launch
+import dev.supermux.state.ContinueHandoff
+import dev.supermux.state.spawnFailureMessage
 
 private const val DEFAULT_MODEL_ID = "__default__"
 private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok")

@@ -59,20 +59,21 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.toRoute
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import dev.supermux.android.host.AddHostScreen
 import dev.supermux.android.host.HostScopePicker
-import dev.supermux.android.host.HostView
-import dev.supermux.android.host.ViewingSurface
-import dev.supermux.android.host.WorkspaceViewingSnapshot
-import dev.supermux.android.host.PushTapHandle
-import dev.supermux.android.host.notificationCancelSessionIds
-import dev.supermux.android.host.pushTapHandleDecision
-import dev.supermux.android.host.resolvePushTap
-import dev.supermux.android.host.viewingSurfaceVisible
+import dev.supermux.host.HostView
+import dev.supermux.host.ViewingSurface
+import dev.supermux.host.WorkspaceViewingSnapshot
+import dev.supermux.android.push.PushTapHandle
+import dev.supermux.android.push.notificationCancelSessionIds
+import dev.supermux.android.push.pushTapHandleDecision
+import dev.supermux.android.push.resolvePushTap
+import dev.supermux.host.viewingSurfaceVisible
 import dev.supermux.android.host.visibleChatIdsForAndroid
-import dev.supermux.android.host.visibleWorkspaceChatIds
-import dev.supermux.android.host.workspaceForSession
+import dev.supermux.host.visibleWorkspaceChatIds
+import dev.supermux.host.workspaceForSession
 import dev.supermux.android.nav.AddHost
 import dev.supermux.android.nav.Appearance
 import dev.supermux.android.nav.Archived
@@ -125,6 +126,8 @@ import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.state.SidebarReorderKind
+import dev.supermux.state.sidebarReorderKind
 
 class MainActivity : ComponentActivity() {
     // Current launch/deep-link intent, surfaced to Compose. Seeded in onCreate; updated by
@@ -210,22 +213,22 @@ class MainActivity : ComponentActivity() {
                 // re-running the idempotent single-host→PairedHost[0] migration on init so existing
                 // users — and the session where onboarding just paired — always have a host to drive.
                 val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
-                val sessions by vm.sessions.collectAsStateWithLifecycle()
-                val archivedSessions by vm.archivedSessions.collectAsStateWithLifecycle()
-                val workspaces by vm.workspaces.collectAsStateWithLifecycle()
-                val archivedWorkspaces by vm.archivedWorkspaces.collectAsStateWithLifecycle()
-                val messages by vm.messages.collectAsStateWithLifecycle()
-                val activity by vm.activity.collectAsStateWithLifecycle()
-                val agentState by vm.agentState.collectAsStateWithLifecycle()
-                val pendingSend by vm.pendingSend.collectAsStateWithLifecycle()
-                val commands by vm.commands.collectAsStateWithLifecycle()
-                val commandsResolved by vm.commandsResolved.collectAsStateWithLifecycle()
-                val lastRead by vm.lastRead.collectAsStateWithLifecycle()
+                val sessions by vm.fleet.sessions.collectAsStateWithLifecycle()
+                val archivedSessions by vm.fleet.archivedSessions.collectAsStateWithLifecycle()
+                val workspaces by vm.fleet.workspaces.collectAsStateWithLifecycle()
+                val archivedWorkspaces by vm.fleet.archivedWorkspaces.collectAsStateWithLifecycle()
+                val messages by vm.fleet.messages.collectAsStateWithLifecycle()
+                val activity by vm.fleet.activity.collectAsStateWithLifecycle()
+                val agentState by vm.fleet.agentState.collectAsStateWithLifecycle()
+                val pendingSend by vm.fleet.pendingSend.collectAsStateWithLifecycle()
+                val commands by vm.fleet.commands.collectAsStateWithLifecycle()
+                val commandsResolved by vm.fleet.commandsResolved.collectAsStateWithLifecycle()
+                val lastRead by vm.fleet.lastRead.collectAsStateWithLifecycle()
                 // Merged-fleet state: the paired hosts (identity + reachability), the sessionId→host
                 // owner index (per-row badges), and the persisted host-filter chip selection.
-                val hostViews by vm.hostViews.collectAsStateWithLifecycle()
-                val sessionHost by vm.sessionHost.collectAsStateWithLifecycle()
-                val activeHost by vm.activeHost.collectAsStateWithLifecycle()
+                val hostViews by vm.fleet.hostViews.collectAsStateWithLifecycle()
+                val sessionHost by vm.fleet.sessionHost.collectAsStateWithLifecycle()
+                val activeHost by vm.fleet.activeHost.collectAsStateWithLifecycle()
                 val activeHostSessions = remember(sessions, sessionHost, hostViews, activeHost) {
                     if (hostViews.size >= 2 && activeHost != null) {
                         sessions.filter { sessionHost[it.id] == activeHost }
@@ -234,9 +237,9 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
-                LaunchedEffect(Unit) { hostFilter = vm.loadHostFilter() }
-                val setHostFilter: (String?) -> Unit = { hostFilter = it; vm.saveHostFilter(it) }
-                val loadHostAgents: suspend () -> List<String> = { vm.agentStatuses().filter { it.installed }.map { it.kind } }
+                LaunchedEffect(Unit) { hostFilter = vm.fleet.hostFilter.first() }
+                val setHostFilter: (String?) -> Unit = { hostFilter = it; vm.fleet.saveHostFilter(it) }
+                val loadHostAgents: suspend () -> List<String> = { vm.fleet.agentStatuses().filter { it.installed }.map { it.kind } }
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val newChatScope = rememberCoroutineScope()
@@ -249,7 +252,7 @@ class MainActivity : ComponentActivity() {
                             return@launch
                         }
                         runCatching {
-                            val id = vm.newChatInWorkspace(recordId, w.id, w.workdir)
+                            val id = vm.fleet.newChatInWorkspace(recordId, w.id, w.workdir)
                             selected = id
                         }.onFailure {
                             Toast.makeText(
@@ -300,10 +303,10 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(selected, workspaces, wide, appVisible, overlayOpen, homeRoute) {
                     if (!appVisible || overlayOpen || !homeRoute) return@LaunchedEffect
                     selected?.let {
-                        sessionHost[it]?.let(vm::setActiveHost)
-                        vm.ensureMessagesLoaded(it)
-                        val hostId = sessionHost[it] ?: vm.activeHost.value
-                        val ws = hostId?.let { h -> vm.workspaceForSession(h, it) }
+                        sessionHost[it]?.let(vm.fleet::setActiveHost)
+                        vm.fleet.ensureMessagesLoaded(it)
+                        val hostId = sessionHost[it] ?: vm.fleet.activeHost.value
+                        val ws = hostId?.let { h -> vm.fleet.workspaceForSession(h, it) }
                         val layout = ws?.layout?.toDomainOrNull()
                         val visibleIds = if (ws != null) {
                             visibleChatIdsForAndroid(wide, ws, layout)
@@ -330,14 +333,14 @@ class MainActivity : ComponentActivity() {
                 }
                 LaunchedEffect(selected, workspaces, sessionHost) {
                     val sid = selected ?: return@LaunchedEffect
-                    val hostId = sessionHost[sid] ?: vm.activeHost.value
-                    val ws = hostId?.let { h -> vm.workspaceForSession(h, sid) }
+                    val hostId = sessionHost[sid] ?: vm.fleet.activeHost.value
+                    val ws = hostId?.let { h -> vm.fleet.workspaceForSession(h, sid) }
                     val chatView = ws?.views?.firstOrNull { v -> v.chatSessionId() == sid }
                     val decision = chatActivationDecision(sid, lastActivatedSelection, ws, chatView)
                     if (decision == ChatActivationHandle.Skip) return@LaunchedEffect
                     if (decision == ChatActivationHandle.ApplyConsume) {
                         if (ws != null && chatView != null && ws.activeViewId != chatView.id) {
-                            vm.setActiveView(ws.id, chatView.id)
+                            vm.fleet.setActiveView(ws.id, chatView.id)
                         }
                         lastActivatedSelection = sid
                     }
@@ -352,12 +355,12 @@ class MainActivity : ComponentActivity() {
                     val decision = pushTapHandleDecision(extra, handledPushSessionId, workspaces.isNotEmpty())
                     if (decision == PushTapHandle.Skip) return@LaunchedEffect
                     val sid = extra!!
-                    val hostId = sessionHost[sid] ?: vm.activeHost.value
-                    val owned = hostId?.let { vm.workspaceForSession(it, sid) }
+                    val hostId = sessionHost[sid] ?: vm.fleet.activeHost.value
+                    val owned = hostId?.let { vm.fleet.workspaceForSession(it, sid) }
                     val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
                     selected = sid
                     if (tap.workspaceId != null && tap.activeViewId != null) {
-                        vm.setActiveView(tap.workspaceId, tap.activeViewId)
+                        vm.fleet.setActiveView(tap.workspaceId, tap.activeViewId)
                     }
                     if (decision == PushTapHandle.ApplyConsume) {
                         handledPushSessionId = sid
@@ -365,8 +368,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val selectedWorkspace = selected?.let { sid ->
-                    val hostId = sessionHost[sid] ?: vm.activeHost.value
-                    hostId?.let { h -> vm.workspaceForSession(h, sid) }
+                    val hostId = sessionHost[sid] ?: vm.fleet.activeHost.value
+                    hostId?.let { h -> vm.fleet.workspaceForSession(h, sid) }
                         ?: workspaceForSession(workspaces, sid)
                 }
                 val viewingSnapshot = run {
@@ -404,7 +407,7 @@ class MainActivity : ComponentActivity() {
                         else -> null
                     }
                 }
-                LaunchedEffect(viewingSnapshot) { vm.updateViewing(viewingSnapshot) }
+                LaunchedEffect(viewingSnapshot) { vm.fleet.updateViewing(viewingSnapshot) }
                 // Maps the screens' legacy string-route callbacks to type-safe NavHost destinations.
                 val navTo: (String) -> Unit = { dest ->
                     when (dest) {
@@ -462,15 +465,15 @@ class MainActivity : ComponentActivity() {
                                         onNewSession = { navController.navigate(NewSession()) },
                                         onAddKind = { kind ->
                                             val sid = selected ?: return@workspaceShortcuts
-                                            val hostId = sessionHost[sid] ?: vm.activeHost.value ?: return@workspaceShortcuts
-                                            val ws = vm.workspaceForSession(hostId, sid) ?: return@workspaceShortcuts
+                                            val hostId = sessionHost[sid] ?: vm.fleet.activeHost.value ?: return@workspaceShortcuts
+                                            val ws = vm.fleet.workspaceForSession(hostId, sid) ?: return@workspaceShortcuts
                                             val tree = ws.layout.toDomainOrNull()
                                             val views = ws.views.associateBy { it.id }
                                             val open = tree?.let { openSingletonView(it, views, kind) }
                                             if (open != null) {
-                                                vm.setActiveView(ws.id, open.first)
+                                                vm.fleet.setActiveView(ws.id, open.first)
                                             } else {
-                                                vm.addWorkspaceView(
+                                                vm.fleet.addWorkspaceView(
                                                     ws.id,
                                                     kind.wire,
                                                     addViewState(kind, System.currentTimeMillis()),
@@ -514,28 +517,28 @@ class MainActivity : ComponentActivity() {
                                                 lastRead = lastRead,
                                                 agentState = agentState,
                                                 onNewSession = { navController.navigate(NewSession()) },
-                                                loadProjects = { vm.listProjects() },
-                                                validatePath = { vm.validatePath(it) },
+                                                loadProjects = { vm.fleet.listProjects() },
+                                                validatePath = { vm.fleet.validatePath(it) },
                                                 onNavigate = navTo,
-                                                onRename = { id, name -> vm.rename(id, name) },
-                                                onKill = { id -> vm.kill(id) },
-                                                onMute = { id, m -> vm.setMute(id, m) },
+                                                onRename = { id, name -> vm.fleet.rename(id, name) },
+                                                onKill = { id -> vm.fleet.kill(id) },
+                                                onMute = { id, m -> vm.fleet.setMute(id, m) },
                                                 archived = archivedSessions,
-                                                onResume = { id -> vm.resume(id) },
+                                                onResume = { id -> vm.fleet.resume(id) },
                                                 onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                                onReorder = { ids -> vm.reorderRows(ids) },
+                                                onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) vm.fleet.reorderSessions(ids) else vm.fleet.reorderWorkspaces(ids) },
                                                 workspaces = workspaces,
                                                 archivedWorkspaces = archivedWorkspaces,
-                                                onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
-                                                onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
+                                                onArchiveWorkspace = { id -> vm.fleet.archiveWorkspace(id) },
+                                                onRestoreWorkspace = { id -> vm.fleet.restoreWorkspace(id) },
                                                 onNewChatInWorkspace = onNewChatInWorkspace,
                                                 hosts = hostViews,
                                                 sessionHost = sessionHost,
                                                 hostFilter = hostFilter,
                                                 onHostFilter = setHostFilter,
                                                 onAddHost = { navController.navigate(AddHost) },
-                                                onRenameHost = { id, name -> vm.renameHost(id, name) },
-                                                onForgetHost = { id -> vm.forgetHost(id) },
+                                                onRenameHost = { id, name -> vm.fleet.renameHost(id, name) },
+                                                onForgetHost = { id -> vm.fleet.forgetHost(id) },
                                             )
                                         }
                                     }
@@ -644,28 +647,28 @@ class MainActivity : ComponentActivity() {
                                         lastRead = lastRead,
                                         agentState = agentState,
                                         onNewSession = { },
-                                        loadProjects = { vm.listProjects() },
-                                        validatePath = { vm.validatePath(it) },
+                                        loadProjects = { vm.fleet.listProjects() },
+                                        validatePath = { vm.fleet.validatePath(it) },
                                         onNavigate = navTo,
-                                        onRename = { id, name -> vm.rename(id, name) },
-                                        onKill = { id -> vm.kill(id) },
-                                        onMute = { id, m -> vm.setMute(id, m) },
+                                        onRename = { id, name -> vm.fleet.rename(id, name) },
+                                        onKill = { id -> vm.fleet.kill(id) },
+                                        onMute = { id, m -> vm.fleet.setMute(id, m) },
                                         archived = archivedSessions,
-                                        onResume = { id -> vm.resume(id) },
+                                        onResume = { id -> vm.fleet.resume(id) },
                                         onOpenDraft = { id -> navController.navigate(NewSession(draftId = id)) },
-                                        onReorder = { ids -> vm.reorderRows(ids) },
+                                        onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) vm.fleet.reorderSessions(ids) else vm.fleet.reorderWorkspaces(ids) },
                                         workspaces = workspaces,
                                         archivedWorkspaces = archivedWorkspaces,
-                                        onArchiveWorkspace = { id -> vm.archiveWorkspace(id) },
-                                        onRestoreWorkspace = { id -> vm.restoreWorkspace(id) },
+                                        onArchiveWorkspace = { id -> vm.fleet.archiveWorkspace(id) },
+                                        onRestoreWorkspace = { id -> vm.fleet.restoreWorkspace(id) },
                                         onNewChatInWorkspace = onNewChatInWorkspace,
                                         hosts = hostViews,
                                         sessionHost = sessionHost,
                                         hostFilter = hostFilter,
                                         onHostFilter = setHostFilter,
                                         onAddHost = { navController.navigate(AddHost) },
-                                        onRenameHost = { id, name -> vm.renameHost(id, name) },
-                                        onForgetHost = { id -> vm.forgetHost(id) },
+                                        onRenameHost = { id, name -> vm.fleet.renameHost(id, name) },
+                                        onForgetHost = { id -> vm.fleet.forgetHost(id) },
                                     )
                                 }
                                 Box(
@@ -680,36 +683,37 @@ class MainActivity : ComponentActivity() {
                                         home = DevConfig.HOME,
                                         lastBySession = lastBySession,
                                         onBack = { navController.popBackStack() },
-                                        loadProjects = { vm.listProjects() },
-                                        validatePath = { vm.validatePath(it) },
-                                        loadModels = { vm.launcherModels(it) },
-                                        loadReasoningLevels = { ag, md -> vm.launcherReasoning(ag, md) },
-                                        loadRepoInfo = { wd, fetch -> vm.launcherRepoInfo(wd, fetch) },
-                                        loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
-                                        loadForges = { vm.listForges() },
-                                        searchForge = { vm.searchForge(it) },
-                                        cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
-                                        createLocalRepo = { vm.createLocalRepo(it) },
-                                        createForge = { cid, name -> vm.createForge(cid, name) },
-                                        loadGlossary = { vm.fetchGlossary() },
-                                        transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
-                                        transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
-                                        loadLauncherPrefs = { vm.loadLauncherPrefs() },
-                                        onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
-                                        loadLauncherDraft = { vm.loadLauncherDraft() },
-                                        onLauncherDraftChange = { vm.saveLauncherDraft(it) },
+                                        loadProjects = { vm.fleet.listProjects() },
+                                        validatePath = { vm.fleet.validatePath(it) },
+                                        loadModels = { vm.fleet.launcherModels(it) },
+                                        loadReasoningLevels = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
+                                        loadRepoInfo = { wd, fetch -> vm.fleet.launcherRepoInfo(wd, fetch) },
+                                        loadCommands = { ag, wd -> vm.fleet.launcherCommands(ag, wd) },
+                                        loadForges = { vm.fleet.listForges() },
+                                        searchForge = { vm.fleet.searchForge(it)?.repos.orEmpty() },
+                                        cloneForge = { cid, owner, name -> vm.fleet.cloneForge(cid, owner, name) },
+                                        createLocalRepo = { vm.fleet.createLocalRepo(it) },
+                                        createForge = { cid, name -> vm.fleet.createForge(cid, name) },
+                                        loadGlossary = { vm.fleet.fetchGlossary() },
+                                        transcribeDraft = { draft -> vm.fleet.transcribeDraft(null, draft) },
+                                        transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(null, bytes, name) },
+                                        loadLauncherPrefs = { vm.fleet.launcherPrefs.first() },
+                                        onLauncherPrefsChange = { vm.fleet.saveLauncherPrefs(it) },
+                                        loadLauncherDraft = { vm.fleet.launcherDraft.first() },
+                                        onLauncherDraftChange = { vm.fleet.saveLauncherDraft(it) },
                                         onSubmit = { wd, ag, md, rl, msg, wt, base, staged, replaceDraftId ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                            vm.fleet.createSessionWithFirstMessage(wd, ag, md, rl, msg, staged, worktree = wt, baseBranch = base, replaceDraftId = replaceDraftId)
+                                                ?: error("Couldn't create the session")
                                         },
                                         onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
-                                            vm.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                            vm.fleet.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
                                         },
                                         initialDraftId = draftId,
                                         initialDraft = draftSession,
                                         onOpenSession = { selected = it; navController.popBackStack() },
                                         hosts = hostViews,
                                         selectedHostId = activeHost,
-                                        onSelectHost = { vm.setActiveHost(it) },
+                                        onSelectHost = { vm.fleet.setActiveHost(it) },
                                         loadAgents = loadHostAgents,
                                     )
                                 }
@@ -720,36 +724,37 @@ class MainActivity : ComponentActivity() {
                                 home = DevConfig.HOME,
                                 lastBySession = lastBySession,
                                 onBack = { navController.popBackStack() },
-                                loadProjects = { vm.listProjects() },
-                                validatePath = { vm.validatePath(it) },
-                                loadModels = { vm.launcherModels(it) },
-                                loadReasoningLevels = { ag, md -> vm.launcherReasoning(ag, md) },
-                                loadRepoInfo = { wd, fetch -> vm.launcherRepoInfo(wd, fetch) },
-                                loadCommands = { ag, wd -> vm.launcherCommands(ag, wd) },
-                                loadForges = { vm.listForges() },
-                                searchForge = { vm.searchForge(it) },
-                                cloneForge = { cid, owner, name -> vm.cloneForge(cid, owner, name) },
-                                createLocalRepo = { vm.createLocalRepo(it) },
-                                createForge = { cid, name -> vm.createForge(cid, name) },
-                                loadGlossary = { vm.fetchGlossary() },
-                                transcribeDraft = { draft -> vm.transcribeDraft(null, draft) },
-                                transcribeAudio = { bytes, name -> vm.transcribeAudio(null, bytes, name) },
-                                loadLauncherPrefs = { vm.loadLauncherPrefs() },
-                                onLauncherPrefsChange = { vm.saveLauncherPrefs(it) },
-                                loadLauncherDraft = { vm.loadLauncherDraft() },
-                                onLauncherDraftChange = { vm.saveLauncherDraft(it) },
+                                loadProjects = { vm.fleet.listProjects() },
+                                validatePath = { vm.fleet.validatePath(it) },
+                                loadModels = { vm.fleet.launcherModels(it) },
+                                loadReasoningLevels = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
+                                loadRepoInfo = { wd, fetch -> vm.fleet.launcherRepoInfo(wd, fetch) },
+                                loadCommands = { ag, wd -> vm.fleet.launcherCommands(ag, wd) },
+                                loadForges = { vm.fleet.listForges() },
+                                searchForge = { vm.fleet.searchForge(it)?.repos.orEmpty() },
+                                cloneForge = { cid, owner, name -> vm.fleet.cloneForge(cid, owner, name) },
+                                createLocalRepo = { vm.fleet.createLocalRepo(it) },
+                                createForge = { cid, name -> vm.fleet.createForge(cid, name) },
+                                loadGlossary = { vm.fleet.fetchGlossary() },
+                                transcribeDraft = { draft -> vm.fleet.transcribeDraft(null, draft) },
+                                transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(null, bytes, name) },
+                                loadLauncherPrefs = { vm.fleet.launcherPrefs.first() },
+                                onLauncherPrefsChange = { vm.fleet.saveLauncherPrefs(it) },
+                                loadLauncherDraft = { vm.fleet.launcherDraft.first() },
+                                onLauncherDraftChange = { vm.fleet.saveLauncherDraft(it) },
                                 onSubmit = { wd, ag, md, rl, msg, wt, base, staged, replaceDraftId ->
-                                            vm.createSessionWithFirstMessage(wd, ag, md, msg, staged, worktree = wt, baseBranch = base, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                            vm.fleet.createSessionWithFirstMessage(wd, ag, md, rl, msg, staged, worktree = wt, baseBranch = base, replaceDraftId = replaceDraftId)
+                                                ?: error("Couldn't create the session")
                                         },
                                 onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
-                                            vm.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
+                                            vm.fleet.createDraftSession(wd, ag, md, msg, reasoningLevel = rl, replaceDraftId = replaceDraftId)
                                         },
                                         initialDraftId = draftId,
                                         initialDraft = draftSession,
                                 onOpenSession = { selected = it; navController.popBackStack() },
                                 hosts = hostViews,
                                 selectedHostId = activeHost,
-                                onSelectHost = { vm.setActiveHost(it) },
+                                onSelectHost = { vm.fleet.setActiveHost(it) },
                                 loadAgents = loadHostAgents,
                             )
                         }
@@ -758,120 +763,120 @@ class MainActivity : ComponentActivity() {
                         AddHostScreen(
                             onBack = { navController.popBackStack() },
                             defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
-                            onClaim = { payload, name -> vm.addHost(payload, name) },
-                            onClaimLegacy = { pair -> vm.addLegacyHost(pair) },
-                            onClaimByUrl = { url, name, allowInsecure -> vm.addHostByUrl(url, name, allowInsecure) },
+                            onClaim = { payload, name -> vm.fleet.addHost(payload, name) },
+                            onClaimLegacy = { pair -> vm.fleet.addLegacyHost(pair) },
+                            onClaimByUrl = { url, name, allowInsecure -> vm.fleet.addHostByUrl(url, name, allowInsecure) },
                             onAdded = {
                                 // New host needs its own relay bootstrap → broker /push/device row.
                                 SupermuxMessagingService.registerIfPaired(applicationContext)
                                 navController.popBackStack()
                             },
-                            needsInsecureOptIn = { vm.urlNeedsInsecureOptIn(it) },
+                            needsInsecureOptIn = { vm.fleet.urlNeedsInsecureOptIn(it) },
                         )
                     }
                     composable<Settings> {
-                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { SettingsScreen(
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { SettingsScreen(
                             onBack = { navController.popBackStack() },
                             // Personal assistants
-                            paLoad = { vm.personalAssistants() },
-                            paCreate = { name, agent, focus -> vm.createPersonalAssistant(name, agent, focus) },
-                            paKill = { vm.killPersonalAssistant(it) },
+                            paLoad = { vm.fleet.personalAssistants() },
+                            paCreate = { name, agent, focus -> vm.fleet.createPersonalAssistant(name, agent, focus) },
+                            paKill = { vm.fleet.killPersonalAssistant(it) },
                             // Assistant
-                            assistantLoad = { vm.assistantLoad() },
-                            assistantSave = { paName, soul -> vm.assistantSave(paName, soul) },
+                            assistantLoad = { vm.fleet.assistantLoad() },
+                            assistantSave = { paName, soul -> vm.fleet.assistantSave(paName, soul) == null },
                             // Agents
-                            agentStatuses = { vm.agentStatuses() },
-                            agentStartLogin = { vm.agentStartLogin(it) },
-                            agentPollLogin = { vm.agentPollLogin(it) },
-                            agentSendCode = { kind, code -> vm.agentSendCode(kind, code) },
-                            agentCancelLogin = { vm.agentCancelLogin(it) },
-                            agentSaveSecret = { kind, value -> vm.agentSaveSecret(kind, value) },
-                            openCodeProviders = { vm.openCodeProviders() },
-                            openCodeSetKey = { id, key -> vm.openCodeSetKey(id, key) },
-                            openCodeStartOAuth = { id, method -> vm.openCodeStartOAuth(id, method) },
-                            openCodeFinishOAuth = { id, method, code -> vm.openCodeFinishOAuth(id, method, code) },
+                            agentStatuses = { vm.fleet.agentStatuses() },
+                            agentStartLogin = { vm.fleet.startAgentLogin(it) },
+                            agentPollLogin = { vm.fleet.agentLoginState(it) },
+                            agentSendCode = { kind, code -> vm.fleet.agentSendCode(kind, code) },
+                            agentCancelLogin = { vm.fleet.agentCancelLogin(it) },
+                            agentSaveSecret = { kind, value -> vm.fleet.agentSaveSecret(kind, value) },
+                            openCodeProviders = { vm.fleet.openCodeProviders() },
+                            openCodeSetKey = { id, key -> vm.fleet.openCodeSetKey(id, key) },
+                            openCodeStartOAuth = { id, method -> vm.fleet.startOpenCodeOAuth(id, method) },
+                            openCodeFinishOAuth = { id, method, code -> vm.fleet.openCodeFinishOAuth(id, method, code) },
                             // Curator
-                            curatorLoad = { vm.curatorSettings() },
+                            curatorLoad = { vm.fleet.curatorSettings() },
                             curatorSave = { e, h, m, agent, model, reasoning ->
-                                vm.saveCurator(e, h, m, agent, model, reasoning)
+                                vm.fleet.saveCurator(e, h, m, agent, model, reasoning)
                             },
-                            curatorRunNow = { vm.runCuratorNow() },
-                            curatorLoadModels = { agent -> vm.launcherModels(agent) },
-                            curatorLoadReasoning = { agent, model -> vm.launcherReasoning(agent, model) },
+                            curatorRunNow = { vm.fleet.runCuratorNow() },
+                            curatorLoadModels = { agent -> vm.fleet.launcherModels(agent) },
+                            curatorLoadReasoning = { agent, model -> vm.fleet.launcherReasoning(agent, model) },
                             // Voice
-                            voiceLoadModels = { family -> vm.launcherModels(family) },
-                            voiceLoadConfig = { vm.config() },
-                            voiceSaveVoiceStt = { engine -> vm.saveVoiceStt(engine) },
-                            voiceSaveVoiceTts = { engine -> vm.saveVoiceTts(engine) },
-                            voiceSaveVoiceCleanup = { engine, model -> vm.saveVoiceCleanup(engine, model) },
-                            glossaryLoad = { vm.fetchGlossary() },
-                            glossarySave = { vm.updateGlossary(it) },
+                            voiceLoadModels = { family -> vm.fleet.launcherModels(family) },
+                            voiceLoadConfig = { vm.fleet.appConfig() },
+                            voiceSaveVoiceStt = { engine -> vm.fleet.saveVoiceStt(engine) },
+                            voiceSaveVoiceTts = { engine -> vm.fleet.saveVoiceTts(engine) },
+                            voiceSaveVoiceCleanup = { engine, model -> vm.fleet.saveVoiceCleanup(engine, model) },
+                            glossaryLoad = { vm.fleet.fetchGlossary() },
+                            glossarySave = { vm.fleet.updateGlossary(it) },
                             // Editor / LSP
-                            lspLoad = { vm.lspLoad() },
-                            lspToggle = { id, enabled -> vm.lspToggle(id, enabled) },
-                            lspInstall = { vm.lspInstall(it) },
-                            lspInstallLog = vm.lspInstallLog,
-                            lspInstallDone = vm.lspInstallDone,
-                            lspAddCustom = { vm.lspAddCustom(it) },
-                            lspRemoveCustom = { vm.lspRemoveCustom(it) },
+                            lspLoad = { vm.fleet.lspLoad() },
+                            lspToggle = { id, enabled -> vm.fleet.lspToggle(id, enabled) },
+                            lspInstall = { vm.fleet.lspInstall(it) },
+                            lspInstallLog = vm.fleet.lspInstallLog,
+                            lspInstallDone = vm.fleet.lspInstallDone,
+                            lspAddCustom = { vm.fleet.lspAddCustom(it.id, it.label, it.command, it.extensions, it.args, it.languageId, it.installCmd) },
+                            lspRemoveCustom = { vm.fleet.lspRemoveCustom(it) },
                             // Git hosting
-                            forgesLoad = { vm.forgesLoad() },
-                            forgeAdd = { kind, token, host, transport -> vm.forgeAdd(kind, token, host, transport) },
-                            forgeImport = { kind, transport -> vm.forgeImport(kind, transport) },
-                            forgeRemove = { vm.forgeRemove(it) },
+                            forgesLoad = { vm.fleet.forgesLoad() },
+                            forgeAdd = { kind, token, host, transport -> vm.fleet.forgeAdd(kind, token, host, transport) },
+                            forgeImport = { kind, transport -> vm.fleet.forgeImport(kind, transport) },
+                            forgeRemove = { vm.fleet.forgeRemove(it) },
                             // System
-                            updateStatus = { vm.updateStatus() },
-                            runUpdate = { vm.runUpdate() },
-                            restartBroker = { vm.restartBroker() },
+                            updateStatus = { vm.fleet.updateStatus() },
+                            runUpdate = { vm.fleet.runUpdate() },
+                            restartBroker = { vm.fleet.restartBroker() },
                         ) } }
                     }
                     composable<Usage> {
-                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { UsageScreen(
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { UsageScreen(
                             onBack = { navController.popBackStack() },
-                            onLoad = { vm.usage() },
-                            onRedeem = { vm.redeemCodexReset() },
+                            onLoad = { vm.fleet.usageRaw() },
+                            onRedeem = { vm.fleet.redeemCodexReset() },
                         ) } }
                     }
                     composable<Devices> {
-                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { DevicesScreen(
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { DevicesScreen(
                             onBack = { navController.popBackStack() },
-                            onLoad = { vm.devices() },
-                            onAdd = { vm.addDevice(it) },
-                            onRevoke = { vm.revoke(it) },
+                            onLoad = { vm.fleet.devices() },
+                            onAdd = { vm.fleet.addDevice(it) },
+                            onRevoke = { vm.fleet.revoke(it) },
                         ) } }
                     }
                     composable<Archived> {
-                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { ArchivedScreen(
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ArchivedScreen(
                             onBack = { navController.popBackStack() },
                             workspaces = archivedWorkspaces,
-                            onRestore = { vm.restoreWorkspace(it) },
+                            onRestore = { vm.fleet.restoreWorkspace(it) },
                             home = DevConfig.HOME,
                             useWorkspaces = workspaces.isNotEmpty(),
-                            loadArchivedSessions = { vm.archived() },
-                            onResumeSession = { vm.resume(it) },
-                            loadLogs = { vm.archivedLogs(it) },
+                            loadArchivedSessions = { vm.fleet.archived() },
+                            onResumeSession = { vm.fleet.resume(it) },
+                            loadLogs = { vm.fleet.archivedLogs(it) },
                         ) } }
                     }
                     composable<Proxies> {
-                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) { ProxyScreen(
-                            onLoad = { vm.proxies() },
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ProxyScreen(
+                            onLoad = { vm.fleet.proxies() },
                             sessions = activeHostSessions,
-                            onCreate = { s, p, d -> vm.createProxy(s, p, d) },
-                            onTogglePublic = { d, pub -> vm.setProxyPublic(d, pub) },
-                            onRemove = { vm.removeProxy(it) },
+                            onCreate = { s, p, d -> vm.fleet.createProxy(s, p, d) },
+                            onTogglePublic = { d, pub -> vm.fleet.setProxyPublic(d, pub) },
+                            onRemove = { vm.fleet.removeProxy(it) },
                             onBack = { navController.popBackStack() },
                         ) } }
                     }
                     composable<Displays> {
-                        HostScopedPage(hostViews, activeHost, vm::setActiveHost) { key(activeHost) {
-                            LaunchedEffect(activeHost) { vm.listDisplays() }
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) {
+                            LaunchedEffect(activeHost) { vm.fleet.listDisplays() }
                             DisplaysScreen(
                                 onBack = { navController.popBackStack() },
-                                displays = vm.displays,
-                                onStart = { sessionName -> vm.startDisplay(sessionName) },
-                                onStop = { id -> vm.stopDisplay(id) },
-                                connectVnc = { vm.connectVnc(it) },
-                                connectScrcpy = { vm.connectScrcpy(it) },
+                                displays = vm.fleet.displays,
+                                onStart = { sessionName -> vm.fleet.startDisplay(sessionName) },
+                                onStop = { id -> vm.fleet.stopDisplay(id) },
+                                connectVnc = { vm.fleet.connectVnc(it) },
+                                connectScrcpy = { vm.fleet.connectScrcpy(it) },
                             )
                         } }
                     }
@@ -939,7 +944,7 @@ private fun PhoneNavHost(
     onNavigate: (String) -> Unit,
     onOpenDraft: (String) -> Unit = {},
     onOpenDisplays: () -> Unit,
-    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    hosts: List<dev.supermux.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},

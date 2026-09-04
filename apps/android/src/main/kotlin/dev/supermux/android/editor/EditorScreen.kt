@@ -65,6 +65,7 @@ import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -95,9 +96,9 @@ fun EditorPanel(
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     // Phase 4 + 5 — LSP + live file-watch. Flows are app-wide; bridge/banner filter by session.
-    fsChanges: SharedFlow<ServerFrame.FsChanged> = MutableSharedFlow(),
+    fsChanges: Flow<ServerFrame.FsChanged> = MutableSharedFlow(),
     lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
-    lspRpc: SharedFlow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
+    lspRpc: Flow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
     editorOpen: (String) -> Unit = {},
     editorClose: (String) -> Unit = {},
     lspStatusQuery: (String, String) -> Unit = { _, _ -> },

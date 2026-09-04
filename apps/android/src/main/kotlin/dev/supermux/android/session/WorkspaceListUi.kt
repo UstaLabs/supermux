@@ -54,7 +54,7 @@ import dev.supermux.workspace.WorkspaceActivity
 fun WorkspaceRow(
     model: WorkspaceRowModel,
     active: Boolean,
-    hostBadge: dev.supermux.android.host.HostView? = null,
+    hostBadge: dev.supermux.host.HostView? = null,
     dragModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
     openSwipeRowId: String? = null,

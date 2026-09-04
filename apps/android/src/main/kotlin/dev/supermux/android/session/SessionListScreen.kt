@@ -248,7 +248,7 @@ fun SessionRow(
     lastReadAt: String? = null,
     working: Boolean = false,
     bgOpen: Int = 0,
-    hostBadge: dev.supermux.android.host.HostView? = null,
+    hostBadge: dev.supermux.host.HostView? = null,
     projectTag: String? = null,
     /** Applied outside the horizontal reveal handler so long-press can own the drag. */
     dragModifier: Modifier = Modifier,
@@ -507,7 +507,7 @@ fun SessionListScreen(
     onRestoreWorkspace: (String) -> Unit = {},
     onNewChatInWorkspace: (WorkspaceDto) -> Unit = {},
     // ── Multi-host (spec §5). All default-empty so single-host callers render exactly as before. ──
-    hosts: List<dev.supermux.android.host.HostView> = emptyList(),
+    hosts: List<dev.supermux.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
@@ -532,7 +532,7 @@ fun SessionListScreen(
     val offlineIds = remember(hosts) { hosts.filter { !it.online }.map { it.recordId }.toSet() }
 
     // Filter (a recordId or null = All), then split live sessions from the offline hosts' cached ones.
-    val shown = if (multiHost) dev.supermux.android.host.filterSessions(sessions, sessionHost, hostFilter) else sessions
+    val shown = if (multiHost) dev.supermux.host.filterSessions(sessions, sessionHost, hostFilter) else sessions
     val onlineSessions = if (multiHost) shown.filter { (sessionHost[it.id] ?: "") !in offlineIds } else shown
 
     // Infer the home dir from the sessions' workdirs (iOS `BrokerSession.grouped` parity) instead of
@@ -1502,9 +1502,9 @@ fun SessionListScreen(
 
 /** Greyed group header for an offline/unreachable host (spec §5): identity dot + name + last-seen. */
 @Composable
-private fun OfflineHostHeader(host: dev.supermux.android.host.HostView) {
+private fun OfflineHostHeader(host: dev.supermux.host.HostView) {
     val cs = MaterialTheme.colorScheme
-    val lastSeen = dev.supermux.android.host.formatLastSeen(System.currentTimeMillis(), host.lastSeenAt)
+    val lastSeen = dev.supermux.host.formatLastSeen(System.currentTimeMillis(), host.lastSeenAt)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1548,7 +1548,7 @@ private fun LazyItemScope.WorkspaceReorderableRow(
     wsHome: String,
     activeId: String?,
     showRowHostBadge: Boolean,
-    hostByRecord: Map<String, dev.supermux.android.host.HostView>,
+    hostByRecord: Map<String, dev.supermux.host.HostView>,
     sessionHost: Map<String, String>,
     openSwipeRowId: String?,
     onOpenSwipeRowChange: (String?) -> Unit,

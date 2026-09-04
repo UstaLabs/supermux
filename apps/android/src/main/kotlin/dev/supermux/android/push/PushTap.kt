@@ -1,0 +1,43 @@
+package dev.supermux.android.push
+
+import dev.supermux.host.workspaceForSession
+import dev.supermux.proto.WorkspaceDto
+import dev.supermux.proto.chatSessionId
+
+/** Where a tapped push notification should land: a chat inside a workspace, or the bare session. */
+data class PushTapResolution(
+    val sessionId: String,
+    val workspaceId: String?,
+    val activeViewId: String?,
+) {
+    val sessionOnly: Boolean get() = workspaceId == null
+}
+
+fun resolvePushTap(sessionId: String, workspaces: List<WorkspaceDto>): PushTapResolution {
+    val ws = workspaceForSession(workspaces, sessionId)
+    val view = ws?.views?.firstOrNull { it.chatSessionId() == sessionId }
+    return PushTapResolution(sessionId = sessionId, workspaceId = ws?.id, activeViewId = view?.id)
+}
+
+/** Visible chats plus [selectedSessionId], de-duplicated, for notification cancel. */
+fun notificationCancelSessionIds(
+    visibleChatSessionIds: List<String>,
+    selectedSessionId: String? = null,
+): List<String> = (visibleChatSessionIds + listOfNotNull(selectedSessionId)).distinct()
+
+/**
+ * Whether a push-tap extra should run. [handledSessionId] is the last extra we fully resolved
+ * (workspaces were ready). Empty workspaces still apply so the chat opens on cold start, but do
+ * not consume — one retry when the list lands.
+ */
+fun pushTapHandleDecision(
+    extraSessionId: String?,
+    handledSessionId: String?,
+    workspacesReady: Boolean,
+): PushTapHandle {
+    val sid = extraSessionId?.takeIf { it.isNotBlank() } ?: return PushTapHandle.Skip
+    if (sid == handledSessionId) return PushTapHandle.Skip
+    return if (workspacesReady) PushTapHandle.ApplyConsume else PushTapHandle.ApplyRetry
+}
+
+enum class PushTapHandle { Skip, ApplyRetry, ApplyConsume }

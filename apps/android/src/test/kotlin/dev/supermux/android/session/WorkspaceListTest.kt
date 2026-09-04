@@ -1,6 +1,5 @@
 package dev.supermux.android.session
 
-import dev.supermux.android.host.WorkspaceHostState
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.LogEntry
@@ -13,6 +12,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.state.SidebarReorderKind
+import dev.supermux.state.sidebarReorderKind
 
 class WorkspaceListTest {
 
@@ -200,18 +201,6 @@ class WorkspaceListTest {
     }
 
     @Test
-    fun applyWorkspaceReorder_updatesTheHostBucketThatHoldsTheIds() {
-        val hostA = WorkspaceHostState(workspaces = listOf(ws(id = "wa", sortOrder = 0), ws(id = "wb", sortOrder = 1)))
-        val hostB = WorkspaceHostState(workspaces = listOf(ws(id = "wc", sortOrder = 0)))
-        val next = applyWorkspaceReorder(
-            mapOf("a" to hostA, "b" to hostB),
-            orderedIds = listOf("wb", "wa"),
-        )
-        assertEquals(listOf(1, 0), next.getValue("a").workspaces.map { it.sortOrder })
-        assertEquals(listOf(0), next.getValue("b").workspaces.map { it.sortOrder })
-    }
-
-    @Test
     fun archivedRow_namePathDate() {
         val w = ws(
             name = "Old",
@@ -223,28 +212,5 @@ class WorkspaceListTest {
         assertEquals("Old", row.name)
         assertEquals(formatWorkdir("/home/u/projects/app", "/home/u"), row.pathLabel)
         assertEquals("2026-08-02T00:00:00Z", row.archivedAt)
-    }
-
-    @Test
-    fun restoreWorkspace_movesFromArchivedToLive() {
-        val dead = ws(id = "w1", status = "archived", archivedAt = "t")
-        val other = ws(id = "w2", status = "archived")
-        val next = applyRestoreWorkspace(
-            live = emptyList(),
-            archived = listOf(dead, other),
-            id = "w1",
-        )
-        assertEquals(listOf("w1"), next.live.map { it.id })
-        assertEquals("active", next.live.single().status)
-        assertNull(next.live.single().archivedAt)
-        assertEquals(listOf("w2"), next.archived.map { it.id })
-    }
-
-    @Test
-    fun archiveWorkspace_movesFromLiveToArchived() {
-        val live = ws(id = "w1")
-        val next = applyArchiveWorkspace(listOf(live), emptyList(), "w1")
-        assertTrue(next.live.isEmpty())
-        assertEquals("archived", next.archived.single().status)
     }
 }

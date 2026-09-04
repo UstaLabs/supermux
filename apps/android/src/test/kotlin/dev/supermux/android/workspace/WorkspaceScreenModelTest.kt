@@ -1,6 +1,6 @@
 package dev.supermux.android.workspace
 
-import dev.supermux.android.host.workspaceForSession
+import dev.supermux.host.workspaceForSession
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.LayoutNode

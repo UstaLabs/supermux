@@ -1,6 +1,7 @@
 package dev.supermux.android.editor
 
 import dev.supermux.proto.ServerFrame
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -22,7 +23,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class AndroidLspBridge(
     private val sessionId: String,
     private val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>>,
-    private val lspRpc: SharedFlow<ServerFrame.LspRpcIn>,
+    private val lspRpc: Flow<ServerFrame.LspRpcIn>,
     private val lspStatusQuery: (sessionId: String, path: String) -> Unit,
     private val lspOpen: (sessionId: String, serverId: String) -> Unit,
     private val lspRpcOut: (sessionId: String, serverId: String, message: String) -> Unit,

@@ -1,4 +1,4 @@
-package dev.supermux.android.chat
+package dev.supermux.state
 
 import dev.supermux.session.HandoffPrefill
 import kotlin.test.Test
@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class ContinueHandoffModelTest {
+class HandoffModelTest {
 
     private val handoff = ContinueHandoff(
         message = "  pick up here  ",
@@ -89,8 +89,4 @@ class ContinueHandoffModelTest {
         )
     }
 
-    @Test
-    fun overflowContinueTestIdMatchesContract() {
-        assertEquals("overflow_continue", ChatOverflowTestIds.CONTINUE)
-    }
 }

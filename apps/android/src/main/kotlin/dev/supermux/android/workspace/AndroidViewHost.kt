@@ -83,7 +83,7 @@ fun AndroidViewHost(
             } else {
                 key(workspace.id, terminalId) {
                     TerminalPanel(
-                        connect = { vm.connectWorkspaceTerminal(workspace.id, terminalId) },
+                        connect = { vm.fleet.connectWorkspaceTerminal(workspace.id, terminalId) },
                         modifier = modifier.fillMaxSize().testTag("terminal-${workspace.id}-$terminalId"),
                     )
                 }
@@ -117,15 +117,15 @@ private fun ChatViewPane(
     wide: Boolean,
     onSelectSession: (String) -> Unit,
 ) {
-    val sessions by vm.sessions.collectAsState()
-    val messages by vm.messages.collectAsState()
-    val activity by vm.activity.collectAsState()
-    val agentState by vm.agentState.collectAsState()
-    val pendingSend by vm.pendingSend.collectAsState()
-    val commands by vm.commands.collectAsState()
-    val commandsResolved by vm.commandsResolved.collectAsState()
-    val bgTasksAll by vm.bgTasks.collectAsState()
-    val finishJobs by vm.finishJobs.collectAsState()
+    val sessions by vm.fleet.sessions.collectAsState()
+    val messages by vm.fleet.messages.collectAsState()
+    val activity by vm.fleet.activity.collectAsState()
+    val agentState by vm.fleet.agentState.collectAsState()
+    val pendingSend by vm.fleet.pendingSend.collectAsState()
+    val commands by vm.fleet.commands.collectAsState()
+    val commandsResolved by vm.fleet.commandsResolved.collectAsState()
+    val bgTasksAll by vm.fleet.bgTasks.collectAsState()
+    val finishJobs by vm.fleet.finishJobs.collectAsState()
     val session = sessions.firstOrNull { it.id == sessionId }
     if (session == null) {
         UnknownViewHint("chat", modifier)
@@ -135,7 +135,7 @@ private fun ChatViewPane(
     var nativeView by remember(sessionId) { mutableStateOf(false) }
     var sessionLinks by remember(sessionId) { mutableStateOf<List<dev.supermux.net.ProxyDto>>(emptyList()) }
     LaunchedEffect(sessionId, session.name) {
-        sessionLinks = vm.proxies().filter { it.sessionName == session.name }
+        sessionLinks = vm.fleet.proxies().filter { it.sessionName == session.name }
     }
     val chatBody: @Composable (Modifier) -> Unit = { paneMod ->
         ChatPanel(
@@ -146,24 +146,24 @@ private fun ChatViewPane(
             bgTasks = bgTasksAll[sessionId] ?: emptyList(),
             sending = pendingSend.contains(sessionId),
             activePanel = if (nativeView) SessionPanel.Native else SessionPanel.Chat,
-            onSendWith = { text, atts -> vm.sendWith(sessionId, text, atts) },
-            onInterrupt = { vm.interrupt(sessionId) },
+            onSendWith = { text, atts -> vm.fleet.sendWith(sessionId, text, atts) },
+            onInterrupt = { vm.fleet.interrupt(sessionId) },
             commands = commands[sessionId] ?: emptyList(),
             commandsResolved = commandsResolved[sessionId] ?: false,
             onUpload = { source, name, mime, kind, onProgress ->
-                vm.uploadResumable(sessionId, source, name, mime, kind, onProgress)
+                vm.fleet.uploadResumable(sessionId, source, name, mime, kind, onProgress)
             },
-            loadBytes = { vm.fileBytes(it) },
-            transcribeAudio = { bytes, name -> vm.transcribeAudio(sessionId, bytes, name) },
-            transcribeDraft = { draft -> vm.transcribeDraft(sessionId, draft) },
-            loadGlossary = { vm.fetchGlossary() },
-            vmModels = { vm.fetchModels(it) },
-            vmReasoning = { vm.fetchReasoning(it) },
-            onPickModel = { vm.switchModel(sessionId, it) },
-            onPickEffort = { vm.switchReasoning(sessionId, it) },
-            loadDraft = { vm.loadDraft(it) },
-            saveDraft = { id, t -> vm.saveDraft(id, t) },
-            consumePendingFirst = { vm.consumePendingFirst(it) },
+            loadBytes = { vm.fleet.fileBytes(it) },
+            transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(sessionId, bytes, name) },
+            transcribeDraft = { draft -> vm.fleet.transcribeDraft(sessionId, draft) },
+            loadGlossary = { vm.fleet.fetchGlossary() },
+            vmModels = { vm.fleet.sessionModels(it) },
+            vmReasoning = { vm.fleet.sessionReasoning(it) },
+            onPickModel = { vm.fleet.switchModel(sessionId, it) },
+            onPickEffort = { vm.fleet.switchReasoning(sessionId, it) },
+            loadDraft = { vm.fleet.loadDraft(it) },
+            saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
+            consumePendingFirst = { vm.fleet.consumePendingFirst(it) },
             onOpenFile = { ref ->
                 val rel = toWorkdirRelativePath(ref.path, workspace.workdir, inferHomeDir(workspace.workdir))
                 if (rel == null) {
@@ -192,31 +192,31 @@ private fun ChatViewPane(
             onSetNative = { nativeView = it },
             sessionLinks = sessionLinks,
             finishJob = finishJobs[sessionId],
-            onFinishReadiness = { vm.finishReadiness(sessionId) },
+            onFinishReadiness = { vm.fleet.finishReadiness(sessionId) },
             onFinish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                vm.finish(sessionId, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
+                vm.fleet.finish(sessionId, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
             },
-            onClearFinishJob = { vm.clearFinishJob(sessionId) },
-            onVerifySuggest = { vm.verifySuggest(sessionId) },
-            onVerifySave = { vm.verifySave(sessionId, it) },
-            onSendToAgent = { vm.sendMessage(sessionId, it) },
+            onClearFinishJob = { vm.fleet.clearFinishJob(sessionId) },
+            onVerifySuggest = { vm.fleet.verifySuggest(sessionId) },
+            onVerifySave = { vm.fleet.verifySave(sessionId, it) },
+            onSendToAgent = { vm.fleet.sendMessage(sessionId, it) },
             onGitOp = { op ->
                 val cb: (dev.supermux.net.GitOpResult?) -> Unit = { toastGitOp(context, it) }
                 when (op) {
-                    "fetch" -> vm.gitFetch(sessionId, cb)
-                    "pull" -> vm.gitPull(sessionId, cb)
-                    "push" -> vm.gitPush(sessionId, cb)
-                    "publish" -> vm.gitPublish(sessionId, cb)
+                    "fetch" -> vm.fleet.gitFetch(sessionId, cb)
+                    "pull" -> vm.fleet.gitPull(sessionId, cb)
+                    "push" -> vm.fleet.gitPush(sessionId, cb)
+                    "publish" -> vm.fleet.gitPublish(sessionId, cb)
                 }
             },
             onContinue = { handoff ->
-                val recordId = vm.sessionHost.value[sessionId] ?: vm.activeHost.value
+                val recordId = vm.fleet.sessionHost.value[sessionId] ?: vm.fleet.activeHost.value
                     ?: throw IllegalStateException("No host")
-                vm.continueInNewConversation(recordId, sessionId, handoff)
+                vm.fleet.continueInNewConversation(recordId, sessionId, handoff)
             },
-            loadContinueAgents = { vm.agentStatuses().filter { it.installed }.map { it.kind } },
-            loadContinueModels = { vm.launcherModels(it) },
-            loadContinueReasoning = { ag, md -> vm.launcherReasoning(ag, md) },
+            loadContinueAgents = { vm.fleet.agentStatuses().filter { it.installed }.map { it.kind } },
+            loadContinueModels = { vm.fleet.launcherModels(it) },
+            loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
             onContinued = onSelectSession,
         )
         Box(Modifier.weight(1f).fillMaxSize()) {
@@ -224,7 +224,7 @@ private fun ChatViewPane(
             if (session.agent == "claude") {
                 Box(Modifier.keepAlivePanel(nativeView)) {
                     TerminalPanel(
-                        connect = { vm.connectAgentTerminal(sessionId) },
+                        connect = { vm.fleet.connectAgentTerminal(sessionId) },
                         modifier = Modifier.fillMaxSize(),
                         active = nativeView,
                         onExit = { nativeView = false },
@@ -245,8 +245,8 @@ private fun AgentTerminalPane(
     key(sessionId, terminalId) {
         TerminalPanel(
             connect = {
-                if (terminalId == "agent") vm.connectAgentTerminal(sessionId)
-                else vm.connectTerminal(sessionId, terminalId)
+                if (terminalId == "agent") vm.fleet.connectAgentTerminal(sessionId)
+                else vm.fleet.connectTerminal(sessionId, terminalId)
             },
             modifier = modifier.fillMaxSize().testTag(
                 if (terminalId == "agent") "view_terminal_agent" else "view_terminal",
@@ -264,7 +264,7 @@ private fun ExplorerViewPane(
 ) {
     val explorer = remember(workspace.id) { ExplorerState() }
     FileTree(
-        fsList = { p -> vm.workspaceFsList(workspace.id, p) },
+        fsList = { p -> vm.fleet.workspaceFsList(workspace.id, p) },
         explorer = explorer,
         onOpenFile = { p -> session.fileOpener.open(p) },
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
@@ -323,8 +323,8 @@ private fun DiffViewPane(
     val primary = workspace.primarySessionId
     LaunchedEffect(workspace.id, diff.diffBase) {
         diff.loadDiff(
-            fsDiff = { spec -> vm.workspaceFsDiff(workspace.id, spec) },
-            fsRefs = { vm.workspaceFsRefs(workspace.id) },
+            fsDiff = { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) },
+            fsRefs = { vm.fleet.workspaceFsRefs(workspace.id) },
         )
     }
     DiffView(
@@ -334,12 +334,12 @@ private fun DiffViewPane(
         refs = diff.diffRefs,
         onSetBase = { base ->
             scope.launch {
-                diff.setDiffBase(base) { spec -> vm.workspaceFsDiff(workspace.id, spec) }
+                diff.setDiffBase(base) { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) }
             }
         },
         onAddComment = { repo, path, line, ctx, hunk, body ->
             if (primary != null) {
-                vm.reviewAddComment(
+                vm.fleet.reviewAddComment(
                     primary,
                     AddCommentBody(
                         repo = repo,
@@ -353,9 +353,9 @@ private fun DiffViewPane(
                 )
             }
         },
-        onResolve = { id -> if (primary != null) vm.reviewResolve(primary, id) },
-        onSubmit = { if (primary != null) vm.reviewSubmit(primary) },
-        onReload = { scope.launch { diff.reloadDiff { spec -> vm.workspaceFsDiff(workspace.id, spec) } } },
+        onResolve = { id -> if (primary != null) vm.fleet.reviewResolve(primary, id) },
+        onSubmit = { if (primary != null) vm.fleet.reviewSubmit(primary) },
+        onReload = { scope.launch { diff.reloadDiff { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) } } },
         onClose = {},
         modifier = modifier.fillMaxSize(),
     )
@@ -368,8 +368,8 @@ private fun DisplayViewPane(
     vm: AppViewModel,
     modifier: Modifier,
 ) {
-    val live by vm.displays.collectAsState()
-    LaunchedEffect(displayId) { vm.listDisplays() }
+    val live by vm.fleet.displays.collectAsState()
+    LaunchedEffect(displayId) { vm.fleet.listDisplays() }
     val stream = when {
         !displayId.isNullOrBlank() -> live.firstOrNull { it.id == displayId }
         else -> live.firstOrNull { it.status == "running" }
@@ -377,11 +377,11 @@ private fun DisplayViewPane(
     val sessionName = stream?.sessionName ?: workspace.name
     DisplayPanel(
         sessionName = sessionName,
-        displays = vm.displays,
-        listDisplays = { vm.listDisplays() },
-        connectScrcpy = { vm.connectScrcpy(it) },
-        connectVnc = { vm.connectVnc(it) },
-        onStartDisplay = { vm.startDisplay(sessionName) },
+        displays = vm.fleet.displays,
+        listDisplays = { vm.fleet.listDisplays() },
+        connectScrcpy = { vm.fleet.connectScrcpy(it) },
+        connectVnc = { vm.fleet.connectVnc(it) },
+        onStartDisplay = { vm.fleet.startDisplay(sessionName) },
         modifier = modifier.fillMaxSize().testTag("view_display"),
     )
 }

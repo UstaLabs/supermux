@@ -71,6 +71,7 @@ import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.net.AddViewBody
+import dev.supermux.net.PatchWorkspaceBody
 import dev.supermux.net.MoveViewBody
 import dev.supermux.net.PatchViewBody
 import kotlinx.serialization.json.JsonObject
@@ -1853,6 +1854,42 @@ class HostStore(
         _state.value.workspaces.firstOrNull { w ->
             w.status != "archived" && w.chatSessionIds().contains(sessionId)
         }?.id
+
+    // ── Android-parity extras (Task 5 cutover) ─────────────────────────────────────
+
+    /** POST /sessions with an already-built request; resolves the new session id (falling back to a
+     *  name match when the broker returns a blank id). Throws on a broker refusal so the caller can
+     *  surface it via [remapSpawnFailure] — unlike the fire-and-forget [spawn]. */
+    suspend fun spawnRequest(request: SpawnRequest): String? =
+        resolveSpawnId(api.spawn(request), _state.value.sessions)
+
+    /** GET /usage as raw JSON — the Android usage sheet renders the body verbatim. Null on failure. */
+    suspend fun usageRaw(): String? = runApi("usageRaw") { api.usageRaw() }
+
+    /** On-device-STT path: JSON draft → cleaned text (long-timeout dictation client). */
+    suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse? =
+        runApi("transcribeDraft") { apiDictate.transcribeDraft(sessionId, draft) }
+
+    /** POST /workspaces/:id/views with an explicit wire body (Android's view host builds its own
+     *  state object). Returns the created view, or null on failure. */
+    suspend fun addView(workspaceId: String, body: AddViewBody): dev.supermux.proto.ViewDto? =
+        runApi("addView") { api.addView(workspaceId, body) }
+
+    /** Add a view from an already-built wire `kind` + `state` (Android's WorkspaceScreen). */
+    fun addWorkspaceView(
+        workspaceId: String,
+        kind: String,
+        state: JsonObject,
+        id: String? = null,
+        groupId: String? = null,
+    ) {
+        stateScope.launch { addView(workspaceId, AddViewBody(kind = kind, state = state, id = id, groupId = groupId)) }
+    }
+
+    /** PATCH /workspaces/:id with a new layout tree (drag-resize / split commits). */
+    suspend fun patchWorkspaceLayout(workspaceId: String, layout: dev.supermux.proto.LayoutNodeDto) {
+        runApi("patchWorkspaceLayout") { api.patchWorkspace(workspaceId, PatchWorkspaceBody(layout = layout)) }
+    }
 
     /** Stop all owned coroutines (collector, WS run-loop, heartbeat, in-flight ops) and release
      *  the shared HttpClients (WS + HTTP, and the dictation-only long-timeout client). Counterpart

@@ -36,18 +36,18 @@ fun rememberWorkspaceSession(
     overlayScope = overlayScope,
     patchLayout = androidLayoutPatch(
         isWorkspaceWidth = isWorkspaceWidth,
-        onPatch = { tree -> vm.patchWorkspaceLayout(workspace.id, tree.toDto()) },
+        onPatch = { tree -> vm.fleet.patchWorkspaceLayout(workspace.id, tree.toDto()) },
         onSkip = { Log.w("WorkspaceSession", "skipping layout PATCH on phone workspace=${workspace.id}") },
     ),
-    fsRead = { p -> vm.workspaceFsRead(workspace.id, p) },
-    fsWrite = { p, content -> vm.workspaceFsWrite(workspace.id, p, content) },
+    fsRead = { p -> vm.fleet.workspaceFsRead(workspace.id, p) },
+    fsWrite = { p, content -> vm.fleet.workspaceFsWrite(workspace.id, p, content) },
     postView = { id, state, groupId ->
-        val created = vm.addView(
+        val created = vm.fleet.addView(
             workspace.id,
             AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
         )?.id
         if (created != null && !isWorkspaceWidth) {
-            vm.setActiveView(workspace.id, created)
+            vm.fleet.setActiveView(workspace.id, created)
         }
         created
     },

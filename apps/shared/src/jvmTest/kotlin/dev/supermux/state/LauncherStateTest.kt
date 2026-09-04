@@ -1,4 +1,4 @@
-package dev.supermux.android.session
+package dev.supermux.state
 
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json

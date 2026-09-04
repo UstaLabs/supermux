@@ -16,8 +16,8 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dev.supermux.android.MainActivity
-import dev.supermux.android.host.HostConnections
 import dev.supermux.android.host.HostStores
+import dev.supermux.state.FleetStore
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.BrokerApi
@@ -227,7 +227,7 @@ class SupermuxMessagingService : FirebaseMessagingService() {
         internal fun resolveAllPairedCreds(context: Context): List<Creds> {
             val fromHosts = runCatching {
                 HostStores.store(context).list().mapNotNull { h ->
-                    val url = HostConnections.effectiveUrl(h)?.takeIf { it.isNotBlank() }
+                    val url = FleetStore.effectiveUrl(h)?.takeIf { it.isNotBlank() }
                         ?: return@mapNotNull null
                     val tok = h.token.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                     Creds(url, tok)
