@@ -1,17 +1,16 @@
-// Ported from apps/android/.../display/VncInput.kt — pure geometry + X11 keysym tables, no UI, no
-// session state. scrcpyKeyName is DROPPED here: h264/scrcpy device-mirroring is out of scope for
-// the desktop client (no JVM MediaCodec equivalent, marginal use case) — see this milestone's Goal.
-package dev.supermux.desktop.display
+package dev.supermux.display
 
 import dev.supermux.net.Keysyms
 
 /**
- * Pure input-mapping helpers for the desktop VNC display transport. Letterbox math is
- * byte-identical to Android's [VncInput] and to Compose's own `ContentScale.Fit` formula, so a
- * click maps to exactly the remote pixel the aspect-fit `Image` composable is showing there.
+ * Pure input-mapping helpers shared by both Display transports (VNC + scrcpy).
+ * The Kotlin analog of iOS `DisplayInput.swift` — no UI / no session state, just
+ * geometry + keysym/key-name tables. Letterbox math is byte-identical to each platform's
+ * VncFramebuffer draw (and to Compose's own `ContentScale.Fit` formula) and to the scrcpy touch
+ * map in DisplayPanel, so a tap maps to exactly the remote pixel shown there.
  */
 object VncInput {
-    /** A special (non-character) key, forwarded by the display panel's key handler. */
+    /** A special (non-character) key, forwarded by the hidden keyboard field. */
     enum class SpecialKey { ENTER, BACKSPACE, TAB, ESCAPE, ARROW_LEFT, ARROW_UP, ARROW_RIGHT, ARROW_DOWN }
 
     /** Map a view-space point to remote framebuffer pixels (aspect-fit + center), clamped. */
@@ -45,5 +44,17 @@ object VncInput {
         SpecialKey.ARROW_UP -> Keysyms.UP
         SpecialKey.ARROW_RIGHT -> Keysyms.RIGHT
         SpecialKey.ARROW_DOWN -> Keysyms.DOWN
+    }
+
+    /** scrcpy key name (mirrors iOS DisplayInput.scrcpyKeyName + the web encoder). */
+    fun scrcpyKeyName(key: SpecialKey): String = when (key) {
+        SpecialKey.ENTER -> "Enter"
+        SpecialKey.BACKSPACE -> "Backspace"
+        SpecialKey.TAB -> "Tab"
+        SpecialKey.ESCAPE -> "Escape"
+        SpecialKey.ARROW_LEFT -> "ArrowLeft"
+        SpecialKey.ARROW_UP -> "ArrowUp"
+        SpecialKey.ARROW_RIGHT -> "ArrowRight"
+        SpecialKey.ARROW_DOWN -> "ArrowDown"
     }
 }

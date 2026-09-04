@@ -71,6 +71,7 @@ import dev.supermux.net.VncStatus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
+import dev.supermux.display.VncInput
 
 /**
  * Feeds Annex-B H.264 access units to a MediaCodec decoding straight to a Surface.

@@ -1,8 +1,7 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/chat/FinishChoices.kt (canSkipTests)
-// — keep in sync (spec 2026-07-10, M4b). PURE: no Compose, no state — unit-testable policy helpers.
-// The finish-dot derivations live here too so SessionDetail and FinishButton share ONE source of
-// truth the tests exercise directly (rather than a test-local copy).
-package dev.supermux.desktop.chat
+// PURE finish-policy helpers: no Compose, no state — the ONE source of truth Android's FinishSheet
+// and desktop's FinishDialog both use (spec 2026-07-10, M4b). The finish-dot derivations live here
+// too so SessionDetail and FinishButton share one definition the tests exercise directly.
+package dev.supermux.chat
 
 import dev.supermux.proto.FinishJobDto
 

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.display
+package dev.supermux.display
 
 import dev.supermux.net.Keysyms
 import kotlin.test.Test
@@ -6,9 +6,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * M5-2 Task 2: [VncInput] — pure input-mapping helpers ported verbatim from
- * apps/android/.../display/VncInput.kt (minus scrcpyKeyName; scrcpy is dropped, see this
- * milestone's Goal). No UI, no session state — geometry + an X11 keysym lookup table.
+ * [VncInput] — pure input-mapping helpers shared by both Display transports (VNC + scrcpy).
+ * No UI, no session state — geometry + an X11 keysym lookup table.
  */
 class VncInputTest {
 

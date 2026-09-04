@@ -73,6 +73,11 @@ import dev.supermux.session.PA_GROUP_KEY
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.workspace.groupWorkspaces
+import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
+import dev.supermux.workspace.WorkspaceDragWorkingState
+import dev.supermux.workspace.WorkspaceReorderScope
+import dev.supermux.workspace.applyWorkspaceWorkingOrder
+import dev.supermux.workspace.moveWorkspaceWithinScope
 
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {

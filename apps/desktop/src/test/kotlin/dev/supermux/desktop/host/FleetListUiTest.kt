@@ -15,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.host.HostView
 
 /**
  * Compose render proofs for the desktop multi-host fleet UI (spec §5): the `All · <host…> · +`

@@ -81,8 +81,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.host.HostBadge
 import dev.supermux.desktop.host.HostFilterChips
-import dev.supermux.desktop.host.HostView
-import dev.supermux.desktop.host.filterSessions
+import dev.supermux.host.HostView
+import dev.supermux.host.filterSessions
 import dev.supermux.desktop.session.NewSessionListRow
 import dev.supermux.desktop.session.PathGroupHeader
 import dev.supermux.desktop.session.SessionRow
@@ -113,6 +113,11 @@ import dev.supermux.workspace.workspaceActivity
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import dev.supermux.ui.panes.PaneDragController
+import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
+import dev.supermux.workspace.WorkspaceDragWorkingState
+import dev.supermux.workspace.WorkspaceReorderScope
+import dev.supermux.workspace.applyWorkspaceWorkingOrder
+import dev.supermux.workspace.moveWorkspaceWithinScope
 
 /**
  * Workspace sidebar (spec §13.6). Same chrome as [dev.supermux.desktop.session.SessionListPanel]

@@ -128,19 +128,4 @@ class SessionListInteractionsTest {
 
         assertEquals(SessionReorderMove(scope, listOf("b", "a")), state.finish(commit = true))
     }
-
-    @Test
-    fun reorderWorkspaces_emitsWorkspaceIds() {
-        val a = workspaceDto("wa", workdir = "/p")
-        val b = workspaceDto("wb", workdir = "/p")
-        val c = workspaceDto("wc", workdir = "/p")
-        val move = moveWorkspaceWithinScope(
-            rows = listOf(a, b, c),
-            workingOrders = emptyMap(),
-            scopeKey = WORKSPACE_FLAT_SCOPE,
-            fromId = "wa",
-            toId = "wc",
-        )
-        assertEquals(listOf("wb", "wc", "wa"), move?.orderedIds)
-    }
 }

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.workspace
 
 import dev.supermux.proto.WorkspaceDto
 import kotlin.test.Test
@@ -69,5 +69,20 @@ class WorkspaceListInteractionsTest {
         state.begin(WorkspaceReorderScope("g1"), listOf("a", "b"))
         state.move(listOf("b", "a"))
         assertNull(state.finish(commit = false))
+    }
+
+    @Test
+    fun reorderWorkspaces_emitsWorkspaceIds() {
+        val a = ws("wa")
+        val b = ws("wb")
+        val c = ws("wc")
+        val move = moveWorkspaceWithinScope(
+            rows = listOf(a, b, c),
+            workingOrders = emptyMap(),
+            scopeKey = WORKSPACE_FLAT_SCOPE,
+            fromId = "wa",
+            toId = "wc",
+        )
+        assertEquals(listOf("wb", "wc", "wa"), move?.orderedIds)
     }
 }

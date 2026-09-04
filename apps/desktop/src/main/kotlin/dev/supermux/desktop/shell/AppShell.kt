@@ -89,7 +89,7 @@ import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.desktop.host.AddHostScreen
 import dev.supermux.state.FleetStore
-import dev.supermux.desktop.host.HostView
+import dev.supermux.host.HostView
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.notify.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController

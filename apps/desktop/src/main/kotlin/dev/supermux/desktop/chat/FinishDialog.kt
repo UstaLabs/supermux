@@ -70,6 +70,8 @@ import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.chat.canSkipTests
+import dev.supermux.chat.finishDotIsError
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.net.VerifySaveResult

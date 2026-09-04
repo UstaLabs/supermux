@@ -32,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.oklchToArgb
+import dev.supermux.host.HostView
+import dev.supermux.host.formatLastSeen
 
 /**
  * Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact

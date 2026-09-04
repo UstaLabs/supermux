@@ -52,6 +52,7 @@ import dev.supermux.android.R
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
+import dev.supermux.chat.canSkipTests
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.net.VerifySaveResult

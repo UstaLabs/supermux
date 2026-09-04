@@ -1,8 +1,12 @@
-package dev.supermux.android.session
+package dev.supermux.workspace
 
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.moveId
 
+/**
+ * Scope for workspace drag-reorder (project group key, or a flat-list bucket).
+ * PA workspaces are never reorderable and never appear in a working order.
+ */
 data class WorkspaceReorderScope(val key: String)
 
 data class WorkspaceReorderMove(
@@ -10,8 +14,14 @@ data class WorkspaceReorderMove(
     val orderedIds: List<String>,
 )
 
+/** Flat (ungrouped) non-PA workspace list shares one reorder scope. */
 const val WORKSPACE_FLAT_SCOPE = "__flat__"
 
+/**
+ * Live drag-working order (session-list `SessionDragWorkingState` parity).
+ * Captures the original order at drag start and the current order while neighbors animate;
+ * [finish] returns a commit only when the order actually changed.
+ */
 class WorkspaceDragWorkingState {
     private var scope: WorkspaceReorderScope? = null
     private var original: List<String> = emptyList()
@@ -45,6 +55,7 @@ class WorkspaceDragWorkingState {
     }
 }
 
+/** Apply a live working order over [workspaces] (missing ids keep their relative position at the end). */
 fun applyWorkspaceWorkingOrder(
     workspaces: List<WorkspaceDto>,
     workingOrder: List<String>?,
@@ -56,6 +67,10 @@ fun applyWorkspaceWorkingOrder(
     return ordered + rest
 }
 
+/**
+ * Move [fromId] to [toId]'s slot within the same scope. Returns null when scopes differ,
+ * either id is unknown, or the order is unchanged.
+ */
 fun moveWorkspaceWithinScope(
     rows: List<WorkspaceDto>,
     workingOrders: Map<String, List<String>>,

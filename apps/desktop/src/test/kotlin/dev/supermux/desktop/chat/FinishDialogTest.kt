@@ -14,13 +14,13 @@ import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.SessionInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
  * FinishButton + FinishDialog (M4b Task 3) — two layers:
  *
- *  1. PURE cores: [canSkipTests] (FinishChoices) and [issueMessage] are unit-tested directly.
+ *  1. PURE core: [issueMessage] is unit-tested directly (the shared FinishChoices policy
+ *     helpers have their own test in :shared).
  *  2. Compose: the state machine is exercised via the WINDOWLESS [FinishDialogContent] seam under
  *     [runComposeUiTest] (the real [FinishDialog] Dialog window is awkward headless — the body is
  *     extracted so the menu/running/outcome branches render directly). [FinishButton] visibility of
@@ -38,22 +38,7 @@ class FinishDialogTest {
         insertions = 20, deletions = 5, hasRemote = true, ghAvailable = true, recommended = "merge",
     )
 
-    // ── (1) pure cores ───────────────────────────────────────────────────────────────────────────
-
-    @Test fun can_skip_tests_merge_always_skippable() {
-        assertTrue(canSkipTests("merge", prRequiresGreen = false))
-        assertTrue(canSkipTests("merge", prRequiresGreen = true))
-    }
-
-    @Test fun can_skip_tests_pr_skippable_unless_requires_green() {
-        assertTrue(canSkipTests("pr", prRequiresGreen = false))
-        assertFalse(canSkipTests("pr", prRequiresGreen = true))
-    }
-
-    @Test fun can_skip_tests_keep_and_discard_always_skippable() {
-        assertTrue(canSkipTests("keep", prRequiresGreen = true))
-        assertTrue(canSkipTests("discard", prRequiresGreen = true))
-    }
+    // ── (1) pure core ───────────────────────────────────────────────────────────────────────────
 
     @Test fun issue_message_tests_failed_wraps_command_and_output() {
         val msg = issueMessage(FinishResult(status = "tests_failed", command = "npm test", output = "boom"))
@@ -229,25 +214,5 @@ class FinishDialogTest {
         waitForIdle()
         onNodeWithTag("finish_button").assertIsDisplayed()
         onNodeWithTag("finish_unacked_dot").assertDoesNotExist()
-    }
-
-    // ── isFinishUnacked / finishDotIsError (the REAL production helpers, not a copy) ─────────────────
-
-    @Test fun is_finish_unacked_derivation() {
-        // running → never unacked (even when not acked)
-        assertFalse(isFinishUnacked(FinishJobDto(status = "running"), acked = false))
-        // terminal + not-yet-acked → unacked
-        assertTrue(isFinishUnacked(FinishJobDto(status = "failed"), acked = false))
-        assertTrue(isFinishUnacked(FinishJobDto(status = "done"), acked = false))
-        // terminal + acked → acked (dot hidden)
-        assertFalse(isFinishUnacked(FinishJobDto(status = "done"), acked = true))
-        // no job → not unacked
-        assertFalse(isFinishUnacked(null, acked = false))
-    }
-
-    @Test fun finish_dot_is_error_only_for_failed() {
-        assertTrue(finishDotIsError(FinishJobDto(status = "failed")))
-        assertFalse(finishDotIsError(FinishJobDto(status = "done")))
-        assertFalse(finishDotIsError(null))
     }
 }

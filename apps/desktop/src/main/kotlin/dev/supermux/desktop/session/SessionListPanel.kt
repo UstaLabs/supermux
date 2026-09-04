@@ -89,8 +89,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.host.HostBadge
 import dev.supermux.desktop.host.HostFilterChips
-import dev.supermux.desktop.host.HostView
-import dev.supermux.desktop.host.filterSessions
+import dev.supermux.host.HostView
+import dev.supermux.host.filterSessions
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii

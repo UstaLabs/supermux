@@ -58,6 +58,7 @@ import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.launch
+import dev.supermux.display.VncInput
 
 /**
  * Display pane for a session's running VNC stream. Resolves the newest running [DisplayStream]
