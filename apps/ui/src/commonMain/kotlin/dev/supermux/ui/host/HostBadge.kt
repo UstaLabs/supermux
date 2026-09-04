@@ -3,6 +3,7 @@ package dev.supermux.ui.host
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -251,10 +252,15 @@ fun HostFilterChips(
                                 awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                 val settled = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                                     do {
-                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        // Final pass: a scroll of the chip row consumes the MOVE on Main (the
+                                        // chip's own clickable only consumes the down), so a consumed
+                                        // position change means the gesture became a drag — bail like
+                                        // combinedClickable did instead of opening the menu later.
+                                        val event = awaitPointerEvent(PointerEventPass.Final)
+                                        if (event.changes.any { it.isConsumed && it.positionChanged() }) return@withTimeoutOrNull Unit
                                     } while (event.changes.any { it.pressed })
                                 }
-                                if (settled != null) return@awaitEachGesture // short tap → the chip handles it
+                                if (settled != null) return@awaitEachGesture // short tap / drag → not ours
                                 menuFor = h.recordId
                                 // Swallow the tail of THIS gesture so opening the menu does not
                                 // also select the host.
