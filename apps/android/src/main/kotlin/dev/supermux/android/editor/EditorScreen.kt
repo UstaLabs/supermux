@@ -70,9 +70,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.collectAsState
-import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
-import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.flow.first
 
 /** A chat-initiated request to open a workdir-relative [path] at an optional [line]. */
 data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?)
@@ -146,11 +146,19 @@ fun EditorPanel(
         searchResults.addAll(fsSearch(q))
     }
 
-    // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt): collected values start
-    // at the defaults for one frame, then settle on what was persisted.
+    // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt), whose reads are
+    // asynchronous. `rememberEditorEngine` KEYS ON `lineWrap`, so mounting with the default and
+    // correcting one frame later would tear down and rebuild the WebView for anyone who had wrap
+    // off. Wait for the first value instead: nothing renders until the prefs have landed (a single
+    // DataStore read — the panel is already mounted asynchronously anyway).
     val prefs = LocalUiPrefs.current
-    val lineWrap by prefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
-    val fontSize by prefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
+    val loadedPrefs by produceState<Pair<Boolean, Int>?>(null, prefs) {
+        value = prefs.editorLineWrap.first() to prefs.editorFontSize.first()
+    }
+    val (lineWrap, initialFontSize) = loadedPrefs ?: return
+    // Live changes (Settings → Editor, or a pinch) still flow through; the seed above only fixes
+    // the FIRST composition.
+    val fontSize by prefs.editorFontSize.collectAsState(initialFontSize)
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
     val bridge = remember(sessionId, lspStatus, lspRpc) {

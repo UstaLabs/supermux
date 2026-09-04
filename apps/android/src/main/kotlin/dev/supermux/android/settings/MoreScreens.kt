@@ -101,6 +101,7 @@ import dev.supermux.ui.prefs.EDITOR_FONT_MAX
 import dev.supermux.ui.prefs.EDITOR_FONT_MIN
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
+import kotlinx.coroutines.flow.first
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 //
@@ -953,7 +954,7 @@ private fun EditorSettingsPage(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     StepperButton(text = "−", enabled = fontSize > EDITOR_FONT_MIN) {
-                        scope.launch { editorPrefs.putEditorFontSize(fontSize - 1) }
+                        scope.launch { editorPrefs.putEditorFontSize(editorPrefs.editorFontSize.first() - 1) }
                     }
                     Text(
                         fontSize.toString(),
@@ -962,7 +963,7 @@ private fun EditorSettingsPage(
                         fontFamily = FontFamily.Monospace,
                     )
                     StepperButton(text = "+", enabled = fontSize < EDITOR_FONT_MAX) {
-                        scope.launch { editorPrefs.putEditorFontSize(fontSize + 1) }
+                        scope.launch { editorPrefs.putEditorFontSize(editorPrefs.editorFontSize.first() + 1) }
                     }
                 }
             }

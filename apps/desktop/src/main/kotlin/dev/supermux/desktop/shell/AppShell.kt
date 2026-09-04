@@ -289,8 +289,18 @@ class ShellUiState {
     /**
      * Push [route]. [Route.Home] clears full-pane overlays; other routes replace any open
      * full-pane (`[Home, route]`), and close the detail-pane launcher + usage popover.
+     *
+     * Only the [desktopRoutes] subset is renderable here — the shared [Route] union also carries
+     * Android's destinations (`NewSession`, `AddHost`, `Usage`, `Devices`, `Proxies`, `Displays`,
+     * `Appearance`), which desktop expresses differently (the launcher is a detail-pane swap, Usage
+     * a popover, the rest are Settings sections). Pushing one is a programming error, and failing
+     * here names the caller instead of leaving `NavDisplay` with no `entry<>` for the key.
      */
     fun navigate(route: Route) {
+        require(isDesktopRoute(route)) {
+            "$route is not a desktop destination; desktop renders only $DESKTOP_ROUTES " +
+                "(the launcher is a detail-pane swap, Usage a popover, the rest Settings sections)"
+        }
         when (route) {
             is Route.Home -> {
                 usageOpen = false
@@ -476,6 +486,15 @@ class ShellUiState {
     companion object {
         val SIDEBAR_MIN = 220.dp
         val SIDEBAR_MAX = 560.dp
+
+        /** Human-readable form of [isDesktopRoute], for [navigate]'s failure message. */
+        private const val DESKTOP_ROUTES = "Home, Settings(section), Archived, AppUpdate"
+
+        /** The members of the shared [Route] union the desktop shell has an `entry<>` for. */
+        private fun isDesktopRoute(route: Route): Boolean = when (route) {
+            is Route.Home, is Route.Settings, is Route.Archived, is Route.AppUpdate -> true
+            else -> false
+        }
     }
 }
 

@@ -119,6 +119,27 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.state.SidebarReorderKind
 import dev.supermux.state.sidebarReorderKind
 import dev.supermux.ui.nav.Route
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.android.settings.AndroidSettingsStore
+
+/**
+ * The launch steps `MainActivity`'s `setContent` runs, in the order it runs them.
+ *
+ * This is an executable statement of an invariant that is otherwise only visible as the physical
+ * order of lines inside one very long composable — and one that has already regressed once:
+ * [LaunchStep.CreateViewModel] MUST come after [LaunchStep.LegacyMigration] and
+ * [LaunchStep.PairingGate], because `AppViewModel`'s `fleet` initializer snapshots the paired-host
+ * list exactly once. A VM built before pairing sees zero hosts forever.
+ */
+internal enum class LaunchStep { DebugSeed, LegacyMigration, PairingGate, CreateViewModel }
+
+/** The steps that actually run for a given pairing state — un-paired stops at the gate. */
+internal fun launchOrder(paired: Boolean): List<LaunchStep> = buildList {
+    add(LaunchStep.DebugSeed)
+    add(LaunchStep.LegacyMigration)
+    add(LaunchStep.PairingGate)
+    if (paired) add(LaunchStep.CreateViewModel)
+}
 
 class MainActivity : ComponentActivity() {
     // Current launch/deep-link intent, surfaced to Compose. Seeded in onCreate; updated by
@@ -160,13 +181,12 @@ class MainActivity : ComponentActivity() {
             // now — the brand palette is the only palette (see AndroidTheme).
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
             var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
-            // Multi-host (spec §5): the VM owns N per-host connections from the PairedHostStore,
-            // re-running the idempotent single-host→PairedHost[0] migration on init so existing
-            // users — and the session where onboarding just paired — always have a host to drive.
-            // Hoisted above the theme because the theme installs the VM's settings-backed
-            // `LocalUiPrefs` for every screen under it.
-            val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
-            AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = vm.uiPrefs) {
+            // The theme's persisted UI preferences. Built here — NOT from the AppViewModel —
+            // because the VM must stay below the pairing gate (see the invariant there), and
+            // `AndroidSettingsStore(context)` is a process-wide DataStore delegate: this instance
+            // and `vm.uiPrefs` read and write exactly the same data.
+            val themeUiPrefs = remember { UiPrefs(AndroidSettingsStore(applicationContext)) }
+            AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = themeUiPrefs) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
                 // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
@@ -208,6 +228,21 @@ class MainActivity : ComponentActivity() {
                     return@AndroidTheme
                 }
 
+                // ORDERING INVARIANT — the VM is created BELOW this gate, on purpose.
+                // `AppViewModel`'s `fleet` initializer runs `HostStores.migrateFromLegacyIfNeeded`
+                // and `FleetStore.init` then snapshots `store.list()` ONCE. Pairing (and the debug
+                // seed) writes only the legacy single-host store, so a VM built before the gate
+                // would snapshot an empty host list and never re-sync — a fresh install would sit
+                // hostless after its first pairing until the process restarts. See
+                // `launchOrder(paired)` / `MainActivityLaunchOrderTest`. Everything the VM needs
+                // (the debug seed + the legacy migration in the `remember` above, and `paired`)
+                // has happened by the time this line runs.
+                //
+                // Multi-host (spec §5): the VM owns N per-host connections from the
+                // PairedHostStore, re-running the idempotent single-host→PairedHost[0] migration
+                // on init so existing users — and the session where onboarding just paired —
+                // always have a host to drive.
+                val vm: AppViewModel = viewModel(factory = AppViewModel.factory(application))
                 val sessions by vm.fleet.sessions.collectAsStateWithLifecycle()
                 val archivedSessions by vm.fleet.archivedSessions.collectAsStateWithLifecycle()
                 val workspaces by vm.fleet.workspaces.collectAsStateWithLifecycle()

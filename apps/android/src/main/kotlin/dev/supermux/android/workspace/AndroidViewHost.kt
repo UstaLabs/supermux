@@ -47,9 +47,9 @@ import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.ui.workspace.WorkspaceSession
 import kotlinx.coroutines.launch
-import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
-import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.flow.first
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
 internal object WorkspaceChatPaneTestIds {
@@ -285,9 +285,14 @@ private fun FileViewPane(
     val documents = session.documents
     LaunchedEffect(path) { documents.open(path) }
     val doc = documents.get(path)
+    // `rememberEditorEngine` keys on `lineWrap`, so the pane waits for the persisted value rather
+    // than mounting on the default and rebuilding the WebView a frame later (see EditorScreen).
     val editorPrefs = LocalUiPrefs.current
-    val lineWrap by editorPrefs.editorLineWrap.collectAsState(EDITOR_LINE_WRAP_DEFAULT)
-    val fontSize by editorPrefs.editorFontSize.collectAsState(EDITOR_FONT_DEFAULT)
+    val loadedPrefs by produceState<Pair<Boolean, Int>?>(null, editorPrefs) {
+        value = editorPrefs.editorLineWrap.first() to editorPrefs.editorFontSize.first()
+    }
+    val (lineWrap, initialFontSize) = loadedPrefs ?: return
+    val fontSize by editorPrefs.editorFontSize.collectAsState(initialFontSize)
     val engine = rememberEditorEngine(
         lineWrap = lineWrap,
         fontSize = fontSize,

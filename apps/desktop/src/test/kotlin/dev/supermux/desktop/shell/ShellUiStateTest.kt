@@ -2,6 +2,7 @@ package dev.supermux.desktop.shell
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -203,5 +204,22 @@ class WorkspaceUiStateTest {
         ui.closeUsage()
         assertFalse(ui.usageOpen)
         assertFalse(ui.overlayOpen)
+    }
+
+    @Test
+    fun navigating_to_an_android_only_route_fails_at_the_call_site() {
+        // The shared Route union carries Android's destinations too; desktop has no `entry<>` for
+        // them, so pushing one must blow up here rather than in NavDisplay.
+        val ui = ShellUiState()
+        val e = assertFailsWith<IllegalArgumentException> { ui.navigate(Route.NewSession("d1")) }
+        assertTrue(e.message.orEmpty().contains("not a desktop destination"), e.message.orEmpty())
+        assertFailsWith<IllegalArgumentException> { ui.navigate(Route.Usage) }
+        assertFailsWith<IllegalArgumentException> { ui.navigate(Route.Appearance) }
+        // ...and the four supported ones still work.
+        listOf(Route.Settings(SettingsSection.Voice), Route.Archived, Route.AppUpdate)
+            .forEach { ui.navigate(it) }
+        assertEquals(listOf(Route.Home, Route.AppUpdate), ui.backStack.toList())
+        ui.navigate(Route.Home)
+        assertEquals(listOf(Route.Home), ui.backStack.toList())
     }
 }

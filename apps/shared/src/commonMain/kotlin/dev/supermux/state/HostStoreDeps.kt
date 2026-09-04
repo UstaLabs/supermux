@@ -16,7 +16,6 @@ object SettingsKeys {
     const val LAUNCHER_DRAFT = "launcher:draft"
     const val LAUNCHER_PREFS = "launcher:prefs"
     const val HOST_FILTER = "host:filter"
-    const val EDITOR_PREFS = "editor:prefs"
 
     // Editor + chat-detail UI preferences (read/written through `dev.supermux.ui.prefs.UiPrefs`).
     // They replaced the per-app stores (Android SharedPreferences `cmux-editor-settings` /
