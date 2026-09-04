@@ -117,7 +117,7 @@ import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.terminal.ScratchTerminalPanel
-import dev.supermux.android.session.SessionAvatar
+import dev.supermux.ui.session.SessionAvatar
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
@@ -274,7 +274,7 @@ fun ChatScreen(
                 SessionAvatar(
                     name = session.name,
                     agent = session.agent,
-                    modifier = Modifier.size(30.dp),
+                    size = 30.dp,
                     sessionId = session.id,
                     sharedScope = sharedScope,
                     animScope = animScope,

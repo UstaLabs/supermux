@@ -90,4 +90,22 @@ class VncInputTest {
         assertEquals(Keysyms.RIGHT, VncInput.keysymForSpecial(VncInput.SpecialKey.ARROW_RIGHT))
         assertEquals(Keysyms.DOWN, VncInput.keysymForSpecial(VncInput.SpecialKey.ARROW_DOWN))
     }
+
+    // ── scrcpyKeyName ───────────────────────────────────────────────────────────────
+
+    /**
+     * scrcpy (Android mirroring) names keys the way the DOM does, NOT the way VNC keysyms do —
+     * the broker forwards these strings verbatim to the web encoder and iOS's DisplayInput, so a
+     * rename here silently breaks every scrcpy key press. All eight are pinned.
+     */
+    @Test fun scrcpy_key_name_covers_every_special_key() {
+        assertEquals("Enter", VncInput.scrcpyKeyName(VncInput.SpecialKey.ENTER))
+        assertEquals("Backspace", VncInput.scrcpyKeyName(VncInput.SpecialKey.BACKSPACE))
+        assertEquals("Tab", VncInput.scrcpyKeyName(VncInput.SpecialKey.TAB))
+        assertEquals("Escape", VncInput.scrcpyKeyName(VncInput.SpecialKey.ESCAPE))
+        assertEquals("ArrowLeft", VncInput.scrcpyKeyName(VncInput.SpecialKey.ARROW_LEFT))
+        assertEquals("ArrowUp", VncInput.scrcpyKeyName(VncInput.SpecialKey.ARROW_UP))
+        assertEquals("ArrowRight", VncInput.scrcpyKeyName(VncInput.SpecialKey.ARROW_RIGHT))
+        assertEquals("ArrowDown", VncInput.scrcpyKeyName(VncInput.SpecialKey.ARROW_DOWN))
+    }
 }

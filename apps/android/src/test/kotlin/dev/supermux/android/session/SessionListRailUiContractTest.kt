@@ -13,9 +13,10 @@ import kotlin.test.assertTrue
 /**
  * UI-contract tests for the Android session-list leading rail.
  *
- * Full Compose UI tests live on desktop ([SessionStatusRailTest]) and share the same pure
- * helpers; Android unit tests lock the decision matrix the [SessionStatusRail] composable
- * must paint (working spinner / green unread / gray idle).
+ * Full Compose UI tests live in `:ui` (`dev.supermux.ui.session.SessionStatusRailTest`) and share
+ * the same pure helpers; these Android unit tests lock the decision matrix the shared
+ * `dev.supermux.ui.session.SessionStatusRail` composable must paint (working spinner / green
+ * unread / gray idle) for the phone list this module owns.
  */
 class SessionListRailUiContractTest {
 

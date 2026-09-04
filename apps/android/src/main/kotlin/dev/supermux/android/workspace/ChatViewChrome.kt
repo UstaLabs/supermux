@@ -41,7 +41,7 @@ import dev.supermux.android.chat.FinishButton
 import dev.supermux.android.chat.FinishSheet
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
-import dev.supermux.android.session.SessionStatusRail
+import dev.supermux.ui.session.SessionStatusRail
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ProxyDto

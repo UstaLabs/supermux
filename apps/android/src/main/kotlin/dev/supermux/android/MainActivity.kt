@@ -80,7 +80,7 @@ import dev.supermux.android.workspace.ChatActivationHandle
 import dev.supermux.android.workspace.chatActivationDecision
 import dev.supermux.android.session.SessionLauncherScreen
 import dev.supermux.android.session.SessionListScreen
-import dev.supermux.android.workspace.SessionsRail
+import dev.supermux.ui.shell.SessionsRail
 import dev.supermux.android.workspace.SidebarDivider
 import dev.supermux.android.workspace.SidebarState
 import dev.supermux.proto.chatSessionId

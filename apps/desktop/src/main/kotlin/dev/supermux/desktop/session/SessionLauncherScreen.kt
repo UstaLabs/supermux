@@ -150,6 +150,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicLong
+import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.session.hasAgentLogo
 
 /** Sentinel id for the "Default" (null-model) row in the model picker — maps back to a null model. */
 internal const val DEFAULT_MODEL_ID = "__default__"

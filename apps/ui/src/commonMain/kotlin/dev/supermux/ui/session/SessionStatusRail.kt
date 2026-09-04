@@ -1,4 +1,7 @@
-package dev.supermux.android.session
+// The one session-status rail. Git/cloud glyphs come from compose.materialIconsExtended, which
+// both apps already ship — Android's bundled `R.drawable.ic_check`/`ic_git_branch`/`ic_cloud_*`
+// vectors are no longer used here.
+package dev.supermux.ui.session
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,19 +15,22 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.android.R
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
@@ -33,6 +39,7 @@ import dev.supermux.proto.SessionStatusLevel
 import dev.supermux.proto.sessionStatus
 import dev.supermux.session.SessionListRailIndicator
 import dev.supermux.session.sessionListRailIndicator
+import androidx.compose.ui.platform.testTag
 
 /**
  * Leading per-session state, priority order:
@@ -43,7 +50,7 @@ import dev.supermux.session.sessionListRailIndicator
  * `bgOpen` > 0 adds a static mono "⧗N" badge (open background tasks) — static because the
  * session list is a 100+/day surface and the design language budgets motion there.
  *
- * @param unreadTestTag optional Compose test tag for the unread dot (phone UI tests).
+ * @param unreadTestTag optional Compose test tag for the unread dot (phone UI tests key on it).
  */
 @Composable
 fun SessionStatusRail(
@@ -51,7 +58,7 @@ fun SessionStatusRail(
     working: Boolean,
     bgOpen: Int = 0,
     unread: Boolean = false,
-    unreadTestTag: String? = null,
+    unreadTestTag: String? = "session_rail_unread",
     modifier: Modifier = Modifier,
 ) {
     val sem = LocalSemantics.current
@@ -73,7 +80,7 @@ fun SessionStatusRail(
                 return@Row
             }
             SessionListRailIndicator.Unread -> {
-                UnreadDot(sem.success, unreadTestTag ?: "session_rail_unread")
+                UnreadDot(sem.success, unreadTestTag)
                 return@Row
             }
             SessionListRailIndicator.Other -> Unit
@@ -83,19 +90,19 @@ fun SessionStatusRail(
             st == null || (st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.PRISTINE) ->
                 NeutralDot()
             st.kind == SessionStatusKind.WORKTREE && st.level == SessionStatusLevel.DONE ->
-                StatusIcon(R.drawable.ic_check, sem.success)
+                StatusIcon(Icons.Filled.Check, sem.success)
             st.kind == SessionStatusKind.WORKTREE ->
-                StatusIcon(R.drawable.ic_git_branch, sem.warning)
+                StatusIcon(Icons.AutoMirrored.Filled.CallSplit, sem.warning)
             st.kind == SessionStatusKind.REMOTE && st.level == SessionStatusLevel.DONE ->
-                StatusIcon(R.drawable.ic_cloud_done, sem.success)
+                StatusIcon(Icons.Filled.CloudDone, sem.success)
             else ->
-                StatusIcon(R.drawable.ic_cloud_off, sem.warning)
+                StatusIcon(Icons.Filled.CloudOff, sem.warning)
         }
     }
 }
 
-@Composable private fun StatusIcon(res: Int, color: Color) {
-    Icon(painterResource(res), contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
+@Composable private fun StatusIcon(icon: ImageVector, color: Color) {
+    Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
 }
 
 /** Quiet idle mark — intentionally smaller/dimmer than [UnreadDot]. */

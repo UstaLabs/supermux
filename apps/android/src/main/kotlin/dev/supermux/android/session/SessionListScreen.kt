@@ -6,9 +6,7 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
@@ -78,6 +76,7 @@ import dev.supermux.workspace.WorkspaceDragWorkingState
 import dev.supermux.workspace.WorkspaceReorderScope
 import dev.supermux.workspace.applyWorkspaceWorkingOrder
 import dev.supermux.workspace.moveWorkspaceWithinScope
+import dev.supermux.ui.session.SessionStatusRail
 
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
@@ -95,15 +94,6 @@ fun relTime(ts: String?): String {
     } catch (_: Exception) {
         ""
     }
-}
-
-/** Returns the drawable resource ID for the given agent name, or null if not recognised. */
-private fun agentDrawableRes(agent: String?): Int? = when (agent?.lowercase()) {
-    "claude" -> R.drawable.agent_claude
-    "codex"  -> R.drawable.agent_codex
-    "cursor" -> R.drawable.agent_cursor
-    "grok"   -> R.drawable.agent_grok
-    else     -> null
 }
 
 // Collapsed project-group state, persisted across launches. Keyed by each group's
@@ -130,57 +120,6 @@ private fun groupedRowShape(first: Boolean, last: Boolean): Shape = RoundedCorne
     bottomStart = if (last) Radii.lg else 0.dp,
     bottomEnd = if (last) Radii.lg else 0.dp,
 )
-
-@OptIn(ExperimentalSharedTransitionApi::class)
-@Composable
-fun SessionAvatar(
-    name: String,
-    agent: String? = null,
-    modifier: Modifier = Modifier,
-    sessionId: String? = null,
-    sharedScope: SharedTransitionScope? = null,
-    animScope: AnimatedVisibilityScope? = null,
-) {
-    val cs = MaterialTheme.colorScheme
-    val sharedModifier = if (sessionId != null && sharedScope != null && animScope != null) {
-        with(sharedScope) {
-            modifier.sharedElement(
-                rememberSharedContentState(key = "avatar-$sessionId"),
-                animatedVisibilityScope = animScope,
-            )
-        }
-    } else modifier
-
-    val logoRes = agentDrawableRes(agent)
-    if (logoRes != null) {
-        Box(
-            sharedModifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFFF7F4EE))
-                .border(1.dp, cs.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                painter = painterResource(logoRes),
-                contentDescription = agent,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    } else {
-        Box(
-            sharedModifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(cs.primary)
-                .border(1.dp, cs.outline.copy(alpha = 0.7f), RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            val initials = name.take(2).uppercase()
-            Text(initials, color = cs.onPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-        }
-    }
-}
 
 // Fix 3: path-group header with rotating ChevronDown matching the web app.
 // Tappable to collapse/expand the group (parity with the iOS session list); the

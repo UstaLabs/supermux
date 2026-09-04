@@ -37,9 +37,9 @@ kotlin {
             api(compose.ui)
             // Icons.Filled.Close, used by DefaultTabChip's close affordance.
             api(compose.materialIconsExtended)
-            // Motion's FiniteAnimationSpec — used directly, so declare it rather than leaning on
-            // compose.foundation's transitive.
-            implementation(compose.animation)
+            // Motion's FiniteAnimationSpec, and SharedTransitionScope/AnimatedVisibilityScope in
+            // SessionAvatar's own signature — hence `api`, not `implementation`.
+            api(compose.animation)
             // Geist + Geist Mono ship from here as Compose Multiplatform resources (Res.font.*),
             // replacing Android's R.font and desktop's classpath lookup. `api`, because the font
             // families in theme/Type.kt are this module's public surface.

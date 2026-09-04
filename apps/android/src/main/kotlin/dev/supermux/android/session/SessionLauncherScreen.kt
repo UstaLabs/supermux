@@ -7,7 +7,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,7 +46,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
@@ -100,6 +98,7 @@ import kotlinx.coroutines.withContext
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.StagedUpload
+import dev.supermux.ui.session.AgentLogo
 
 
 /** Identifies this screen to `Platform.pickFiles` (see the chat composer's twin). */
@@ -1055,52 +1054,6 @@ fun SessionLauncherScreen(
     }
 
     if (voice.micDenied) MicDeniedDialog(onDismiss = { voice.micDenied = false })
-}
-
-/** Per-agent brand logo on a cream tile (SessionAvatar parity), so a dark mark like Cursor's
- *  stays legible in both themes. Unknown agents (e.g. opencode) fall back to an initial tile. */
-@Composable
-private fun AgentLogo(agent: String?, size: Dp) {
-    val cs = MaterialTheme.colorScheme
-    val res = when (agent?.lowercase()) {
-        "claude" -> R.drawable.agent_claude
-        "codex" -> R.drawable.agent_codex
-        "cursor" -> R.drawable.agent_cursor
-        "grok" -> R.drawable.agent_grok
-        else -> null
-    }
-    val shape = RoundedCornerShape(size * 0.28f)
-    if (res != null) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .clip(shape)
-                .background(Color(0xFFF7F4EE))
-                .border(1.dp, cs.outline.copy(alpha = 0.7f), shape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                painter = painterResource(res),
-                contentDescription = null,
-                modifier = Modifier.size(size * 0.62f),
-            )
-        }
-    } else {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .clip(shape)
-                .background(cs.primary),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                (agent?.take(1) ?: "?").uppercase(),
-                color = cs.onPrimary,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = (size.value * 0.5f).sp,
-            )
-        }
-    }
 }
 
 /** Compact agent chip (logo + capitalized name + chevron) — the launcher's agent selector,

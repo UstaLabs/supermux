@@ -84,7 +84,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.host.HostBadge
@@ -112,6 +111,7 @@ import dev.supermux.session.TaskSection
 import dev.supermux.session.SectionKey
 import dev.supermux.net.ArchivedDto
 import dev.supermux.session.inferHomeDir
+import dev.supermux.ui.session.SessionStatusRail
 
 /** Produces a human-readable relative time string from an ISO-8601 timestamp string. */
 fun relTime(ts: String?): String {
@@ -128,43 +128,6 @@ fun relTime(ts: String?): String {
         }
     } catch (_: Exception) {
         ""
-    }
-}
-
-/**
- * Session avatar: real agent brand mark ([AgentLogo]) on a cream tile, or the session's name
- * initials when the agent isn't recognised. Android parity (no shared-element params on desktop).
- *
- * NOT used in [SessionRow] — matching Android, where list rows deliberately stay lean (the small
- * [SessionStatusRail] IS the row's leading visual).
- */
-@Composable
-fun SessionAvatar(
-    name: String,
-    agent: String? = null,
-    modifier: Modifier = Modifier,
-    size: Dp = 40.dp,
-) {
-    val cs = MaterialTheme.colorScheme
-    if (hasAgentLogo(agent)) {
-        AgentLogo(agent = agent, size = size, modifier = modifier)
-    } else {
-        Box(
-            modifier
-                .size(size)
-                .clip(RoundedCornerShape(size * 0.3f))
-                .background(cs.primary)
-                .border(1.dp, cs.outline.copy(alpha = 0.7f), RoundedCornerShape(size * 0.3f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            val initials = name.take(2).uppercase()
-            Text(
-                initials,
-                color = cs.onPrimary,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = (size.value * 0.32f).sp,
-            )
-        }
     }
 }
 

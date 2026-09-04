@@ -1,4 +1,16 @@
-package dev.supermux.android.workspace
+// The one collapsed sessions rail.
+//
+//   - Glyphs come from compose.materialIconsExtended (ic_chevron_right → Icons.Filled.ChevronRight,
+//     ic_plus → Icons.Filled.Add), which both apps already ship.
+//   - `statusBarsPadding()` is applied only in the Compact width class: that is the phone layout
+//     where the rail runs edge-to-edge under the system status bar. Desktop and tablets have no
+//     status bar inset to consume, so they keep the flush top.
+//   - `pointerHoverIcon(PointerIcon.Hand)` on the tappable avatars is a mouse affordance and a
+//     no-op on touch.
+//   - No collapse chip on the rail itself. Collapse is a title-bar toggle (macOS, expanded only) /
+//     View ▸ Show Sidebar / Ctrl+B on desktop and the sidebar divider's chip on Android; expanding
+//     when collapsed is this rail's chevron.
+package dev.supermux.ui.shell
 
 import dev.supermux.ui.TestIds
 import androidx.compose.foundation.background
@@ -18,6 +30,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,12 +41,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import dev.supermux.android.R
-import dev.supermux.android.session.SessionAvatar
-import dev.supermux.android.session.SessionStatusRail
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.session.SessionAvatar
+import dev.supermux.ui.session.SessionStatusRail
 import dev.supermux.ui.theme.Space
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
@@ -40,12 +57,11 @@ import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.session.sessionsByUserOrder
 
 /**
- * Slim (~64dp) collapsed sidebar shown in place of [dev.supermux.android.session.SessionListScreen]
- * when [WorkspaceLayout.sidebarCollapsed] is true. Top: an expand chevron ([onExpand]) and a "+"
+ * Slim (~64dp) collapsed sidebar shown in place of the session list when the shell's sidebar is
+ * collapsed. Top: an expand chevron ([onExpand]) and a "+"
  * new-session button ([onNewSession]); below, a vertical scrollable column of session
  * [SessionAvatar]s. Tapping one calls [onSelect]; the active session is ringed. Each avatar carries
- * its [SessionStatusRail] status dot at the bottom-end corner (working spinner / unread green /
- * git status).
+ * its [SessionStatusRail] status at the bottom-end corner (working spinner / unread green / git).
  */
 @Composable
 fun SessionsRail(
@@ -60,19 +76,20 @@ fun SessionsRail(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     Column(
         modifier
             .fillMaxHeight()
             .width(64.dp)
             .background(cs.surfaceContainerHigh)
-            .statusBarsPadding()
+            .then(if (compact) Modifier.statusBarsPadding() else Modifier)
             .padding(vertical = Space.sm),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Space.xs),
     ) {
         IconButton(onClick = onExpand, modifier = Modifier.testTag("rail_expand")) {
             Icon(
-                painter = painterResource(R.drawable.ic_chevron_right),
+                imageVector = Icons.Filled.ChevronRight,
                 contentDescription = "Expand sidebar",
                 tint = cs.onSurfaceVariant,
                 modifier = Modifier.size(20.dp),
@@ -80,7 +97,7 @@ fun SessionsRail(
         }
         IconButton(onClick = onNewSession, modifier = Modifier.testTag(TestIds.NEW_SESSION)) {
             Icon(
-                painter = painterResource(R.drawable.ic_plus),
+                imageVector = Icons.Filled.Add,
                 contentDescription = "New session",
                 tint = cs.primary,
                 modifier = Modifier.size(22.dp),
@@ -134,6 +151,7 @@ private fun RailSessionItem(
             .clip(shape)
             .background(if (selected) cs.surfaceContainerHighest else Color.Transparent)
             .then(if (selected) Modifier.border(2.dp, cs.primary, shape) else Modifier)
+            .pointerHoverIcon(PointerIcon.Hand)
             .clickable(onClick = onClick)
             .testTag("rail_session_${session.id}"),
         contentAlignment = Alignment.Center,
@@ -141,7 +159,7 @@ private fun RailSessionItem(
         SessionAvatar(
             name = session.name,
             agent = session.agent,
-            modifier = Modifier.size(36.dp),
+            size = 36.dp,
             sessionId = session.id,
         )
         // Status (working spinner / unread green / git), badged over the avatar's bottom-end.

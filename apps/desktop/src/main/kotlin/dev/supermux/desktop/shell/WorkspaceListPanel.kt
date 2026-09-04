@@ -86,7 +86,7 @@ import dev.supermux.host.filterSessions
 import dev.supermux.desktop.session.NewSessionListRow
 import dev.supermux.desktop.session.PathGroupHeader
 import dev.supermux.desktop.session.SessionRow
-import dev.supermux.desktop.session.SessionStatusRail
+import dev.supermux.ui.session.SessionStatusRail
 import dev.supermux.desktop.session.relTime
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.LocalPanes

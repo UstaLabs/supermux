@@ -96,8 +96,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.auth.DesktopTokenStore
-import dev.supermux.desktop.session.AgentLogo
-import dev.supermux.desktop.session.hasAgentLogo
+import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.Radii
 import dev.supermux.desktop.ui.Speedometer

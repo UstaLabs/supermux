@@ -49,6 +49,7 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.WorkspaceActivity
+import dev.supermux.ui.session.SessionStatusRail
 
 @Composable
 fun WorkspaceRow(

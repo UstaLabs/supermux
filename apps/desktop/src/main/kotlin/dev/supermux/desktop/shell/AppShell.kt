@@ -117,6 +117,7 @@ import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.shell.SessionsRail
 
 /**
  * macOS title-bar sidebar collapse control — next to the traffic lights (live JBR left

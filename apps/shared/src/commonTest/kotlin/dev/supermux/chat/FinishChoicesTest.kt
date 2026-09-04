@@ -10,16 +10,6 @@ import kotlin.test.assertFalse
  * Android's FinishSheet and desktop's FinishDialog, so both agree without a per-app copy.
  */
 class FinishChoicesTest {
-    @Test fun merge_can_always_skip() {
-        assertTrue(canSkipTests("merge", false))
-        assertTrue(canSkipTests("merge", true))
-    }
-
-    @Test fun pr_skips_only_when_not_requiring_green() {
-        assertTrue(canSkipTests("pr", false))
-        assertFalse(canSkipTests("pr", true))
-    }
-
     @Test fun can_skip_tests_merge_always_skippable() {
         assertTrue(canSkipTests("merge", prRequiresGreen = false))
         assertTrue(canSkipTests("merge", prRequiresGreen = true))

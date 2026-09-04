@@ -1,4 +1,4 @@
-package dev.supermux.desktop.session
+package dev.supermux.ui.session
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -6,7 +6,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
+import dev.supermux.ui.theme.SupermuxTheme
 import kotlin.test.Test
 
 /**
@@ -18,7 +18,7 @@ class SessionStatusRailTest {
 
     @Test fun idle_unread_shows_unread_icon_not_working_or_neutral() = runComposeUiTest {
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionStatusRail(git = null, working = false, unread = true)
             }
         }
@@ -30,7 +30,7 @@ class SessionStatusRailTest {
 
     @Test fun working_shows_spinner_and_hides_unread_even_when_flag_true() = runComposeUiTest {
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionStatusRail(git = null, working = true, unread = true)
             }
         }
@@ -43,7 +43,7 @@ class SessionStatusRailTest {
 
     @Test fun idle_read_shows_neutral_gray_dot() = runComposeUiTest {
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SessionStatusRail(git = null, working = false, unread = false)
             }
         }

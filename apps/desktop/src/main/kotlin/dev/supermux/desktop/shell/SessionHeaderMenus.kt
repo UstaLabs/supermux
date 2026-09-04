@@ -81,7 +81,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.session.AgentLogo
+import dev.supermux.ui.session.AgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
