@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -14,6 +15,7 @@ import dev.supermux.android.platform.AndroidHaptics
 import dev.supermux.android.platform.rememberInputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.widthClassFor
 import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.LocalHaptics
@@ -62,7 +64,12 @@ fun AndroidTheme(
     val haptics = remember(view) { AndroidHaptics(view) }
     val widthPx = LocalWindowInfo.current.containerSize.width
     val density = LocalDensity.current.density
-    val widthClass = widthClassForPx(widthPx, density)
+    // `containerSize` is 0 during the very first composition (composition precedes measure), and
+    // the shared helper maps 0 → Expanded — right for desktop, wrong for a phone (one frame of the
+    // desktop type scale). Fall back to the configuration width until the window has measured.
+    val widthClass =
+        if (widthPx > 0) widthClassForPx(widthPx, density)
+        else widthClassFor(LocalConfiguration.current.screenWidthDp)
     CompositionLocalProvider(
         LocalHaptics provides haptics,
         LocalWindowWidthClass provides widthClass,
