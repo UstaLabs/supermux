@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -89,6 +91,16 @@ class AndroidPlatform(
      * null (see [QrScanHost]).
      */
     override suspend fun scanQr(): String? = qrScanHost.scan()
+
+    /**
+     * Decodes that completed with nobody left to await them — the activity was re-created while the
+     * scanner was in the foreground. The re-created add-host screen collects this and claims the
+     * host exactly as if its own `scanQr()` had returned, instead of the scan being silently lost.
+     */
+    fun pendingScans(): Flow<String> = qrScanHost.unclaimed.filterNotNull().map { decoded ->
+        qrScanHost.claim(decoded)
+        decoded
+    }
 
     /**
      * Results of picks that completed with nobody left to await them — the user rotated the device
@@ -266,45 +278,80 @@ class PickerHost<R : Any> {
  * The activity-scoped half of [AndroidPlatform.scanQr]: a `suspend` bridge over
  * [dev.supermux.android.pairing.rememberQrScanLauncher]'s callback.
  *
- * Deliberately SIMPLER than [PickerHost]. A scan stages nothing — the decoded string is consumed
- * on the spot — so there is no result worth rescuing across an activity recreation: a scan
- * interrupted by a restart is just re-taken. Two rules:
+ * Same three rules as [PickerHost], for the same reason — the OS keeps working on a launched scan
+ * across an activity restart, but the coroutine awaiting it does not survive:
  *  1. **One scan at a time.** A second [scan] while the scanner is up returns null WITHOUT
- *     launching, so a double-tapped button cannot leave two coroutines waiting on one camera.
- *  2. **Cancel → null.** Backing out of the scanner, denying `CAMERA`, or leaving the composition
- *     mid-scan all resume with null, which every caller already treats as "user said no".
+ *     launching, so a decode can only belong to the one caller recorded in [inFlight].
+ *  2. **Recreation.** [inFlight] is mirrored into `rememberSaveable` by [rememberQrScanHost], so a
+ *     decode arriving with nobody waiting is published on [unclaimed] and the re-created screen
+ *     collects it instead of the user silently losing a successful scan.
+ *  3. **Nothing in flight → drop.** A delivery with no [inFlight] marker is ignored.
+ *
+ * There is no `requester`/kind: a QR scan has exactly one shape and one caller in the app.
  */
 class QrScanHost {
 
     /** Installed by [rememberQrScanHost]; null in a composition that never registered a launcher. */
     internal var onLaunch: (() -> Unit)? = null
 
+    /** True while the OS is working on a scan (survives recreation via `rememberSaveable`). */
+    var inFlight: Boolean = false
+        private set
+
     private var pending: CompletableDeferred<String?>? = null
 
-    /** True while the scanner is up — a second [scan] is refused until it resolves. */
-    val inFlight: Boolean get() = pending != null
+    private val _unclaimed = MutableStateFlow<String?>(null)
+
+    /** A decode nobody was left to await (rule 2), collected by the screen that asked for it. */
+    val unclaimed: StateFlow<String?> = _unclaimed.asStateFlow()
+
+    /** Re-installs the marker saved across an activity recreation. */
+    internal fun restoreInFlight() { inFlight = true }
 
     /** Launches the scanner and suspends until it decodes or the user backs out. */
     suspend fun scan(): String? {
-        if (pending != null) return null // rule 1
+        if (inFlight) return null // rule 1: the scanner is already up
         val launch = onLaunch ?: return null
         val deferred = CompletableDeferred<String?>()
         pending = deferred
+        inFlight = true
         launch()
         return try {
             deferred.await()
         } finally {
-            // The caller went away mid-scan (its screen left the composition): drop the waiter so
-            // the next scan is not refused by rule 1 — there is nothing to stash.
-            if (pending === deferred) pending = null
+            // The caller went away while the scanner is still up: forget the waiter but KEEP
+            // inFlight, so the eventual decode is stashed on [unclaimed] rather than lost.
+            if (pending === deferred && !deferred.isCompleted) pending = null
         }
     }
 
     /** Called from the launcher callback with the decoded value (null = cancelled/denied). */
     internal fun deliver(decoded: String?) {
-        val deferred = pending ?: return
+        if (!inFlight) return // rule 3: nothing in flight — not ours to route
+        inFlight = false
+        val deferred = pending
         pending = null
-        deferred.complete(decoded)
+        if (deferred != null) {
+            deferred.complete(decoded)
+            return
+        }
+        // Nobody is waiting: the activity was re-created mid-scan (rule 2).
+        if (decoded != null) _unclaimed.value = decoded
+    }
+
+    /**
+     * Forget an in-flight marker that can never be completed — the marker was restored from
+     * `rememberSaveable` but the result died with the process. See [PickerHost.clearStuckInFlight].
+     */
+    fun clearStuckInFlight(): Boolean {
+        if (!inFlight || pending != null) return false
+        inFlight = false
+        return true
+    }
+
+    /** Marks [stash] consumed. A second claim of the same value is a no-op. */
+    fun claim(stash: String) {
+        _unclaimed.compareAndSet(stash, null)
     }
 }
 
@@ -313,8 +360,28 @@ class QrScanHost {
 @Composable
 fun rememberQrScanHost(): QrScanHost {
     val host = remember { QrScanHost() }
-    val launch = rememberQrScanLauncher { decoded -> host.deliver(decoded) }
-    host.onLaunch = launch
+    var savedInFlight by rememberSaveable { mutableStateOf(false) }
+    remember(host) { if (savedInFlight) host.restoreInFlight(); Unit }
+    val launcher = rememberQrScanLauncher { decoded ->
+        host.deliver(decoded)
+        savedInFlight = host.inFlight
+    }
+    // SideEffect, not a bare assignment: the hook must be installed only once the composition that
+    // owns the launcher has actually been applied, never from a composition that gets discarded.
+    SideEffect {
+        host.onLaunch = {
+            launcher()
+            savedInFlight = host.inFlight
+        }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, host) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && host.clearStuckInFlight()) savedInFlight = false
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     return host
 }
 

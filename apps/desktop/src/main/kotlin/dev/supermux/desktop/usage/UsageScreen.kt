@@ -12,10 +12,10 @@
 //   - `resetsAt` is typed per-provider at the source (BrokerApi.kt): Claude's `ClaudeWindow` and
 //     Cursor's `billingCycleEnd` are ISO-8601 Strings; Codex's `CodexWindow` is a Double of epoch
 //     SECONDS. Two formatter entry points below match that split — no stringify-then-reparse.
-//   - kotlinx-datetime deviation: the M4f plan text says "use kotlinx-datetime (shared dep)", but
-//     no module in this repo actually depends on it (checked shared/build.gradle.kts and
-//     desktop/build.gradle.kts) — and Android's own `formatReset` uses `java.time`, not
-//     kotlinx.datetime, despite the plan's framing. The desktop module already uses
+//   - Datetime-library deviation: the M4f plan text says "use the shared multiplatform datetime
+//     dep", but no module in this repo depends on one (checked shared/build.gradle.kts and
+//     desktop/build.gradle.kts) — and Android's own `formatReset` uses `java.time`, despite the
+//     plan's framing. The desktop module already uses
 //     `java.time.Instant` elsewhere (chat/Timeline.kt's gutter timestamps), and this task's ground
 //     rules restrict changes to `apps/desktop/src` (no build.gradle.kts edits to add a dependency).
 //     So [formatResetIso]/[formatResetEpochSeconds] inject a `java.time.Instant now` instead —
@@ -93,7 +93,7 @@ private const val MS_PER_DAY = 24 * MS_PER_HOUR
 /**
  * Claude windows (`ClaudeWindow.resetsAt`) + Cursor's `billingCycleEnd`: an ISO-8601 string
  * (Android also falls back to a numeric epoch-millis string first). `now` is injected for
- * deterministic tests (see file header re: java.time vs kotlinx-datetime).
+ * deterministic tests (see the file header on the java.time choice).
  */
 fun formatResetIso(resetsAt: String?, now: Instant = Instant.now()): String {
     val s = resetsAt?.takeIf { it.isNotBlank() } ?: return ""

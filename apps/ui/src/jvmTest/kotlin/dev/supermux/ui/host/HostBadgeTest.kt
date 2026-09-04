@@ -11,11 +11,17 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.rightClick
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.HostView
 import dev.supermux.proto.SessionInfo
 import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -69,6 +75,36 @@ class HostBadgeTest {
         onNodeWithText("Rename").assertIsDisplayed()
     }
 
+    @Test fun longPress_alsoOpensTheMenu_whenAPointerIsAvailable() = runComposeUiTest {
+        // A tablet with a mouse still has a touchscreen: attaching a pointer must not disable the
+        // touch gesture, only ADD the right-click one.
+        setContent(chips(pointer = true))
+        onNodeWithTag("host_chip_press_h1").performTouchInput { longClick() }
+        onNodeWithText("Rename").assertIsDisplayed()
+    }
+
+    @Test fun aShortClickOnTheChip_selectsItRatherThanOpeningTheMenu() = runComposeUiTest {
+        // The gesture overlay must not swallow the primary click: the chip keeps its own onClick,
+        // which is what keyboard / switch-access / screen-reader activation goes through.
+        var selected: String? = "sentinel"
+        setContent {
+            CompositionLocalProvider(LocalPointerAvailable provides false) {
+                HostFilterChips(
+                    hosts = hosts,
+                    sessions = emptyList(),
+                    sessionHost = emptyMap(),
+                    selected = null,
+                    onSelect = { selected = it },
+                    onAddHost = {},
+                    nowMs = 1_000_000L,
+                )
+            }
+        }
+        onNodeWithTag("host_chip_h2").performClick()
+        assertEquals("h2", selected)
+        onNodeWithText("Rename").assertDoesNotExist()
+    }
+
     @Test fun renameDialog_reportsTheTrimmedNewName() = runComposeUiTest {
         var renamed: Pair<String, String>? = null
         setContent(chips(pointer = false, onRename = { id, name -> renamed = id to name }))
@@ -111,6 +147,31 @@ class HostBadgeTest {
     @Test fun hostBadge_rendersTheShortLabel() = runComposeUiTest {
         setContent { HostBadge(hosts[1]) }
         onNodeWithTag("host_badge_h2").assertIsDisplayed()
-        assertTrue(true)
+        onNodeWithText("Raspberry").assertIsDisplayed()
+    }
+
+    @Test fun scopePickerAnchor_isChipSizedOnAWideWindow() = runComposeUiTest {
+        // The DropdownMenu anchors to this box: a full-pane anchor on a wide window would drop a
+        // menu the width of the whole settings pane, which desktop's own picker deliberately avoided.
+        setContent {
+            CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Expanded) {
+                Box(Modifier.width(400.dp)) {
+                    HostScopePicker(hosts, selectedHostId = "h1", onSelect = {})
+                }
+            }
+        }
+        val width = onNodeWithTag("host_scope_picker").fetchSemanticsNode().size.width
+        assertTrue(width < 400, "wide-window anchor should be chip-sized, was $width px of 400")
+    }
+
+    @Test fun scopePickerAnchor_spansThePaneWhenCompact() = runComposeUiTest {
+        setContent {
+            CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Compact) {
+                Box(Modifier.width(400.dp)) {
+                    HostScopePicker(hosts, selectedHostId = "h1", onSelect = {})
+                }
+            }
+        }
+        assertEquals(400, onNodeWithTag("host_scope_picker").fetchSemanticsNode().size.width)
     }
 }

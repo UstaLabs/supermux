@@ -23,8 +23,9 @@ import kotlin.test.assertTrue
  * Compose render proofs for the shared multi-host fleet UI (spec §5): the `All · <host…> · +`
  * chip row + per-row host badges, and the [AddHostScreen] paste flow. Moved here from desktop's
  * `host/FleetListUiTest` when both app copies collapsed into `:ui`; the chip cases now drive
- * [HostFilterChips]/[HostBadge] directly instead of through desktop's `SessionListPanel` (the
- * multi-host gating those two cases exercised lives in the panels, which are still per-app).
+ * [HostFilterChips]/[HostBadge] directly. The two cases that exercised the multi-host /
+ * `showRowHostBadge` GATING stayed behind in `desktop/.../session/SessionListPanelHostGatingTest`,
+ * because that gating lives in the per-app list panels, which did not move.
  */
 @OptIn(ExperimentalTestApi::class)
 class FleetListUiTest {
@@ -57,23 +58,6 @@ class FleetListUiTest {
         onNodeWithTag("host_badge_h1").assertIsDisplayed()
     }
 
-    @Test fun chipRowHidden_withASingleHost() = runComposeUiTest {
-        // The panels decide multi-host (`hosts.size > 1`); the scope picker is the shared component
-        // that carries the same rule, so it is what pins it here.
-        setContent { HostScopePicker(listOf(twoHosts[0]), selectedHostId = "h1", onSelect = {}) }
-        onNodeWithTag("host_scope_picker").assertDoesNotExist()
-    }
-
-    @Test fun rowBadgeHidden_whenHostPillSelected() = runComposeUiTest {
-        // `showRowHostBadge = multiHost && hostFilter == null` is the panels' rule; the badge itself
-        // renders whenever it is asked to, and does NOT when it is not.
-        setContent {
-            val host: HostView? = null
-            host?.let { HostBadge(it) }
-        }
-        onNodeWithTag("host_badge_h1").assertDoesNotExist()
-    }
-
     @Test fun clickingAHostChip_reportsTheSelection() = runComposeUiTest {
         var selected: String? = "sentinel"
         setContent {
@@ -86,7 +70,7 @@ class FleetListUiTest {
                 onAddHost = {},
             )
         }
-        onNodeWithTag("host_chip_press_h2").performClick()
+        onNodeWithTag("host_chip_h2").performClick()
         assertEquals("h2", selected)
     }
 

@@ -58,6 +58,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.toRoute
 import androidx.navigation.compose.rememberNavController
+import dev.supermux.android.platform.AndroidPlatform
+import dev.supermux.ui.platform.LocalPlatform
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import dev.supermux.ui.host.AddHostScreen
@@ -800,6 +803,10 @@ class MainActivity : ComponentActivity() {
                                 navController.popBackStack()
                             },
                             needsInsecureOptIn = { vm.fleet.urlNeedsInsecureOptIn(it) },
+                            // A scan that completed after an activity recreation is re-delivered
+                            // here instead of being dropped (see AndroidPlatform.pendingScans).
+                            pendingScans = (LocalPlatform.current as? AndroidPlatform)
+                                ?.pendingScans() ?: emptyFlow(),
                         )
                     }
                     composable<Route.Settings> {

@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,8 @@ import dev.supermux.state.AddHostResult
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.LocalPlatform
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 
 private enum class AddMode { Scan, Paste, Url }
@@ -81,6 +84,14 @@ fun AddHostScreen(
     onClaimByUrl: suspend (url: String, deviceName: String, allowInsecure: Boolean) -> AddHostResult,
     onAdded: () -> Unit,
     needsInsecureOptIn: (String) -> Boolean = { false },
+    /**
+     * Decodes from a scan that finished with nobody awaiting it — on Android the activity can be
+     * re-created while the camera is in the foreground, which kills the coroutine inside
+     * [dev.supermux.ui.platform.Platform.scanQr]. The re-created screen collects this and claims
+     * exactly as if its own call had returned, instead of the user losing a good scan. Platforms
+     * with a stable caller (desktop) leave it empty.
+     */
+    pendingScans: Flow<String> = emptyFlow(),
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -126,6 +137,8 @@ fun AddHostScreen(
         busy = true
         scope.launch { handle(onClaimLegacy(legacy)) }
     }
+
+    LaunchedEffect(pendingScans) { pendingScans.collect { claimInput(it) } }
 
     Scaffold(
         topBar = {

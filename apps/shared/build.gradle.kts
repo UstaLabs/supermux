@@ -40,7 +40,6 @@ kotlin {
             implementation(libs.ktor.client.websockets)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
-            api(libs.datetime)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

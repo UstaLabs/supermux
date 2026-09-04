@@ -2,7 +2,7 @@ package dev.supermux.state
 
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.Flow
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 
 /** Async key-value settings. One actual per platform (DataStore on Android, JSON file on desktop). */
 interface SettingsStore {

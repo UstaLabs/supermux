@@ -9,8 +9,8 @@ import kotlin.test.assertEquals
  * ISO-8601 string) and [formatResetEpochSeconds] (Codex windows, a `Double` of epoch SECONDS).
  * Ports Android MoreScreens.kt:998-1021's `formatReset` semantics as two typed entry points.
  *
- * Deviation from the M4f plan text: the plan says "use kotlinx-datetime (shared dep)" but no
- * module in this repo (desktop OR shared) actually depends on kotlinx-datetime — Android's own
+ * Deviation from the M4f plan text: the plan says "use the shared multiplatform datetime dep" but
+ * no module in this repo (desktop OR shared) depends on such a library — Android's own
  * `formatReset` uses `java.time` (see MoreScreens.kt's imports), and the desktop module already
  * uses `java.time.Instant` elsewhere (chat/Timeline.kt's gutter timestamps). Adding a new Gradle
  * dependency would also mean touching build.gradle.kts, outside this task's "only apps/desktop/src"
