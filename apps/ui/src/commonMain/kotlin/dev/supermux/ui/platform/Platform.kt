@@ -41,12 +41,21 @@ interface Platform {
      *
      * The result streams: each [PickedFile] carries a [ChunkSource] that can be handed straight to
      * `HostStore.uploadResumable` without buffering the bytes in the heap.
+     *
+     * [requester] identifies the calling screen (e.g. `"chat-composer"`). It only matters where the
+     * platform can lose the caller mid-pick: on Android an activity recreation (rotation while the
+     * picker is up) kills the awaiting coroutine, and the result is later re-delivered to the
+     * screen that asked for it — never to whichever screen happens to be composed first. Platforms
+     * with a stable caller (desktop) ignore it.
      */
-    suspend fun pickFiles(kind: PickKind): List<PickedFile>
+    suspend fun pickFiles(kind: PickKind, requester: String = DEFAULT_REQUESTER): List<PickedFile>
 
     /** Platform haptics (Android's `View.performHapticFeedback`; a no-op where there is no actuator). */
     val haptics: Haptics
 }
+
+/** Default [Platform.pickFiles] requester for screens that only ever have one picker in play. */
+const val DEFAULT_REQUESTER: String = "default"
 
 /**
  * Platform capabilities, as plain booleans decided once per app at construction time.

@@ -101,6 +101,10 @@ import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.StagedUpload
 
+
+/** Identifies this screen to `Platform.pickFiles` (see the chat composer's twin). */
+private const val PICK_REQUESTER = "session-launcher"
+
 /** Sentinel id for the "Default" (null-model) row in the model picker — maps back to a null model. */
 private const val DEFAULT_MODEL_ID = "__default__"
 
@@ -460,9 +464,10 @@ fun SessionLauncherScreen(
 
     // Files / Photos: the shared picker seam (registered once by AndroidTheme's PickerHost).
     val platform = LocalPlatform.current
-    // Claim a pick that completed while the activity was being re-created (see PickerHost rule 1).
+    // Picks that completed while the activity was being re-created (see PickerHost rule 2),
+    // filtered to the ones THIS screen asked for.
     LaunchedEffect(platform) {
-        (platform as? AndroidPlatform)?.claimPendingPick()?.let { stagePicked(it) }
+        (platform as? AndroidPlatform)?.pendingPicks(PICK_REQUESTER)?.collect { stagePicked(it) }
     }
 
     // Camera photo → our FileProvider URI, then staged back.
@@ -853,7 +858,7 @@ fun SessionLauncherScreen(
                                     onClick = {
                                         attachMenu = false
                                         scope.launch {
-                                            platform.pickFiles(PickKind.Media).forEach { stagePicked(it) }
+                                            platform.pickFiles(PickKind.Media, PICK_REQUESTER).forEach { stagePicked(it) }
                                         }
                                     },
                                 )
@@ -864,7 +869,7 @@ fun SessionLauncherScreen(
                                     onClick = {
                                         attachMenu = false
                                         scope.launch {
-                                            platform.pickFiles(PickKind.Any).forEach { stagePicked(it) }
+                                            platform.pickFiles(PickKind.Any, PICK_REQUESTER).forEach { stagePicked(it) }
                                         }
                                     },
                                 )

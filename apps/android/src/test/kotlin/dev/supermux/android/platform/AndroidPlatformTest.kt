@@ -3,6 +3,8 @@ package dev.supermux.android.platform
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.PickKind
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlin.test.assertNull
@@ -41,7 +43,7 @@ class AndroidPlatformTest {
         assertTrue(ANDROID_CAPS.push)
     }
 
-    // ── PickerHost: the three behaviours that bite. Driven with String results so the logic is
+    // ── PickerHost: the behaviours that bite. Driven with String results so the logic is
     // testable with no Activity and no android.net.Uri (production uses PickerHost<Uri>).
 
     private fun host(): Pair<PickerHost<String>, MutableList<PickKind>> {
@@ -54,62 +56,106 @@ class AndroidPlatformTest {
     @Test
     fun `a pick resumes with the delivered result`() = runTest {
         val (host, launched) = host()
-        val pick = async { host.pick(PickKind.Media) }
+        val pick = async { host.pick(PickKind.Media, "chat") }
         yield()
         assertEquals(listOf(PickKind.Media), launched)
         host.deliver("content://photo")
         assertEquals("content://photo", pick.await())
+        assertNull(host.inFlightId)
     }
 
     @Test
     fun `cancelling the picker resumes with null - the caller sees an empty list`() = runTest {
         val (host, _) = host()
-        val pick = async { host.pick(PickKind.Any) }
+        val pick = async { host.pick(PickKind.Any, "chat") }
         yield()
         host.deliver(null)
         assertNull(pick.await())
+        assertNull(host.unclaimed.value) // a cancel is not a stash
     }
 
     @Test
     fun `with no launcher registered a pick behaves like a cancel`() = runTest {
         val host = PickerHost<String>()
-        assertNull(host.pick(PickKind.Any))
+        assertNull(host.pick(PickKind.Any, "chat"))
         assertNull(host.inFlightId)
     }
 
     @Test
-    fun `a pick that outlives activity recreation is claimed, not lost`() = runTest {
-        val (host, _) = host()
-        val pick = async { host.pick(PickKind.Images) }
+    fun `a double-tapped attach button never opens a second picker`() = runTest {
+        val (host, launched) = host()
+        val first = async { host.pick(PickKind.Any, "chat") }
         yield()
-        val savedMarker = host.inFlightId // what rememberSaveable persists across the restart
-        assertNotNull(savedMarker)
-        pick.cancel() // the awaiting coroutine dies with the old composition
+        // Same frame, second tap: rejected outright — one pick in flight at a time.
+        assertNull(host.pick(PickKind.Any, "chat"))
+        assertEquals(listOf(PickKind.Any), launched)
 
-        // The re-created activity: a fresh host, restored marker, fresh launcher registration.
-        val recreated = PickerHost<String>()
-        recreated.onLaunch = { }
-        recreated.inFlightId = savedMarker
-        recreated.deliver("content://photo") // the OS finally answers the pre-restart pick
-
-        assertEquals("content://photo", recreated.drainUnclaimed())
-        assertNull(recreated.drainUnclaimed()) // claimed once, then gone
+        host.deliver("content://one")
+        assertEquals("content://one", first.await())
     }
 
     @Test
-    fun `a superseded pick answering late never resumes the new caller`() = runTest {
+    fun `a delivery with nothing in flight is dropped`() = runTest {
         val (host, _) = host()
-        val first = async { host.pick(PickKind.Any) }
-        yield()
-        val second = async { host.pick(PickKind.Media) }
-        yield()
-        assertNull(first.await()) // starting a second pick cancels the first
+        host.deliver("content://ghost")
+        assertNull(host.unclaimed.value)
 
-        host.deliver("stale-from-the-first-picker") // arrives with the FIRST launch's id
+        // ...and it did not poison the next pick.
+        val pick = async { host.pick(PickKind.Any, "chat") }
         yield()
-        assertTrue(second.isActive) // ignored: not the current request
+        host.deliver("content://real")
+        assertEquals("content://real", pick.await())
+    }
 
-        host.deliver("fresh")
-        assertEquals("fresh", second.await())
+    @Test
+    fun `a pick that outlives activity recreation reaches the requesting screen`() = runTest {
+        val (host, _) = host()
+        val pick = async { host.pick(PickKind.Images, "chat") }
+        yield()
+        val id = assertNotNull(host.inFlightId) // what rememberSaveable persists
+        val kind = assertNotNull(host.inFlightKind)
+        val requester = assertNotNull(host.inFlightRequester)
+        pick.cancel() // the awaiting coroutine dies with the old composition
+        yield() // let the cancellation unwind so the host stops seeing a waiter
+
+        // The re-created activity: a fresh host, restored marker, launcher re-registered.
+        val recreated = PickerHost<String>()
+        val relaunched = mutableListOf<PickKind>()
+        recreated.onLaunch = { relaunched.add(it) }
+        recreated.restoreInFlight(id, kind, requester)
+
+        // A collector attached BEFORE the OS answers — the target case (rotation while the picker
+        // is still in the foreground), which a one-shot drain would miss.
+        val seen = mutableListOf<UnclaimedPick<String>>()
+        val collector = launch {
+            recreated.unclaimed.filterNotNull().collect { seen.add(it); recreated.claim(it) }
+        }
+        yield()
+        recreated.deliver("content://photo")
+        yield()
+        collector.cancel()
+
+        assertEquals(listOf(UnclaimedPick("content://photo", PickKind.Images, "chat")), seen)
+        assertNull(recreated.unclaimed.value) // claimed
+
+        // And the screen can pick again: nothing is left in flight.
+        val next = async { recreated.pick(PickKind.Any, "chat") }
+        yield()
+        assertEquals(listOf(PickKind.Any), relaunched)
+        recreated.deliver(null)
+        next.await()
+    }
+
+    @Test
+    fun `an unclaimed pick is tagged with the screen that asked for it`() = runTest {
+        val (host, _) = host()
+        val pick = async { host.pick(PickKind.Media, "session-launcher") }
+        yield()
+        pick.cancel()
+        yield()
+        host.deliver("content://video")
+        val stash = assertNotNull(host.unclaimed.value)
+        assertEquals("session-launcher", stash.requester)
+        assertEquals(PickKind.Media, stash.kind)
     }
 }

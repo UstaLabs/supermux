@@ -136,6 +136,11 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
 
+
+/** Identifies this screen to `Platform.pickFiles`, so a pick that outlives an activity
+ *  recreation comes back HERE and not to the new-session launcher. */
+private const val PICK_REQUESTER = "chat-composer"
+
 /** Stable list key for timeline diffing so the optimistic→real id swap (§9) doesn't flicker. */
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
@@ -275,10 +280,12 @@ fun ChatPanel(
     // Files / Photos: the shared picker seam (SAF GetContent + the visual-media picker live in
     // AndroidPlatform's PickerHost, registered once by AndroidTheme).
     val platform = LocalPlatform.current
-    // A pick the user started before an activity recreation (rotation) finishes with no coroutine
-    // left to await it; PickerHost stashes it and the re-created composer claims it here.
+    // A pick the user started before an activity recreation (rotation while the system picker is
+    // in the foreground) finishes with no coroutine left to await it. Collected for the whole
+    // lifetime of the composer — a one-shot read would race the delivery — and tagged with this
+    // screen's id so the launcher screen never steals it.
     LaunchedEffect(platform) {
-        (platform as? AndroidPlatform)?.claimPendingPick()?.let { stagePicked(it) }
+        (platform as? AndroidPlatform)?.pendingPicks(PICK_REQUESTER)?.collect { stagePicked(it) }
     }
 
     // Camera: delegated capture to the system camera app, writing into our FileProvider URI.
@@ -812,7 +819,7 @@ fun ChatPanel(
                             onClick = {
                                 attachMenu = false
                                 scope.launch {
-                                    platform.pickFiles(PickKind.Media).forEach { stagePicked(it) }
+                                    platform.pickFiles(PickKind.Media, PICK_REQUESTER).forEach { stagePicked(it) }
                                 }
                             },
                         )
@@ -825,7 +832,7 @@ fun ChatPanel(
                             onClick = {
                                 attachMenu = false
                                 scope.launch {
-                                    platform.pickFiles(PickKind.Any).forEach { stagePicked(it) }
+                                    platform.pickFiles(PickKind.Any, PICK_REQUESTER).forEach { stagePicked(it) }
                                 }
                             },
                         )

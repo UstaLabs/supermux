@@ -30,11 +30,13 @@ private class FakePlatform(
     val openedUrls = mutableListOf<String>()
     val copied = mutableListOf<String>()
     var pickedKind: PickKind? = null
+    var pickedRequester: String? = null
 
     override fun openUrl(url: String) { openedUrls.add(url) }
     override fun copyToClipboard(text: String) { copied.add(text) }
-    override suspend fun pickFiles(kind: PickKind): List<PickedFile> {
+    override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> {
         pickedKind = kind
+        pickedRequester = requester
         return listOf(PickedFile("a.txt", "text/plain", ByteArrayChunkSource(byteArrayOf(1, 2))))
     }
 }
@@ -88,6 +90,7 @@ class PlatformTest {
         val fake = FakePlatform()
         val picked = kotlinx.coroutines.runBlocking { fake.pickFiles(PickKind.Images) }
         assertEquals(PickKind.Images, fake.pickedKind)
+        assertEquals(DEFAULT_REQUESTER, fake.pickedRequester) // screens opt in to a name
         assertEquals("a.txt", picked.single().name)
         assertEquals("text/plain", picked.single().mime)
         assertEquals(2L, picked.single().source.size)

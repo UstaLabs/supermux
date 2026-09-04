@@ -52,11 +52,14 @@ class DesktopPlatform : Platform {
     /**
      * The AWT dialog, mapped to streaming [FileChunkSource]s. Multi-select (unlike Android).
      *
+     * `requester` is ignored: an AWT dialog cannot outlive its caller, so there is never an
+     * orphaned result to re-route.
+     *
      * Hopped onto [Dispatchers.Swing] explicitly: AWT requires the EDT, and a caller may well be on
      * a background dispatcher (Compose Desktop's Main happens to be the EDT, but nothing in this
      * signature promises the caller is on it).
      */
-    override suspend fun pickFiles(kind: PickKind): List<PickedFile> = withContext(Dispatchers.Swing) {
+    override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> = withContext(Dispatchers.Swing) {
         awtPickFiles(kind).map { file -> PickedFile(file.name, probeMime(file), FileChunkSource(file)) }
     }
 
