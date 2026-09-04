@@ -97,6 +97,10 @@ class SupermuxTermSettings(
         val DARK_TERMINAL_BG: Int = 0xFF050605.toInt()
         val DARK_TERMINAL_FG: Int = 0xFFD8DED3.toInt()
 
+        // The ONLY font still bundled in this module's resources: JediTerm needs a java.awt.Font
+        // synchronously from the classpath, which the Compose-resource families in :ui (loaded
+        // inside composition) cannot provide. The Compose UI reads its Geist Mono from
+        // dev.supermux.ui.theme.GeistMonoFontFamily; this file is the same TTF for the terminal.
         private const val FONT_RESOURCE = "/fonts/geist_mono_regular.ttf"
 
         /** Geist Mono, loaded once for every settings instance (Font.createFont is not cheap).

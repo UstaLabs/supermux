@@ -39,8 +39,8 @@ import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalInteropOverlay
 import dev.supermux.desktop.theme.LocalPanes
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
 import java.awt.Dimension

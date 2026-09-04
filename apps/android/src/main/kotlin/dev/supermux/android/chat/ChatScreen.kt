@@ -104,8 +104,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import java.io.File
 import dev.supermux.android.R
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Radii
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.formatDuration
 import dev.supermux.util.proxyDisplayUrl
@@ -121,7 +121,7 @@ import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.terminal.ScratchTerminalPanel
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus

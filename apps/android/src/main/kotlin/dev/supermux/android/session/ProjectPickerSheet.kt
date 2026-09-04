@@ -20,7 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.RemoteRepo
 import dev.supermux.session.OmniOption

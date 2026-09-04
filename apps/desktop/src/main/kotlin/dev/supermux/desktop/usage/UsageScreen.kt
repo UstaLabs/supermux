@@ -67,9 +67,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.LocalSemantics
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage

@@ -25,8 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.LocalSemantics
-import dev.supermux.android.theme.MonoFontFamily
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionStatusKind
 import dev.supermux.proto.SessionStatusLevel

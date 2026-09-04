@@ -53,11 +53,11 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.desktop.host.qrBitmap
 import dev.supermux.desktop.session.relTime
-import dev.supermux.desktop.theme.IconSize
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.theme.Stroke
+import dev.supermux.ui.theme.IconSize
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.DeviceDto
 import kotlinx.coroutines.delay

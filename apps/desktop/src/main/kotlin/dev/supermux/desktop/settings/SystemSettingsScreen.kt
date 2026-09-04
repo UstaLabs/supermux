@@ -50,8 +50,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus

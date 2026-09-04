@@ -54,7 +54,7 @@ import dev.supermux.android.R
 import dev.supermux.android.chat.MarkdownBody
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.LocalPanes
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult

@@ -78,8 +78,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs

@@ -53,8 +53,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto

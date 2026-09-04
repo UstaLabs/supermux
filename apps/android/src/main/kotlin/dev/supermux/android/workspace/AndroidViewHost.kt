@@ -33,7 +33,7 @@ import dev.supermux.android.editor.WebCodeEditor
 import dev.supermux.android.editor.rememberEditorEngine
 import dev.supermux.android.ui.keepAlivePanel
 import dev.supermux.android.terminal.TerminalPanel
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.AddCommentBody
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto

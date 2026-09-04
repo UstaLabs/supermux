@@ -33,8 +33,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.FsSearchResult
 

@@ -37,6 +37,10 @@ kotlin {
             // Motion's FiniteAnimationSpec — used directly, so declare it rather than leaning on
             // compose.foundation's transitive.
             implementation(compose.animation)
+            // Geist + Geist Mono ship from here as Compose Multiplatform resources (Res.font.*),
+            // replacing Android's R.font and desktop's classpath lookup. `api`, because the font
+            // families in theme/Type.kt are this module's public surface.
+            api(compose.components.resources)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))
@@ -46,6 +50,13 @@ kotlin {
             implementation(compose.desktop.currentOs)
         }
     }
+}
+
+compose.resources {
+    // Generated accessor: dev.supermux.ui.resources.Res — public so app modules could reach it too.
+    packageOfResClass = "dev.supermux.ui.resources"
+    publicResClass = true
+    generateResClass = always
 }
 
 android {

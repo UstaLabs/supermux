@@ -24,7 +24,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.supermux.android.R
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 
 /**
  * The resize gutter between the expanded sidebar and the detail: a hairline [outlineVariant] rule

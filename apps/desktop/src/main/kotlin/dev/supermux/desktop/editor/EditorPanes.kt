@@ -68,7 +68,7 @@ import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry

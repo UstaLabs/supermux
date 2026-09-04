@@ -67,8 +67,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.chat.TimelineItemRow
 import dev.supermux.desktop.chat.mergeTimeline
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.session.ArchivedProject

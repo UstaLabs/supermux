@@ -41,9 +41,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 
 /** Desktop Enter-to-submit: fire [submit] (and consume) on Enter/NumPad-Enter when [enabled]. */
 fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =

@@ -90,10 +90,10 @@ import dev.supermux.desktop.session.SessionStatusRail
 import dev.supermux.desktop.session.relTime
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.desktop.theme.LocalPanes
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.theme.softElevation
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.softElevation
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo

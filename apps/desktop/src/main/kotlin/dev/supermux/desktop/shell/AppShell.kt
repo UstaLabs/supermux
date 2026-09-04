@@ -100,7 +100,7 @@ import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.desktop.theme.AppearanceMode
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.proto.stateString
-import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.desktop.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen

@@ -14,7 +14,7 @@
 //     Download/Check/Close (established compose.materialIconsExtended mapping — DiffView.kt/
 //     SessionsRail.kt precedent).
 //   - No haptics (desktop has no touch feedback concept — established elsewhere in this module).
-//   - LocalPanes.current.warning (Android) -> dev.supermux.desktop.theme.LocalSemantics.current.warning
+//   - LocalPanes.current.warning (Android) -> dev.supermux.ui.theme.LocalSemantics.current.warning
 //     (desktop's equivalent semantic-color holder; already used by UsageScreen.kt's barColor).
 //   - Android's `lspError` state is declared but NEVER SET anywhere in EditorLspSection — lspLoad()
 //     never throws (AppViewModel.kt:737 degrades to emptyList() internally), so that branch is dead
@@ -80,9 +80,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.LocalSemantics
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer

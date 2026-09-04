@@ -21,6 +21,10 @@ import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.SupermuxColors
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.supermuxSemanticsDark
+import dev.supermux.ui.theme.supermuxSemanticsLight
+import dev.supermux.ui.theme.supermuxTypography
 
 /**
  * Slimmed pane palette. Only the genuinely-fixed app tones should be read from here

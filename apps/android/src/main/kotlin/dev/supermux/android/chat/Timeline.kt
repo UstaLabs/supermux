@@ -98,9 +98,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Radii
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.LogEntry
@@ -987,7 +987,7 @@ private fun looksLikeDiff(text: String): Boolean {
 @Composable
 private fun InlineDiff(text: String) {
     val cs = MaterialTheme.colorScheme
-    val sem = dev.supermux.android.theme.LocalSemantics.current
+    val sem = dev.supermux.ui.theme.LocalSemantics.current
     Column(
         Modifier
             .fillMaxWidth()

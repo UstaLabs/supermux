@@ -24,7 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.SpecialKey
 

@@ -54,9 +54,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.desktop.chat.MessageTts
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.theme.Stroke
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ModelInfo
 import kotlinx.coroutines.delay

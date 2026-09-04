@@ -19,8 +19,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import dev.supermux.desktop.theme.Media
-import dev.supermux.desktop.theme.Sizes
+import dev.supermux.ui.theme.Media
+import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.MdBlock
 import com.sun.net.httpserver.HttpServer

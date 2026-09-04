@@ -50,11 +50,11 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.LocalPanes
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Radii
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
-import dev.supermux.android.theme.softElevation
+import dev.supermux.ui.theme.softElevation
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir

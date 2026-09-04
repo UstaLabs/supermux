@@ -46,10 +46,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.theme.Stroke
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse

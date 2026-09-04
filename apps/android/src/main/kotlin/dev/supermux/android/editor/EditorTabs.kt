@@ -27,8 +27,8 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
 import dev.supermux.android.theme.LocalPanes
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.ui.editor.Document
 

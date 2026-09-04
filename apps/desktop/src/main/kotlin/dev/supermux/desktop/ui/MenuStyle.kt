@@ -30,7 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import dev.supermux.desktop.theme.Stroke
+import dev.supermux.ui.theme.Stroke
 
 /**
  * One menu look for the whole desktop app — the popup surface AND the rows in it.
@@ -61,7 +61,7 @@ import dev.supermux.desktop.theme.Stroke
  * thing the platform does.
  */
 object MenuStyle {
-    /** Container corner. macOS menus are ~6pt; ours is softer to match [dev.supermux.desktop.theme.Radii]. */
+    /** Container corner. macOS menus are ~6pt; ours is softer to match [dev.supermux.ui.theme.Radii]. */
     val Shape: Shape = RoundedCornerShape(10.dp)
 
     /** The hover/selection highlight behind one row. */

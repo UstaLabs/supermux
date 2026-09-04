@@ -56,8 +56,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.supermux.android.theme.LocalPanes
-import dev.supermux.android.theme.Radii
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.DEFAULT_CONFIG
 import dev.supermux.net.Mods
 import dev.supermux.net.PredictionEngine

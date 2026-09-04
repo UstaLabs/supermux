@@ -72,8 +72,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.supermux.android.R
-import dev.supermux.android.theme.GeistFontFamily
-import dev.supermux.android.theme.MonoFontFamily
+import dev.supermux.ui.theme.GeistFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.net.PairUrl
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

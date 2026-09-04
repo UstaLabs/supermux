@@ -72,7 +72,7 @@ import dev.supermux.android.chat.replaceSlashToken
 import dev.supermux.android.chat.slashCommandMatches
 import dev.supermux.android.chat.slashInsertText
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ModelInfo

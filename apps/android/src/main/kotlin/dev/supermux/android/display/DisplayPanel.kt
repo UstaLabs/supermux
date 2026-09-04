@@ -60,9 +60,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
 import dev.supermux.android.theme.LocalPanes
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Radii
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.ScrcpyStatus

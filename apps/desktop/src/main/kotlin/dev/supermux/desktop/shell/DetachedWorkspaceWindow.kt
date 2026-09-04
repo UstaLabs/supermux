@@ -17,7 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import dev.supermux.desktop.editor.WalkthroughState
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto

@@ -1,5 +1,4 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/theme/SemanticColors.kt — keep in sync until a shared UI module exists (spec 2026-07-09, Decision 1).
-package dev.supermux.desktop.theme
+package dev.supermux.ui.theme
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color

@@ -48,7 +48,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.net.FsEntry
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.workspace.TreeNode

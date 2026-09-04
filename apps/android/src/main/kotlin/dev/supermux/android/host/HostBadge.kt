@@ -48,7 +48,7 @@ import dev.supermux.host.HostView
 /**
  * Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact
  * per-row badge, and the `All · <host…> · +` filter chip row. Colors are authored in OKLCH (like
- * [dev.supermux.android.theme.SupermuxSemantics]) and held FIXED across dynamic color so a host's
+ * [dev.supermux.ui.theme.SupermuxSemantics]) and held FIXED across dynamic color so a host's
  * dot never gets repainted by the wallpaper — its color is its identity.
  *
  * The pure slot/label/filter logic AND the OKLCH dot palette live in the shared [dev.supermux.host]

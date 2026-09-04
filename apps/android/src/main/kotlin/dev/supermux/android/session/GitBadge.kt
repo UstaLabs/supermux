@@ -14,7 +14,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.MonoFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitBadgeTone
 import dev.supermux.proto.GitLiteStatusDto

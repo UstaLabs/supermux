@@ -27,7 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge

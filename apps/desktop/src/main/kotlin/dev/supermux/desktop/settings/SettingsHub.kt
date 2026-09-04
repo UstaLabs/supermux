@@ -50,7 +50,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallJob

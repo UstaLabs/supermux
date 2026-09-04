@@ -113,10 +113,10 @@ import dev.supermux.desktop.chat.isComposerSendKey
 import dev.supermux.desktop.chat.rememberDesktopDictation
 import dev.supermux.desktop.host.HostDot
 import dev.supermux.desktop.host.HostView
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Size
-import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.theme.Stroke
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Size
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.state.StagedUpload
 import dev.supermux.net.ChunkSource

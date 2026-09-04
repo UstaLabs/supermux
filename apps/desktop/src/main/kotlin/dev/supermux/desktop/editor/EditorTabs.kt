@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.theme.LocalPanes
 import dev.supermux.ui.editor.Document
-import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 
 @Composable
 fun EditorTabs(

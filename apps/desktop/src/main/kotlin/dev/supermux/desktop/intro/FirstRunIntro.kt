@@ -76,9 +76,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.GeistFontFamily
-import dev.supermux.desktop.theme.LocalSemantics
-import dev.supermux.desktop.theme.MonoFontFamily
+import dev.supermux.ui.theme.GeistFontFamily
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.MonoFontFamily
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.floor

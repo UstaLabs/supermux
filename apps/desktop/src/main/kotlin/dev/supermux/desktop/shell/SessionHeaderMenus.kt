@@ -84,9 +84,9 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.chat.ChatDetailPrefs
 import dev.supermux.desktop.session.AgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Radii
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.ui.openInBrowser
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo

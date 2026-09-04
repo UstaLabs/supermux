@@ -41,8 +41,8 @@ import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.state.HostStore
 import dev.supermux.desktop.terminal.DesktopTerminalPanel
-import dev.supermux.desktop.theme.MonoFontFamily
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.TerminalClient
 import dev.supermux.proto.SessionInfo

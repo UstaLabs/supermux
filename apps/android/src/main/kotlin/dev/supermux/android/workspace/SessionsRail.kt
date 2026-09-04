@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.android.R
 import dev.supermux.android.session.SessionAvatar
 import dev.supermux.android.session.SessionStatusRail
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo

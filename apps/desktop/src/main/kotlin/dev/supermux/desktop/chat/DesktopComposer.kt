@@ -99,7 +99,7 @@ import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.desktop.session.AgentLogo
 import dev.supermux.desktop.session.hasAgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
-import dev.supermux.desktop.theme.Radii
+import dev.supermux.ui.theme.Radii
 import dev.supermux.desktop.ui.Speedometer
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource

@@ -1,6 +1,6 @@
 package dev.supermux.android.settings
 
-import dev.supermux.android.theme.LocalSemantics
+import dev.supermux.ui.theme.LocalSemantics
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

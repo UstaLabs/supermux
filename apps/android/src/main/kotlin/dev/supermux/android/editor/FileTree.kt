@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.MonoFontFamily
+import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.android.theme.rememberHaptics
 import dev.supermux.net.FsEntry
 import dev.supermux.ui.editor.ExplorerState

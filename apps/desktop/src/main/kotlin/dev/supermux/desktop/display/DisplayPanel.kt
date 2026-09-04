@@ -52,7 +52,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus

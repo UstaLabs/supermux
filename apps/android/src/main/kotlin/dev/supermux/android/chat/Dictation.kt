@@ -56,7 +56,7 @@ import androidx.core.content.ContextCompat
 import dev.supermux.android.DevConfig
 import dev.supermux.android.R
 import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.rememberHaptics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

@@ -26,6 +26,10 @@ import dev.supermux.ui.SupermuxColors
 import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.supermuxSemanticsDark
+import dev.supermux.ui.theme.supermuxSemanticsLight
+import dev.supermux.ui.theme.supermuxTouchTypography
 
 /**
  * Slimmed pane palette. Only the genuinely-fixed app tones should be read from here
@@ -178,7 +182,7 @@ fun SupermuxTheme(
     ) {
         MaterialTheme(
             colorScheme = scheme,
-            typography = supermuxTypography(),
+            typography = supermuxTouchTypography(),
             shapes = SupermuxShapes,
             content = content,
         )

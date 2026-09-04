@@ -67,7 +67,7 @@ import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
 import dev.supermux.state.HostStore
 import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.Space
+import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.SupermuxTheme
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence

@@ -36,7 +36,7 @@ import dev.supermux.ui.oklchToArgb
 /**
  * Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact
  * per-row badge, and the `All · <host…> · +` filter chip row. Colors are authored in OKLCH (like
- * [dev.supermux.desktop.theme.SupermuxSemantics]) and held FIXED so a host's dot is its identity.
+ * [dev.supermux.ui.theme.SupermuxSemantics]) and held FIXED so a host's dot is its identity.
  *
  * The pure slot/label/filter logic lives in [FleetModel] (unit-tested on the JVM); this file is
  * only the Compose rendering.
