@@ -73,6 +73,7 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.desktop.ui.LocalModalPresence
@@ -1597,6 +1598,7 @@ private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
     CompositionLocalProvider(
         LocalWindowWidthClass provides widthClassForPx(widthPx, density),
         LocalInputMode provides InputMode.Pointer,
+        LocalPointerAvailable provides true,
         content = content,
     )
 }

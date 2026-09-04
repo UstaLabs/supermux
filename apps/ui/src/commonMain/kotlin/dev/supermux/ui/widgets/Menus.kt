@@ -32,8 +32,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
-import dev.supermux.ui.adaptive.InputMode
-import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.Stroke
 
 /**
@@ -54,12 +53,14 @@ import dev.supermux.ui.theme.Stroke
  * is an INSET ROUNDED RECT rather than a full-width band, so the accent floats inside the menu
  * instead of touching its walls. Consumers:
  *
- *   • [DropdownMenu] / [DropdownMenuItem] under [InputMode.Pointer] — every in-app menu.
+ *   • [DropdownMenu] / [DropdownMenuItem] wherever [LocalPointerAvailable] is true — every in-app menu.
  *   • `desktop/ui/DesktopContextMenu.kt`'s `SupermuxContextMenuRepresentation` — the right-click /
  *     text menus, which Compose draws itself and which otherwise look nothing like the app.
  *
- * They are POINTER tokens on purpose. A phone still gets Material3's thumb-sized rows, because a
- * 28dp row is not a touch target — see [DropdownMenuItem].
+ * They are POINTER tokens on purpose. A device with no mouse or touchpad still gets Material3's
+ * thumb-sized rows, because a 28dp row is not a touch target — see [DropdownMenuItem]. The signal is
+ * [LocalPointerAvailable], NOT `LocalInputMode`: the latter also turns Pointer for a phone with a
+ * Bluetooth keyboard, which is still a device you tap with a thumb.
  *
  * Sizes stay in dp (not sp) so a menu row keeps its proportions under the Appearance ▸ Text size
  * multiplier; only the label scales, which is the same thing the platform does.
@@ -116,10 +117,10 @@ object MenuStyle {
  * SAME NAME as `androidx.compose.material3.DropdownMenu`, so a call site opts in by changing one
  * import line.
  *
- * Under [InputMode.Pointer] it wears [MenuStyle]; under [InputMode.Touch] it stays on Material3's
- * defaults, which is exactly what the phone shipped before this file existed. Density is the one
- * thing the two platforms genuinely disagree about, and `LocalInputMode`'s whole contract is
- * "dense hit targets are Pointer-only, 48dp targets are Touch".
+ * With a pointer ([LocalPointerAvailable]) it wears [MenuStyle]; without one it stays on
+ * Material3's defaults, which is exactly what the phone shipped before this file existed. Density is
+ * the one thing the two platforms genuinely disagree about, and a mouse/touchpad — not a keyboard —
+ * is what settles it.
  */
 @Composable
 fun DropdownMenu(
@@ -132,7 +133,7 @@ fun DropdownMenu(
     // Only while it is actually open: a closed menu is composed all over the app and would
     // otherwise pin every desktop terminal hidden forever.
     if (expanded) ModalHost {}
-    if (LocalInputMode.current == InputMode.Pointer) {
+    if (LocalPointerAvailable.current) {
         androidx.compose.material3.DropdownMenu(
             expanded = expanded,
             onDismissRequest = onDismissRequest,
@@ -159,8 +160,8 @@ fun DropdownMenu(
 }
 
 /**
- * A menu row. Compact and macOS-flavoured under [InputMode.Pointer]; plain Material3 under
- * [InputMode.Touch].
+ * A menu row. Compact and macOS-flavoured when a pointer is available; plain Material3 (48dp thumb
+ * rows) when there is none.
  *
  * Only the parameters the two apps actually pass exist here; M3's `colors` and `contentPadding` are
  * deliberately absent because the whole point is that no call site styles a menu row any more.
@@ -180,7 +181,7 @@ fun DropdownMenuItem(
     trailingIcon: (@Composable () -> Unit)? = null,
     enabled: Boolean = true,
 ) {
-    if (LocalInputMode.current != InputMode.Pointer) {
+    if (!LocalPointerAvailable.current) {
         androidx.compose.material3.DropdownMenuItem(
             text = text,
             onClick = onClick,

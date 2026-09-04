@@ -13,7 +13,9 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.core.view.WindowCompat
 import dev.supermux.android.platform.rememberAndroidPlatform
 import dev.supermux.android.platform.rememberInputMode
+import dev.supermux.android.platform.rememberPointerAvailable
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.widthClassFor
 import dev.supermux.ui.adaptive.widthClassForPx
@@ -79,6 +81,9 @@ fun AndroidTheme(
         LocalHaptics provides platform.haptics,
         LocalWindowWidthClass provides widthClass,
         LocalInputMode provides rememberInputMode(),
+        // Hit-target sizing asks for a real mouse/touchpad, never the keyboard — a phone with a
+        // Bluetooth keyboard is still a thumb device. See ui/adaptive/InputMode.kt.
+        LocalPointerAvailable provides rememberPointerAvailable(),
     ) {
         SupermuxTheme(
             appearance = appearance,

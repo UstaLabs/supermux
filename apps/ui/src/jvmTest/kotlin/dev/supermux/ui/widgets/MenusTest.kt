@@ -10,9 +10,17 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -51,7 +59,10 @@ class MenusTest {
     fun touch_rows_click_too() = runComposeUiTest {
         var clicks = 0
         setContent {
-            CompositionLocalProvider(LocalInputMode provides InputMode.Touch) {
+            CompositionLocalProvider(
+                LocalInputMode provides InputMode.Touch,
+                LocalPointerAvailable provides false,
+            ) {
                 Box {
                     DropdownMenu(expanded = true, onDismissRequest = {}) {
                         DropdownMenuItem(text = { Text("Restore") }, onClick = { clicks++ })
@@ -62,6 +73,45 @@ class MenusTest {
         onNodeWithText("Restore").assertIsDisplayed()
         onNodeWithText("Restore").performClick()
         assertEquals(1, clicks)
+    }
+
+    /**
+     * Row density follows the POINTER, not the keyboard: a phone with a Bluetooth keyboard reports
+     * `InputMode.Pointer` and must still get Material3's 48dp thumb rows.
+     */
+    @Test
+    fun row_height_follows_pointer_availability_not_input_mode() {
+        // Touch, no pointer — a plain phone (or one with only a keyboard): Material3's thumb row.
+        assertTrue(rowHeight(InputMode.Touch, pointer = false) >= 44.dp, "touch rows must stay thumb-sized")
+        assertTrue(rowHeight(InputMode.Pointer, pointer = false) >= 44.dp, "a keyboard alone is not a pointer")
+        // A mouse or trackpad is attached (tablet, DeX, desktop): the compact row is reachable.
+        assertTrue(rowHeight(InputMode.Touch, pointer = true) < 40.dp, "a pointer earns the compact row")
+        assertTrue(rowHeight(InputMode.Pointer, pointer = true) < 40.dp, "desktop rows are compact")
+    }
+
+    private fun rowHeight(mode: InputMode, pointer: Boolean): Dp {
+        var height = 0.dp
+        runComposeUiTest {
+            setContent {
+                CompositionLocalProvider(
+                    LocalInputMode provides mode,
+                    LocalPointerAvailable provides pointer,
+                ) {
+                    Box {
+                        DropdownMenu(expanded = true, onDismissRequest = {}) {
+                            DropdownMenuItem(
+                                text = { Text("Rename") },
+                                onClick = {},
+                                modifier = Modifier.testTag("row"),
+                            )
+                        }
+                    }
+                }
+            }
+            waitForIdle()
+            height = onNodeWithTag("row").getBoundsInRoot().height
+        }
+        return height
     }
 
     @Test

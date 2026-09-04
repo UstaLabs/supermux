@@ -44,3 +44,14 @@ fun rememberInputMode(): InputMode {
     val configuration = LocalConfiguration.current
     return remember(configuration) { inputModeFor(configuration.keyboard, hasPointerDevice()) }
 }
+
+/**
+ * Android's `LocalPointerAvailable` value: a mouse or touchpad ONLY — the keyboard deliberately does
+ * not count, because it does not make a 28dp hit target reachable. Re-evaluated on every
+ * configuration change, with the same hot-plug caveat as [rememberInputMode].
+ */
+@Composable
+fun rememberPointerAvailable(): Boolean {
+    val configuration = LocalConfiguration.current
+    return remember(configuration) { hasPointerDevice() }
+}

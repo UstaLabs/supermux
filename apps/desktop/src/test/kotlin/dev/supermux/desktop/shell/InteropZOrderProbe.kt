@@ -28,6 +28,8 @@ import androidx.compose.ui.window.application
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.LocalModalPresence
+import dev.supermux.desktop.ui.ModalPresenceHost
+import dev.supermux.ui.widgets.LocalModalHost
 import dev.supermux.desktop.ui.ModalPresence
 import java.awt.Font
 import javax.swing.JTextArea
@@ -52,7 +54,13 @@ fun main() {
     application {
         Window(onCloseRequest = ::exitApplication, title = "interop-z-order-probe") {
             val presence = remember { ModalPresence() }
-            CompositionLocalProvider(LocalModalPresence provides presence) {
+            // The shared surfaces announce themselves through LocalModalHost, so the probe must
+            // install desktop's host too — without it the dialog/menu never retains the presence
+            // and this measures the UN-shielded case.
+            CompositionLocalProvider(
+                LocalModalPresence provides presence,
+                LocalModalHost provides ModalPresenceHost,
+            ) {
             MaterialTheme {
                 Box(Modifier.fillMaxSize().background(Color(0xFF101418))) {
                     Column(Modifier.fillMaxSize()) {

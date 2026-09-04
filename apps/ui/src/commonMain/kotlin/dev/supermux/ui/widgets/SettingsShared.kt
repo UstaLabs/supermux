@@ -142,7 +142,10 @@ fun SettingsCaption(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // labelSmall is Medium in both type scales; a caption is body copy, so it keeps the Normal
+        // weight both apps drew before the token move.
         style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Normal,
         modifier = modifier,
     )
 }
@@ -163,6 +166,8 @@ fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
             color = cs.onSurface,
             fontFamily = MonoFontFamily,
             style = MaterialTheme.typography.labelMedium,
+            // As above: the token is Medium, a shell command is not emphasised text.
+            fontWeight = FontWeight.Normal,
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(Radii.sm))
