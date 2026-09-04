@@ -25,6 +25,20 @@ class EditorPanelLspUriTest {
         assertEquals("file:///home/user/weird%23name/a%20b.ts", uri)
     }
 
+    // CONVERGENCE pinned in cluster C1: Android's old `android.net.Uri.encode(abs, "/")` left the
+    // sub-delims `! ~ ' ( )` literal, desktop's `java.net.URLEncoder` percent-encoded them. The one
+    // shared encoder follows desktop, so an Android LSP `file://` URI now escapes them too — both
+    // forms are legal URIs and cm6's LSP client decodes either, so this is a deliberate one-way
+    // change, not a regression.
+    @Test fun path_to_uri_percent_encodes_the_sub_delims_android_used_to_leave_literal() {
+        assertEquals(
+            "file:///w/%21%7E%27%28%29.kt",
+            pathToUri("/w/!~'().kt"),
+        )
+        // …while the characters URLEncoder itself leaves alone stay literal.
+        assertEquals("file:///w/a-b_c.d*e.kt", pathToUri("/w/a-b_c.d*e.kt"))
+    }
+
     @Test fun dir_uri_always_ends_with_a_trailing_slash() {
         assertEquals("file:///home/user/proj/", dirUri("/home/user/proj"))
         assertEquals("file:///home/user/proj/", dirUri("/home/user/proj/"))

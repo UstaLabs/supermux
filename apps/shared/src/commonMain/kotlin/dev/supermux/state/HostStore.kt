@@ -981,6 +981,7 @@ class HostStore(
             currentCoroutineContext().ensureActive() // real cancel → propagate
             Result.failure(c)
         } catch (e: Throwable) {
+            println("[HostStore] fsList failed: $e") // runApi's log, kept now that runApi is bypassed
             Result.failure(e)
         }
 
@@ -997,6 +998,7 @@ class HostStore(
             currentCoroutineContext().ensureActive()
             Result.failure(c)
         } catch (e: Throwable) {
+            println("[HostStore] workspaceFsList failed: $e")
             Result.failure(e)
         }
 

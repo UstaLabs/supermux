@@ -30,10 +30,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -127,14 +123,15 @@ fun FileTree(
         }
 
     // The hosts `remember(workspaceId)` the ExplorerState, so a workdir change under the same
-    // workspace used to leave the PREVIOUS checkout's tree on screen. `seenWorkdir` starts null so
-    // the FIRST composition only loads (no reset → no doubled root listing); every later change
-    // resets and re-lists in the same effect, which is what makes the reload happen at all (a
-    // separate `LaunchedEffect(Unit)` root load would never re-run).
-    var seenWorkdir by remember { mutableStateOf<String?>(null) }
+    // workspace used to leave the PREVIOUS checkout's tree on screen. `explorer.seenWorkdir` starts
+    // null so the FIRST sight of a workdir only loads (no reset → no doubled root listing); every
+    // later change resets and re-lists in the same effect, which is what makes the reload happen at
+    // all (a separate `LaunchedEffect(Unit)` root load would never re-run). The marker is on the
+    // STATE, not on this composable: both apps compose the tree conditionally, and a marker that
+    // died with the composable would miss a workdir change made while the tree was hidden.
     LaunchedEffect(workdir) {
-        if (seenWorkdir != null && seenWorkdir != workdir) explorer.reset()
-        seenWorkdir = workdir
+        if (explorer.seenWorkdir != null && explorer.seenWorkdir != workdir) explorer.reset()
+        explorer.seenWorkdir = workdir
         if (!explorer.treeRootLoaded) {
             loadDir(".")
                 .onSuccess { roots ->
