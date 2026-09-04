@@ -101,8 +101,10 @@ import dev.supermux.desktop.session.hasAgentLogo
 import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.Radii
 import dev.supermux.desktop.ui.Speedometer
+import dev.supermux.desktop.platform.awtPickFiles
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.net.ChunkSource
+import dev.supermux.ui.platform.PickKind
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningLevel
@@ -113,8 +115,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.awt.FileDialog
-import java.awt.Frame
 import java.awt.Image
 import java.awt.RenderingHints
 import java.awt.Toolkit
@@ -615,12 +615,7 @@ internal fun composerModelSelectedId(current: String?): String =
 
 /** Blocking AWT multi-select file picker (modal on the EDT by AWT contract — fine, Compose Desktop
  *  Main == EDT). The default [DesktopComposer.pickFiles] seam; tests inject a fake. */
-internal fun composerPickFiles(): List<File> {
-    val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
-    dialog.isMultipleMode = true
-    dialog.isVisible = true
-    return dialog.files?.toList() ?: emptyList()
-}
+internal fun composerPickFiles(): List<File> = awtPickFiles(PickKind.Any)
 
 /**
  * Chat composer with attachment chips.

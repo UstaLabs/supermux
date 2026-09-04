@@ -120,6 +120,8 @@ import dev.supermux.ui.theme.Stroke
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.state.StagedUpload
 import dev.supermux.net.ChunkSource
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.PickKind
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse
 import dev.supermux.net.ModelInfo
@@ -146,8 +148,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.awt.FileDialog
-import java.awt.Frame
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicLong
@@ -230,14 +230,6 @@ private val LAUNCHER_MAX_WIDTH = 720.dp
 /** One attachment staged before any session exists (uploaded post-spawn by the caller's onSubmit). */
 private data class StagedChip(val id: Long, val name: String, val source: ChunkSource, val mime: String)
 
-/** Blocking AWT multi-select file picker. Runs on the caller (UI) thread — modal by AWT contract. */
-private fun pickFiles(): List<File> {
-    val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
-    dialog.isMultipleMode = true
-    dialog.isVisible = true
-    return dialog.files?.toList() ?: emptyList()
-}
-
 /**
  * The New-Session launcher screen. Broker access is injected as suspend-lambdas (Android's style —
  * no VM ref in the composable); the app shell (M4a Task 5) binds these to [HostStore].
@@ -309,6 +301,7 @@ fun SessionLauncherScreen(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val platform = LocalPlatform.current
     var workdir by remember { mutableStateOf("~") }
     var workdirTouched by remember { mutableStateOf(false) }
     var agent by remember { mutableStateOf("claude") }
@@ -803,9 +796,19 @@ fun SessionLauncherScreen(
                 ) {
                     IconButton(
                         onClick = {
-                            pickFiles().forEach { file ->
-                                val up = stagedUploadFor(file)
-                                staged.add(StagedChip(stagedIdGen.incrementAndGet(), up.name, up.source, up.mime))
+                            // Modal AWT dialog on the Main (== EDT) dispatcher: same blocking
+                            // behaviour as before, now behind the shared Platform seam.
+                            scope.launch {
+                                platform.pickFiles(PickKind.Any).forEach { picked ->
+                                    staged.add(
+                                        StagedChip(
+                                            stagedIdGen.incrementAndGet(),
+                                            picked.name,
+                                            picked.source,
+                                            picked.mime,
+                                        ),
+                                    )
+                                }
                             }
                         },
                         modifier = Modifier

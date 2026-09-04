@@ -1,7 +1,7 @@
 // Ported from apps/android/.../settings/AgentSettingsScreen.kt (+ iOS install section).
 // Desktop adaptations:
 //   - painterResource icons → Icons.Filled (Check / Settings / Close / Expand)
-//   - LocalContext openUrl/copy → openInBrowser + LocalClipboardManager
+//   - LocalContext openUrl/copy → LocalPlatform.openUrl + LocalClipboardManager
 //   - Install flow from iOS AgentSettingsView (Android screen had status only, no install button)
 //   - testTags for compose UI tests + headless verification
 //   - Login/install poll resumes from broker state when the overlay is reopened
@@ -62,7 +62,7 @@ import androidx.compose.ui.unit.dp
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.openInBrowser
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
@@ -904,6 +904,7 @@ private fun AwaitingUser(
     onSubmitCode: () -> Unit,
     onCancel: () -> Unit,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
     Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
@@ -919,7 +920,7 @@ private fun AwaitingUser(
                 horizontalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
                 Button(
-                    onClick = { openInBrowser(url) },
+                    onClick = { platform.openUrl(url) },
                     colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
                     modifier = Modifier.testTag("agent_login_open_url"),
                 ) { Text("Open sign-in page", color = cs.onPrimary) }
@@ -1104,6 +1105,7 @@ private fun OpenCodeZenKeyRow(
     setKey: suspend (String, String) -> Boolean,
     onChanged: () -> Unit,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var keyValue by remember { mutableStateOf("") }
@@ -1143,7 +1145,7 @@ private fun OpenCodeZenKeyRow(
             fontWeight = FontWeight.Medium,
         )
         TextButton(
-            onClick = { openInBrowser("https://opencode.ai/auth") },
+            onClick = { platform.openUrl("https://opencode.ai/auth") },
             contentPadding = PaddingValues(0.dp),
         ) {
             Text(
@@ -1190,6 +1192,7 @@ private fun OpenCodeProviderRow(
     finishOAuth: suspend (providerId: String, method: Int, code: String) -> Boolean,
     onChanged: () -> Unit,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
 
@@ -1279,7 +1282,7 @@ private fun OpenCodeProviderRow(
                 style = MaterialTheme.typography.labelSmall,
             )
             TextButton(
-                onClick = { openInBrowser(currentOauthUrl) },
+                onClick = { platform.openUrl(currentOauthUrl) },
                 contentPadding = PaddingValues(0.dp),
             ) {
                 Text(
@@ -1330,7 +1333,7 @@ private fun OpenCodeProviderRow(
                         if (!url.isNullOrEmpty()) {
                             oauthMethodIndex = oauthMethod.index
                             oauthUrl = url
-                            openInBrowser(url)
+                            platform.openUrl(url)
                         } else {
                             oauthError = "Couldn't start browser login."
                         }

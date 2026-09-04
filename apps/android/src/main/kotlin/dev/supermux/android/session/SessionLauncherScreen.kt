@@ -1,9 +1,7 @@
 package dev.supermux.android.session
 
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -53,7 +51,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.chat.ContentResolverChunkSource
+import dev.supermux.android.platform.pickedFileFromUri
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.PickKind
+import dev.supermux.ui.platform.PickedFile
 import dev.supermux.android.chat.MicButton
 import dev.supermux.android.chat.MicDeniedDialog
 import dev.supermux.android.chat.EffortPill
@@ -444,44 +445,21 @@ fun SessionLauncherScreen(
         )
     }
 
-    // Name + byte size for a content Uri (DISPLAY_NAME/SIZE, falling back to the fd's statSize).
-    // Size is required to chunk the streaming upload later.
-    fun queryNameSize(uri: Uri): Pair<String, Long?> {
-        val resolver = context.contentResolver
-        var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-        var size: Long? = null
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
-                val si = c.getColumnIndex(OpenableColumns.SIZE)
-                if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
-            }
-        }
-        if (size == null) {
-            size = runCatching { resolver.openFileDescriptor(uri, "r")?.use { it.statSize.takeIf { s -> s >= 0 } } }.getOrNull()
-        }
-        return name to size
-    }
-
     // Stage one attachment: build a streaming source + add a chip. No upload here (no session id).
-    suspend fun stageFromUri(uri: Uri) {
-        val resolver = context.contentResolver
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        val (name, size) = withContext(Dispatchers.IO) { queryNameSize(uri) }
-        if (size == null || size <= 0L) return
-        val source = ContentResolverChunkSource(resolver, uri, size)
-        staged.add(StagedChip(stagedIdGen.incrementAndGet(), name, source, mime))
+    // Name/size/MIME resolution lives in android/platform/AndroidPlatform.kt (one copy app-wide).
+    fun stagePicked(picked: PickedFile) {
+        staged.add(StagedChip(stagedIdGen.incrementAndGet(), picked.name, picked.source, picked.mime))
     }
 
-    // Files: system document picker (any mime).
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) scope.launch { stageFromUri(uri) }
+    // Camera captures arrive as a bare Uri; the pickers already return a PickedFile.
+    suspend fun stageFromUri(uri: Uri) {
+        val picked = pickedFileFromUri(context, uri) ?: return
+        stagePicked(picked)
     }
-    // Photos: modern visual-media picker (no storage permission).
-    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
-        if (uri != null) scope.launch { stageFromUri(uri) }
-    }
+
+    // Files / Photos: the shared picker seam (registered once by AndroidTheme's PickerHost).
+    val platform = LocalPlatform.current
+
     // Camera photo → our FileProvider URI, then staged back.
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok: Boolean ->
@@ -869,16 +847,21 @@ fun SessionLauncherScreen(
                                     modifier = Modifier.testTag("attach_menu_photos"),
                                     onClick = {
                                         attachMenu = false
-                                        photoPicker.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
-                                        )
+                                        scope.launch {
+                                            platform.pickFiles(PickKind.Media).forEach { stagePicked(it) }
+                                        }
                                     },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Files") },
                                     leadingIcon = { Icon(painterResource(R.drawable.ic_file), null, Modifier.size(18.dp)) },
                                     modifier = Modifier.testTag("attach_menu_files"),
-                                    onClick = { attachMenu = false; filePicker.launch("*/*") },
+                                    onClick = {
+                                        attachMenu = false
+                                        scope.launch {
+                                            platform.pickFiles(PickKind.Any).forEach { stagePicked(it) }
+                                        }
+                                    },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Camera") },

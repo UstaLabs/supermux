@@ -1,10 +1,8 @@
 package dev.supermux.android.chat
 
-import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi

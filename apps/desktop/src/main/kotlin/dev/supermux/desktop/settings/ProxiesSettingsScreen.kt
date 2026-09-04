@@ -55,7 +55,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.openInBrowser
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto
 import kotlinx.coroutines.delay
@@ -414,6 +414,7 @@ private fun ProxyRow(
     onTogglePublic: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
     val tagSafe = proxy.domain.replace(Regex("[^A-Za-z0-9._-]"), "_")
@@ -468,7 +469,7 @@ private fun ProxyRow(
                         )
                     }
                     IconButton(
-                        onClick = { openInBrowser(url) },
+                        onClick = { platform.openUrl(url) },
                         modifier = Modifier
                             .size(Space.xxl)
                             .testTag("proxy_url_open_$tagSafe"),

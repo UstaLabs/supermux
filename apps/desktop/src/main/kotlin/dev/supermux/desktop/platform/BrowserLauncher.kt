@@ -1,4 +1,4 @@
-package dev.supermux.desktop.ui
+package dev.supermux.desktop.platform
 
 import java.awt.Desktop
 import java.net.URI

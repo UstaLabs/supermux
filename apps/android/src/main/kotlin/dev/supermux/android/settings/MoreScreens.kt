@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -38,7 +37,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.AppViewModel
+import androidx.compose.ui.platform.LocalContext
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.android.update.AppUpdatePage
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
@@ -1746,7 +1747,7 @@ private fun AddDeviceDialog(
     onDismiss: (minted: Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -1845,7 +1846,7 @@ private fun AddDeviceDialog(
                 }
             } else {
                 TextButton(onClick = {
-                    copyToClipboard(context, "pairing link", result!!.url)
+                    platform.copyToClipboard(result!!.url)
                     copied = true
                 }) { Text(if (copied) "Copied" else "Copy link") }
             }

@@ -1,0 +1,105 @@
+package dev.supermux.desktop.platform
+
+import dev.supermux.desktop.upload.FileChunkSource
+import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.platform.PickKind
+import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.theme.Haptics
+import dev.supermux.ui.theme.NoHaptics
+import java.awt.FileDialog
+import java.awt.Frame
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
+import java.io.File
+import java.nio.file.Files
+
+/**
+ * Desktop's [Platform]: `java.awt.Desktop.browse` for links, the AWT system clipboard, the AWT
+ * file dialog for pickers, and no haptics (no actuator on a desktop).
+ *
+ * `fileSystem = true` and `localBroker = true` are what actually separate desktop from Android in
+ * the screens: it can browse real paths and it can supervise its own broker process.
+ */
+class DesktopPlatform : Platform {
+
+    override val caps: Caps = Caps(
+        push = false,
+        camera = false,
+        tray = true,
+        externalDisplay = true,
+        hardwareVideoDecode = false,
+        localBroker = true,
+        multiWindow = true,
+        fileSystem = true,
+    )
+
+    /** Delegates to [openInBrowser], which keeps the daemon-thread hand-off and the
+     *  `openInBrowserOverride` / `supermux.tests` guards every desktop test relies on. */
+    override fun openUrl(url: String) = openInBrowser(url)
+
+    /** AWT system clipboard. Headless (CI without an X server) throws — swallowed, as a failed
+     *  copy must never take the app down. */
+    override fun copyToClipboard(text: String) {
+        runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+        }
+    }
+
+    /** The AWT dialog, mapped to streaming [FileChunkSource]s. Multi-select (unlike Android). */
+    override suspend fun pickFiles(kind: PickKind): List<PickedFile> =
+        awtPickFiles(kind).map { file -> PickedFile(file.name, probeMimeOf(file), FileChunkSource(file)) }
+
+    override val haptics: Haptics = NoHaptics
+}
+
+/**
+ * THE desktop file picker: a modal AWT [FileDialog] in LOAD mode, multi-select.
+ *
+ * Blocking by AWT contract and modal on the EDT — Compose Desktop's main dispatcher IS the EDT, so
+ * calling it from a click handler (or a `scope.launch` on Main) behaves exactly like the inline
+ * dialogs it replaced. Kept `internal` + non-suspend so the composer's injectable
+ * `() -> List<File>` test seam can still default to it.
+ *
+ * [PickKind.Any] deliberately installs no filter (unchanged behaviour for "Attach files"); the
+ * media kinds use a name filter, which AWT honours on X11/macOS and ignores on Windows — a
+ * best-effort hint, never a guarantee, the same as the platform pickers.
+ */
+internal fun awtPickFiles(kind: PickKind): List<File> {
+    val dialog = FileDialog(null as Frame?, "Attach files", FileDialog.LOAD)
+    dialog.isMultipleMode = true
+    when (kind) {
+        PickKind.Any -> Unit
+        PickKind.Images -> dialog.setFilenameFilter { _, name -> name.hasExtensionIn(IMAGE_EXTENSIONS) }
+        PickKind.Media -> dialog.setFilenameFilter { _, name ->
+            name.hasExtensionIn(IMAGE_EXTENSIONS) || name.hasExtensionIn(VIDEO_EXTENSIONS)
+        }
+    }
+    dialog.isVisible = true
+    return dialog.files?.toList() ?: emptyList()
+}
+
+/**
+ * THE desktop save dialog: a modal AWT [FileDialog] in SAVE mode, pre-filled with [defaultName].
+ * Returns the chosen target file, or null when the user cancelled. Not (yet) on the shared
+ * [Platform] interface — no shared screen saves a file in cluster A; the timeline's attachment
+ * download is the only caller and it moves in cluster D.
+ */
+internal fun awtSaveFile(defaultName: String): File? {
+    val dialog = FileDialog(null as Frame?, "Save attachment", FileDialog.SAVE)
+    dialog.file = defaultName
+    dialog.isVisible = true
+    val dir = dialog.directory ?: return null
+    val fileName = dialog.file ?: return null
+    return File(dir, fileName)
+}
+
+/** Best-effort content type; `application/octet-stream` when the OS cannot tell. */
+internal fun probeMimeOf(file: File): String =
+    runCatching { Files.probeContentType(file.toPath()) }.getOrNull() ?: "application/octet-stream"
+
+private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif")
+private val VIDEO_EXTENSIONS = setOf("mp4", "mov", "m4v", "webm", "mkv", "avi")
+
+private fun String.hasExtensionIn(extensions: Set<String>): Boolean =
+    substringAfterLast('.', "").lowercase() in extensions

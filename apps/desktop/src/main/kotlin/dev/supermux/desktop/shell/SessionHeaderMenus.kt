@@ -87,7 +87,7 @@ import dev.supermux.desktop.session.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.openInBrowser
+import dev.supermux.desktop.platform.openInBrowser
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto

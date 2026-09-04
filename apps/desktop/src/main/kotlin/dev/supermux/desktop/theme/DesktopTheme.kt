@@ -4,7 +4,9 @@ import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import dev.supermux.desktop.platform.DesktopPlatform
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 
@@ -15,7 +17,7 @@ import dev.supermux.ui.theme.SupermuxTheme
  * only supported way to restyle them is to replace the representation. Provided at the theme root
  * so every window (main, detached, dialogs) gets the same one. See `ui/DesktopContextMenu.kt`.
  *
- * Haptics stay on the shared `NoHaptics` default — desktop has no actuator. No typography is
+ * Haptics stay on the shared `NoHaptics` default (through `DesktopPlatform`) — no actuator here. No typography is
  * passed either: the shared theme reads `LocalWindowWidthClass`/`LocalInputMode` (provided at each
  * window root) and desktop is always Pointer, so it always resolves to the desktop scale.
  */
@@ -26,7 +28,13 @@ fun DesktopTheme(
     content: @Composable () -> Unit,
 ) {
     val contextMenu = remember { SupermuxContextMenuRepresentation() }
-    CompositionLocalProvider(LocalContextMenuRepresentation provides contextMenu) {
+    // Platform services (links, clipboard, pickers, no-op haptics) — provided here so every
+    // window root (main + detached) installs them from one place, as on Android.
+    val platform = remember { DesktopPlatform() }
+    CompositionLocalProvider(
+        LocalContextMenuRepresentation provides contextMenu,
+        LocalPlatform provides platform,
+    ) {
         SupermuxTheme(
             appearance = appearance,
             textScale = textScale,

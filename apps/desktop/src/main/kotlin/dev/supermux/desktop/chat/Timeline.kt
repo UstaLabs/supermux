@@ -110,7 +110,8 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.openInBrowser
+import dev.supermux.desktop.platform.awtSaveFile
+import dev.supermux.desktop.platform.openInBrowser
 import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
 import dev.supermux.proto.ActivityEvent
@@ -130,8 +131,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
-import java.awt.FileDialog
-import java.awt.Frame
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -2018,14 +2017,8 @@ private fun AttachmentChip(
  *  (Compose Desktop main == EDT on most hosts). */
 internal fun saveAttachmentBytes(bytes: ByteArray, name: String): File? {
     val safeName = name.substringAfterLast('/').ifBlank { "file" }
-    val dialog = FileDialog(null as Frame?, "Save attachment", FileDialog.SAVE)
-    dialog.file = safeName
-    dialog.isVisible = true
-    val dir = dialog.directory ?: return null
-    val fileName = dialog.file ?: return null
-    return runCatching {
-        File(dir, fileName).also { it.writeBytes(bytes) }
-    }.getOrNull()
+    val target = awtSaveFile(safeName) ?: return null
+    return runCatching { target.also { it.writeBytes(bytes) } }.getOrNull()
 }
 
 /** Open a local file with the OS default handler (viewer / player / folder). */

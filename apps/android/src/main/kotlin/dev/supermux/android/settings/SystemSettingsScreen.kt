@@ -37,12 +37,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import kotlinx.coroutines.delay
@@ -66,7 +66,7 @@ fun SystemSettingsPage(
     restartBroker: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
 
     var status by remember { mutableStateOf<UpdateStatus?>(null) }
@@ -151,7 +151,7 @@ fun SystemSettingsPage(
                     // Release notes link
                     s.notesUrl?.let { notes ->
                         Row(
-                            Modifier.clickable { openUrl(context, notes) },
+                            Modifier.clickable { platform.openUrl(notes) },
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {

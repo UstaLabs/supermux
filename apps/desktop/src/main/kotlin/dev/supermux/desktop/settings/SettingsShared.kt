@@ -1,6 +1,6 @@
 // Shared settings primitives for the desktop Settings hub (Agents / future sections).
 // Ported from apps/android/.../settings/SettingsShared.kt — desktop adaptations:
-//   - LocalContext openUrl/copy → openInBrowser + LocalClipboardManager
+//   - LocalContext openUrl/copy → LocalPlatform.openUrl + LocalClipboardManager
 //   - No KeyboardOptions (no mobile IME concern on desktop)
 //   - Enter-to-submit via onPreviewKeyEvent (desktop convention)
 package dev.supermux.desktop.settings

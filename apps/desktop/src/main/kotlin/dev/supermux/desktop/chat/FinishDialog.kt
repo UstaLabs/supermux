@@ -69,7 +69,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.ui.Dialog
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
-import dev.supermux.desktop.ui.openInBrowser
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.net.VerifySaveResult
@@ -582,6 +582,7 @@ private fun OutcomeBody(
     onClearJob: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val o = finishJob?.outcome
     val oStatus = o?.status ?: ""
@@ -602,7 +603,7 @@ private fun OutcomeBody(
             "pr_opened" -> {
                 OutcomeHeader("Pull request opened", Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
                 o?.prUrl?.let { url ->
-                    ActionRow("View PR", Icons.AutoMirrored.Filled.OpenInNew) { openInBrowser(url) }
+                    ActionRow("View PR", Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
                 }
                 DismissRow(done)
                 DoneRow(done)
@@ -612,7 +613,7 @@ private fun OutcomeBody(
                 OutcomeHeader("Branch pushed", Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
                 o?.prError?.let { Caption(it) }
                 o?.compareUrl?.let { url ->
-                    ActionRow("Open a PR", Icons.AutoMirrored.Filled.OpenInNew) { openInBrowser(url) }
+                    ActionRow("Open a PR", Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
                 }
                 DismissRow(done)
                 DoneRow(done)

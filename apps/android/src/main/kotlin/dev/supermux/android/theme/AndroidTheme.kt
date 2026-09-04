@@ -11,19 +11,20 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.core.view.WindowCompat
-import dev.supermux.android.platform.AndroidHaptics
+import dev.supermux.android.platform.rememberAndroidPlatform
 import dev.supermux.android.platform.rememberInputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.widthClassFor
 import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.LocalHaptics
 import dev.supermux.ui.theme.SupermuxTheme
 
 /**
  * Android's thin wrapper over the shared [SupermuxTheme]: edge-to-edge system-bar icon contrast
- * plus the platform haptics implementation.
+ * plus the platform services ([dev.supermux.android.platform.AndroidPlatform], including haptics).
  *
  * It also provides the adaptive locals ABOVE the shared theme, so every Android entry point —
  * `MainActivity` and the debug preview activities — gets them from one place and the theme can
@@ -61,7 +62,10 @@ fun AndroidTheme(
             controller.isAppearanceLightNavigationBars = !dark
         }
     }
-    val haptics = remember(view) { AndroidHaptics(view) }
+    // The whole platform seam (pickers + clipboard + links + haptics) is installed here, so
+    // MainActivity and the debug preview activities all get it from one place; `LocalHaptics`
+    // is just a shortcut onto `platform.haptics` for `rememberHaptics()` call sites.
+    val platform = rememberAndroidPlatform()
     val widthPx = LocalWindowInfo.current.containerSize.width
     val density = LocalDensity.current.density
     // `containerSize` is 0 during the very first composition (composition precedes measure), and
@@ -71,7 +75,8 @@ fun AndroidTheme(
         if (widthPx > 0) widthClassForPx(widthPx, density)
         else widthClassFor(LocalConfiguration.current.screenWidthDp)
     CompositionLocalProvider(
-        LocalHaptics provides haptics,
+        LocalPlatform provides platform,
+        LocalHaptics provides platform.haptics,
         LocalWindowWidthClass provides widthClass,
         LocalInputMode provides rememberInputMode(),
     ) {

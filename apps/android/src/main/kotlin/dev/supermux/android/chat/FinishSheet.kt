@@ -1,7 +1,5 @@
 package dev.supermux.android.chat
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -52,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.FinishReadiness
@@ -528,15 +526,13 @@ private fun OutcomeBody(
     onDismiss: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
     val o = finishJob?.outcome
     val oStatus = o?.status ?: ""
 
     // Done/Dismiss both clear the (terminal) job so reopening returns to the readiness menu.
     val done: () -> Unit = { onClearJob(); onDismiss() }
-    val openUrl: (String) -> Unit = { url ->
-        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-    }
+    val platform = LocalPlatform.current
+    val openUrl: (String) -> Unit = { url -> platform.openUrl(url) }
     val letAgentFix: () -> Unit = {
         if (o != null) { onSendToAgent(issueMessage(o)); onClearJob(); onDismiss() }
     }

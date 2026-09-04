@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.AnimatedVisibility
@@ -101,6 +100,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
+import dev.supermux.android.platform.pickedFileFromUri
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.PickKind
+import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
@@ -130,7 +133,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
-import android.provider.OpenableColumns
 import java.util.concurrent.atomic.AtomicLong
 
 /** Stable list key for timeline diffing so the optimistic→real id swap (§9) doesn't flicker. */
@@ -210,26 +212,6 @@ fun ChatPanel(
         if (idx >= 0) pendingAttachments[idx] = transform(pendingAttachments[idx])
     }
 
-    // Name + byte size for a content Uri (DISPLAY_NAME/SIZE, falling back to the
-    // fd's statSize). Size is required to chunk + show determinate progress.
-    fun queryNameSize(uri: Uri): Pair<String, Long?> {
-        val resolver = context.contentResolver
-        var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
-        var size: Long? = null
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
-            if (c.moveToFirst()) {
-                val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
-                val si = c.getColumnIndex(OpenableColumns.SIZE)
-                if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
-            }
-        }
-        if (size == null) {
-            size = runCatching { resolver.openFileDescriptor(uri, "r")?.use { it.statSize.takeIf { s -> s >= 0 } } }.getOrNull()
-        }
-        return name to size
-    }
-
     // Run (or re-run, on Retry) the resumable upload for one staged attachment,
     // driving its progress + failed state. Bounded RAM: streams from the Uri.
     suspend fun uploadAtt(attId: Long, source: ChunkSource, name: String, mime: String) {
@@ -247,17 +229,29 @@ fun ChatPanel(
     // Shared staging for ALL attachment sources (Photos / Files / Camera / paste).
     // Keeps the Uri as a streaming ChunkSource instead of reading the whole file
     // into RAM, then uploads it resumably with a progress chip.
-    suspend fun stageFromUri(uri: Uri) {
-        val resolver = context.contentResolver
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        val (name, size) = queryNameSize(uri)
-        if (size == null || size <= 0L) return
-        val source = ContentResolverChunkSource(resolver, uri, size)
+    suspend fun stagePicked(picked: PickedFile) {
         val attId = attIdGen.incrementAndGet()
         withContext(Dispatchers.Main) {
-            pendingAttachments.add(PendingAttachment(id = attId, fileId = "", name = name, uploading = true, source = source, mime = mime))
+            pendingAttachments.add(
+                PendingAttachment(
+                    id = attId,
+                    fileId = "",
+                    name = picked.name,
+                    uploading = true,
+                    source = picked.source,
+                    mime = picked.mime,
+                ),
+            )
         }
-        uploadAtt(attId, source, name, mime)
+        uploadAtt(attId, picked.source, picked.name, picked.mime)
+    }
+
+    // Camera captures and paste/drag arrive as a bare Uri; the pickers already return a
+    // PickedFile. Both funnel through stagePicked (name/size/MIME resolution lives in
+    // android/platform/AndroidPlatform.kt now, one copy for the whole app).
+    suspend fun stageFromUri(uri: Uri) {
+        val picked = pickedFileFromUri(context, uri) ?: return
+        stagePicked(picked)
     }
 
     // Clipboard helpers for paste-to-attach (web parity). Reading the clip *description* (mime
@@ -277,19 +271,9 @@ fun ChatPanel(
             .filter { isAttachableMediaMime(context.contentResolver.getType(it)) }
     }
 
-    // Files: system document picker (any mime).
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-    ) { uri: Uri? ->
-        if (uri != null) scope.launch { stageFromUri(uri) }
-    }
-
-    // Photos: modern visual-media picker (no storage permission; backported on Play services).
-    val photoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri: Uri? ->
-        if (uri != null) scope.launch { stageFromUri(uri) }
-    }
+    // Files / Photos: the shared picker seam (SAF GetContent + the visual-media picker live in
+    // AndroidPlatform's PickerHost, registered once by AndroidTheme).
+    val platform = LocalPlatform.current
 
     // Camera: delegated capture to the system camera app, writing into our FileProvider URI.
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -821,9 +805,9 @@ fun ChatPanel(
                             modifier = Modifier.testTag("attach_menu_photos"),
                             onClick = {
                                 attachMenu = false
-                                photoPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
-                                )
+                                scope.launch {
+                                    platform.pickFiles(PickKind.Media).forEach { stagePicked(it) }
+                                }
                             },
                         )
                         DropdownMenuItem(
@@ -834,7 +818,9 @@ fun ChatPanel(
                             modifier = Modifier.testTag("attach_menu_files"),
                             onClick = {
                                 attachMenu = false
-                                filePickerLauncher.launch("*/*")
+                                scope.launch {
+                                    platform.pickFiles(PickKind.Any).forEach { stagePicked(it) }
+                                }
                             },
                         )
                         DropdownMenuItem(

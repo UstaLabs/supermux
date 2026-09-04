@@ -43,13 +43,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.OpenCodeOAuthStart
@@ -393,17 +393,17 @@ private fun AwaitingUser(
     onCancel: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         val url = login.url
         if (url != null) {
             Text("Open this link to authorize.", color = cs.onSurfaceVariant, fontSize = 11.sp)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    onClick = { openUrl(context, url) },
+                    onClick = { platform.openUrl(url) },
                     colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
                 ) { Text("Open sign-in page", color = cs.onPrimary) }
-                IconButton(onClick = { copyToClipboard(context, "auth url", url) }) {
+                IconButton(onClick = { platform.copyToClipboard(url) }) {
                     Icon(painterResource(R.drawable.ic_file), contentDescription = "Copy", tint = cs.primary, modifier = Modifier.size(18.dp))
                 }
             }
@@ -513,7 +513,7 @@ private fun OpenCodeProvidersSection(
 @Composable
 private fun OpenCodeZenKeyRow(setKey: (String, String) -> Unit, onChanged: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
     var keyValue by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
@@ -528,7 +528,7 @@ private fun OpenCodeZenKeyRow(setKey: (String, String) -> Unit, onChanged: () ->
     ) {
         Text("OpenCode", color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         TextButton(
-            onClick = { openUrl(context, "https://opencode.ai/auth") },
+            onClick = { platform.openUrl("https://opencode.ai/auth") },
             contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
         ) { Text("Get a key at opencode.ai/auth", color = cs.primary, fontSize = 11.sp) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -564,7 +564,7 @@ private fun OpenCodeProviderRow(
     onChanged: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
 
     var keyValue by remember { mutableStateOf("") }
@@ -597,7 +597,7 @@ private fun OpenCodeProviderRow(
             // OAuth in progress — reopen + paste-code finish.
             Text("A browser tab opened — authorize, then paste the code:", color = cs.onSurfaceVariant, fontSize = 11.sp)
             TextButton(
-                onClick = { openUrl(context, currentOauthUrl) },
+                onClick = { platform.openUrl(currentOauthUrl) },
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
             ) { Text("Reopen sign-in", color = cs.primary, fontSize = 11.sp) }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -641,7 +641,7 @@ private fun OpenCodeProviderRow(
                         if (!url.isNullOrEmpty()) {
                             oauthMethodIndex = oauthMethod.index
                             oauthUrl = url
-                            openUrl(context, url)
+                            platform.openUrl(url)
                         }
                     }
                 }) { Text("Login via browser", color = cs.primary) }

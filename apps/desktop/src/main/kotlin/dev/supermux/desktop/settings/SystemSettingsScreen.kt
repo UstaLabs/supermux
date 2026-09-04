@@ -1,7 +1,7 @@
 // Ported from apps/android/.../settings/SystemSettingsScreen.kt.
 // Desktop adaptations:
 //   - Scaffold/TopAppBar → hub detail chrome (no nested Back; hub owns navigation)
-//   - LocalContext openUrl → openInBrowser
+//   - LocalContext openUrl → LocalPlatform.openUrl
 //   - painterResource icons → Material Icons
 //   - sp/dp hardcodes → theme Space / MaterialTheme.typography
 //   - checkUpdate() wired as UPDATES "Recheck" (BrokerApi force-poll; Android AppViewModel has it)
@@ -52,7 +52,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.openInBrowser
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import kotlinx.coroutines.delay
@@ -78,6 +78,7 @@ fun SystemSettingsScreen(
     updatePollAttempts: Int = 120,
     updatePollDelayMs: Long = 1500L,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
 
@@ -258,7 +259,7 @@ fun SystemSettingsScreen(
                             color = cs.primary,
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier
-                                .clickable { openInBrowser(notes) }
+                                .clickable { platform.openUrl(notes) }
                                 .testTag("system_release_notes"),
                         )
                     }

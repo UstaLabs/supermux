@@ -1,10 +1,5 @@
 package dev.supermux.android.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 
 // ─── Shared settings primitives ────────────────────────────────────────────────
 //
@@ -57,19 +52,6 @@ data class AddCustomLspArgs(
     val languageId: String? = null,
     val installCmd: String? = null,
 )
-
-/** Open a URL in the browser (mirrors the FinishSheet ACTION_VIEW pattern). */
-fun openUrl(context: Context, url: String) {
-    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-}
-
-/** Copy text to the system clipboard (parity with iOS UIPasteboard.general.string). */
-fun copyToClipboard(context: Context, label: String, text: String) {
-    runCatching {
-        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText(label, text))
-    }
-}
 
 /** Standard OutlinedTextField colours used across the settings forms (matches
  *  ExposePortDialog's role mapping). */
@@ -141,7 +123,7 @@ fun SettingsCaption(text: String, modifier: Modifier = Modifier) {
 @Composable
 fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     var copied by remember { mutableStateOf(false) }
     Row(
         modifier.fillMaxWidth(),
@@ -161,7 +143,7 @@ fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
                 .padding(horizontal = 10.dp, vertical = 8.dp),
         )
         IconButton(onClick = {
-            copyToClipboard(context, "command", command)
+            platform.copyToClipboard(command)
             copied = true
         }) {
             Icon(
