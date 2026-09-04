@@ -36,7 +36,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
@@ -48,7 +47,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -109,12 +107,9 @@ import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.update.AppUpdateNotifier
 import dev.supermux.android.settings.UsageScreen
-import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.ProvideWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.android.platform.rememberInputMode
 import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
@@ -174,11 +169,6 @@ class MainActivity : ComponentActivity() {
             // now — the brand palette is the only palette (see AndroidTheme).
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
             var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
-            // Adaptive locals for the whole app, above the theme (the theme picks its type
-            // scale from them): width class from the activity configuration, and Touch unless a
-            // hardware keyboard or mouse/touchpad is attached (DeX / Chromebook / docked tablet).
-            ProvideWindowWidthClass(LocalConfiguration.current.screenWidthDp) {
-            CompositionLocalProvider(LocalInputMode provides rememberInputMode()) {
             AndroidTheme(appearance = appearance, textScale = textScale) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
@@ -913,8 +903,6 @@ class MainActivity : ComponentActivity() {
                 }
                 } // Column (banner + NavHost)
             }
-            } // CompositionLocalProvider(LocalInputMode)
-            } // ProvideWindowWidthClass
         }
     }
 }

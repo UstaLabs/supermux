@@ -27,6 +27,21 @@ class WindowSizeTest {
     }
 
     @Test
+    fun pixelWidthsDivideByDensity() {
+        assertEquals(WindowWidthClass.Compact, widthClassForPx(1080, 2.75f))   // 392dp phone
+        assertEquals(WindowWidthClass.Medium, widthClassForPx(1600, 2f))       // 800dp tablet
+        assertEquals(WindowWidthClass.Expanded, widthClassForPx(2880, 2f))     // 1440dp desktop
+    }
+
+    @Test
+    fun unmeasuredWindowIsExpandedNotCompact() {
+        // First composed frame: containerSize is still 0. Falling through to Compact would flash
+        // the phone layout on desktop, so an unmeasured window takes the desktop-safe default.
+        assertEquals(WindowWidthClass.Expanded, widthClassForPx(0, 2f))
+        assertEquals(WindowWidthClass.Expanded, widthClassForPx(1080, 0f))
+    }
+
+    @Test
     fun defaultsToExpandedWhenUnprovided() = runComposeUiTest {
         setContent {
             assertEquals(WindowWidthClass.Expanded, LocalWindowWidthClass.current)

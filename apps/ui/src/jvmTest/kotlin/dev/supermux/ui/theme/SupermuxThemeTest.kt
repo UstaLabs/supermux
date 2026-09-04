@@ -85,16 +85,17 @@ class SupermuxThemeTest {
     }
 
     // --- typography selection (task A3) ------------------------------------------------
-    // With no explicit `typography`, the theme picks the touch scale ONLY for a compact
-    // touch window (a phone); everything else — desktop, and an Android tablet/DeX — gets
-    // the pointer/desktop scale ("desktop wins for medium/expanded", spec §Foundations).
+    // With no explicit `typography`, the theme picks the touch scale for a Compact window and
+    // the desktop scale for Medium/Expanded ("desktop wins for medium/expanded", spec
+    // §Foundations). The rule is width-only: a keyboard paired to a phone must not shrink type.
 
     @Test
-    fun compactTouchGetsTheTouchTypeScale() = runComposeUiTest {
+    fun compactGetsTheTouchTypeScaleEvenWithAPointer() = runComposeUiTest {
         setContent {
             val expected = supermuxTouchTypography().headlineSmall.fontSize
             ProvideWindowWidthClass(widthDp = 411) {
-                CompositionLocalProvider(LocalInputMode provides InputMode.Touch) {
+                // Phone with a Bluetooth keyboard/mouse: still the touch scale.
+                CompositionLocalProvider(LocalInputMode provides InputMode.Pointer) {
                     SupermuxTheme(appearance = AppearanceMode.DARK) {
                         assertEquals(expected, MaterialTheme.typography.headlineSmall.fontSize)
                         Text("touch-scale")

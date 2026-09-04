@@ -15,8 +15,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.SupermuxColors
-import dev.supermux.ui.adaptive.InputMode
-import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.supermuxDark
@@ -126,11 +124,13 @@ const val TEXT_SCALE_MAX = 1.3f
  *  - Android's `AndroidTheme` — edge-to-edge system-bar contrast and the platform haptics.
  *  - Desktop's `DesktopTheme` — the Compose Desktop context-menu representation.
  *
- * [typography] is chosen from the adaptive locals when the caller passes none: the roomier touch
- * scale (`supermuxTouchTypography()`) only for a compact touch window (a phone), the denser
- * pointer scale (`supermuxTypography()`) everywhere else — desktop, and an Android tablet / DeX /
- * unfolded foldable, per the spec's "desktop wins for medium/expanded". Pass [typography]
- * explicitly to override (tests, previews).
+ * [typography] follows the width class alone when the caller passes none: the roomier touch scale
+ * (`supermuxTouchTypography()`) for a `Compact` window, the denser desktop scale
+ * (`supermuxTypography()`) for `Medium`/`Expanded` — desktop, and an Android tablet / DeX /
+ * unfolded foldable, per the spec's "desktop wins for medium/expanded". `LocalInputMode` is
+ * deliberately NOT consulted here: pairing a Bluetooth keyboard with a phone must not shrink the
+ * type on a screen still held at arm's length. Input mode drives affordances (hover, right-click,
+ * hit-target size), not type. Pass [typography] explicitly to override (tests, previews).
  */
 @Composable
 fun SupermuxTheme(
@@ -139,10 +139,7 @@ fun SupermuxTheme(
     textScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
-    val resolvedTypography = typography ?: if (
-        LocalWindowWidthClass.current == WindowWidthClass.Compact &&
-        LocalInputMode.current == InputMode.Touch
-    ) {
+    val resolvedTypography = typography ?: if (LocalWindowWidthClass.current == WindowWidthClass.Compact) {
         supermuxTouchTypography()
     } else {
         supermuxTypography()

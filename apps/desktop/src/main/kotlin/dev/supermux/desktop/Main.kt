@@ -73,7 +73,8 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
-import dev.supermux.ui.adaptive.ProvideWindowWidthClass
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
@@ -1585,14 +1586,17 @@ private fun MdImageVerifyOverlay(source: String) {
 /**
  * Per-window adaptive locals (task A3). Desktop is always [InputMode.Pointer]; the width class
  * comes from the window's own container size in dp and follows resizes — `containerSize` is
- * window-scoped state, so a detached window classifies itself independently of the main one.
+ * window-scoped state, so a detached window classifies itself independently of the main one. The
+ * first frame reports width 0; `widthClassForPx` maps that to `Expanded` so the phone layout never
+ * flashes before the window is measured.
  */
 @Composable
 private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
     val density = LocalDensity.current.density
     val widthPx = LocalWindowInfo.current.containerSize.width
-    val widthDp = (widthPx / density).toInt()
-    ProvideWindowWidthClass(widthDp) {
-        CompositionLocalProvider(LocalInputMode provides InputMode.Pointer, content = content)
-    }
+    CompositionLocalProvider(
+        LocalWindowWidthClass provides widthClassForPx(widthPx, density),
+        LocalInputMode provides InputMode.Pointer,
+        content = content,
+    )
 }

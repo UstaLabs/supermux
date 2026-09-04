@@ -26,6 +26,20 @@ fun widthClassFor(widthDp: Int): WindowWidthClass = when {
 }
 
 /**
+ * Classifies a window width measured in pixels. The first composed frame can report a container
+ * size of 0 (before the window is laid out) — that is not "a tiny window", so it falls back to
+ * [WindowWidthClass.Expanded], the same desktop-safe default [LocalWindowWidthClass] carries.
+ * Both entry points measure the same way (window bounds ÷ density), so a given physical window
+ * classifies identically on Android and desktop.
+ */
+fun widthClassForPx(widthPx: Int, density: Float): WindowWidthClass =
+    if (widthPx <= 0 || density <= 0f) {
+        WindowWidthClass.Expanded
+    } else {
+        widthClassFor((widthPx / density).toInt())
+    }
+
+/**
  * Current window width class. Defaults to [WindowWidthClass.Expanded] — the desktop-safe value,
  * so a composable rendered outside an entry point (previews, tests, tooling) gets the roomy
  * layout rather than the phone one.
