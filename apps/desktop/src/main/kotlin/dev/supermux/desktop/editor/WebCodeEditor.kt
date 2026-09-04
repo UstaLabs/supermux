@@ -62,7 +62,7 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.editor.EditorState
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay

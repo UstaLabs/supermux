@@ -24,7 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CallSplit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Tune
-import dev.supermux.desktop.ui.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.shell.gitOpResultLabel
 import dev.supermux.desktop.shell.shouldPublish
-import dev.supermux.desktop.ui.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge

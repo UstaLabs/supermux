@@ -30,8 +30,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CircularProgressIndicator
-import dev.supermux.desktop.ui.DropdownMenu
-import dev.supermux.desktop.ui.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +62,9 @@ import dev.supermux.net.ModelInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.submitOnEnter
 
 private data class SttEngine(val id: String, val label: String)
 private data class VoiceEngine(val id: String, val label: String, val family: String)

@@ -57,7 +57,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import androidx.compose.ui.window.Dialog
+import dev.supermux.ui.widgets.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image

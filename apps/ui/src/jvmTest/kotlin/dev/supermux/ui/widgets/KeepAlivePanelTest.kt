@@ -1,4 +1,4 @@
-package dev.supermux.desktop.ui
+package dev.supermux.ui.widgets
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,7 +23,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Spec for the desktop [KeepAlivePanel] — the heavyweight-safe hide/show wrapper for
+ * Spec for the JVM [KeepAlivePanel] — the heavyweight-safe hide/show wrapper for
  * SwingPanel-bearing panes. What can be asserted headlessly is the CONTRACT the strategy rests
  * on: (1) hidden = laid out at 0×0 (the only hiding a heavyweight AWT child respects — SwingPanel
  * mirrors its Compose bounds onto the AWT component), and (2) the content composable is NEVER

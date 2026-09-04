@@ -57,6 +57,11 @@ import dev.supermux.net.OpenCodeProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SecretField
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.CopyableCommand
+import dev.supermux.ui.widgets.settingsFieldColors
 
 // ─── Agents settings (CLI login + API-key fallback + opencode providers) ─────────
 //

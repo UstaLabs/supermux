@@ -86,11 +86,24 @@ fun ModalOpen() {
 }
 
 /**
+ * Desktop's `LocalModalHost` (see `ui/widgets/Dialogs.kt`): the shared dialogs and menus announce
+ * themselves through it, and here that means counting them on [LocalModalPresence] for exactly as
+ * long as they are composed. Installed once by `DesktopTheme`.
+ *
+ * A top-level val, not a lambda written at the provider: the local is static, so a fresh lambda on
+ * every recomposition of the theme would invalidate the whole app subtree.
+ */
+val ModalPresenceHost: @Composable (@Composable () -> Unit) -> Unit = { modal ->
+    ModalOpen()
+    modal()
+}
+
+/**
  * Wrap a heavyweight AWT child (JediTerm, JCEF) so it steps aside while anything
  * modal is open.
  *
  * The outer box KEEPS its full size; only the inner slot collapses to 0×0. That
- * distinction matters: [KeepAlivePanel] shrinks the wrapper itself, which is
+ * distinction matters: [dev.supermux.ui.widgets.KeepAlivePanel] shrinks the wrapper itself, which is
  * right for a background tab nobody can see, but here the pane is still on
  * screen behind the dialog — collapsing it outright makes every sibling reflow
  * and the layout visibly jump the moment a menu opens. Reserving the space

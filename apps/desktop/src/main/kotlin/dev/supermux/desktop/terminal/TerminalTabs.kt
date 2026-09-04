@@ -52,7 +52,7 @@ import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
 
 import dev.supermux.net.TerminalClient
 import kotlin.random.Random

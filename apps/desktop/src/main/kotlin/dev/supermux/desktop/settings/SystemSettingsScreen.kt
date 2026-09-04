@@ -29,7 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
-import dev.supermux.desktop.ui.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +57,9 @@ import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 
 /**
  * Broker system / maintenance: update status + self-update + restart.

@@ -7,8 +7,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import dev.supermux.desktop.ui.DropdownMenu
-import dev.supermux.desktop.ui.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,7 +30,7 @@ import dev.supermux.workspace.NewViewPlacement
 /**
  * The workspace's "+" — the visual and interactive half of the tab strip's add button, split out
  * of the pane layer so that layer carries no icon, no menu chrome, and no dependency on
- * [dev.supermux.desktop.ui.DropdownMenu]'s `ModalOpen()` side effect (it pins terminals hidden
+ * [dev.supermux.ui.widgets.DropdownMenu]'s `ModalOpen()` side effect (it pins terminals hidden
  * while the menu is open).
  *
  * The layer owns position and size: it places this inside an animated 36 dp slot at the end of

@@ -71,6 +71,13 @@ import dev.supermux.net.OpenCodeProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SecretField
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.CopyableCommand
+import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.submitOnEnter
 
 private const val POLL_INTERVAL_MS = 1500L
 /** ~2 minutes of polling before surfacing a timeout. */

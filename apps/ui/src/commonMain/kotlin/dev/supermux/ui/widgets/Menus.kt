@@ -1,4 +1,4 @@
-package dev.supermux.desktop.ui
+package dev.supermux.ui.widgets
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -29,36 +30,39 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.theme.Stroke
 
 /**
- * One menu look for the whole desktop app — the popup surface AND the rows in it.
+ * One menu look for the whole app — the popup surface AND the rows in it.
  *
  * ── Why this exists ─────────────────────────────────────────────────────────
  *
  * Ahmet: "in kmp desktop the menus are very ugly".
  *
- * Every menu in the app was raw Material 3 with nothing passed: 48dp rows sized
- * for a thumb, 16sp `bodyLarge`, a 4dp corner, tonal elevation, a full-bleed
- * ripple. That is the Android phone default, and on a Mac — next to a native
- * menu bar drawn by AppKit two pixels above it — it reads as a phone app in a
- * window. Nothing was wrong with the code; the defaults were simply for another
+ * Every desktop menu was raw Material 3 with nothing passed: 48dp rows sized for a thumb, 16sp
+ * `bodyLarge`, a 4dp corner, tonal elevation, a full-bleed ripple. That is the Android phone
+ * default, and on a Mac — next to a native menu bar drawn by AppKit two pixels above it — it reads
+ * as a phone app in a window. Nothing was wrong with the code; the defaults were simply for another
  * platform.
  *
- * These tokens aim at the macOS menu instead: a compact row, 13sp text, a 10dp
- * container with a hairline edge and a soft shadow, and — the detail that does
- * most of the work — a highlight that is an INSET ROUNDED RECT rather than a
- * full-width band, so the accent floats inside the menu instead of touching its
- * walls. Two consumers share them, which is the point:
+ * These tokens aim at the macOS menu instead: a compact row, 13sp text, a 10dp container with a
+ * hairline edge and a soft shadow, and — the detail that does most of the work — a highlight that
+ * is an INSET ROUNDED RECT rather than a full-width band, so the accent floats inside the menu
+ * instead of touching its walls. Consumers:
  *
- *   • [DropdownMenu] (ModalSurfaces.kt) — every in-app menu, one choke point.
- *   • [SupermuxContextMenuRepresentation] — the right-click / text menus, which
- *     Compose draws itself and which otherwise look nothing like the app.
+ *   • [DropdownMenu] / [DropdownMenuItem] under [InputMode.Pointer] — every in-app menu.
+ *   • `desktop/ui/DesktopContextMenu.kt`'s `SupermuxContextMenuRepresentation` — the right-click /
+ *     text menus, which Compose draws itself and which otherwise look nothing like the app.
  *
- * Sizes stay in dp (not sp) so a menu row keeps its proportions under the
- * Appearance ▸ Text size multiplier; only the label scales, which is the same
- * thing the platform does.
+ * They are POINTER tokens on purpose. A phone still gets Material3's thumb-sized rows, because a
+ * 28dp row is not a touch target — see [DropdownMenuItem].
+ *
+ * Sizes stay in dp (not sp) so a menu row keeps its proportions under the Appearance ▸ Text size
+ * multiplier; only the label scales, which is the same thing the platform does.
  */
 object MenuStyle {
     /** Container corner. macOS menus are ~6pt; ours is softer to match [dev.supermux.ui.theme.Radii]. */
@@ -108,24 +112,64 @@ object MenuStyle {
 }
 
 /**
- * Compact, macOS-flavoured drop-in for `androidx.compose.material3.DropdownMenuItem`.
+ * The app's one menu surface. Same drop-in contract as the surfaces in `Dialogs.kt`: it carries the
+ * SAME NAME as `androidx.compose.material3.DropdownMenu`, so a call site opts in by changing one
+ * import line.
  *
- * Same drop-in contract as the surfaces in ModalSurfaces.kt: it carries the SAME
- * NAME as the original, so a call site opts in by changing one import line —
+ * Under [InputMode.Pointer] it wears [MenuStyle]; under [InputMode.Touch] it stays on Material3's
+ * defaults, which is exactly what the phone shipped before this file existed. Density is the one
+ * thing the two platforms genuinely disagree about, and `LocalInputMode`'s whole contract is
+ * "dense hit targets are Pointer-only, 48dp targets are Touch".
+ */
+@Composable
+fun DropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset(0.dp, 0.dp),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    // Only while it is actually open: a closed menu is composed all over the app and would
+    // otherwise pin every desktop terminal hidden forever.
+    if (expanded) ModalHost {}
+    if (LocalInputMode.current == InputMode.Pointer) {
+        androidx.compose.material3.DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissRequest,
+            modifier = modifier,
+            offset = offset,
+            shape = MenuStyle.Shape,
+            containerColor = MenuStyle.containerColor,
+            // Tonal elevation would tint the container a second time on top of the explicit
+            // containerColor; the shadow alone carries the "floating" read.
+            tonalElevation = 0.dp,
+            shadowElevation = MenuStyle.ShadowElevation,
+            border = MenuStyle.border,
+            content = content,
+        )
+    } else {
+        androidx.compose.material3.DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = onDismissRequest,
+            modifier = modifier,
+            offset = offset,
+            content = content,
+        )
+    }
+}
+
+/**
+ * A menu row. Compact and macOS-flavoured under [InputMode.Pointer]; plain Material3 under
+ * [InputMode.Touch].
  *
- *     -import androidx.compose.material3.DropdownMenuItem
- *     +import dev.supermux.desktop.ui.DropdownMenuItem
+ * Only the parameters the two apps actually pass exist here; M3's `colors` and `contentPadding` are
+ * deliberately absent because the whole point is that no call site styles a menu row any more.
  *
- * — and nothing else. Only the parameters this app actually passes exist here;
- * M3's `colors` and `contentPadding` are deliberately absent because the whole
- * point is that no call site styles a menu row any more.
- *
- * This is a reimplementation rather than a wrapper because M3 pins the row at
- * `sizeIn(minHeight = 48.dp)` and fills the entire width with its indication —
- * the two things that make the menus look wrong — and neither is reachable
- * through a parameter. Semantics are unchanged: a clickable row with the label's
- * text, so every existing `onNodeWithText(...)` / `testTag` assertion still
- * matches.
+ * The pointer branch is a reimplementation rather than a wrapper because M3 pins the row at
+ * `sizeIn(minHeight = 48.dp)` and fills the entire width with its indication — the two things that
+ * make the menus look wrong on a desktop — and neither is reachable through a parameter. Semantics
+ * are unchanged either way: a clickable row carrying the label's text, so every existing
+ * `onNodeWithText(...)` / `testTag` assertion still matches.
  */
 @Composable
 fun DropdownMenuItem(
@@ -136,6 +180,17 @@ fun DropdownMenuItem(
     trailingIcon: (@Composable () -> Unit)? = null,
     enabled: Boolean = true,
 ) {
+    if (LocalInputMode.current != InputMode.Pointer) {
+        androidx.compose.material3.DropdownMenuItem(
+            text = text,
+            onClick = onClick,
+            modifier = modifier,
+            leadingIcon = leadingIcon,
+            trailingIcon = trailingIcon,
+            enabled = enabled,
+        )
+        return
+    }
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     // clickable() already feeds hover into the source, so no separate hoverable().
@@ -146,8 +201,8 @@ fun DropdownMenuItem(
         active -> cs.onPrimary
         else -> cs.onSurface
     }
-    // Provided AROUND the Row, not inside it: CompositionLocalProvider's content is a
-    // plain lambda, and nesting it would drop the RowScope that `weight` needs.
+    // Provided AROUND the Row, not inside it: CompositionLocalProvider's content is a plain lambda,
+    // and nesting it would drop the RowScope that `weight` needs.
     CompositionLocalProvider(LocalContentColor provides contentColor) {
         Row(
             modifier
@@ -155,8 +210,8 @@ fun DropdownMenuItem(
                 .padding(horizontal = MenuStyle.ItemInset, vertical = MenuStyle.ItemGap)
                 .clip(MenuStyle.ItemShape)
                 .background(if (active) cs.primary else Color.Transparent)
-                // No indication: a macOS menu row highlights on hover and then just
-                // closes — a ripple expanding under the cursor belongs to touch.
+                // No indication: a macOS menu row highlights on hover and then just closes — a
+                // ripple expanding under the cursor belongs to touch.
                 .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
                 .heightIn(min = MenuStyle.ItemHeight)
                 .padding(horizontal = MenuStyle.ItemPadding),
@@ -170,8 +225,8 @@ fun DropdownMenuItem(
                 ProvideTextStyle(MenuStyle.itemTextStyle.copy(color = contentColor)) { text() }
             }
             if (trailingIcon != null) {
-                // Weighted so the trailing mark pins to the right edge; the min width
-                // keeps a sane gap when the menu is only as wide as its longest label.
+                // Weighted so the trailing mark pins to the right edge; the min width keeps a sane
+                // gap when the menu is only as wide as its longest label.
                 Spacer(Modifier.weight(1f).defaultMinSize(minWidth = MenuStyle.IconGap * 2))
                 trailingIcon()
             }

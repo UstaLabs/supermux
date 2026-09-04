@@ -7,8 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import dev.supermux.desktop.ui.AlertDialog
-import dev.supermux.desktop.ui.DropdownMenu
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text

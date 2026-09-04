@@ -53,6 +53,9 @@ import dev.supermux.net.LspServer
 import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.settingsFieldColors
 
 // ─── Editor / Language-servers section ──────────────────────────────────────────
 //

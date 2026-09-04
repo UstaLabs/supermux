@@ -61,8 +61,8 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
-import dev.supermux.desktop.ui.DropdownMenu
-import dev.supermux.desktop.ui.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -104,7 +104,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.ui.Dialog
+import dev.supermux.ui.widgets.Dialog
 import dev.supermux.desktop.ui.Speedometer
 import dev.supermux.desktop.chat.MicButton
 import dev.supermux.desktop.chat.MicCapture

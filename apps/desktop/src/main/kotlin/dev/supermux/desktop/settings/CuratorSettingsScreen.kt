@@ -24,8 +24,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import dev.supermux.desktop.ui.DropdownMenu
-import dev.supermux.desktop.ui.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +62,9 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 
 private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
 

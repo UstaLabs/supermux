@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.settingsFieldColors
 
 // ─── Assistant settings (paName + soul.md) ──────────────────────────────────────
 //

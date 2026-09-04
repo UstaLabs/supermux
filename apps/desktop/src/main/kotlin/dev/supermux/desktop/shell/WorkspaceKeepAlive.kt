@@ -8,7 +8,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.workspace.WorkspaceKeepAliveCache
 
 @Composable

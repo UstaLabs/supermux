@@ -49,10 +49,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -109,7 +109,7 @@ import dev.supermux.util.formatDuration
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
 import dev.supermux.android.display.DisplayPanel
-import dev.supermux.android.ui.keepAlivePanel
+import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.android.editor.EditorPanel
 import dev.supermux.android.editor.PendingEditorOpen
 import dev.supermux.session.inferHomeDir

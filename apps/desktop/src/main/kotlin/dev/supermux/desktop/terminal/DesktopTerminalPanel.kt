@@ -34,7 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jediterm.terminal.ui.JediTermWidget
 import com.jediterm.terminal.ui.settings.SettingsProvider
-import dev.supermux.desktop.ui.KeepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalInteropOverlay
@@ -55,7 +55,7 @@ import kotlinx.coroutines.launch
  * @param active whether this terminal is the foreground pane (Android-parity parameter). Desktop
  *   has no soft keyboard to manage; focus is click-to-focus (Swing default) and we deliberately do
  *   NOT auto-focus on composition (Android rule). Kept-alive background panes are hidden by the
- *   host via [dev.supermux.desktop.ui.KeepAlivePanel], which shrinks the heavyweight Swing child
+ *   host via [dev.supermux.ui.widgets.KeepAlivePanel], which shrinks the heavyweight Swing child
  *   to 0×0 so it can't be clicked (and thus can't take focus) while hidden.
  * @param onExit fires when the broker reports the pty ended — its `{"type":"exit"|"error"}` text
  *   frame, surfaced as [TerminalClient.exit] — NOT on disconnection. Web parity (useTerminal.ts

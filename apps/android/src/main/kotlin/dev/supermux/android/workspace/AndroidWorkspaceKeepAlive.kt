@@ -7,7 +7,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import dev.supermux.android.ui.keepAlivePanel
+import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.MAX_RETAINED_WORKSPACES
 import dev.supermux.workspace.WorkspaceKeepAliveCache

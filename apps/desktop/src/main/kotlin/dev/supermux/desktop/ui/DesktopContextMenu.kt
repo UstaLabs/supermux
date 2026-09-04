@@ -24,6 +24,8 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import kotlin.math.roundToInt
+import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.widgets.MenuStyle
 
 /**
  * The right-click menu — text fields' cut/copy/paste and anything else that goes

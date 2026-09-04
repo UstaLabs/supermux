@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +47,8 @@ import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
 
 // ─── System settings (update status + restart broker) ──────────────────────────
 //

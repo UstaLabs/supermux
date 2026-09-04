@@ -39,8 +39,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.settings.SettingsCaption
-import dev.supermux.android.settings.SettingsSectionHeader
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.SettingsSectionHeader
 import dev.supermux.update.ClientUpdateStatus
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO

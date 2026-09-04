@@ -31,7 +31,7 @@ import dev.supermux.android.editor.DiffView
 import dev.supermux.android.editor.FileTree
 import dev.supermux.android.editor.WebCodeEditor
 import dev.supermux.android.editor.rememberEditorEngine
-import dev.supermux.android.ui.keepAlivePanel
+import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.AddCommentBody

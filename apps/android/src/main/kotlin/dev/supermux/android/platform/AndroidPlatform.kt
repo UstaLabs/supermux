@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,6 +19,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.supermux.android.chat.ContentResolverChunkSource
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.PickKind
@@ -220,6 +224,29 @@ class PickerHost<R : Any> {
         }
     }
 
+    /**
+     * Forget an in-flight marker that can never be completed.
+     *
+     * Called on ON_RESUME (see [rememberPickerHost]). Being resumed means the picker activity is
+     * gone, and the activity-result registry dispatches a pending result while the launcher
+     * re-registers — i.e. before ON_RESUME — so a marker with no waiter at this point is one whose
+     * callback will never arrive: the marker was restored from `rememberSaveable` but the result
+     * was lost with the process. Leaving it would wedge rule 1 and every later pick would silently
+     * return null.
+     *
+     * A marker WITH a waiter ([pending] non-null) is a live pick — the brief window right after
+     * [pick] launches, before the picker covers us — and is left alone.
+     *
+     * @return true when a stuck marker was cleared (the caller re-syncs its saved copy).
+     */
+    fun clearStuckInFlight(): Boolean {
+        if (inFlightId == null || pending != null) return false
+        inFlightId = null
+        inFlightKind = null
+        inFlightRequester = null
+        return true
+    }
+
     /** Marks [stash] consumed. A second claim of the same stash is a no-op. */
     fun claim(stash: UnclaimedPick<R>) {
         _unclaimed.compareAndSet(stash, null)
@@ -235,8 +262,13 @@ fun rememberPickerHost(): PickerHost<Uri> {
     // before the restart is recognised, tagged and re-routed rather than dropped (rule 2).
     var savedMarker by rememberSaveable { mutableStateOf<String?>(null) }
     remember(host) {
-        savedMarker?.split('\u0000')?.let { (id, kind, requester) ->
-            host.restoreInFlight(id.toLong(), PickKind.valueOf(kind), requester)
+        // A marker is app-written, but it round-trips through a Bundle that outlives this build:
+        // an unparseable id or a PickKind that no longer exists must drop the marker, not crash the
+        // first composition after an upgrade.
+        runCatching {
+            savedMarker?.split('\u0000')?.let { (id, kind, requester) ->
+                host.restoreInFlight(id.toLong(), PickKind.valueOf(kind), requester)
+            }
         }
         Unit
     }
@@ -252,6 +284,17 @@ fun rememberPickerHost(): PickerHost<Uri> {
     val visualMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         host.deliver(uri)
         syncMarker()
+    }
+    // Clear a marker the OS can no longer complete (see PickerHost.clearStuckInFlight): the
+    // activity was re-created mid-pick and the result died with the old process, so nothing will
+    // ever call deliver() and rule 1 would refuse every later pick.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, host) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && host.clearStuckInFlight()) savedMarker = null
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     host.onLaunch = { kind ->
         when (kind) {

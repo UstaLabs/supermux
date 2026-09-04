@@ -33,7 +33,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Hub
-import dev.supermux.desktop.ui.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -59,7 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import dev.supermux.desktop.ui.Dialog
+import dev.supermux.ui.widgets.Dialog
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -76,6 +76,9 @@ import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SecretField
+import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 
 /**
  * Settings hub detail: connected GitHub/GitLab accounts.

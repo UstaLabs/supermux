@@ -9,6 +9,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.LocalModalHost
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -23,7 +26,9 @@ import kotlin.test.assertTrue
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
  * Compose cannot paint over JediTerm or JCEF, so [ModalPresence] tells them to
- * step aside. The failure modes are asymmetric and both bad: miss a retain and
+ * step aside. The shared dialogs and menus (`dev.supermux.ui.widgets`) reach it through
+ * [ModalPresenceHost], which is what `DesktopTheme` installs as their `LocalModalHost` — so these
+ * tests provide the same pair the app does. The failure modes are asymmetric and both bad: miss a retain and
  * the dialog is invisible again; miss a release and the terminal stays hidden
  * forever with no way for the user to get it back. The count is what these pin
  * down.
@@ -43,7 +48,10 @@ class ModalPresenceTest {
 
         setContent {
             presence = remember { ModalPresence() }
-            CompositionLocalProvider(LocalModalPresence provides presence) {
+            CompositionLocalProvider(
+                LocalModalPresence provides presence,
+                LocalModalHost provides ModalPresenceHost,
+            ) {
                 if (open) {
                     AlertDialog(
                         onDismissRequest = {},
@@ -76,7 +84,10 @@ class ModalPresenceTest {
 
         setContent {
             presence = remember { ModalPresence() }
-            CompositionLocalProvider(LocalModalPresence provides presence) {
+            CompositionLocalProvider(
+                LocalModalPresence provides presence,
+                LocalModalHost provides ModalPresenceHost,
+            ) {
                 DropdownMenu(expanded = expanded, onDismissRequest = {}) { Text("item") }
             }
         }
@@ -102,7 +113,10 @@ class ModalPresenceTest {
 
         setContent {
             presence = remember { ModalPresence() }
-            CompositionLocalProvider(LocalModalPresence provides presence) {
+            CompositionLocalProvider(
+                LocalModalPresence provides presence,
+                LocalModalHost provides ModalPresenceHost,
+            ) {
                 if (dialog) {
                     AlertDialog(
                         onDismissRequest = {},

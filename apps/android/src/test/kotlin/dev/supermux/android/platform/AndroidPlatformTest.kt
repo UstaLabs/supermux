@@ -158,4 +158,38 @@ class AndroidPlatformTest {
         assertEquals("session-launcher", stash.requester)
         assertEquals(PickKind.Media, stash.kind)
     }
+    @Test
+    fun `a marker nothing can complete is cleared on resume`() = runTest {
+        // The activity died mid-pick and the OS result died with it: the marker is restored from
+        // rememberSaveable but no callback will ever arrive.
+        val host = PickerHost<String>()
+        val launched = mutableListOf<PickKind>()
+        host.onLaunch = { launched.add(it) }
+        host.restoreInFlight(7L, PickKind.Images, "chat")
+
+        assertTrue(host.clearStuckInFlight(), "a waiter-less marker must be cleared on resume")
+        assertNull(host.inFlightId)
+        assertNull(host.inFlightKind)
+        assertNull(host.inFlightRequester)
+
+        // Rule 1 is un-wedged: the screen can pick again.
+        val next = async { host.pick(PickKind.Any, "chat") }
+        yield()
+        assertEquals(listOf(PickKind.Any), launched)
+        host.deliver(null)
+        next.await()
+    }
+
+    @Test
+    fun `a live pick is not cleared on resume`() = runTest {
+        // Resumed with the picker still up (the window right after launch): the waiter is alive and
+        // the marker must survive, or its eventual result would be dropped by rule 3.
+        val (host, _) = host()
+        val pick = async { host.pick(PickKind.Images, "chat") }
+        yield()
+        assertFalse(host.clearStuckInFlight(), "a live pick must not be cleared")
+        assertNotNull(host.inFlightId)
+        host.deliver("content://kept")
+        assertEquals("content://kept", pick.await())
+    }
 }

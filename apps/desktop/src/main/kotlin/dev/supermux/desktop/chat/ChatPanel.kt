@@ -59,8 +59,8 @@ import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.ui.KeepAlivePanel
-import dev.supermux.desktop.ui.keepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
+import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse

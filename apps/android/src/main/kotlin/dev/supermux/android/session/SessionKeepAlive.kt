@@ -42,7 +42,7 @@ import androidx.compose.ui.zIndex
 import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ChatScreen
-import dev.supermux.android.ui.keepAlivePanel
+import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.host.workspaceForSession
 import dev.supermux.android.workspace.AndroidWorkspaceKeepAliveHost
 import dev.supermux.android.workspace.WorkspaceScreen

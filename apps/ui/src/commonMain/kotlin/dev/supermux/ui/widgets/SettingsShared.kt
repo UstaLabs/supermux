@@ -1,9 +1,12 @@
-// Shared settings primitives for the desktop Settings hub (Agents / future sections).
-// Ported from apps/android/.../settings/SettingsShared.kt — desktop adaptations:
-//   - LocalContext openUrl/copy → LocalPlatform.openUrl + LocalClipboardManager
-//   - No KeyboardOptions (no mobile IME concern on desktop)
-//   - Enter-to-submit via onPreviewKeyEvent (desktop convention)
-package dev.supermux.desktop.settings
+// The union of both apps' former `settings/SettingsShared.kt`. Desktop's typography-token version
+// is the base (it was itself a port of Android's, with the sp literals replaced by the type scale —
+// and under the touch scale those tokens resolve to exactly the sizes Android hard-coded, so the
+// phone is unchanged). Android's mobile-IME KeyboardOptions and desktop's Enter-to-submit are both
+// kept: they are additive.
+//
+// `openUrl`/`copyToClipboard` used to live here on Android; they moved to `LocalPlatform` in A4 and
+// are NOT re-exported.
+package dev.supermux.ui.widgets
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
@@ -35,17 +39,16 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 
-/** Desktop Enter-to-submit: fire [submit] (and consume) on Enter/NumPad-Enter when [enabled]. */
+/** Enter-to-submit: fire [submit] (and consume the event) on Enter/NumPad-Enter when [enabled]. */
 fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =
     onPreviewKeyEvent { e ->
         if (e.type == KeyEventType.KeyDown &&
@@ -59,6 +62,7 @@ fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =
         }
     }
 
+/** Standard OutlinedTextField colours used across the settings forms. */
 @Composable
 fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -70,7 +74,10 @@ fun settingsFieldColors() = OutlinedTextFieldDefaults.colors(
     cursorColor = MaterialTheme.colorScheme.primary,
 )
 
-/** A monospaced secret field (password transformation). Optional Enter-to-submit. */
+/**
+ * A monospaced secret field (password transformation, autocorrect + autocaps off — an API key is
+ * not a sentence). Optional Enter-to-submit for the pointer platforms.
+ */
 @Composable
 fun SecretField(
     value: String,
@@ -97,6 +104,10 @@ fun SecretField(
         },
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(
+            autoCorrectEnabled = false,
+            capitalization = KeyboardCapitalization.None,
+        ),
         textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFontFamily),
         colors = settingsFieldColors(),
     )
@@ -140,7 +151,7 @@ fun SettingsCaption(text: String, modifier: Modifier = Modifier) {
 @Composable
 fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
+    val platform = LocalPlatform.current
     var copied by remember { mutableStateOf(false) }
     Row(
         modifier.fillMaxWidth(),
@@ -160,7 +171,7 @@ fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
                 .padding(horizontal = Space.md, vertical = Space.sm),
         )
         IconButton(onClick = {
-            clipboard.setText(AnnotatedString(command))
+            platform.copyToClipboard(command)
             copied = true
         }) {
             Icon(
@@ -173,5 +184,5 @@ fun CopyableCommand(command: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Max width for settings detail content on a wide desktop pane. */
+/** Max width for settings detail content on a wide pane. */
 val SettingsDetailMaxWidth = 720.dp

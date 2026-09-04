@@ -17,7 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Lock
-import dev.supermux.desktop.ui.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,27 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.PairUrl
-
-/** Desktop Enter-to-submit: fire [submit] (and consume) on Enter/NumPad-Enter key-down when
- *  [enabled]; otherwise let the field handle the event (e.g. no-op / newline while blank). */
-private fun Modifier.submitOnEnter(enabled: Boolean, submit: () -> Unit): Modifier =
-    onPreviewKeyEvent { e: KeyEvent ->
-        if (e.type == KeyEventType.KeyDown && (e.key == Key.Enter || e.key == Key.NumPadEnter) && enabled) {
-            submit()
-            true
-        } else {
-            false
-        }
-    }
+import dev.supermux.ui.widgets.submitOnEnter
 
 private enum class PairMode { Paste, Manual }
 
