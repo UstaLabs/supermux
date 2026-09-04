@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.android.R
 import dev.supermux.android.chat.MarkdownBody
+import dev.supermux.ui.editor.DiffView
 import dev.supermux.ui.editor.EditorLspHandle
 import dev.supermux.ui.editor.EditorSurface
 import dev.supermux.ui.editor.engine.EditorScrollReader

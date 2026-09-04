@@ -1,8 +1,7 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import dev.supermux.ui.editor.diffStats
 
 /**
  * Pure-function tests for [parseDiffLines] / [diffStats] (M4g-2 Task 4) — the load-bearing unified-

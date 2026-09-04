@@ -1,63 +1,35 @@
-package dev.supermux.desktop.settings
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.test.withKeyDown
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.net.BrokerApi
+import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.proto.ServerFrame
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.respond
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpMethod
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.headersOf
-import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
-import java.nio.file.Path
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import dev.supermux.net.AddCustomLspArgs
 
 /**
- * M4g-4 Task 2: [LspSettingsScreen] + [LspServerRow]/[AddLspForm], a port of Android
- * `EditorLspScreen.kt`. Pure helpers ([stateLabel]/[extSummary]/[slugId]) are tested directly;
+ * [LspSettingsScreen] + its row/form. Pure helpers ([stateLabel]/[extSummary]/[slugId]) are tested directly;
  * the composables are tested via [runComposeUiTest] with faked lspLoad/lspToggle/lspInstall/
  * lspAddCustom/lspRemoveCustom suspend lambdas + a controllable installLog/installDone
- * MutableStateFlow — no broker, no AppShell (that's the overlay-wiring section below).
+ * MutableStateFlow — no broker. Desktop's AppShell overlay wiring stays in `:desktop`
+ * (`LspSettingsOverlayTest`), which is the only thing there that is desktop-specific.
  */
-@OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
-class EditorLspScreenTest {
+@OptIn(ExperimentalTestApi::class)
+class LspSettingsScreenTest {
 
     // ── (1) pure helpers ──────────────────────────────────────────────────────────────────────
 
@@ -137,7 +109,7 @@ class EditorLspScreenTest {
     }
 
     @Test fun servers_render_from_a_fake_lsp_load_list() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         onNodeWithTag("lsp_server_row_typescript").assertIsDisplayed()
         onNodeWithTag("lsp_server_row_pyright").assertIsDisplayed()
@@ -149,7 +121,7 @@ class EditorLspScreenTest {
     @Test fun the_enable_switch_fires_lsp_toggle_with_the_desired_state() = runComposeUiTest {
         var toggled: Pair<String, Boolean>? = null
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(lspToggle = { id, enabled -> toggled = id to enabled; null })()
             }
         }
@@ -161,7 +133,7 @@ class EditorLspScreenTest {
 
     @Test fun toggle_updates_the_row_from_the_returned_server_list() = runComposeUiTest {
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(lspToggle = { id, enabled -> listOf(pyright().copy(enabled = enabled)) })()
             }
         }
@@ -175,7 +147,7 @@ class EditorLspScreenTest {
 
     @Test fun install_button_only_shown_when_enabled_installable_and_not_ready() = runComposeUiTest {
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = listOf(ts(), pyright().copy(enabled = true)))()
             }
         }
@@ -196,7 +168,7 @@ class EditorLspScreenTest {
         // appear — this is the realistic shape of a long-running install, not a test artifact.
         val installGate = CompletableDeferred<Unit>()
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     servers = listOf(pyright().copy(enabled = true)),
                     installLog = log,
@@ -221,7 +193,7 @@ class EditorLspScreenTest {
             mapOf("pyright" to ServerFrame.LspInstallDone(serverId = "pyright", ok = true)),
         )
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = listOf(pyright().copy(enabled = true)), installDone = done)()
             }
         }
@@ -237,7 +209,7 @@ class EditorLspScreenTest {
             mapOf("pyright" to ServerFrame.LspInstallDone(serverId = "pyright", ok = false, error = "network unreachable")),
         )
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = listOf(pyright().copy(enabled = true)), installDone = done)()
             }
         }
@@ -248,7 +220,7 @@ class EditorLspScreenTest {
     @Test fun custom_server_shows_a_remove_button_and_firing_it_calls_lsp_remove_custom() = runComposeUiTest {
         var removedId: String? = null
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     servers = listOf(zig()),
                     lspRemoveCustom = { id -> removedId = id; LspMutationResult(ok = true, lsp = null) },
@@ -267,7 +239,7 @@ class EditorLspScreenTest {
     // ── (3) the add-custom-server form ────────────────────────────────────────────────────────────
 
     @Test fun add_form_toggle_reveals_the_form_and_save_validates_required_fields() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen(servers = emptyList())() } }
+        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen(servers = emptyList())() } }
         waitForIdle()
         onNodeWithTag("lsp_add_form").assertDoesNotExist()
         onNodeWithTag("lsp_add_toggle").performClick()
@@ -282,7 +254,7 @@ class EditorLspScreenTest {
     @Test fun submitting_a_valid_add_form_calls_lsp_add_custom_and_closes_the_form_on_success() = runComposeUiTest {
         var submitted: AddCustomLspArgs? = null
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     servers = emptyList(),
                     lspAddCustom = { args ->
@@ -309,7 +281,7 @@ class EditorLspScreenTest {
 
     @Test fun a_failed_add_shows_the_returned_error_and_keeps_the_form_open() = runComposeUiTest {
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = emptyList(), lspAddCustom = { LspMutationResult(ok = false, error = "id already exists") })()
             }
         }
@@ -329,127 +301,9 @@ class EditorLspScreenTest {
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {
         var backCalled = false
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen(onBack = { backCalled = true })() } }
+        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen(onBack = { backCalled = true })() } }
         waitForIdle()
         onNodeWithTag("lsp_settings_back").performClick()
         assertTrue(backCalled)
-    }
-
-    // ── (5) overlay wiring into AppShell ─────────────────────────────────────────────────────
-
-    private val tempFiles = mutableListOf<Path>()
-
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("lsp_settings_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
-
-    @AfterTest fun cleanup() {
-        tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
-    }
-
-    /** A [HostStore] whose HTTP serves GET /settings/editor. */
-    private fun appForLspSettings(): HostStore {
-        val engine = MockEngine { req ->
-            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-            if (req.method == HttpMethod.Get && req.url.encodedPath == "/settings/editor") {
-                respond(
-                    """
-                    {"lsp":{"servers":[
-                      {"id":"typescript","label":"TypeScript","extensions":[".ts",".tsx"],"enabled":true,"state":"ready","installable":true},
-                      {"id":"pyright","label":"Pyright","extensions":[".py"],"enabled":false,"state":"missing","installable":true,"installLabel":"Install"}
-                    ]}}
-                    """.trimIndent(),
-                    HttpStatusCode.OK, jsonHeaders,
-                )
-            } else {
-                respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
-            }
-        }
-        val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return HostStore(
-            baseUrl = "ws://test:9898",
-            token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
-            connectOnInit = false,
-            sendFrameOverride = { },
-            apiOverride = api,
-        )
-    }
-
-    @OptIn(ExperimentalTestApi::class)
-    @Test fun lsp_settings_overlay_opens_from_ui_and_loads_the_server_list() = runComposeUiTest {
-        val ui = ShellUiState().apply { openLspSettings() }
-        val app = appForLspSettings()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("lsp_settings_overlay").assertIsDisplayed()
-        onNodeWithTag("lsp_settings_screen").assertIsDisplayed()
-        onNodeWithText("TypeScript").assertIsDisplayed()
-        onNodeWithText("Pyright").assertIsDisplayed()
-    }
-
-    @OptIn(ExperimentalTestApi::class)
-    @Test fun escape_closes_the_lsp_settings_overlay() = runComposeUiTest {
-        val ui = ShellUiState().apply { openLspSettings() }
-        val app = appForLspSettings()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("lsp_settings_overlay").performKeyInput { pressKey(Key.Escape) }
-        waitForIdle()
-        assertFalse(ui.lspSettingsOpen)
-        onNodeWithTag("lsp_settings_overlay").assertDoesNotExist()
-    }
-
-    @OptIn(ExperimentalTestApi::class)
-    @Test fun workspace_shortcuts_are_gated_off_while_the_lsp_settings_overlay_is_up() = runComposeUiTest {
-        val ui = ShellUiState().apply { openLspSettings() }
-        val app = appForLspSettings()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        assertFalse(ui.sidebarCollapsed)
-        onNodeWithTag("lsp_settings_screen").performKeyInput {
-            withKeyDown(Key.CtrlLeft) {
-                pressKey(Key.B)
-            }
-        }
-        waitForIdle()
-        assertFalse(ui.sidebarCollapsed)
-        assertTrue(ui.lspSettingsOpen)
-    }
-
-    @Test fun opening_lsp_settings_closes_any_other_open_overlay() {
-        val ui = ShellUiState()
-        ui.openUsage()
-        ui.openLspSettings()
-        assertFalse(ui.usageOpen)
-        assertTrue(ui.lspSettingsOpen)
     }
 }

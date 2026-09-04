@@ -67,6 +67,10 @@ import dev.supermux.ui.editor.engine.DiffRegionComment
 import dev.supermux.ui.editor.engine.DiffRegionComposer
 import dev.supermux.ui.editor.engine.DiffRegionRange
 import dev.supermux.ui.editor.engine.DiffRegionThread
+import dev.supermux.ui.editor.DiffLine
+import dev.supermux.ui.editor.DiffLineType
+import dev.supermux.ui.editor.DiffRows
+import dev.supermux.ui.editor.parseDiffLines
 import dev.supermux.ui.editor.CommentAnchor
 import dev.supermux.ui.editor.DiffRegionSurface
 import dev.supermux.ui.editor.engine.EditorEngineFactory
@@ -578,8 +582,10 @@ internal fun walkthroughDiffLines(
         when {
             line.type == DiffLineType.Del -> pending += line
             line.newLine != null -> {
+                // `newLine` now lives in :ui, so it cannot smart-cast across the module boundary.
+                val newLine = line.newLine!!
                 if (pending.isNotEmpty()) {
-                    deletionsBefore.getOrPut(line.newLine) { mutableListOf() }.addAll(pending)
+                    deletionsBefore.getOrPut(newLine) { mutableListOf() }.addAll(pending)
                     pending.clear()
                 }
             }

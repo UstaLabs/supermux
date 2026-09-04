@@ -96,6 +96,7 @@ import org.json.JSONObject
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import dev.supermux.ui.settings.LspSettingsScreen
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_MAX
 import dev.supermux.ui.prefs.EDITOR_FONT_MIN
@@ -878,7 +879,7 @@ private fun curatorNextRunLabel(enabled: Boolean, nextRun: String?): String {
 //
 // Mirrors iOS EditorSettingsScreen: ONE "Editor" screen with two sections — the
 // device-local appearance prefs (line-wrap + font-size, SharedPreferences) and the
-// broker-backed Language servers (EditorLspSection, EditorLspScreen.kt). The whole page
+// broker-backed Language servers (the shared LspSettingsScreen, embedded). The whole page
 // scrolls because the LSP list + add-form can be tall.
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -972,7 +973,7 @@ private fun EditorSettingsPage(
 
             // 3. Language servers (broker-backed)
             Spacer(Modifier.height(8.dp))
-            EditorLspSection(
+            LspSettingsScreen(
                 lspLoad = lspLoad,
                 lspToggle = lspToggle,
                 lspInstall = lspInstall,
@@ -980,6 +981,10 @@ private fun EditorSettingsPage(
                 lspInstallDone = lspInstallDone,
                 lspAddCustom = lspAddCustom,
                 lspRemoveCustom = lspRemoveCustom,
+                // The page owns the Back arrow and the scroll; this is the embedded section.
+                onBack = onBack,
+                showTopBar = false,
+                scrollable = false,
             )
             Spacer(Modifier.height(24.dp))
         }

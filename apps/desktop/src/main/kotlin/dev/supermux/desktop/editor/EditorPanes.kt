@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.LocalPanes
+import dev.supermux.ui.editor.DiffView
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.EditorLspHandle
 import dev.supermux.ui.editor.EditorSurface

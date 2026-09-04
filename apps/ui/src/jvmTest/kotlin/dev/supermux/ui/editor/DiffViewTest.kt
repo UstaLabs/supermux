@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -8,9 +8,16 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.net.AddCommentBody
+import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RefCommit
 import dev.supermux.net.RepoDiff
@@ -55,8 +62,15 @@ class DiffViewTest {
         onReload: () -> Unit = {},
         onClose: () -> Unit = {},
         autoExpandAll: Boolean = false,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
     ): @androidx.compose.runtime.Composable () -> Unit = {
-        DesktopTheme(appearance = AppearanceMode.DARK) {
+        CompositionLocalProvider(
+            LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
+            LocalWindowWidthClass provides widthClass,
+            LocalInputMode provides
+                if (widthClass == WindowWidthClass.Compact) InputMode.Touch else InputMode.Pointer,
+        ) {
+        SupermuxTheme(appearance = AppearanceMode.DARK) {
             DiffView(
                 repos = repos,
                 comments = comments,
@@ -71,9 +85,10 @@ class DiffViewTest {
                 autoExpandAll = autoExpandAll,
             )
         }
+        }
     }
 
-    // ── Diff-base selector (DropdownMenu, desktop convention — NOT a bottom sheet) ─────
+    // ── Diff-base selector (DropdownMenu on a pointer window, bottom sheet under Compact) ──
 
     private fun refsWith() = listOf(
         RepoRefs(
@@ -337,5 +352,31 @@ class DiffViewTest {
         setContent(host(oneRepoDiff(), autoExpandAll = false))
 
         onNodeWithText("old").assertDoesNotExist()
+    }
+
+    // ── Compact: the same chip, the same options, a bottom sheet instead of a menu ──────
+
+    @Test
+    fun under_compact_the_base_chip_opens_a_bottom_sheet_with_the_same_options() = runComposeUiTest {
+        var picked: String? = null
+        setContent(
+            host(
+                oneRepoDiff(),
+                refs = refsWith(),
+                onSetBase = { picked = it },
+                widthClass = WindowWidthClass.Compact,
+            ),
+        )
+
+        onNodeWithTag("diff_base_chip").performClick()
+        waitForIdle()
+
+        // The sheet, not a dropdown — but carrying the same `diff_base_menu` + option tags.
+        onNodeWithTag("diff_base_sheet").assertExists()
+        onNodeWithTag("diff_base_menu").assertExists()
+        onNodeWithTag("diff_base_option_head").assertExists()
+        onNodeWithTag("diff_base_option_branch:main").performClick()
+        waitForIdle()
+        assertEquals("branch:main", picked)
     }
 }

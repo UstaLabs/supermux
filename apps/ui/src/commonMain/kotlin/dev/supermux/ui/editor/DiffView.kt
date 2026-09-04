@@ -1,26 +1,23 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/editor/DiffView.kt (M4g-2) — keep
-// in sync until a shared UI module exists.
+// The one diff viewer for both apps (cluster C, task C3) — desktop's copy is the base (tree/list
+// mode, `autoExpandAll`, the richer `repoKey`, Material icons, the full test-tag set) and Android's
+// two contributions fold in:
 //
-// Desktop adaptations vs. the Android source:
-//   - painterResource(R.drawable.ic_*) → Icons.Filled.* (desktop has no Android drawable resources;
-//     this module already made the same swap for the rest of the editor — EditorPanel.kt/FileTree.kt):
-//     ic_x → Close, ic_chevron_down/ic_chevron_right → KeyboardArrowDown/KeyboardArrowRight (both in
-//     material-icons-core, unlike a literal "chevron" glyph which only exists in the extended set),
-//     ic_plus → Add, ic_diff (the toolbar button, wired in EditorPanel.kt) → Difference (extended).
-//   - No haptics: `rememberHaptics()`/`haptic.perform(HapticKind.Tick)` calls are dropped — desktop has no
-//     touch feedback concept (EditorPanel.kt/FileTree.kt precedent).
-//   - testTags added throughout (`diff_view`, `diff_file_<n>`, `diff_add_comment`, `diff_comment_thread`,
-//     `diff_resolve`, `diff_submit`, `diff_wrap_toggle`, `diff_back`) so runComposeUiTest can drive
-//     every interactive surface without a pointer — DiffView is pure Compose (no JCEF), so unlike the
-//     rest of the editor it's FULLY host-able under the Compose UI test harness.
-//   - [parseDiffLines] and [diffStats] are kept BYTE-FOR-BYTE identical to Android (the load-bearing
-//     diff parser, "ported 1:1 from DiffView.swift/DiffView.vue") — not "improved".
+//   - Haptic ticks on every toggle (`rememberHaptics().perform(HapticKind.Tick)`), a no-op wherever
+//     there is no vibrator — so the phone keeps the feedback it had and desktop is unchanged.
+//   - The base picker's Compact face: a `ModalBottomSheet` (the commit list can be 30+ rows and a
+//     dropdown anchored to a chip is not a thumb target), while every non-Compact window keeps
+//     desktop's `DropdownMenu`. SAME options, callbacks and tags on both paths — only the container
+//     and two numbers (chip max width 140dp vs 160dp, the "None" row 13sp vs 12sp) differ.
+//
+// [parseDiffLines] is kept BYTE-FOR-BYTE identical to the two app copies (the load-bearing diff
+// parser, "ported 1:1 from DiffView.swift/DiffView.vue") — not "improved". `diffStats` moved to
+// DiffTree.kt in C1 and is used from there.
 //
 // Everything else — repo grouping (repo header only when >1 repo, `repo == ""` = "workdir"), file
 // expand/collapse with +/- stat badges, the Wrap toggle, the +-gutter inline comment composer,
 // CommentThreadRow + Resolve (matching (repo,path,newLine)), and the sticky "Submit review" bar with
-// open-comment count — mirrors Android 1:1.
-package dev.supermux.desktop.editor
+// open-comment count — is the shared behaviour both apps already had.
+package dev.supermux.ui.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -52,6 +50,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -86,13 +87,11 @@ import dev.supermux.net.RepoRefs
 import dev.supermux.net.ReviewComment
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.prefs.EDITOR_DIFF_TREE_VIEW_DEFAULT
-import dev.supermux.ui.editor.DiffTreeNode
-import dev.supermux.ui.editor.allFolderPaths
-import dev.supermux.ui.editor.buildDiffTree
-import dev.supermux.ui.editor.diffStats
-import dev.supermux.ui.editor.flattenVisible
-import dev.supermux.ui.editor.folderDiffStats
 import androidx.compose.runtime.collectAsState
 
 // ─── Diff colours — same semantic palette as iOS DiffView.swift:38-41 (emerald/red/
@@ -141,6 +140,8 @@ fun DiffView(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    // No-op wherever there is no vibrator (desktop): Android's tick on every toggle, kept.
+    val haptic = rememberHaptics()
 
     // Keys are stable strings so the sets survive re-composition (Set<String> like iOS/Vue).
     var expandedFiles by remember { mutableStateOf(setOf<String>()) }
@@ -199,19 +200,22 @@ fun DiffView(
             )
             Box(Modifier.weight(1f))
             // Adjustable diff base (the compare target stays the working tree) — parity with the
-            // web/Android/iOS DiffView base picker. Desktop uses a DropdownMenu (a real pointer),
-            // not the mobile ModalBottomSheet, matching the launcher/SessionHeaderMenus convention.
+            // web/Android/iOS DiffView base picker. A DropdownMenu where there is a pointer, a
+            // ModalBottomSheet under Compact — see [BaseSelector].
             BaseSelector(
                 base = base,
                 refs = refs.firstOrNull(),
                 expanded = showBaseMenu,
-                onExpand = { showBaseMenu = true },
+                onExpand = { haptic.perform(HapticKind.Tick); showBaseMenu = true },
                 onDismiss = { showBaseMenu = false },
-                onSelect = { spec -> showBaseMenu = false; onSetBase(spec) },
+                onSelect = { spec -> haptic.perform(HapticKind.Tick); showBaseMenu = false; onSetBase(spec) },
             )
             Spacer(Modifier.width(Space.xs))
             IconButton(
-                onClick = { scope.launch { uiPrefs.putEditorDiffTreeView(!treeView) } },
+                onClick = {
+                    haptic.perform(HapticKind.Tick)
+                    scope.launch { uiPrefs.putEditorDiffTreeView(!treeView) }
+                },
                 modifier = Modifier.testTag("diff_tree_toggle"),
             ) {
                 Icon(
@@ -221,7 +225,10 @@ fun DiffView(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            TextButton(onClick = { wrap = !wrap }, modifier = Modifier.testTag("diff_wrap_toggle")) {
+            TextButton(
+                onClick = { haptic.perform(HapticKind.Tick); wrap = !wrap },
+                modifier = Modifier.testTag("diff_wrap_toggle"),
+            ) {
                 Text(
                     "Wrap",
                     style = MaterialTheme.typography.titleSmall,
@@ -253,7 +260,10 @@ fun DiffView(
                             RepoHeader(
                                 repo = repo,
                                 expanded = repo.repo in expandedRepos,
-                                onToggle = { expandedRepos = toggle(expandedRepos, repo.repo) },
+                                onToggle = {
+                                    haptic.perform(HapticKind.Tick)
+                                    expandedRepos = toggle(expandedRepos, repo.repo)
+                                },
                             )
                             HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                         }
@@ -269,7 +279,10 @@ fun DiffView(
                                             depth = row.depth,
                                             multiRepo = multiRepo,
                                             expanded = node.path in expandedFolders,
-                                            onToggle = { expandedFolders = toggle(expandedFolders, node.path) },
+                                            onToggle = {
+                                                haptic.perform(HapticKind.Tick)
+                                                expandedFolders = toggle(expandedFolders, node.path)
+                                            },
                                         )
                                         HorizontalDivider(color = cs.outlineVariant, thickness = 0.5.dp)
                                     }
@@ -290,8 +303,8 @@ fun DiffView(
                                                 submitting = submitting,
                                                 depth = row.depth,
                                                 label = node.name,
-                                                onToggleFile = { expandedFiles = toggle(expandedFiles, key) },
-                                                onToggleComposer = { ck -> toggleComposer(ck) },
+                                                onToggleFile = { haptic.perform(HapticKind.Tick); expandedFiles = toggle(expandedFiles, key) },
+                                                onToggleComposer = { ck -> haptic.perform(HapticKind.Tick); toggleComposer(ck) },
                                                 onDraftChange = { draft = it },
                                                 onCancelComposer = { composerFor = null; draft = "" },
                                                 onAdd = { repoId, path, line, hunkHeader ->
@@ -333,8 +346,8 @@ fun DiffView(
                                         composerFor = composerFor,
                                         draft = draft,
                                         submitting = submitting,
-                                        onToggleFile = { expandedFiles = toggle(expandedFiles, key) },
-                                        onToggleComposer = { ck -> toggleComposer(ck) },
+                                        onToggleFile = { haptic.perform(HapticKind.Tick); expandedFiles = toggle(expandedFiles, key) },
+                                        onToggleComposer = { ck -> haptic.perform(HapticKind.Tick); toggleComposer(ck) },
                                         onDraftChange = { draft = it },
                                         onCancelComposer = { composerFor = null; draft = "" },
                                         onAdd = { repoId, path, line, hunkHeader ->
@@ -412,14 +425,19 @@ fun baseLabel(base: String): String = when {
 }
 
 /**
- * The "Base: <label>" chip in the diff header and the [DropdownMenu] it opens. Desktop deliberately
- * diverges from Android's ModalBottomSheet (the mobile source) to a DropdownMenu: the desktop has a
- * real pointer, so a menu matches the launcher + SessionHeaderMenus convention. The menu lists the
- * four base families — Session start, Uncommitted (HEAD), a "Previous commit" section (recent
- * commits → `commit:<sha>`), and an "Another branch" section (branches → `branch:<name>`) — with a
- * check on the current selection. [refs] is the PRIMARY repo's refs (global selector, primary-repo
- * refs — matches web/Android).
+ * The "Base: <label>" chip in the diff header and the picker it opens. The chip and the option rows
+ * are the same on every window; only the CONTAINER branches — a [DropdownMenu] anchored to the chip
+ * for a pointer window (desktop's convention, matching the launcher + SessionHeaderMenus), and a
+ * [ModalBottomSheet] under [WindowWidthClass.Compact] (Android's, because the commit list can be
+ * 30+ rows and a chip-anchored dropdown is not a thumb target). Both carry `diff_base_menu` and the
+ * same `diff_base_option_<spec>` rows; the sheet additionally carries `diff_base_sheet`.
+ *
+ * The rows list the four base families — Session start, Uncommitted (HEAD), a "Previous commit"
+ * section (recent commits → `commit:<sha>`), and an "Another branch" section (branches →
+ * `branch:<name>`) — with a check on the current selection. [refs] is the PRIMARY repo's refs
+ * (global selector, primary-repo refs — matches web/Android).
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BaseSelector(
     base: String,
@@ -430,6 +448,7 @@ private fun BaseSelector(
     onSelect: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val isRef = base.startsWith("commit:") || base.startsWith("branch:")
     Box {
         Row(
@@ -450,44 +469,87 @@ private fun BaseSelector(
                 fontFamily = if (isRef) MonoFontFamily else null,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 160.dp),
+                // The phone chip sits in a narrower header row — Android's 140dp, kept.
+                modifier = Modifier.widthIn(max = if (compact) 140.dp else 160.dp),
             )
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = onDismiss,
-            modifier = Modifier.testTag("diff_base_menu"),
-        ) {
-            BaseOption("Session start", spec = "session-start", selected = base == "session-start", onSelect = onSelect)
-            BaseOption("Uncommitted (HEAD)", spec = "head", selected = base == "head", onSelect = onSelect)
-
-            BaseSectionHeader("Previous commit")
-            val commits = refs?.commits ?: emptyList()
-            if (commits.isEmpty()) {
-                BaseNoneRow()
-            } else {
-                commits.forEach { c ->
-                    val spec = "commit:${c.sha}"
-                    BaseOption(
-                        label = c.subject.ifEmpty { c.sha.take(7) },
-                        spec = spec,
-                        selected = base == spec,
-                        mono = c.sha.take(7),
-                        onSelect = onSelect,
-                    )
+        if (compact) {
+            if (expanded) {
+                val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+                ModalBottomSheet(
+                    onDismissRequest = onDismiss,
+                    sheetState = sheetState,
+                    containerColor = cs.surfaceContainerLow,
+                    contentColor = cs.onSurface,
+                    modifier = Modifier.testTag("diff_base_sheet"),
+                ) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 480.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(bottom = 24.dp)
+                            .testTag("diff_base_menu"),
+                    ) {
+                        Text(
+                            "Diff base",
+                            color = cs.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp,
+                            modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
+                        )
+                        BaseOptions(base = base, refs = refs, noneFontSize = 13, onSelect = onSelect)
+                    }
                 }
             }
-
-            BaseSectionHeader("Another branch")
-            val branches = refs?.branches ?: emptyList()
-            if (branches.isEmpty()) {
-                BaseNoneRow()
-            } else {
-                branches.forEach { b ->
-                    val spec = "branch:$b"
-                    BaseOption(label = b, spec = spec, selected = base == spec, monoLabel = true, onSelect = onSelect)
-                }
+        } else {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = onDismiss,
+                modifier = Modifier.testTag("diff_base_menu"),
+            ) {
+                BaseOptions(base = base, refs = refs, noneFontSize = 12, onSelect = onSelect)
             }
+        }
+    }
+}
+
+/** The picker's rows — identical in the menu and in the sheet. */
+@Composable
+private fun BaseOptions(
+    base: String,
+    refs: RepoRefs?,
+    noneFontSize: Int,
+    onSelect: (String) -> Unit,
+) {
+    BaseOption("Session start", spec = "session-start", selected = base == "session-start", onSelect = onSelect)
+    BaseOption("Uncommitted (HEAD)", spec = "head", selected = base == "head", onSelect = onSelect)
+
+    BaseSectionHeader("Previous commit")
+    val commits = refs?.commits ?: emptyList()
+    if (commits.isEmpty()) {
+        BaseNoneRow(noneFontSize)
+    } else {
+        commits.forEach { c ->
+            val spec = "commit:${c.sha}"
+            BaseOption(
+                label = c.subject.ifEmpty { c.sha.take(7) },
+                spec = spec,
+                selected = base == spec,
+                mono = c.sha.take(7),
+                onSelect = onSelect,
+            )
+        }
+    }
+
+    BaseSectionHeader("Another branch")
+    val branches = refs?.branches ?: emptyList()
+    if (branches.isEmpty()) {
+        BaseNoneRow(noneFontSize)
+    } else {
+        branches.forEach { b ->
+            val spec = "branch:$b"
+            BaseOption(label = b, spec = spec, selected = base == spec, monoLabel = true, onSelect = onSelect)
         }
     }
 }
@@ -504,11 +566,11 @@ private fun BaseSectionHeader(text: String) {
 }
 
 @Composable
-private fun BaseNoneRow() {
+private fun BaseNoneRow(fontSize: Int) {
     Text(
         "None",
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-        fontSize = 12.sp,
+        fontSize = fontSize.sp,
         modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
     )
 }
@@ -800,7 +862,7 @@ private fun FileSection(
 // ── Diff rows + inline comments ────────────────────────────────────────────────
 
 @Composable
-internal fun DiffRows(
+fun DiffRows(
     repo: String,
     path: String,
     lines: List<DiffLine>,
@@ -933,7 +995,7 @@ private fun GutterText(s: String, color: Color) {
 }
 
 @Composable
-internal fun Composer(
+fun Composer(
     draft: String,
     submitting: Boolean,
     onDraftChange: (String) -> Unit,
@@ -969,7 +1031,7 @@ internal fun Composer(
 }
 
 @Composable
-internal fun CommentThreadRow(
+fun CommentThreadRow(
     c: ReviewComment,
     replies: List<ReviewComment> = emptyList(),
     onResolve: () -> Unit,

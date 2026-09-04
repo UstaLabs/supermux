@@ -50,6 +50,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.settings.LspSettingsScreen
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.net.AddDeviceResponse

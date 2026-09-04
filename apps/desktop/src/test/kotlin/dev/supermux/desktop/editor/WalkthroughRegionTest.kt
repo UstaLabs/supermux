@@ -9,6 +9,7 @@ import dev.supermux.net.Walkthrough
 import dev.supermux.net.WalkthroughStep
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.HostStore
+import dev.supermux.ui.editor.DiffLineType
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.editor.engine.DiffRegionRange
 import kotlinx.coroutines.ExperimentalCoroutinesApi

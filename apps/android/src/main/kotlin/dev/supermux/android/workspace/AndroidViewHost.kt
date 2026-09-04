@@ -27,7 +27,7 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.chat.ChatPanel
 import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
-import dev.supermux.android.editor.DiffView
+import dev.supermux.ui.editor.DiffView
 import dev.supermux.ui.editor.FileTree
 import dev.supermux.ui.editor.EditorSurface
 import dev.supermux.ui.widgets.keepAlivePanel

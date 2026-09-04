@@ -1,35 +1,23 @@
-// Ported from apps/android/src/main/kotlin/dev/supermux/android/settings/EditorLspScreen.kt
-// (M4g-4) — keep in sync until a shared UI module exists.
+// The one LSP settings screen for both apps (cluster C, task C3). Desktop's standalone
+// `LspSettingsScreen` is the base — it is the richer of the two (its own back row + title, a
+// spinner-centred loading state, the full test-tag set, `internal` pure helpers) — and Android's
+// former `EditorLspSection` is now this same composable with `showTopBar = false`, embedded in the
+// Editor settings page exactly where the section used to be.
 //
-// Desktop is the FIRST platform where this renders as a standalone full-pane screen: Android
-// embeds `EditorLspSection` inside a shared "Editor" settings page that doesn't exist on desktop
-// yet, so `LspSettingsScreen` below IS the whole overlay — it gets its own back row + title
-// (mirrors UsageScreen.kt's shape), not a bare embedded section. It is also desktop's FIRST
-// settings screen; there is no shared SettingsShared.kt-equivalent to reuse yet (Android has one),
-// so the header/caption/field composables are inlined here privately — a future second settings
-// screen can extract a shared file then (YAGNI for now).
+// What each side contributed:
+//   - Desktop: the standalone chrome, the centred spinner (Android's inline "Loading…" row is
+//     dropped), all tags, and the DROP of Android's `lspError` branch — `lspLoad()` never throws
+//     (HostStore degrades to emptyList() internally), so that state was never set and the branch
+//     was dead code.
+//   - Android: `KeyboardOptions(autoCorrectEnabled = false, capitalization = …)` on the add-custom
+//     fields (a server id or a shell command is not a sentence) — harmless on a hardware keyboard,
+//     and the `scrollable = false` embedding, since the Android page already scrolls around it.
+//   - Both: the header/caption/field composables each app had inlined are the shared
+//     `dev.supermux.ui.widgets` ones (they came from the same source in cluster A, task A5).
 //
-// Desktop adaptations vs. the Android source:
-//   - painterResource(R.drawable.ic_trash/ic_download/ic_check/ic_x) -> Icons.Filled.Delete/
-//     Download/Check/Close (established compose.materialIconsExtended mapping — DiffView.kt/
-//     SessionsRail.kt precedent).
-//   - No haptics (desktop has no touch feedback concept — established elsewhere in this module).
-//   - LocalPanes.current.warning (Android) -> dev.supermux.ui.theme.LocalSemantics.current.warning
-//     (desktop's equivalent semantic-color holder; already used by UsageScreen.kt's barColor).
-//   - Android's `lspError` state is declared but NEVER SET anywhere in EditorLspSection — lspLoad()
-//     never throws (AppViewModel.kt:737 degrades to emptyList() internally), so that branch is dead
-//     code in the ported source. Dropped here: just loading -> spinner, else -> the list (an empty
-//     list still shows the "Add language server" affordance, which is what Android's unreachable
-//     error branch would never actually preempt anyway).
-//   - Add-form text fields drop KeyboardOptions(autoCorrectEnabled=false, capitalization=...) — no
-//     other desktop OutlinedTextField in this module sets it (no mobile IME concern here).
-//   - testTags added throughout (`lsp_settings_screen`, `lsp_server_row_<id>`, `lsp_toggle_<id>`,
-//     `lsp_install_<id>`, `lsp_install_log_<id>`, `lsp_install_result_<id>`, `lsp_remove_<id>`,
-//     `lsp_add_*`) so runComposeUiTest can drive every interactive surface without a pointer — this
-//     screen is pure Compose (no JCEF), so it hosts cleanly under the Compose UI test harness.
-//   - stateLabel/extSummary/slugId are `internal` (not `private`), matching EditorPanel.kt's
-//     joinPath/pathToUri convention, so they're independently unit-tested.
-package dev.supermux.desktop.settings
+// Icons are Material (`Icons.Filled.Delete/Download/Check/Close`) — Android's `painterResource`
+// drawables do not exist off Android, and the two glyph sets match.
+package dev.supermux.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -80,7 +68,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.LspInstallResult
@@ -111,8 +104,13 @@ fun LspSettingsScreen(
     lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult?,
     lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
     onBack: () -> Unit,
-    /** When false (Settings hub), omit the nested Back/title chrome — the hub owns navigation. */
+    /** When false (Settings hub / the Android Editor page), omit the nested Back/title chrome —
+     *  the host owns navigation. */
     showTopBar: Boolean = true,
+    /** False when the HOST already scrolls (Android's Editor settings page): the screen then wraps
+     *  its content height instead of filling and scrolling, since a vertical scroll nested in a
+     *  vertical scroll measures to zero height. */
+    scrollable: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -137,8 +135,7 @@ fun LspSettingsScreen(
     LaunchedEffect(Unit) { reload() }
 
     Column(
-        Modifier
-            .fillMaxSize()
+        (if (scrollable) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
             .background(cs.surfaceContainerHigh)
             .testTag("lsp_settings_screen"),
     ) {
@@ -164,23 +161,29 @@ fun LspSettingsScreen(
                 )
             }
         }
-        Box(Modifier.fillMaxSize()) {
+        Box(if (scrollable) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
             if (loading) {
                 CircularProgressIndicator(
                     color = cs.primary,
-                    modifier = Modifier.align(Alignment.Center).testTag("lsp_settings_spinner"),
+                    modifier = Modifier
+                        .align(if (scrollable) Alignment.Center else Alignment.TopCenter)
+                        .padding(Space.lg)
+                        .testTag("lsp_settings_spinner"),
                 )
             } else {
                 Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                    (if (scrollable) {
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    } else {
+                        Modifier.fillMaxWidth()
+                    })
                         .padding(start = Space.lg, end = Space.lg, top = Space.sm, bottom = Space.xl),
                 ) {
-                    Text(
+                    // Android's section header, kept: without the top bar nothing else in this
+                    // composable names what the rows are.
+                    if (!showTopBar) SettingsSectionHeader("LANGUAGE SERVERS")
+                    SettingsCaption(
                         "Language servers run on the broker host.",
-                        color = cs.onSurfaceVariant,
-                        fontSize = 11.sp,
                         modifier = Modifier.padding(bottom = Space.sm),
                     )
                     servers.forEach { server ->
@@ -393,7 +396,7 @@ private fun AddLspForm(
         Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("lsp_add_form"),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Add language server", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        SettingsSectionHeader("Add language server")
         addError?.let { Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("lsp_add_error")) }
 
         LspField("Display name", "Zig", label, mono = false, testTag = "lsp_add_label") {
@@ -408,7 +411,7 @@ private fun AddLspForm(
         LspField("Language id (optional)", "zig", languageId, mono = true, testTag = "lsp_add_language_id") { languageId = it }
         LspField("Install command (optional)", "apt install -y zls", installCmd, mono = true, testTag = "lsp_add_install_cmd") { installCmd = it }
 
-        Text("Install command runs as the broker user — do not use sudo.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+        SettingsCaption("Install command runs as the broker user — do not use sudo.")
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
@@ -475,11 +478,18 @@ private fun LspField(
         placeholder = { Text(placeholder) },
         modifier = Modifier.fillMaxWidth().testTag(testTag),
         singleLine = true,
+        // Android's: a server id, a command or an extension list is not a sentence. Inert where
+        // there is no soft keyboard.
+        keyboardOptions = KeyboardOptions(
+            autoCorrectEnabled = false,
+            capitalization = if (mono) KeyboardCapitalization.None else KeyboardCapitalization.Sentences,
+        ),
         textStyle = if (mono) {
             MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
         } else {
             MaterialTheme.typography.bodyMedium
         },
+        colors = settingsFieldColors(),
     )
 }
 
