@@ -23,9 +23,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.SpecialKey
 
 /** Tri-state of a sticky bar modifier (like iOS Shift): off → armed-for-one-key → locked. */
@@ -112,20 +112,20 @@ fun TerminalKeyBar(
                         locked = state == ModState.LOCKED,
                         mono = false,
                     ) {
-                        haptic(HapticKind.Tick)
+                        haptic.perform(HapticKind.Tick)
                         onPress(KeyPress.Mod(key.key))
                     }
                 }
 
                 is BarKey.Special ->
                     KeyButton(label = key.label, active = false, locked = false, mono = false) {
-                        haptic(HapticKind.Tick)
+                        haptic.perform(HapticKind.Tick)
                         onPress(KeyPress.Special(key.key))
                     }
 
                 is BarKey.Printable ->
                     KeyButton(label = key.ch.toString(), active = false, locked = false, mono = true) {
-                        haptic(HapticKind.Tick)
+                        haptic.perform(HapticKind.Tick)
                         onPress(KeyPress.Printable(key.ch))
                     }
             }

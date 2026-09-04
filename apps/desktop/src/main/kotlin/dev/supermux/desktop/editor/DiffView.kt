@@ -7,7 +7,7 @@
 //     ic_x → Close, ic_chevron_down/ic_chevron_right → KeyboardArrowDown/KeyboardArrowRight (both in
 //     material-icons-core, unlike a literal "chevron" glyph which only exists in the extended set),
 //     ic_plus → Add, ic_diff (the toolbar button, wired in EditorPanel.kt) → Difference (extended).
-//   - No haptics: `rememberHaptics()`/`haptic(HapticKind.Tick)` calls are dropped — desktop has no
+//   - No haptics: `rememberHaptics()`/`haptic.perform(HapticKind.Tick)` calls are dropped — desktop has no
 //     touch feedback concept (EditorPanel.kt/FileTree.kt precedent).
 //   - testTags added throughout (`diff_view`, `diff_file_<n>`, `diff_add_comment`, `diff_comment_thread`,
 //     `diff_resolve`, `diff_submit`, `diff_wrap_toggle`, `diff_back`) so runComposeUiTest can drive

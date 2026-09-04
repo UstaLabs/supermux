@@ -10,8 +10,8 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.chat.MicCapture
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import kotlin.test.Test
 
 private class ScriptedMicCapture(private val startsOk: Boolean, private val wav: ByteArray?) : MicCapture {
@@ -36,7 +36,7 @@ class SessionLauncherDictationTest {
         transcribeAudio: suspend (ByteArray, String) -> String? = { _, _ -> null },
         micRecorderFactory: () -> MicCapture = { ScriptedMicCapture(startsOk = true, wav = byteArrayOf(1)) },
     ) {
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
+        DesktopTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
                 sessions = emptyList(),
                 home = "/home/u",

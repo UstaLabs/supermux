@@ -12,7 +12,7 @@
 //       ic_file          → Icons.Filled.InsertDriveFile
 //     Directories always render the FolderOpen glyph regardless of expanded state — that mirrors
 //     Android exactly (a pre-existing simplification there, not something introduced here).
-//   - `rememberHaptics()(HapticKind.Tick)` on node click dropped — no haptic actuator on desktop,
+//   - `rememberHaptics().perform(HapticKind.Tick)` on node click dropped — no haptic actuator on desktop,
 //     and no other ported desktop file wires the no-op haptics stub at a call site (theme/Haptics.kt
 //     exists but is uncalled), so this follows that established convention.
 //   - `pointerHoverIcon(PointerIcon.Hand)` added to the clickable node row (desktop mouse

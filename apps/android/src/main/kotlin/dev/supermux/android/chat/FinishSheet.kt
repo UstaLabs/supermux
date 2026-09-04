@@ -52,8 +52,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.net.VerifySaveResult
@@ -707,7 +707,7 @@ private fun ActionRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (enabled) Modifier.clickable { haptic(HapticKind.Tick); onClick() }
+                if (enabled) Modifier.clickable { haptic.perform(HapticKind.Tick); onClick() }
                 else Modifier,
             )
             .heightIn(min = 48.dp)
@@ -752,7 +752,7 @@ private fun LoadingActionRow(
             .fillMaxWidth()
             .then(
                 if (active) Modifier.clickable {
-                    haptic(HapticKind.Tick)
+                    haptic.perform(HapticKind.Tick)
                     busy = true
                     scope.launch { try { onClick() } finally { busy = false } }
                 } else Modifier,

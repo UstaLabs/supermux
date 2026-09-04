@@ -5,8 +5,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -36,7 +36,7 @@ class SessionListUnreadRowTest {
 
     @Test fun unread_row_shows_green_rail_icon() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionListPanel(
                     sessions = listOf(session("s1", "Unread Chat")),
                     home = "/home/u",
@@ -55,7 +55,7 @@ class SessionListUnreadRowTest {
 
     @Test fun read_row_shows_neutral_not_unread() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionListPanel(
                     sessions = listOf(session("s1", "Read Chat")),
                     home = "/home/u",
@@ -73,7 +73,7 @@ class SessionListUnreadRowTest {
 
     @Test fun working_row_shows_spinner_not_unread_despite_newer_message() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionListPanel(
                     sessions = listOf(session("s1", "Working Chat")),
                     home = "/home/u",
@@ -98,7 +98,7 @@ class SessionListUnreadRowTest {
 
     @Test fun active_row_does_not_show_unread() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionListPanel(
                     sessions = listOf(session("s1", "Active Chat")),
                     home = "/home/u",

@@ -16,8 +16,8 @@ import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.cioHttpFactory
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -172,7 +172,7 @@ class SystemSettingsScreenTest {
 
     @Test fun renders_broker_version_commit_and_last_checked() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(current = "2.0.1", commit = "deadbeefcafe")
                 })()
@@ -200,7 +200,7 @@ class SystemSettingsScreenTest {
 
     @Test fun update_available_shows_update_broker_for_binary() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(
                         updateAvailable = true,
@@ -226,7 +226,7 @@ class SystemSettingsScreenTest {
 
     @Test fun source_mode_hides_update_broker_button() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(updateAvailable = true, latest = "9.9.9", mode = "source")
                 })()
@@ -247,7 +247,7 @@ class SystemSettingsScreenTest {
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     loads.incrementAndGet()
                     null
@@ -271,7 +271,7 @@ class SystemSettingsScreenTest {
     @Test fun retry_after_load_failure_recovers() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null else sampleStatus(current = "3.0.0")
@@ -303,7 +303,7 @@ class SystemSettingsScreenTest {
         val statusCalls = AtomicInteger(0)
         val checkCalls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         statusCalls.incrementAndGet()
@@ -344,7 +344,7 @@ class SystemSettingsScreenTest {
     @Test fun recheck_failure_after_load_surfaces_error_keeps_status() = runComposeUiTest {
         val checkCalls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = { sampleStatus(current = "1.0.0") },
                     checkUpdate = {
@@ -382,7 +382,7 @@ class SystemSettingsScreenTest {
         val runCalls = AtomicInteger(0)
         val polls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         val n = polls.incrementAndGet()
@@ -441,7 +441,7 @@ class SystemSettingsScreenTest {
 
     @Test fun run_update_instruction_surfaces_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
@@ -481,7 +481,7 @@ class SystemSettingsScreenTest {
     @Test fun run_update_empty_failure_surfaces_fallback_error() = runComposeUiTest {
         val runCalls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
@@ -518,7 +518,7 @@ class SystemSettingsScreenTest {
 
     @Test fun run_update_null_result_surfaces_unreachable() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
@@ -550,7 +550,7 @@ class SystemSettingsScreenTest {
     /** Mid-flight failed status shows Failed + broker lastError + Retry update. */
     @Test fun midflight_failed_shows_failed_row_and_retry() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(
                         updateAvailable = true,
@@ -581,7 +581,7 @@ class SystemSettingsScreenTest {
     /** restart-required must not use an indefinite spinner. */
     @Test fun restart_required_shows_icon_not_spinner() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(state = "restart-required", updateAvailable = false)
                 })()
@@ -603,7 +603,7 @@ class SystemSettingsScreenTest {
     /** While downloading, only one StateRow (no duplicate progress from the updating flag). */
     @Test fun downloading_shows_single_progress_row() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(state = "downloading", updateAvailable = true, latest = "2.0.0")
                 })()
@@ -630,7 +630,7 @@ class SystemSettingsScreenTest {
     @Test fun run_update_polling_timeout_surfaces_error() = runComposeUiTest {
         val polls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SystemSettingsScreen(
                     updateStatus = {
                         val n = polls.incrementAndGet()
@@ -674,7 +674,7 @@ class SystemSettingsScreenTest {
     @Test fun restart_requires_confirm_and_states_connection_kill() = runComposeUiTest {
         val restarted = AtomicBoolean(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(restartBroker = {
                     restarted.set(true)
                     true
@@ -713,7 +713,7 @@ class SystemSettingsScreenTest {
 
     @Test fun restart_failure_surfaces_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(restartBroker = { false })()
             }
         }
@@ -800,7 +800,7 @@ class SystemSettingsScreenTest {
         val app = appForSystem()
         var loaded: UpdateStatus? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SystemSettingsScreen(
                     updateStatus = {
                         loaded = app.updateStatus()
@@ -826,7 +826,7 @@ class SystemSettingsScreenTest {
         var result: UpdateStatus? = UpdateStatus(current = "sentinel")
         var called = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SystemSettingsScreen(
                     updateStatus = {
                         result = app.updateStatus()
@@ -996,7 +996,7 @@ class SystemSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
         val app = appForSystem()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -1047,7 +1047,7 @@ class SystemSettingsScreenTest {
             apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("rail-state")),
@@ -1138,7 +1138,7 @@ class SystemSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     primary, ui,
                     ShellStateStore(tempPath("mh-state")),

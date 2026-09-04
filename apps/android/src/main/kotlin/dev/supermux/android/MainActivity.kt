@@ -109,8 +109,8 @@ import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.update.AppUpdateNotifier
 import dev.supermux.android.settings.UsageScreen
-import dev.supermux.android.theme.AppearanceMode
-import dev.supermux.android.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
 import dev.supermux.android.host.HostStores
@@ -165,9 +165,11 @@ class MainActivity : ComponentActivity() {
                     }.getOrDefault(AppearanceMode.SYSTEM)
                 )
             }
+            // Kept for the Settings → Appearance switch only: dynamic color (Material You) is a no-op
+            // now — the brand palette is the only palette (see AndroidTheme).
             var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
             var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
-            SupermuxTheme(appearance = appearance, dynamicEnabled = dynamicColor, textScale = textScale) {
+            AndroidTheme(appearance = appearance, textScale = textScale) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
                 // emulator boots past the gate (no-op on release / when DEBUG_TOKEN is empty).
@@ -206,7 +208,7 @@ class MainActivity : ComponentActivity() {
                         onPaired = { paired = true },
                         initialDeepLink = deepLink,
                     )
-                    return@SupermuxTheme
+                    return@AndroidTheme
                 }
 
                 // Multi-host (spec §5): the VM owns N per-host connections from the PairedHostStore,

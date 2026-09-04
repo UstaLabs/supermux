@@ -6,8 +6,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.proto.FinishJobDto
@@ -78,7 +78,7 @@ class FinishDialogTest {
 
     @Test fun null_job_shows_menu_with_readiness_and_four_action_rows() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishDialogContent(
                     session = session,
                     finishJob = null,
@@ -102,7 +102,7 @@ class FinishDialogTest {
 
     @Test fun running_job_shows_running_body() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishDialogContent(
                     session = session,
                     finishJob = FinishJobDto(status = "running", stage = "Merging…"),
@@ -124,7 +124,7 @@ class FinishDialogTest {
     @Test fun tests_failed_outcome_shows_recovery_and_let_agent_fix() = runComposeUiTest {
         var sentToAgent: String? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishDialogContent(
                     session = session,
                     finishJob = FinishJobDto(
@@ -153,7 +153,7 @@ class FinishDialogTest {
     @Test fun merge_run_tests_calls_onFinish_merge_skipVerify_false() = runComposeUiTest {
         var captured: Triple<String, Boolean?, Boolean?>? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishDialogContent(
                     session = session,
                     finishJob = null,
@@ -178,7 +178,7 @@ class FinishDialogTest {
 
     @Test fun pr_requires_green_hides_skip_row() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishDialogContent(
                     session = session,
                     finishJob = null,
@@ -203,7 +203,7 @@ class FinishDialogTest {
 
     @Test fun finish_button_shows_unacked_dot_only_when_unacked() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishButton(
                     finishJob = FinishJobDto(status = "failed"),
                     isUnacked = true,
@@ -218,7 +218,7 @@ class FinishDialogTest {
 
     @Test fun finish_button_hides_dot_when_acked() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 FinishButton(
                     finishJob = FinishJobDto(status = "done"),
                     isUnacked = false,

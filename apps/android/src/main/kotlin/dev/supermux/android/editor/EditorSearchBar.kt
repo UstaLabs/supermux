@@ -32,10 +32,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.FsSearchResult
 
 @Composable
@@ -108,7 +108,7 @@ fun EditorSearchOverlay(
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.25f))
                 .clickable {
-                    haptic(HapticKind.Tick)
+                    haptic.perform(HapticKind.Tick)
                     onDismiss()
                 },
         )
@@ -136,7 +136,7 @@ fun EditorSearchOverlay(
                         .fillMaxWidth()
                         .semantics { contentDescription = result.path }
                         .clickable {
-                            haptic(HapticKind.Tick)
+                            haptic.perform(HapticKind.Tick)
                             onSelect(result.path)
                         }
                         .padding(horizontal = Space.md, vertical = 10.dp),

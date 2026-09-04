@@ -10,8 +10,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
@@ -90,7 +90,7 @@ class SessionHeaderMenusTest {
     fun gitBadgeRendersCountsAndOpensMenuWithPushWhenPublished() = runComposeUiTest {
         var pushed = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = remotePublished,
                     onFetch = { GitOpResult() },
@@ -120,7 +120,7 @@ class SessionHeaderMenusTest {
     fun gitMenuShowsPublishWhenUnpublishedAndFiresPublish() = runComposeUiTest {
         var published = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = remoteUnpublished,
                     onFetch = { GitOpResult() },
@@ -144,7 +144,7 @@ class SessionHeaderMenusTest {
         var fetched = false
         var pulled = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { fetched = true; GitOpResult() },
@@ -174,7 +174,7 @@ class SessionHeaderMenusTest {
         val gateFetch = CompletableDeferred<GitOpResult?>()
         val gatePull = CompletableDeferred<GitOpResult?>()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { gateFetch.await() },
@@ -208,7 +208,7 @@ class SessionHeaderMenusTest {
         var consumed = 0
         var force by mutableStateOf<GitMenuForceOp?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { fetched = true; GitOpResult() },
@@ -236,7 +236,7 @@ class SessionHeaderMenusTest {
         var consumed = 0
         var force by mutableStateOf<GitMenuForceOp?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { fetched = true; GitOpResult(status = "fetched") },
@@ -261,7 +261,7 @@ class SessionHeaderMenusTest {
         var pulled = false
         var force by mutableStateOf<GitMenuForceOp?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { error("fetch not expected from a PULL force-op") },
@@ -290,7 +290,7 @@ class SessionHeaderMenusTest {
     @Test
     fun gitBadgeHiddenWhenGitNull() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitBadgeMenu(
                     session = nonRepo,
                     onFetch = { GitOpResult() },
@@ -311,7 +311,7 @@ class SessionHeaderMenusTest {
         val other = ProxyDto(domain = "other.example", sessionName = "elsewhere", port = 4000, url = "https://other.example/")
         var opened: String? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionLinksMenu(
                     session = baseSession,
                     proxies = listOf(mine, other),
@@ -337,7 +337,7 @@ class SessionHeaderMenusTest {
         var consumed = 0
         var force by mutableStateOf(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionLinksMenu(
                     session = baseSession,
                     proxies = listOf(mine),
@@ -359,7 +359,7 @@ class SessionHeaderMenusTest {
     fun linksMenuHiddenWhenNoProxiesForThisSession() = runComposeUiTest {
         val other = ProxyDto(domain = "other.example", sessionName = "elsewhere", port = 4000)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 SessionLinksMenu(session = baseSession, proxies = listOf(other), onOpenUrl = {})
             }
         }
@@ -372,7 +372,7 @@ class SessionHeaderMenusTest {
     fun overflowUsageRowFiresOnUsage() = runComposeUiTest {
         var usageOpened = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession,
                     onRename = {},
@@ -392,7 +392,7 @@ class SessionHeaderMenusTest {
     fun overflow_lsp_settings_row_fires_on_lsp_settings() = runComposeUiTest {
         var opened = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession,
                     onRename = {},
@@ -412,7 +412,7 @@ class SessionHeaderMenusTest {
     fun overflowRenameOpensDialogAndFiresOnRename() = runComposeUiTest {
         var renamed: String? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession,
                     onRename = { renamed = it },
@@ -435,7 +435,7 @@ class SessionHeaderMenusTest {
     fun overflowMuteTogglesToDesiredState() = runComposeUiTest {
         var next: Boolean? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession, // mute == null → treated as not muted
                     onRename = {},
@@ -455,7 +455,7 @@ class SessionHeaderMenusTest {
     fun overflowMuteShowsUnmuteWhenMuted() = runComposeUiTest {
         var next: Boolean? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession.copy(mute = true),
                     onRename = {},
@@ -474,7 +474,7 @@ class SessionHeaderMenusTest {
     fun overflowKillConfirmFiresOnKill() = runComposeUiTest {
         var killed = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession,
                     onRename = {},
@@ -494,7 +494,7 @@ class SessionHeaderMenusTest {
     fun overflowContinuePassesAgentModelAndReasoning() = runComposeUiTest {
         var received: ContinueHandoff? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession.copy(agent = "claude", model = "sonnet", reasoningLevel = "high"),
                     onRename = {},
@@ -560,7 +560,7 @@ class SessionHeaderMenusTest {
         var consumed = 0
         var force by mutableStateOf(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession,
                     onRename = { renamed = it },

@@ -24,11 +24,11 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.StagedUpload
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.ForgeAccount
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeSearchResponse
@@ -185,7 +185,7 @@ class SessionLauncherScreenTest {
         onClearDraft: () -> Unit = {},
         onSubmit: suspend (String, String, String?, String?, String, List<StagedUpload>, Boolean, String?, String?) -> Unit = { _, _, _, _, _, _, _, _, _ -> },
     ) {
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
+        DesktopTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
                 sessions = sessions,
                 home = "/home/u",
@@ -291,7 +291,7 @@ class SessionLauncherScreenTest {
 
     @Test fun project_picker_search_field_filters_project_list() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -324,7 +324,7 @@ class SessionLauncherScreenTest {
         var picked: String? = null
         var dismissed = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -353,7 +353,7 @@ class SessionLauncherScreenTest {
         var picked: String? = null
         var dismissed = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -378,7 +378,7 @@ class SessionLauncherScreenTest {
     @Test fun project_picker_use_this_path_appears_for_free_query() = runComposeUiTest {
         // Android showTypedPath: query non-empty and not an exact known project path.
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -442,7 +442,7 @@ class SessionLauncherScreenTest {
         val home = "/home/u"
         var workdir by remember { mutableStateOf("~") }
         var menu by remember { mutableStateOf(true) }
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
+        DesktopTheme(appearance = AppearanceMode.DARK) {
             Column {
                 Text(
                     formatWorkdir(workdir, home),
@@ -538,7 +538,7 @@ class SessionLauncherScreenTest {
         var dismissed = false
         val gate = CompletableDeferred<Unit>()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -616,7 +616,7 @@ class SessionLauncherScreenTest {
         val hold = CompletableDeferred<Unit>()
         val picked = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -694,7 +694,7 @@ class SessionLauncherScreenTest {
 
     @Test fun project_picker_search_5xx_shows_error_not_empty() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -729,7 +729,7 @@ class SessionLauncherScreenTest {
 
     @Test fun project_picker_empty_search_shows_no_repos_message() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -763,7 +763,7 @@ class SessionLauncherScreenTest {
     @Test fun project_picker_slow_search_shows_searching_indicator() = runComposeUiTest {
         val gate = CompletableDeferred<Unit>()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -811,7 +811,7 @@ class SessionLauncherScreenTest {
             remote(name = "repo$i")
         }
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -884,7 +884,7 @@ class SessionLauncherScreenTest {
     @Test fun project_picker_search_is_entry_point_when_opened() = runComposeUiTest {
         // Plain host (no DropdownMenu) so headless skiko reports IsFocused after requestFocus.
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -925,7 +925,7 @@ class SessionLauncherScreenTest {
     @Test fun project_picker_autofocuses_without_waiting_for_forges() = runComposeUiTest {
         val gate = CompletableDeferred<Unit>()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,
@@ -970,7 +970,7 @@ class SessionLauncherScreenTest {
         val picked = AtomicReference<String?>(null)
         val target = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 Box {
                     ProjectPicker(
                         expanded = true,

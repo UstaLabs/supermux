@@ -48,12 +48,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.theme.softElevation
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -198,7 +198,7 @@ fun PathGroupHeader(
             .clickable(
                 role = Role.Button,
                 onClickLabel = if (collapsed) "Expand" else "Collapse",
-            ) { haptic(HapticKind.Tick); onToggle() }
+            ) { haptic.perform(HapticKind.Tick); onToggle() }
             .semantics { stateDescription = if (collapsed) "Collapsed" else "Expanded" }
     } else {
         Modifier
@@ -316,19 +316,19 @@ fun SessionRow(
     fun runAction(action: SessionSwipeAction?) {
         when (action) {
             SessionSwipeAction.Mute, SessionSwipeAction.Unmute -> {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 onToggleMute()
             }
             SessionSwipeAction.Settle, SessionSwipeAction.Discard -> {
-                haptic(HapticKind.Confirm)
+                haptic.perform(HapticKind.Confirm)
                 onKill()
             }
             SessionSwipeAction.Edit -> {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 onClick()
             }
             SessionSwipeAction.Activate -> {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 onResume()
             }
             null -> Unit
@@ -367,7 +367,7 @@ fun SessionRow(
                 color = surfaceColor,
                 onClick = {
                     onOpenSwipeRowChange(null)
-                    haptic(HapticKind.Tick)
+                    haptic.perform(HapticKind.Tick)
                     onClick()
                 },
                 interactionSource = rowInteraction,
@@ -622,7 +622,7 @@ fun SessionListScreen(
                 .map { it.id }
         dragWorkingState.begin(scope, orderedIds)
         openSwipeRowId = null
-        haptic(HapticKind.Tick)
+        haptic.perform(HapticKind.Tick)
     }
 
     val wsFlatRows = remember(wsGroups) {
@@ -652,7 +652,7 @@ fun SessionListScreen(
         val orderedIds = wsWorkingOrders[scopeKey] ?: wsRowsForScope(scopeKey).map { it.id }
         wsDragState.begin(WorkspaceReorderScope(scopeKey), orderedIds)
         openSwipeRowId = null
-        haptic(HapticKind.Tick)
+        haptic.perform(HapticKind.Tick)
     }
 
     fun finishDrag() {

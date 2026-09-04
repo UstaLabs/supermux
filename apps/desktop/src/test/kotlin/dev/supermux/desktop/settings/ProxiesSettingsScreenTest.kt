@@ -13,8 +13,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -96,7 +96,7 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun proxies_render_from_a_fake_list() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -117,7 +117,7 @@ class ProxiesSettingsScreenTest {
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(proxiesLoad = {
                     loads.incrementAndGet()
                     null
@@ -134,7 +134,7 @@ class ProxiesSettingsScreenTest {
 
     @Test fun empty_list_shows_empty_state_not_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(proxiesLoad = { emptyList() })()
             }
         }
@@ -148,7 +148,7 @@ class ProxiesSettingsScreenTest {
         val created = AtomicReference<Triple<String, Int, String?>?>(null)
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     proxiesLoad = {
                         loads.incrementAndGet()
@@ -198,7 +198,7 @@ class ProxiesSettingsScreenTest {
 
     @Test fun create_proxy_failure_keeps_dialog_and_shows_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(proxyCreate = { _, _, _ -> null })()
             }
         }
@@ -223,7 +223,7 @@ class ProxiesSettingsScreenTest {
         val removed = AtomicReference<String?>(null)
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     proxiesLoad = {
                         loads.incrementAndGet()
@@ -266,7 +266,7 @@ class ProxiesSettingsScreenTest {
 
     @Test fun remove_failure_shows_error_in_dialog() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(proxyRemove = { false })()
             }
         }
@@ -289,7 +289,7 @@ class ProxiesSettingsScreenTest {
     @Test fun toggle_public_requires_confirm_then_calls_set() = runComposeUiTest {
         val toggled = AtomicReference<Pair<String, Boolean>?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     proxySetPublic = { domain, isPublic ->
                         toggled.set(domain to isPublic)
@@ -320,7 +320,7 @@ class ProxiesSettingsScreenTest {
 
     @Test fun toggle_public_failure_shows_error_in_dialog() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(proxySetPublic = { _, _ -> false })()
             }
         }
@@ -388,7 +388,7 @@ class ProxiesSettingsScreenTest {
         val (app, methods) = appForProxies()
         var listed: List<ProxyDto>? = emptyList()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ProxiesSettingsScreen(
                     proxiesLoad = {
                         listed = app.proxiesForSettings()
@@ -419,7 +419,7 @@ class ProxiesSettingsScreenTest {
         var result: List<ProxyDto>? = emptyList()
         var called = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ProxiesSettingsScreen(
                     proxiesLoad = {
                         result = app.proxiesForSettings()
@@ -443,7 +443,7 @@ class ProxiesSettingsScreenTest {
         val (app, methods) = appForProxies(deleteStatus = HttpStatusCode.InternalServerError)
         var removed = true
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ProxiesSettingsScreen(
                     proxiesLoad = { app.proxiesForSettings() },
                     sessionNames = { listOf("web") },
@@ -479,7 +479,7 @@ class ProxiesSettingsScreenTest {
         val (app, _) = appForProxies(createStatus = HttpStatusCode.InternalServerError)
         var created: CreateProxyResponse? = CreateProxyResponse("u", "d", 1)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ProxiesSettingsScreen(
                     proxiesLoad = { app.proxiesForSettings() },
                     sessionNames = { listOf("web") },
@@ -512,7 +512,7 @@ class ProxiesSettingsScreenTest {
         val (app, methods) = appForProxies(patchStatus = HttpStatusCode.InternalServerError)
         var ok = true
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ProxiesSettingsScreen(
                     proxiesLoad = { app.proxiesForSettings() },
                     sessionNames = { listOf("web") },
@@ -540,7 +540,7 @@ class ProxiesSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Proxies) }
         val (app, _) = appForProxies()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),

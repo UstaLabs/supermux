@@ -64,7 +64,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.LocalPanes
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState

@@ -4,7 +4,7 @@
 // Desktop adaptations vs. the Android source:
 //   - Bundled drawable ic_x → Icons.Filled.Close (established mapping; see TerminalTabs.kt /
 //     DesktopComposer.kt).
-//   - `rememberHaptics()(HapticKind.Tick)` on select/close dropped — see FileTree.kt's note; no
+//   - `rememberHaptics().perform(HapticKind.Tick)` on select/close dropped — see FileTree.kt's note; no
 //     haptic actuator on desktop, and no ported desktop file wires the no-op haptics stub at a call
 //     site.
 //   - `pointerHoverIcon(PointerIcon.Hand)` added to the chip and its close glyph (desktop mouse
@@ -39,7 +39,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.theme.LocalPanes
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.editor.Document
 import dev.supermux.ui.theme.MonoFontFamily
 

@@ -3,7 +3,7 @@
 //
 // Desktop adaptations vs. the Android source:
 //   - Bundled drawable ic_search → Icons.Filled.Search.
-//   - `rememberHaptics()(HapticKind.Tick)` on scrim-dismiss / result-tap dropped — see FileTree.kt's
+//   - `rememberHaptics().perform(HapticKind.Tick)` on scrim-dismiss / result-tap dropped — see FileTree.kt's
 //     note; no haptic actuator on desktop, and no ported desktop file wires the no-op haptics stub
 //     at a call site.
 //   - `pointerHoverIcon(PointerIcon.Hand)` added to the dismiss scrim and each result row (desktop

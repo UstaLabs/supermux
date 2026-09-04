@@ -66,9 +66,9 @@ import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.desktop.shell.AppShell
@@ -477,7 +477,7 @@ fun main() {
             // can show a terminal next to the pane the dialog came from.
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
-            SupermuxTheme(appearance = ui.appearance) {
+            DesktopTheme(appearance = ui.appearance) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
@@ -1484,7 +1484,7 @@ fun main() {
                 ) {
                     val extraModal = remember { ModalPresence() }
                     CompositionLocalProvider(LocalModalPresence provides extraModal) {
-                        SupermuxTheme(appearance = ui.appearance) {
+                        DesktopTheme(appearance = ui.appearance) {
                             if (extraBind != null) {
                                 DetachedWorkspaceWindow(host, extraBind, ui)
                             }

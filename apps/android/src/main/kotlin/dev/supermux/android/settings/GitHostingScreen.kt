@@ -60,7 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.LocalPanes
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.net.ForgeCliStatus
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse

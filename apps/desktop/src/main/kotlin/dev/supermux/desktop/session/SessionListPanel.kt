@@ -52,7 +52,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewAgenda
-import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.ui.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -91,7 +91,7 @@ import dev.supermux.desktop.host.HostBadge
 import dev.supermux.desktop.host.HostFilterChips
 import dev.supermux.desktop.host.HostView
 import dev.supermux.desktop.host.filterSessions
-import dev.supermux.desktop.theme.LocalPanes
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space

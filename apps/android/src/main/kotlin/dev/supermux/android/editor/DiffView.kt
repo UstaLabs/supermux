@@ -50,10 +50,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RepoDiff
 import dev.supermux.net.RepoRefs
@@ -152,7 +152,7 @@ fun DiffView(
             Row(
                 Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { haptic(HapticKind.Tick); showBaseSheet = true }
+                    .clickable { haptic.perform(HapticKind.Tick); showBaseSheet = true }
                     .background(cs.surfaceContainerHighest)
                     .padding(horizontal = Space.sm, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -174,7 +174,7 @@ fun DiffView(
                 )
             }
             Spacer(Modifier.width(Space.xs))
-            TextButton(onClick = { haptic(HapticKind.Tick); wrap = !wrap }) {
+            TextButton(onClick = { haptic.perform(HapticKind.Tick); wrap = !wrap }) {
                 Text(
                     "Wrap",
                     style = MaterialTheme.typography.titleSmall,
@@ -206,7 +206,7 @@ fun DiffView(
                                 repo = repo,
                                 expanded = repo.repo in expandedRepos,
                                 onToggle = {
-                                    haptic(HapticKind.Tick)
+                                    haptic.perform(HapticKind.Tick)
                                     expandedRepos = toggle(expandedRepos, repo.repo)
                                 },
                             )
@@ -228,10 +228,10 @@ fun DiffView(
                                     draft = draft,
                                     submitting = submitting,
                                     onToggleFile = {
-                                        haptic(HapticKind.Tick)
+                                        haptic.perform(HapticKind.Tick)
                                         expandedFiles = toggle(expandedFiles, key)
                                     },
-                                    onToggleComposer = { ck -> haptic(HapticKind.Tick); toggleComposer(ck) },
+                                    onToggleComposer = { ck -> haptic.perform(HapticKind.Tick); toggleComposer(ck) },
                                     onDraftChange = { draft = it },
                                     onCancelComposer = { composerFor = null; draft = "" },
                                     onAdd = { repoId, path, line, hunkHeader ->
@@ -353,12 +353,12 @@ private fun BaseSelectorSheet(
             }
             item(key = "session-start") {
                 BaseRow("Session start", selected = base == "session-start") {
-                    haptic(HapticKind.Tick); onSelect("session-start")
+                    haptic.perform(HapticKind.Tick); onSelect("session-start")
                 }
             }
             item(key = "head") {
                 BaseRow("Uncommitted (HEAD)", selected = base == "head") {
-                    haptic(HapticKind.Tick); onSelect("head")
+                    haptic.perform(HapticKind.Tick); onSelect("head")
                 }
             }
 
@@ -372,7 +372,7 @@ private fun BaseSelectorSheet(
                         label = c.subject,
                         mono = c.sha.take(7),
                         selected = base == spec,
-                    ) { haptic(HapticKind.Tick); onSelect(spec) }
+                    ) { haptic.perform(HapticKind.Tick); onSelect(spec) }
                 }
             }
 
@@ -383,7 +383,7 @@ private fun BaseSelectorSheet(
                 items(branches, key = { "branch:$it" }) { b ->
                     val spec = "branch:$b"
                     BaseRow(monoLabel = b, selected = base == spec) {
-                        haptic(HapticKind.Tick); onSelect(spec)
+                        haptic.perform(HapticKind.Tick); onSelect(spec)
                     }
                 }
             }

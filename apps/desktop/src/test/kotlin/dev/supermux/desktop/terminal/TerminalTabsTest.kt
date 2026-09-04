@@ -17,8 +17,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -111,7 +111,7 @@ class TerminalTabsTest {
 
     @Composable
     private fun host(app: HostStore, mounts: MutableList<String>, disposals: MutableList<String>) {
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
+        DesktopTheme(appearance = AppearanceMode.DARK) {
             TerminalTabs(
                 app = app,
                 sessionId = "s1",

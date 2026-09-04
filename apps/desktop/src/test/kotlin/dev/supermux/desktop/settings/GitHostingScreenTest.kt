@@ -12,8 +12,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -133,7 +133,7 @@ class GitHostingScreenTest {
 
     @Test fun empty_state_shows_connect_a_git_host_strings() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
@@ -159,7 +159,7 @@ class GitHostingScreenTest {
 
     @Test fun connection_list_renders_login_and_disconnect() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = {
                         response(
@@ -193,7 +193,7 @@ class GitHostingScreenTest {
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = {
                         loads.incrementAndGet()
@@ -223,7 +223,7 @@ class GitHostingScreenTest {
 
     @Test fun manual_github_opens_add_dialog() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
@@ -251,7 +251,7 @@ class GitHostingScreenTest {
 
     @Test fun connect_failure_surfaces_error_in_dialog() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
@@ -288,7 +288,7 @@ class GitHostingScreenTest {
     @Test fun connect_success_closes_dialog_and_reloads_list() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = {
                         val n = loads.incrementAndGet()
@@ -332,7 +332,7 @@ class GitHostingScreenTest {
     @Test fun disconnect_confirm_calls_remove() = runComposeUiTest {
         val removed = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = { response(listOf(conn(id = "c-rm", login = "gone"))) },
                     forgeAdd = { _, _, _, _ -> false },
@@ -372,7 +372,7 @@ class GitHostingScreenTest {
     @Test fun disconnect_failure_keeps_row_and_surfaces_error() = runComposeUiTest {
         val removed = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = { response(listOf(conn(id = "c-keep", login = "sticky"))) },
                     forgeAdd = { _, _, _, _ -> false },
@@ -415,7 +415,7 @@ class GitHostingScreenTest {
     @Test fun cli_import_button_shown_when_cli_available() = runComposeUiTest {
         val imported = AtomicBoolean(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = {
                         response(
@@ -453,7 +453,7 @@ class GitHostingScreenTest {
         // Opens the add dialog (which has the CLI import path) and forces import to fail —
         // the old bug closed the dialog with no error on a 500.
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = {
                         response(
@@ -500,7 +500,7 @@ class GitHostingScreenTest {
 
     @Test fun invalid_self_host_url_blocks_connect_and_shows_feedback() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> true },
@@ -534,7 +534,7 @@ class GitHostingScreenTest {
 
     @Test fun needs_reconnect_shows_badge_and_reconnect() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 GitHostingScreen(
                     forgesLoad = {
                         response(listOf(conn(id = "stale", login = "stale", status = "needs_reconnect")))
@@ -606,7 +606,7 @@ class GitHostingScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.GitHosting) }
         val app = appWithForges(body)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -635,7 +635,7 @@ class GitHostingScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val app = appWithForges(body)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state-rail")),

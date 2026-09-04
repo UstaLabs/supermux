@@ -13,8 +13,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -100,7 +100,7 @@ class AssistantSettingsScreenTest {
     }
 
     @Test fun assistant_renders_pa_name_and_soul() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -120,7 +120,7 @@ class AssistantSettingsScreenTest {
     }
 
     @Test fun curator_section_renders_controls() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { curatorScreen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { curatorScreen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -136,7 +136,7 @@ class AssistantSettingsScreenTest {
 
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(assistantLoad = { null })()
             }
         }
@@ -150,7 +150,7 @@ class AssistantSettingsScreenTest {
 
     @Test fun empty_soul_is_ready_not_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(assistantLoad = { "" to "" })()
             }
         }
@@ -170,7 +170,7 @@ class AssistantSettingsScreenTest {
     @Test fun save_soul_success_shows_saved_badge() = runComposeUiTest {
         val saved = AtomicReference<Pair<String, String>?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     assistantLoad = { "" to "" },
                     assistantSave = { name, soul ->
@@ -207,7 +207,7 @@ class AssistantSettingsScreenTest {
 
     @Test fun save_soul_failure_shows_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     assistantLoad = { "x" to "y" },
                     assistantSave = { _, _ -> "Couldn't save soul.md — check connection and try again" },
@@ -240,7 +240,7 @@ class AssistantSettingsScreenTest {
     @Test fun curator_run_now_fires() = runComposeUiTest {
         val ran = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 curatorScreen(curatorRunNow = {
                     ran.set(true)
                     true
@@ -263,7 +263,7 @@ class AssistantSettingsScreenTest {
 
     @Test fun curator_run_now_failure_shows_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 curatorScreen(curatorRunNow = { false })()
             }
         }
@@ -290,7 +290,7 @@ class AssistantSettingsScreenTest {
     @Test fun curator_save_updates_next_run() = runComposeUiTest {
         val saved = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 curatorScreen(
                     curatorSave = { e, h, m, a, model, r ->
                         saved.set(true)
@@ -328,7 +328,7 @@ class AssistantSettingsScreenTest {
 
     @Test fun curator_save_failure_shows_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 curatorScreen(curatorSave = { _, _, _, _, _, _ -> null })()
             }
         }
@@ -442,7 +442,7 @@ class AssistantSettingsScreenTest {
         val (app, methods) = appForAssistant()
         var loaded: Pair<String, String>? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AssistantSettingsScreen(
                     assistantLoad = {
                         loaded = app.assistantLoad()
@@ -476,7 +476,7 @@ class AssistantSettingsScreenTest {
         val (app, _) = appForAssistant(soulBody = null)
         var loaded: Pair<String, String>? = Pair("x", "y") // non-null until proven
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AssistantSettingsScreen(
                     assistantLoad = {
                         loaded = app.assistantLoad()
@@ -505,7 +505,7 @@ class AssistantSettingsScreenTest {
         val (app, methods) = appForAssistant(configPutOk = false, soulPutOk = true)
         var saveErr: String? = "unset"
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AssistantSettingsScreen(
                     assistantLoad = { app.assistantLoad() },
                     assistantSave = { n, s ->
@@ -542,7 +542,7 @@ class AssistantSettingsScreenTest {
         val (app, methods) = appForAssistant(curatorRunStatus = HttpStatusCode.InternalServerError)
         var ok = true
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 CuratorSettingsScreen(
                     curatorLoad = { app.curatorSettings() },
                     curatorSave = { e, h, m, a, model, r -> app.saveCurator(e, h, m, a, model, r) },
@@ -568,7 +568,7 @@ class AssistantSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Assistant) }
         val (app, _) = appForAssistant()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),

@@ -10,8 +10,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.ViewDto
@@ -47,7 +47,7 @@ fun main() = application {
         state = rememberWindowState(width = 340.dp, height = 700.dp),
     ) {
         // Same theme wrapper Main.kt applies around the shell.
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
+        DesktopTheme(appearance = AppearanceMode.DARK) {
             Box(
                 Modifier
                     .fillMaxSize()

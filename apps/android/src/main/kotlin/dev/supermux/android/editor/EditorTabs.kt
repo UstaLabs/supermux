@@ -25,11 +25,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.Haptics
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.editor.Document
 
 @Composable
@@ -90,7 +91,7 @@ private fun TabChip(
     loading: Boolean,
     onSelect: () -> Unit,
     onClose: () -> Unit,
-    haptic: (HapticKind) -> Unit,
+    haptic: Haptics,
 ) {
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
@@ -100,7 +101,7 @@ private fun TabChip(
             .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
             .background(if (active) cs.surfaceContainer else Color.Transparent)
             .clickable(enabled = !loading) {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 onSelect()
             }
             .padding(horizontal = 10.dp),
@@ -140,7 +141,7 @@ private fun TabChip(
                 modifier = Modifier
                     .size(14.dp)
                     .clickable {
-                        haptic(HapticKind.Tick)
+                        haptic.perform(HapticKind.Tick)
                         onClose()
                     },
             )

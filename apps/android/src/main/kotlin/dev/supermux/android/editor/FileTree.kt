@@ -26,9 +26,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.FsEntry
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.workspace.TreeNode
@@ -125,7 +125,7 @@ private fun TreeNodeRow(
         Modifier
             .fillMaxWidth()
             .clickable {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 onClick(node)
             }
             .padding(start = (depth * 14 + 10).dp, end = SpaceEnd, top = 4.dp, bottom = 4.dp),

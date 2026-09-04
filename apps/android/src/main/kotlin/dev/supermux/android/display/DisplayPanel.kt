@@ -59,7 +59,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
-import dev.supermux.android.theme.LocalPanes
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space

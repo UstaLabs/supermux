@@ -120,9 +120,9 @@ import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.terminal.ScratchTerminalPanel
 import dev.supermux.android.session.SessionAvatar
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitBadgeKind
@@ -799,7 +799,7 @@ fun ChatScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        haptic(HapticKind.Heavy)
+                        haptic.perform(HapticKind.Heavy)
                         showKillDialog = false
                         onKill()
                     },

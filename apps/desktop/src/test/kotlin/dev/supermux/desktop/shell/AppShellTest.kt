@@ -20,8 +20,8 @@ import androidx.compose.ui.unit.width
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.editor.DesktopWalkthroughSeam
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.ServerFrame
 import dev.supermux.workspace.singleViewLayout
@@ -166,7 +166,7 @@ class AppShellTest {
         val ui = ShellUiState().apply { sidebarCollapsed = true } // rail mode → TestIds.NEW_SESSION
         val app = appFor(mutableListOf())
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -187,7 +187,7 @@ class AppShellTest {
         val ui = ShellUiState().apply { launcherOpen = true }
         val launcherStore = LauncherStore(tempPath("launcher"))
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), launcherStore)
             }
         }
@@ -221,7 +221,7 @@ class AppShellTest {
         val app = appFor(sent, validateOk = false) // invalid workdir → createSessionWithFirstMessage returns null
         val ui = ShellUiState().apply { launcherOpen = true }
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -245,7 +245,7 @@ class AppShellTest {
         val ui = ShellUiState().apply { launcherOpen = true }
         val launcherStore = LauncherStore(tempPath("launcher"))
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), launcherStore)
             }
         }
@@ -273,7 +273,7 @@ class AppShellTest {
         val app = appFor(mutableListOf())
         val ui = ShellUiState().apply { launcherOpen = true } // sidebarCollapsed defaults false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -316,7 +316,7 @@ class AppShellTest {
         val fakeManager = RecordingNotificationManager()
         val notify = dev.supermux.desktop.notify.NotificationController(fakeManager)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
             }
         }
@@ -349,7 +349,7 @@ class AppShellTest {
         val fakeManager = RecordingNotificationManager()
         val notify = dev.supermux.desktop.notify.NotificationController(fakeManager)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")), notify)
             }
         }
@@ -454,7 +454,7 @@ class AppShellTest {
         val app = twoWorkspaceApp()
         val ui = ShellUiState().apply { selectedId = "s1" }
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -478,7 +478,7 @@ class AppShellTest {
         val app = twoWorkspaceApp()
         val ui = ShellUiState().apply { selectedId = "s1" }
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -523,7 +523,7 @@ class AppShellTest {
         )
         val ui = ShellUiState().apply { selectedId = "s1" }
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -544,7 +544,7 @@ class AppShellTest {
             )
             val ui = ShellUiState().apply { selectedId = "s1" }
             setContent {
-                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DesktopTheme(appearance = AppearanceMode.DARK) {
                     AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
                 }
             }

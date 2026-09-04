@@ -14,8 +14,8 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.DesktopRoute
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -91,7 +91,7 @@ class ArchivedScreenTest {
 
     @Test fun renders_rows_with_names_and_project_labels() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() })
             }
         }
@@ -106,7 +106,7 @@ class ArchivedScreenTest {
 
     @Test fun project_filter_narrows_to_the_selected_project() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() })
             }
         }
@@ -124,7 +124,7 @@ class ArchivedScreenTest {
 
     @Test fun search_narrows_by_name() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() })
             }
         }
@@ -138,7 +138,7 @@ class ArchivedScreenTest {
 
     @Test fun loading_shows_a_spinner_not_the_empty_text() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(emptyList(), home, onBack = {}, onResume = {}, loadLogs = { emptyList() }, loading = true)
             }
         }
@@ -150,7 +150,7 @@ class ArchivedScreenTest {
 
     @Test fun resolved_empty_shows_the_no_archived_sessions_text() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(emptyList(), home, onBack = {}, onResume = {}, loadLogs = { emptyList() }, loading = false)
             }
         }
@@ -160,7 +160,7 @@ class ArchivedScreenTest {
 
     @Test fun resolved_nonempty_shows_rows_not_the_empty_text() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() }, loading = false)
             }
         }
@@ -173,7 +173,7 @@ class ArchivedScreenTest {
         // A non-empty archived list but a search that matches nothing → "No matches." (there ARE
         // archived sessions, just none in view), distinct from the truly-empty "No archived sessions."
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() })
             }
         }
@@ -187,7 +187,7 @@ class ArchivedScreenTest {
     @Test fun escape_from_the_list_closes_the_overlay_via_on_back() = runComposeUiTest {
         var backCalled = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = { backCalled = true }, onResume = {}, loadLogs = { emptyList() })
             }
         }
@@ -206,7 +206,7 @@ class ArchivedScreenTest {
             LogEntry(id = "m2", ts = "2026-07-09T10:00:05Z", direction = "outbound", text = "hi back"),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { logs })
             }
         }
@@ -229,7 +229,7 @@ class ArchivedScreenTest {
         )
         var consumedCount = 0
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(
                     fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { logs },
                     forceOpenId = "a1",
@@ -247,7 +247,7 @@ class ArchivedScreenTest {
     @Test fun resume_fires_on_resume_with_the_session_id() = runComposeUiTest {
         var resumed: String? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = {}, onResume = { resumed = it }, loadLogs = { emptyList() })
             }
         }
@@ -262,7 +262,7 @@ class ArchivedScreenTest {
     @Test fun escape_from_the_chat_view_returns_to_the_list() = runComposeUiTest {
         var backCalled = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ArchivedScreen(fakeArchived, home, onBack = { backCalled = true }, onResume = {}, loadLogs = { emptyList() })
             }
         }
@@ -327,7 +327,7 @@ class ArchivedScreenTest {
         val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) }
         val app = appForArchived()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -344,7 +344,7 @@ class ArchivedScreenTest {
         val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) } // sidebarCollapsed defaults false
         val app = appForArchived()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -362,7 +362,7 @@ class ArchivedScreenTest {
         val ui = ShellUiState().apply { navigate(DesktopRoute.Archived) }
         val app = appForArchived()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }

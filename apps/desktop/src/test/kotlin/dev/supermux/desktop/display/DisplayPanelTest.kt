@@ -10,8 +10,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.BrokerApi
 import dev.supermux.proto.SessionInfo
 import io.ktor.client.HttpClient
@@ -66,7 +66,7 @@ class DisplayPanelTest {
 
     @Test fun no_running_display_shows_the_empty_state_with_a_start_button() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 DisplayPanel(app = appWith("[]"), session = session)
             }
         }
@@ -77,7 +77,7 @@ class DisplayPanelTest {
 
     @Test fun a_running_display_for_a_different_session_still_shows_the_empty_state() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 DisplayPanel(
                     app = appWith("""[{"id":"d1","sessionName":"other","status":"running"}]"""),
                     session = session,
@@ -106,7 +106,7 @@ class DisplayPanelTest {
             deps = testDeps(),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) { DisplayPanel(app = app, session = session) }
+            DesktopTheme(appearance = AppearanceMode.DARK) { DisplayPanel(app = app, session = session) }
         }
         waitForTag("display_start_button")
 

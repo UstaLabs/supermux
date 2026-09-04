@@ -17,8 +17,8 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
@@ -136,7 +136,7 @@ class EditorLspScreenTest {
     }
 
     @Test fun servers_render_from_a_fake_lsp_load_list() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         onNodeWithTag("lsp_server_row_typescript").assertIsDisplayed()
         onNodeWithTag("lsp_server_row_pyright").assertIsDisplayed()
@@ -148,7 +148,7 @@ class EditorLspScreenTest {
     @Test fun the_enable_switch_fires_lsp_toggle_with_the_desired_state() = runComposeUiTest {
         var toggled: Pair<String, Boolean>? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(lspToggle = { id, enabled -> toggled = id to enabled; null })()
             }
         }
@@ -160,7 +160,7 @@ class EditorLspScreenTest {
 
     @Test fun toggle_updates_the_row_from_the_returned_server_list() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(lspToggle = { id, enabled -> listOf(pyright().copy(enabled = enabled)) })()
             }
         }
@@ -174,7 +174,7 @@ class EditorLspScreenTest {
 
     @Test fun install_button_only_shown_when_enabled_installable_and_not_ready() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = listOf(ts(), pyright().copy(enabled = true)))()
             }
         }
@@ -195,7 +195,7 @@ class EditorLspScreenTest {
         // appear — this is the realistic shape of a long-running install, not a test artifact.
         val installGate = CompletableDeferred<Unit>()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     servers = listOf(pyright().copy(enabled = true)),
                     installLog = log,
@@ -220,7 +220,7 @@ class EditorLspScreenTest {
             mapOf("pyright" to ServerFrame.LspInstallDone(serverId = "pyright", ok = true)),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = listOf(pyright().copy(enabled = true)), installDone = done)()
             }
         }
@@ -236,7 +236,7 @@ class EditorLspScreenTest {
             mapOf("pyright" to ServerFrame.LspInstallDone(serverId = "pyright", ok = false, error = "network unreachable")),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = listOf(pyright().copy(enabled = true)), installDone = done)()
             }
         }
@@ -247,7 +247,7 @@ class EditorLspScreenTest {
     @Test fun custom_server_shows_a_remove_button_and_firing_it_calls_lsp_remove_custom() = runComposeUiTest {
         var removedId: String? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     servers = listOf(zig()),
                     lspRemoveCustom = { id -> removedId = id; LspMutationResult(ok = true, lsp = null) },
@@ -266,7 +266,7 @@ class EditorLspScreenTest {
     // ── (3) the add-custom-server form ────────────────────────────────────────────────────────────
 
     @Test fun add_form_toggle_reveals_the_form_and_save_validates_required_fields() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen(servers = emptyList())() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen(servers = emptyList())() } }
         waitForIdle()
         onNodeWithTag("lsp_add_form").assertDoesNotExist()
         onNodeWithTag("lsp_add_toggle").performClick()
@@ -281,7 +281,7 @@ class EditorLspScreenTest {
     @Test fun submitting_a_valid_add_form_calls_lsp_add_custom_and_closes_the_form_on_success() = runComposeUiTest {
         var submitted: AddCustomLspArgs? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     servers = emptyList(),
                     lspAddCustom = { args ->
@@ -308,7 +308,7 @@ class EditorLspScreenTest {
 
     @Test fun a_failed_add_shows_the_returned_error_and_keeps_the_form_open() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(servers = emptyList(), lspAddCustom = { LspMutationResult(ok = false, error = "id already exists") })()
             }
         }
@@ -328,7 +328,7 @@ class EditorLspScreenTest {
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {
         var backCalled = false
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen(onBack = { backCalled = true })() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen(onBack = { backCalled = true })() } }
         waitForIdle()
         onNodeWithTag("lsp_settings_back").performClick()
         assertTrue(backCalled)
@@ -384,7 +384,7 @@ class EditorLspScreenTest {
         val ui = ShellUiState().apply { openLspSettings() }
         val app = appForLspSettings()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -404,7 +404,7 @@ class EditorLspScreenTest {
         val ui = ShellUiState().apply { openLspSettings() }
         val app = appForLspSettings()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -424,7 +424,7 @@ class EditorLspScreenTest {
         val ui = ShellUiState().apply { openLspSettings() }
         val app = appForLspSettings()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),

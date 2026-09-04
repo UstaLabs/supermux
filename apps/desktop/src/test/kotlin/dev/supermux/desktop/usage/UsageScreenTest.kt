@@ -16,8 +16,8 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
@@ -102,7 +102,7 @@ class UsageScreenTest {
 
     @Test fun loading_and_usage_null_shows_a_spinner_not_the_unable_to_load_text() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = null, loading = true, onBack = {}, onRedeem = { null })
             }
         }
@@ -113,7 +113,7 @@ class UsageScreenTest {
 
     @Test fun usage_null_and_not_loading_shows_the_unable_to_load_text() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = null, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -124,7 +124,7 @@ class UsageScreenTest {
 
     @Test fun renders_all_three_provider_cards_from_a_representative_usage_response() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -156,7 +156,7 @@ class UsageScreenTest {
     @Test fun back_button_fires_on_back() = runComposeUiTest {
         var backCalled = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(), loading = false, onBack = { backCalled = true }, onRedeem = { null })
             }
         }
@@ -174,7 +174,7 @@ class UsageScreenTest {
             windowSeconds = 604_800.0,
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(codexWindows = listOf(currentWindow)),
                     loading = false,
@@ -194,7 +194,7 @@ class UsageScreenTest {
         val fixture = fixtureUsage()
         val usage = fixture.copy(cursor = requireNotNull(fixture.cursor).copy(spendAvailable = false))
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -207,7 +207,7 @@ class UsageScreenTest {
 
     @Test fun null_seven_day_fable_hides_that_row() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(sevenDayFable = null), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -219,7 +219,7 @@ class UsageScreenTest {
 
     @Test fun present_seven_day_fable_shows_the_row() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(sevenDayFable = ClaudeWindow(used = 5.0, resetsAt = null)),
                     loading = false, onBack = {}, onRedeem = { null },
@@ -248,7 +248,7 @@ class UsageScreenTest {
             ),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -262,7 +262,7 @@ class UsageScreenTest {
     @Test fun a_provider_absent_from_usage_and_errors_falls_back_to_not_available() = runComposeUiTest {
         val usage = UsageResponse(claude = null, codex = null, cursor = null, errors = emptyMap())
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -279,7 +279,7 @@ class UsageScreenTest {
             fetchedAt = mapOf("claude" to "2026-07-09T11:55:00Z", "codex" to "2026-07-09T10:00:00Z"),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null }, now = now)
             }
         }
@@ -294,7 +294,7 @@ class UsageScreenTest {
     @Test fun refreshing_providers_show_a_progress_indicator() = runComposeUiTest {
         val usage = fixtureUsage().copy(refreshing = listOf("claude", "cursor"))
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -307,7 +307,7 @@ class UsageScreenTest {
     @Test fun refresh_button_calls_on_refresh() = runComposeUiTest {
         var refreshed = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(),
                     loading = false,
@@ -327,7 +327,7 @@ class UsageScreenTest {
 
     @Test fun redeem_button_shown_only_when_reset_credits_positive() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(codexResetCredits = 3), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -337,7 +337,7 @@ class UsageScreenTest {
 
     @Test fun redeem_button_hidden_when_reset_credits_is_zero() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(codexResetCredits = 0), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -348,7 +348,7 @@ class UsageScreenTest {
     @Test fun firing_the_redeem_button_confirms_then_calls_on_redeem() = runComposeUiTest {
         var redeemCalled = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(codexResetCredits = 3),
                     loading = false,
@@ -372,7 +372,7 @@ class UsageScreenTest {
     @Test fun canceling_the_redeem_dialog_does_not_call_on_redeem() = runComposeUiTest {
         var redeemCalled = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(codexResetCredits = 3),
                     loading = false,
@@ -477,7 +477,7 @@ class UsageScreenTest {
         val ui = ShellUiState().apply { openUsage() }
         val app = appForUsage()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -494,7 +494,7 @@ class UsageScreenTest {
         val ui = ShellUiState().apply { openUsage() }
         val app = appForUsage()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -509,7 +509,7 @@ class UsageScreenTest {
         val ui = ShellUiState().apply { openUsage() } // sidebarCollapsed defaults false
         val app = appForUsage()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
@@ -527,7 +527,7 @@ class UsageScreenTest {
         val ui = ShellUiState().apply { openUsage() }
         val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }

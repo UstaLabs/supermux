@@ -19,8 +19,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.editor.DesktopWalkthroughSeam
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.ProxyDto
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -74,7 +74,7 @@ class ChatHeaderTest {
     @Test
     fun linksMenuHiddenWhenTheSessionHasNoProxies() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },
@@ -89,7 +89,7 @@ class ChatHeaderTest {
         var consumed = 0
         var force by mutableStateOf(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     loadProxies = {
@@ -112,7 +112,7 @@ class ChatHeaderTest {
         // Suppressing the header suppresses the load too — nothing would draw the result.
         var loads = 0
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     showHeader = false,
@@ -128,7 +128,7 @@ class ChatHeaderTest {
     @Test
     fun pillShownForClaudeWithANativeSurface() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },
@@ -143,7 +143,7 @@ class ChatHeaderTest {
     @Test
     fun pillHiddenForNonClaude() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = codexSession, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },
@@ -160,7 +160,7 @@ class ChatHeaderTest {
     @Test
     fun pillHiddenWhenTheCallerSuppliesNoNativeSurface() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },
@@ -174,7 +174,7 @@ class ChatHeaderTest {
     fun togglingSwapsTheBodyButKeepsChatInTreeAndTheHeaderOnScreen() = runComposeUiTest {
         capturedOnExit = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },
@@ -207,7 +207,7 @@ class ChatHeaderTest {
     fun ptyExitDropsThePanelAndReturnsToTheTranscript() = runComposeUiTest {
         capturedOnExit = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = claudeSession, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },
@@ -235,7 +235,7 @@ class ChatHeaderTest {
         val disposals = mutableListOf<String>()
         var current by mutableStateOf(claudeSession)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 ChatPanel(
                     app = app(), session = current, draft = "", onDraftChange = {},
                     loadProxies = { emptyList() },

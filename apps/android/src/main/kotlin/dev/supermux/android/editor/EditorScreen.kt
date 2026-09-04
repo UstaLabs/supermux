@@ -52,10 +52,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import dev.supermux.android.R
 import dev.supermux.android.chat.MarkdownBody
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
@@ -298,7 +298,7 @@ fun EditorPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = {
-                    haptic(HapticKind.Tick)
+                    haptic.perform(HapticKind.Tick)
                     focusManager.clearFocus()
                     searchResults.clear()
                     editor.treeVisible = !treeVisible
@@ -321,7 +321,7 @@ fun EditorPanel(
                 )
                 // Markdown preview toggle — only on .md tabs (parity EditorPane.swift:158-166).
                 if (showPreviewToggle) {
-                    IconButton(onClick = { haptic(HapticKind.Tick); editor.previewMode = !editor.previewMode }) {
+                    IconButton(onClick = { haptic.perform(HapticKind.Tick); editor.previewMode = !editor.previewMode }) {
                         Icon(
                             painter = painterResource(
                                 if (editor.previewMode) R.drawable.ic_pencil else R.drawable.ic_eye,
@@ -343,7 +343,7 @@ fun EditorPanel(
                     }
                 } else {
                     IconButton(onClick = {
-                        haptic(HapticKind.Tick)
+                        haptic.perform(HapticKind.Tick)
                         focusManager.clearFocus()
                         scope.launch { editor.loadDiff(fsDiff, fsRefs) }
                     }) {
@@ -366,7 +366,7 @@ fun EditorPanel(
                 } else {
                     IconButton(
                         onClick = {
-                            haptic(HapticKind.Confirm)
+                            haptic.perform(HapticKind.Confirm)
                             editor.saveActive()
                         },
                         enabled = editor.activeTab?.let { editor.isDirty(it.path) } == true,
@@ -550,7 +550,7 @@ fun EditorPanel(
                                 .fillMaxSize()
                                 .background(Color.Black.copy(alpha = 0.45f))
                                 .clickable {
-                                    haptic(HapticKind.Tick)
+                                    haptic.perform(HapticKind.Tick)
                                     editor.treeVisible = false
                                 },
                         )

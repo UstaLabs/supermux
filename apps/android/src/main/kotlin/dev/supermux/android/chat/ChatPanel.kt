@@ -101,12 +101,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.chat.TimelineItem
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
@@ -488,7 +488,7 @@ fun ChatPanel(
                     .forEachIndexed { i, prompt ->
                         Surface(
                             onClick = {
-                                haptic(HapticKind.Confirm)
+                                haptic.perform(HapticKind.Confirm)
                                 onSendWith(prompt, emptyList())
                             },
                             shape = RoundedCornerShape(Radii.md),
@@ -599,7 +599,7 @@ fun ChatPanel(
             // Apply a slash command — shared by a tap and by keyboard Enter. Control commands clear
             // the token and fire onControl; everything else inserts its text (SlashCommands.kt).
             fun selectSlashCommand(cmd: SlashCommand) {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 if (cmd.action != null) {
                     val cleared = replaceSlashToken(text.text, "")
                     text = TextFieldValue(cleared, TextRange(cleared.length))
@@ -730,7 +730,7 @@ fun ChatPanel(
             val canSend = !anyBlocking && (text.text.isNotBlank() || pendingAttachments.isNotEmpty())
             fun doSend() {
                 if (!canSend) return
-                haptic(HapticKind.Confirm)
+                haptic.perform(HapticKind.Confirm)
                 val attachmentIds = pendingAttachments.map { it.fileId }
                 onSendWith(text.text, attachmentIds)
                 text = TextFieldValue("")
@@ -1152,7 +1152,7 @@ private fun WorkingIndicator(
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(Radii.sm))
-                .clickable { haptic(HapticKind.Tick); onStop() }
+                .clickable { haptic.perform(HapticKind.Tick); onStop() }
                 .testTag("working_stop")
                 .padding(horizontal = Space.sm, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1258,7 +1258,7 @@ private fun SendingIndicator(onStop: () -> Unit) {
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(Radii.sm))
-                .clickable { haptic(HapticKind.Tick); onStop() }
+                .clickable { haptic.perform(HapticKind.Tick); onStop() }
                 .testTag("sending_stop")
                 .padding(horizontal = Space.sm, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,

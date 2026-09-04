@@ -38,7 +38,7 @@ import dev.supermux.desktop.ui.KeepAlivePanel
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalInteropOverlay
-import dev.supermux.desktop.theme.LocalPanes
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.TerminalClient

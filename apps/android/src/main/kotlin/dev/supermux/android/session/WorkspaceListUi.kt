@@ -41,12 +41,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.LocalPanes
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.WorkspaceActivity
 
@@ -117,11 +117,11 @@ fun WorkspaceRow(
                 startIcon = icon(startAction),
                 endIcon = icon(endAction),
                 onStartAction = {
-                    haptic(HapticKind.Tick)
+                    haptic.perform(HapticKind.Tick)
                     onToggleMute()
                 },
                 onEndAction = {
-                    haptic(HapticKind.Confirm)
+                    haptic.perform(HapticKind.Confirm)
                     onKill()
                 },
                 enabled = !isDragging,
@@ -135,7 +135,7 @@ fun WorkspaceRow(
                     color = surfaceColor,
                     onClick = {
                         onOpenSwipeRowChange(null)
-                        haptic(HapticKind.Tick)
+                        haptic.perform(HapticKind.Tick)
                         onClick()
                     },
                     interactionSource = rowInteraction,
@@ -204,7 +204,7 @@ fun WorkspaceRow(
                                         modifier = Modifier
                                             .size(20.dp)
                                             .clickable {
-                                                haptic(HapticKind.Tick)
+                                                haptic.perform(HapticKind.Tick)
                                                 menu = true
                                             },
                                     )
@@ -259,7 +259,7 @@ fun WorkspaceRow(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                haptic(HapticKind.Tick)
+                                haptic.perform(HapticKind.Tick)
                                 onChildClick(child.sessionId)
                             }
                             .padding(horizontal = 8.dp, vertical = 6.dp),

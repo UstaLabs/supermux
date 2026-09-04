@@ -7,8 +7,8 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
@@ -36,7 +36,7 @@ class WorkspaceHeaderTest {
     @Test
     fun repoWorkspaceDrawsTheBadgeStrip() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 WorkspaceHeader(
                     gitSession = repoSession,
                     onFetch = noOps(), onPull = noOps(), onPush = noOps(), onPublish = noOps(),
@@ -50,7 +50,7 @@ class WorkspaceHeaderTest {
     @Test
     fun nonRepoWorkspaceDrawsNoStripAtAll() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 WorkspaceHeader(
                     gitSession = plainSession,
                     onFetch = noOps(), onPull = noOps(), onPush = noOps(), onPublish = noOps(),
@@ -65,7 +65,7 @@ class WorkspaceHeaderTest {
     @Test
     fun workspaceWithNoChatSessionDrawsNoStrip() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 WorkspaceHeader(
                     gitSession = null,
                     onFetch = noOps(), onPull = noOps(), onPush = noOps(), onPublish = noOps(),
@@ -81,7 +81,7 @@ class WorkspaceHeaderTest {
         var consumed = 0
         var force by mutableStateOf<GitMenuForceOp?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 WorkspaceHeader(
                     gitSession = repoSession,
                     onFetch = noOps(), onPull = noOps(), onPush = noOps(), onPublish = noOps(),
@@ -104,7 +104,7 @@ class WorkspaceHeaderTest {
         var fetches = 0
         var force by mutableStateOf<GitMenuForceOp?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 WorkspaceHeader(
                     gitSession = repoSession,
                     onFetch = { fetches++; GitOpResult(status = "ok") },

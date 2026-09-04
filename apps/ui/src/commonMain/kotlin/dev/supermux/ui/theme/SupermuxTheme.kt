@@ -1,44 +1,22 @@
-package dev.supermux.android.theme
+package dev.supermux.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import androidx.core.view.WindowCompat
 import dev.supermux.ui.SupermuxColors
-import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.supermuxDark
 import dev.supermux.ui.supermuxLight
-import dev.supermux.ui.theme.LocalSemantics
-import dev.supermux.ui.theme.supermuxSemanticsDark
-import dev.supermux.ui.theme.supermuxSemanticsLight
-import dev.supermux.ui.theme.supermuxTouchTypography
-
-/**
- * Slimmed pane palette. Only the genuinely-fixed app tones should be read from here
- * (`code`, `terminal`, `terminalForeground`, `warning`) — everything else now comes
- * through `MaterialTheme.colorScheme` so it follows light/dark and Material You.
- */
-val LocalPanes = staticCompositionLocalOf { supermuxDark() }
-
-enum class AppearanceMode { SYSTEM, LIGHT, DARK }
 
 /** M3 shape scale derived from the brand `Radii` (Tokens.kt) + M3's 4dp/28dp ends. */
 val SupermuxShapes = Shapes(
@@ -131,18 +109,27 @@ private fun buildSupermuxScheme(c: SupermuxColors, other: SupermuxColors, dark: 
     )
 }
 
-/**
- * Root theme. Defaults keep the existing `SupermuxTheme { … }` call-site compiling;
- * the actual Appearance/Material-You settings are wired in (Phase 0a Task 3).
- */
 /** App-level text-size multiplier bounds (Appearance → Text size). */
 const val TEXT_SCALE_MIN = 0.9f
 const val TEXT_SCALE_MAX = 1.3f
 
+/**
+ * Root theme, shared by both apps. Supermux is always the branded OKLCH palette — there is no
+ * Material You / dynamic color surface on any platform (2026-07-04 brand decision), so the scheme
+ * is built from `supermuxDark()`/`supermuxLight()` and every M3 role is assigned explicitly.
+ *
+ * Each app wraps this with the platform bits it owns and passes its own [typography]:
+ *  - Android's `AndroidTheme` — edge-to-edge system-bar contrast, the touch type scale
+ *    (`supermuxTouchTypography()`) and the platform haptics implementation.
+ *  - Desktop's `DesktopTheme` — the Compose Desktop context-menu representation and the pointer
+ *    type scale (`supermuxTypography()`).
+ *
+ * The two type scales collapse into one once the width class lands (cluster A task A3).
+ */
 @Composable
 fun SupermuxTheme(
     appearance: AppearanceMode = AppearanceMode.SYSTEM,
-    dynamicEnabled: Boolean = ThemeDefaults.DYNAMIC_COLOR_ENABLED,
+    typography: Typography,
     textScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
@@ -151,22 +138,11 @@ fun SupermuxTheme(
         AppearanceMode.LIGHT -> false
         AppearanceMode.DARK -> true
     }
-    val ctx = LocalContext.current
-    // Status/nav-bar icon contrast follows the app theme (dark icons on a light app).
-    val view = LocalView.current
-    SideEffect {
-        (view.context as? Activity)?.window?.let { window ->
-            val controller = WindowCompat.getInsetsController(window, view)
-            controller.isAppearanceLightStatusBars = !dark
-            controller.isAppearanceLightNavigationBars = !dark
-        }
-    }
     val paneTones = if (dark) supermuxDark() else supermuxLight()
-    val scheme = when {
-        dynamicEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-            if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-        dark -> buildSupermuxScheme(supermuxDark(), supermuxLight(), dark = true)
-        else -> buildSupermuxScheme(supermuxLight(), supermuxDark(), dark = false)
+    val scheme = if (dark) {
+        buildSupermuxScheme(supermuxDark(), supermuxLight(), dark = true)
+    } else {
+        buildSupermuxScheme(supermuxLight(), supermuxDark(), dark = false)
     }
     val semantics = if (dark) supermuxSemanticsDark() else supermuxSemanticsLight()
     // App-level text scale: multiplies the system fontScale so every sp in the app
@@ -182,7 +158,7 @@ fun SupermuxTheme(
     ) {
         MaterialTheme(
             colorScheme = scheme,
-            typography = supermuxTouchTypography(),
+            typography = typography,
             shapes = SupermuxShapes,
             content = content,
         )

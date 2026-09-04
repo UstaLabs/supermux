@@ -55,9 +55,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import dev.supermux.android.DevConfig
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -78,7 +79,7 @@ import kotlinx.coroutines.withContext
 internal class DictationController(
     private val context: Context,
     private val scope: CoroutineScope,
-    private val haptic: (HapticKind) -> Unit,
+    private val haptic: Haptics,
 ) {
     val recorder = VoiceRecorder(context)
     val dictation = DictationEngine(context)
@@ -122,7 +123,7 @@ internal class DictationController(
     }
 
     fun startMic() {
-        haptic(HapticKind.Tick)
+        haptic.perform(HapticKind.Tick)
         val started =
             if (DevConfig.ENABLE_ONDEVICE_STT) dictation.start(glossary.toList())
             else DictationStart.UNAVAILABLE
@@ -141,7 +142,7 @@ internal class DictationController(
     }
 
     fun stopMic() {
-        haptic(HapticKind.Tick)
+        haptic.perform(HapticKind.Tick)
         if (listening) {
             listening = false
             val draft = dictation.stop()

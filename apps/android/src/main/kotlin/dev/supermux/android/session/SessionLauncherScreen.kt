@@ -71,9 +71,9 @@ import dev.supermux.android.chat.rememberDictation
 import dev.supermux.android.chat.replaceSlashToken
 import dev.supermux.android.chat.slashCommandMatches
 import dev.supermux.android.chat.slashInsertText
-import dev.supermux.android.theme.HapticKind
+import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
@@ -536,7 +536,7 @@ fun SessionLauncherScreen(
     // button spins through the whole flow, then onOpenSession pops this screen (iOS spawn() parity).
     fun doSubmit() {
         if (!canSend || submitting) return
-        haptic(HapticKind.Confirm)
+        haptic.perform(HapticKind.Confirm)
         submitting = true
         error = null
         // Only honor worktree/baseBranch when the repo is eligible (iOS parity).
@@ -573,7 +573,7 @@ fun SessionLauncherScreen(
     val slashMenuOpen = slashMatches.isNotEmpty() && !slashDismissed
     val safeSlashIndex = slashSelectedIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
     fun selectSlashCommand(cmd: SlashCommand) {
-        haptic(HapticKind.Tick)
+        haptic.perform(HapticKind.Tick)
         // The token is always the draft's tail (activeSlashQuery only matches end-of-draft), so the
         // inserted command becomes the new tail — move the caret to the end, not the old offset.
         val inserted = replaceSlashToken(message.text, slashInsertText(cmd))
@@ -1130,7 +1130,7 @@ private fun AgentPill(agent: String, enabled: Boolean, onClick: () -> Unit) {
             .background(cs.surfaceContainer)
             .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
             .clickable(interactionSource = interaction, indication = null, enabled = enabled) {
-                haptic(HapticKind.Tick); onClick()
+                haptic.perform(HapticKind.Tick); onClick()
             }
             .padding(start = 5.dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1174,7 +1174,7 @@ private fun HostPickerPill(
                 .clip(RoundedCornerShape(20.dp))
                 .background(cs.surfaceContainer)
                 .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
-                .clickable { haptic(HapticKind.Tick); menu = true }
+                .clickable { haptic.perform(HapticKind.Tick); menu = true }
                 .padding(horizontal = 11.dp, vertical = 5.dp)
                 .testTag("launcher_host_pill"),
             verticalAlignment = Alignment.CenterVertically,
@@ -1223,7 +1223,7 @@ private fun WorktreePill(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
             .background(cs.surfaceContainer)
-            .clickable { haptic(HapticKind.Tick); onClick() }
+            .clickable { haptic.perform(HapticKind.Tick); onClick() }
             .padding(horizontal = 11.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),

@@ -97,7 +97,7 @@ import dev.supermux.desktop.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
-import dev.supermux.desktop.theme.AppearanceMode
+import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.proto.stateString
 import dev.supermux.ui.theme.MonoFontFamily

@@ -8,8 +8,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.DiffFile
 import dev.supermux.net.RefCommit
@@ -56,7 +56,7 @@ class DiffViewTest {
         onClose: () -> Unit = {},
         autoExpandAll: Boolean = false,
     ): @androidx.compose.runtime.Composable () -> Unit = {
-        SupermuxTheme(appearance = AppearanceMode.DARK) {
+        DesktopTheme(appearance = AppearanceMode.DARK) {
             DiffView(
                 repos = repos,
                 comments = comments,

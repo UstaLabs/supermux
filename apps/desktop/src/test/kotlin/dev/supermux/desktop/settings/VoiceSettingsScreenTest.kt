@@ -13,8 +13,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -91,7 +91,7 @@ class VoiceSettingsScreenTest {
     }
 
     @Test fun voice_renders_engine_rows_from_config() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -113,7 +113,7 @@ class VoiceSettingsScreenTest {
 
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(loadConfig = { null })()
             }
         }
@@ -127,7 +127,7 @@ class VoiceSettingsScreenTest {
     @Test fun picking_stt_engine_persists() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(saveVoiceStt = {
                     saved.set(it)
                     true
@@ -152,7 +152,7 @@ class VoiceSettingsScreenTest {
 
     @Test fun picking_stt_engine_failure_reverts_and_shows_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(saveVoiceStt = { false })()
             }
         }
@@ -183,7 +183,7 @@ class VoiceSettingsScreenTest {
     @Test fun picking_tts_engine_persists() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(saveVoiceTts = {
                     saved.set(it)
                     true
@@ -208,7 +208,7 @@ class VoiceSettingsScreenTest {
 
     @Test fun picking_tts_engine_failure_reverts() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(saveVoiceTts = { false })()
             }
         }
@@ -231,7 +231,7 @@ class VoiceSettingsScreenTest {
         val saved = AtomicReference<Pair<String?, String?>?>(null)
         val families = CopyOnWriteArrayList<String>()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     loadModels = { family ->
                         families.add(family)
@@ -264,7 +264,7 @@ class VoiceSettingsScreenTest {
     @Test fun glossary_add_and_remove_persist() = runComposeUiTest {
         val terms = AtomicReference(listOf("Supermux"))
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     glossaryLoad = { terms.get() },
                     glossarySave = {
@@ -312,7 +312,7 @@ class VoiceSettingsScreenTest {
 
     @Test fun glossary_save_failure_reverts() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     glossaryLoad = { listOf("Keep") },
                     glossarySave = { null },
@@ -340,7 +340,7 @@ class VoiceSettingsScreenTest {
 
     @Test fun glossary_load_failure_shows_error_not_empty() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(glossaryLoad = { null })()
             }
         }
@@ -361,7 +361,7 @@ class VoiceSettingsScreenTest {
 
     @Test fun glossary_empty_shows_empty_not_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(glossaryLoad = { emptyList() })()
             }
         }
@@ -445,7 +445,7 @@ class VoiceSettingsScreenTest {
     @Test fun desktop_app_state_voice_config_and_glossary() = runComposeUiTest {
         val (app, methods) = appForVoice()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 VoiceSettingsScreen(
                     loadConfig = { app.appConfig() },
                     loadModels = { app.launcherModels(it) },
@@ -487,7 +487,7 @@ class VoiceSettingsScreenTest {
         )
         var result: List<String>? = emptyList()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 VoiceSettingsScreen(
                     loadConfig = { app.appConfig() },
                     loadModels = { app.launcherModels(it) },
@@ -520,7 +520,7 @@ class VoiceSettingsScreenTest {
         val (app, methods) = appForVoice(configPutOk = false)
         var ok = true
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 VoiceSettingsScreen(
                     loadConfig = { app.appConfig() },
                     loadModels = { app.launcherModels(it) },
@@ -557,7 +557,7 @@ class VoiceSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Voice) }
         val (app, _) = appForVoice()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),

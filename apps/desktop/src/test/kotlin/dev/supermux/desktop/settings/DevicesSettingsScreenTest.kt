@@ -30,8 +30,8 @@ import dev.supermux.state.FleetStore
 import dev.supermux.desktop.host.encodeQr
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
 import dev.supermux.desktop.shell.ShellStateStore
@@ -119,7 +119,7 @@ class DevicesSettingsScreenTest {
     // ── screen load states ──────────────────────────────────────────────────────────────────────
 
     @Test fun devices_render_from_a_fake_list_with_last_seen() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -138,7 +138,7 @@ class DevicesSettingsScreenTest {
 
     @Test fun null_last_seen_renders_without_subtitle() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = {
                         listOf(
@@ -166,7 +166,7 @@ class DevicesSettingsScreenTest {
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = {
                     loads.incrementAndGet()
                     null
@@ -183,7 +183,7 @@ class DevicesSettingsScreenTest {
 
     @Test fun empty_list_shows_empty_state_not_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = { emptyList() })()
             }
         }
@@ -196,7 +196,7 @@ class DevicesSettingsScreenTest {
     @Test fun retry_after_load_failure_recovers() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null else sampleDevices()
@@ -220,7 +220,7 @@ class DevicesSettingsScreenTest {
     @Test fun auto_retry_recovers_after_reconnect_without_manual_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null else sampleDevices()
@@ -244,7 +244,7 @@ class DevicesSettingsScreenTest {
         val loads = AtomicInteger(0)
         var show by mutableStateOf(true)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 if (show) {
                     screen(devicesLoad = {
                         loads.incrementAndGet()
@@ -278,7 +278,7 @@ class DevicesSettingsScreenTest {
     @Test fun add_device_mints_pairing_link_and_shows_qr() = runComposeUiTest {
         val added = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { sampleDevices() },
                     deviceAdd = { name ->
@@ -321,7 +321,7 @@ class DevicesSettingsScreenTest {
 
     @Test fun add_dialog_autofocuses_name_field() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = { sampleDevices() })()
             }
         }
@@ -343,7 +343,7 @@ class DevicesSettingsScreenTest {
     @Test fun add_dialog_enter_submits_name() = runComposeUiTest {
         val added = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { sampleDevices() },
                     deviceAdd = {
@@ -397,7 +397,7 @@ class DevicesSettingsScreenTest {
             override fun hasText(): Boolean = copied.get() != null
         }
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 CompositionLocalProvider(LocalClipboardManager provides fakeClipboard) {
                     screen(
                         devicesLoad = { emptyList() },
@@ -427,7 +427,7 @@ class DevicesSettingsScreenTest {
 
     @Test fun add_device_failure_surfaces_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { emptyList() },
                     deviceAdd = { null },
@@ -454,7 +454,7 @@ class DevicesSettingsScreenTest {
     @Test fun add_device_done_reloads_list() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = {
                         val n = loads.incrementAndGet()
@@ -512,7 +512,7 @@ class DevicesSettingsScreenTest {
         val revoked = AtomicReference<String?>(null)
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = {
                         loads.incrementAndGet()
@@ -561,7 +561,7 @@ class DevicesSettingsScreenTest {
 
     @Test fun revoke_failure_shows_visible_error_and_keeps_row() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { sampleDevices() },
                     deviceRevoke = { false },
@@ -640,7 +640,7 @@ class DevicesSettingsScreenTest {
         val harness = appForDevices()
         var listed: List<DeviceDto>? = emptyList()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 DevicesSettingsScreen(
                     devicesLoad = {
                         listed = harness.app.devices()
@@ -664,7 +664,7 @@ class DevicesSettingsScreenTest {
         var result: List<DeviceDto>? = emptyList()
         var called = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 DevicesSettingsScreen(
                     devicesLoad = {
                         result = harness.app.devices()
@@ -725,7 +725,7 @@ class DevicesSettingsScreenTest {
         )
         val harness = appForDevices(mutableDevices = devices)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 DevicesSettingsScreen(
                     devicesLoad = { harness.app.devices() },
                     deviceAdd = { harness.app.addDevice(it) },
@@ -778,7 +778,7 @@ class DevicesSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
         val harness = appForDevices()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     harness.app, ui,
                     ShellStateStore(tempPath("state")),
@@ -831,7 +831,7 @@ class DevicesSettingsScreenTest {
             apiOverride = BrokerApi("ws://test:9898", "t", client),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("rail-state")),
@@ -923,7 +923,7 @@ class DevicesSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     primary, ui,
                     ShellStateStore(tempPath("mh-state")),

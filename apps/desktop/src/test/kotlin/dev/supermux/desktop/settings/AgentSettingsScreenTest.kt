@@ -20,8 +20,8 @@ import androidx.compose.ui.test.withKeyDown
 import dev.supermux.state.FleetStore
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.ui.openInBrowserOverride
 import dev.supermux.desktop.shell.SettingsSection
 import dev.supermux.desktop.shell.AppShell
@@ -145,7 +145,7 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun agents_render_from_a_fake_status_list() = runComposeUiTest {
-        setContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -164,7 +164,7 @@ class AgentSettingsScreenTest {
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = {
                     loads.incrementAndGet()
                     null
@@ -182,7 +182,7 @@ class AgentSettingsScreenTest {
 
     @Test fun empty_status_list_shows_empty_state_not_error() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = { emptyList() })()
             }
         }
@@ -195,7 +195,7 @@ class AgentSettingsScreenTest {
     @Test fun retry_after_load_failure_recovers() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null
@@ -220,7 +220,7 @@ class AgentSettingsScreenTest {
     @Test fun auto_retry_recovers_after_reconnect_without_manual_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = {
                     // First load fails; auto-retry (3s) should succeed.
                     val n = loads.incrementAndGet()
@@ -248,7 +248,7 @@ class AgentSettingsScreenTest {
         val startCalls = AtomicInteger(0)
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -291,7 +291,7 @@ class AgentSettingsScreenTest {
         val loadCount = AtomicInteger(0)
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         val n = loadCount.incrementAndGet()
@@ -336,7 +336,7 @@ class AgentSettingsScreenTest {
     @Test fun login_pending_to_error_shows_failure_message() = runComposeUiTest {
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "codex", installed = true, authed = false))
@@ -367,7 +367,7 @@ class AgentSettingsScreenTest {
 
     @Test fun login_start_failure_surfaces_error_instead_of_spinning() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -395,7 +395,7 @@ class AgentSettingsScreenTest {
         val cancelled = AtomicReference<String?>(null)
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -434,7 +434,7 @@ class AgentSettingsScreenTest {
         // Actually close + reopen composition (unmount/remount), not just first-mount resume.
         var mounted by mutableStateOf(true)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 if (mounted) {
                     screen(
                         agentStatuses = {
@@ -492,7 +492,7 @@ class AgentSettingsScreenTest {
     @Test fun login_null_poll_streak_times_out_and_start_works_again() = runComposeUiTest {
         val startCalls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -528,7 +528,7 @@ class AgentSettingsScreenTest {
         val pollCalls = AtomicInteger(0)
         var mounted by mutableStateOf(true)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 if (mounted) {
                     screen(
                         agentStatuses = {
@@ -578,7 +578,7 @@ class AgentSettingsScreenTest {
     @Test fun install_idle_to_running_shows_progress_and_cancel() = runComposeUiTest {
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "cursor", installed = false, authed = false))
@@ -611,7 +611,7 @@ class AgentSettingsScreenTest {
         val started = AtomicReference(false)
         val pollCount = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "cursor", installed = false, authed = false))
@@ -663,7 +663,7 @@ class AgentSettingsScreenTest {
         val pollN = AtomicInteger(0)
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         val n = loadCount.incrementAndGet()
@@ -705,7 +705,7 @@ class AgentSettingsScreenTest {
     @Test fun install_running_to_failed_shows_error() = runComposeUiTest {
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "cursor", installed = false, authed = false))
@@ -741,7 +741,7 @@ class AgentSettingsScreenTest {
         val savedValue = AtomicReference<String?>(null)
         val saveCalls = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "codex", installed = true, authed = false))
@@ -778,7 +778,7 @@ class AgentSettingsScreenTest {
     @Test fun secret_save_success_clears_input() = runComposeUiTest {
         val loadCount = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         val n = loadCount.incrementAndGet()
@@ -810,7 +810,7 @@ class AgentSettingsScreenTest {
         val seen = AtomicInteger(0)
         val lastKey = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -845,7 +845,7 @@ class AgentSettingsScreenTest {
         val setCalls = AtomicInteger(0)
         val providerLoads = AtomicInteger(0)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -873,7 +873,7 @@ class AgentSettingsScreenTest {
 
     @Test fun opencode_oauth_finish_failure_keeps_code() = runComposeUiTest {
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -919,7 +919,7 @@ class AgentSettingsScreenTest {
     @Test fun enter_submits_secret_field() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "codex", installed = true, authed = false))
@@ -940,7 +940,7 @@ class AgentSettingsScreenTest {
     @Test fun enter_submits_opencode_zen_key() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -962,7 +962,7 @@ class AgentSettingsScreenTest {
     @Test fun enter_submits_provider_key() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -999,7 +999,7 @@ class AgentSettingsScreenTest {
     @Test fun enter_submits_oauth_code() = runComposeUiTest {
         val finished = AtomicReference<String?>(null)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -1047,7 +1047,7 @@ class AgentSettingsScreenTest {
         val sent = AtomicReference<String?>(null)
         val started = AtomicReference(false)
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -1156,7 +1156,7 @@ class AgentSettingsScreenTest {
         val app = appForAgents()
         var listed: List<AgentInstallStatus>? = emptyList()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AgentSettingsScreen(
                     agentStatuses = {
                         listed = app.agentStatuses()
@@ -1189,7 +1189,7 @@ class AgentSettingsScreenTest {
         var result: List<AgentInstallStatus>? = emptyList() // sentinel non-null so we can detect null
         var called = false
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AgentSettingsScreen(
                     agentStatuses = {
                         result = app.agentStatuses()
@@ -1222,7 +1222,7 @@ class AgentSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val app = appForAgents()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -1248,7 +1248,7 @@ class AgentSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings() }
         val app = appForAgents()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -1267,7 +1267,7 @@ class AgentSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings() }
         val app = appForAgents()
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state")),
@@ -1322,7 +1322,7 @@ class AgentSettingsScreenTest {
             ),
         )
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     app, ui,
                     ShellStateStore(tempPath("state2")),
@@ -1412,7 +1412,7 @@ class AgentSettingsScreenTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         val primary = fleet.appForRecord("h1")!!
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(
                     primary, ui,
                     ShellStateStore(tempPath("mh-state")),
@@ -1465,7 +1465,7 @@ class AgentSettingsScreenTest {
         )
         var secretOk: Boolean? = null
         setContent {
-            SupermuxTheme(appearance = AppearanceMode.DARK) {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
                 AgentSettingsScreen(
                     agentStatuses = { app.agentStatuses() },
                     agentStartLogin = { app.startAgentLogin(it) },

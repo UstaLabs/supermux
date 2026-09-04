@@ -39,8 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.rememberHaptics
 
 /** Shared pill shape used by both ModelPill and EffortPill. */
 @Composable
@@ -67,7 +67,7 @@ private fun PillChip(
                 interactionSource = interactionSource,
                 indication = null,
             ) {
-                haptic(HapticKind.Tick)
+                haptic.perform(HapticKind.Tick)
                 onClick()
             }
             .padding(horizontal = 8.dp, vertical = 3.dp),
@@ -150,7 +150,7 @@ fun PickerSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                haptic(HapticKind.Tick)
+                                haptic.perform(HapticKind.Tick)
                                 onPick(id)
                                 onDismiss()
                             }

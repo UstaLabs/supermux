@@ -42,10 +42,10 @@ import dev.supermux.android.R
 import dev.supermux.android.update.AppUpdatePage
 import dev.supermux.android.chat.TimelineItemRow
 import dev.supermux.android.chat.mergeTimeline
-import dev.supermux.android.theme.AppearanceMode
-import dev.supermux.android.theme.LocalPanes
-import dev.supermux.android.theme.TEXT_SCALE_MAX
-import dev.supermux.android.theme.TEXT_SCALE_MIN
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.LocalPanes
+import dev.supermux.ui.theme.TEXT_SCALE_MAX
+import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import kotlin.math.roundToInt
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AgentInstallStatus
@@ -1000,8 +1000,12 @@ private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
 
 // ─── Appearance page (light/dark + Material You) ──────────────────────────────
 //
-// Born native: reads MaterialTheme.colorScheme (not LocalPanes) so it reflects
-// dynamic colour, and uses the M3 SingleChoiceSegmentedButtonRow.
+// Born native: reads MaterialTheme.colorScheme (not LocalPanes) and uses the M3
+// SingleChoiceSegmentedButtonRow.
+//
+// NOTE: the "Material You" switch is a NO-OP since the theme moved to :ui — the brand OKLCH
+// palette is the only palette on every platform. The setting is still shown and still persisted
+// so nobody loses their stored preference; nothing reads it to build a colour scheme.
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1064,7 +1068,8 @@ fun AppearanceSettingsPage(
                 Column(Modifier.weight(1f)) {
                     Text("Material You", style = MaterialTheme.typography.titleMedium, color = cs.onBackground)
                     Text(
-                        "Use colours from your wallpaper (Android 12+).",
+                        "Use colours from your wallpaper (Android 12+). Currently unavailable — " +
+                            "supermux always uses the brand palette.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onSurfaceVariant,
                     )
