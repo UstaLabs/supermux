@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.filled.WrapText
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -77,6 +78,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.MonoFontFamily
@@ -142,6 +144,7 @@ fun DiffView(
     val scope = rememberCoroutineScope()
     // No-op wherever there is no vibrator (desktop): Android's tick on every toggle, kept.
     val haptic = rememberHaptics()
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
 
     // Keys are stable strings so the sets survive re-composition (Set<String> like iOS/Vue).
     var expandedFiles by remember { mutableStateOf(setOf<String>()) }
@@ -197,6 +200,11 @@ fun DiffView(
                 "$totalFiles changed file${if (totalFiles == 1) "" else "s"}",
                 style = MaterialTheme.typography.titleSmall,
                 color = cs.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // fill = false: the title takes only what it needs and yields the rest, so the
+                // chip/toggles keep their intrinsic width on a 360dp phone instead of overflowing.
+                modifier = Modifier.weight(1f, fill = false),
             )
             Box(Modifier.weight(1f))
             // Adjustable diff base (the compare target stays the working tree) — parity with the
@@ -225,15 +233,31 @@ fun DiffView(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            TextButton(
-                onClick = { haptic.perform(HapticKind.Tick); wrap = !wrap },
-                modifier = Modifier.testTag("diff_wrap_toggle"),
-            ) {
-                Text(
-                    "Wrap",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (wrap) cs.primary else cs.onSurfaceVariant,
-                )
+            // The word "Wrap" costs ~56dp the phone header does not have; under Compact the same
+            // toggle (same tag, same state) is the icon alone.
+            if (compact) {
+                IconButton(
+                    onClick = { haptic.perform(HapticKind.Tick); wrap = !wrap },
+                    modifier = Modifier.testTag("diff_wrap_toggle"),
+                ) {
+                    Icon(
+                        Icons.Filled.WrapText,
+                        contentDescription = if (wrap) "Turn wrapping off" else "Turn wrapping on",
+                        tint = if (wrap) cs.primary else cs.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            } else {
+                TextButton(
+                    onClick = { haptic.perform(HapticKind.Tick); wrap = !wrap },
+                    modifier = Modifier.testTag("diff_wrap_toggle"),
+                ) {
+                    Text(
+                        "Wrap",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (wrap) cs.primary else cs.onSurfaceVariant,
+                    )
+                }
             }
             IconButton(onClick = onClose, modifier = Modifier.testTag("diff_back")) {
                 Icon(
@@ -498,7 +522,7 @@ private fun BaseSelector(
                             fontSize = 15.sp,
                             modifier = Modifier.padding(horizontal = Space.md, vertical = Space.sm),
                         )
-                        BaseOptions(base = base, refs = refs, noneFontSize = 13, onSelect = onSelect)
+                        BaseOptions(base = base, refs = refs, noneFontSize = 13, tintSelected = true, onSelect = onSelect)
                     }
                 }
             }
@@ -521,9 +545,11 @@ private fun BaseOptions(
     refs: RepoRefs?,
     noneFontSize: Int,
     onSelect: (String) -> Unit,
+    /** Android's sheet tinted the selected row; a menu marks it with the trailing check alone. */
+    tintSelected: Boolean = false,
 ) {
-    BaseOption("Session start", spec = "session-start", selected = base == "session-start", onSelect = onSelect)
-    BaseOption("Uncommitted (HEAD)", spec = "head", selected = base == "head", onSelect = onSelect)
+    BaseOption("Session start", spec = "session-start", selected = base == "session-start", tintSelected = tintSelected, onSelect = onSelect)
+    BaseOption("Uncommitted (HEAD)", spec = "head", selected = base == "head", tintSelected = tintSelected, onSelect = onSelect)
 
     BaseSectionHeader("Previous commit")
     val commits = refs?.commits ?: emptyList()
@@ -537,6 +563,7 @@ private fun BaseOptions(
                 spec = spec,
                 selected = base == spec,
                 mono = c.sha.take(7),
+                tintSelected = tintSelected,
                 onSelect = onSelect,
             )
         }
@@ -549,7 +576,7 @@ private fun BaseOptions(
     } else {
         branches.forEach { b ->
             val spec = "branch:$b"
-            BaseOption(label = b, spec = spec, selected = base == spec, monoLabel = true, onSelect = onSelect)
+            BaseOption(label = b, spec = spec, selected = base == spec, monoLabel = true, tintSelected = tintSelected, onSelect = onSelect)
         }
     }
 }
@@ -585,10 +612,19 @@ private fun BaseOption(
     onSelect: (String) -> Unit,
     mono: String? = null,
     monoLabel: Boolean = false,
+    tintSelected: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     DropdownMenuItem(
-        modifier = Modifier.testTag("diff_base_option_$spec"),
+        modifier = Modifier
+            .then(
+                if (tintSelected && selected) {
+                    Modifier.background(cs.primary.copy(alpha = 0.10f))
+                } else {
+                    Modifier
+                },
+            )
+            .testTag("diff_base_option_$spec"),
         onClick = { onSelect(spec) },
         text = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -626,6 +662,15 @@ private fun BaseOption(
         } else null,
     )
 }
+
+/**
+ * Tree indent for one nesting level. Desktop keeps [Space.lg] per level; under Compact the step is
+ * [Space.sm] AND capped at four levels, so a deep path can never eat more than 32dp of a 360dp
+ * phone (the chain compression in `buildDiffTree` removes most of the depth to begin with).
+ */
+internal fun diffTreeIndent(depth: Int, compact: Boolean, multiRepo: Boolean): Dp =
+    (if (multiRepo) Space.md else 0.dp) +
+        if (compact) Space.sm * depth.coerceAtMost(4) else Space.lg * depth
 
 // ── Repo group header (only when >1 repo) ──────────────────────────────────────
 
@@ -677,11 +722,12 @@ private fun FolderRow(
     onToggle: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val stats = remember(folder) { folderDiffStats(folder) }
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = (if (multiRepo) Space.md else 0.dp) + Space.lg * depth)
+            .padding(start = diffTreeIndent(depth, compact, multiRepo))
             .clickable(onClick = onToggle)
             .heightIn(min = 48.dp)
             .padding(horizontal = Space.md)
@@ -755,17 +801,19 @@ private fun FileSection(
     label: String = file.path,
 ) {
     val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val stats = remember(file.diff) { diffStats(file.diff) }
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = (if (multiRepo) Space.md else 0.dp) + Space.lg * depth)
             .testTag("diff_file_$testTagIndex"),
     ) {
-        // File header
+        // File header — the ONLY indented part of the section: the diff body below is monospaced
+        // code that needs every column it can get, so it always starts at the pane edge.
         Row(
             Modifier
                 .fillMaxWidth()
+                .padding(start = diffTreeIndent(depth, compact, multiRepo))
                 .clickable(onClick = onToggleFile)
                 .heightIn(min = 48.dp)
                 .padding(horizontal = Space.md),
@@ -995,7 +1043,7 @@ private fun GutterText(s: String, color: Color) {
 }
 
 @Composable
-fun Composer(
+internal fun Composer(
     draft: String,
     submitting: Boolean,
     onDraftChange: (String) -> Unit,
@@ -1031,7 +1079,7 @@ fun Composer(
 }
 
 @Composable
-fun CommentThreadRow(
+internal fun CommentThreadRow(
     c: ReviewComment,
     replies: List<ReviewComment> = emptyList(),
     onResolve: () -> Unit,

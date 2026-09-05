@@ -136,7 +136,10 @@ fun LspSettingsScreen(
 
     Column(
         (if (scrollable) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
-            .background(cs.surfaceContainerHigh)
+            // Only the standalone overlay paints its own ground; embedded (Android's Editor page,
+            // the desktop hub's detail pane) the host owns the background and a second one here
+            // would draw a band across the middle of the page.
+            .then(if (showTopBar) Modifier.background(cs.surfaceContainerHigh) else Modifier)
             .testTag("lsp_settings_screen"),
     ) {
         if (showTopBar) {
@@ -396,7 +399,9 @@ private fun AddLspForm(
         Modifier.fillMaxWidth().padding(vertical = Space.sm).testTag("lsp_add_form"),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        SettingsSectionHeader("Add language server")
+        // The form's own heading is a title, not a settings section label — both apps drew it at
+        // 15sp SemiBold onSurface and it keeps that weight here.
+        Text("Add language server", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         addError?.let { Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("lsp_add_error")) }
 
         LspField("Display name", "Zig", label, mono = false, testTag = "lsp_add_label") {

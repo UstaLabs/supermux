@@ -33,15 +33,41 @@ class DiffTreeTest {
 
     @Test fun a_nested_path_builds_folder_nodes_down_to_the_file() {
         val tree = buildDiffTree(listOf(file("src/main/Foo.kt")))
+        // `src` holds only `main`, so the two collapse into one row (see chain compression below).
         val src = assertIs<DiffTreeNode.Folder>(tree.single())
-        assertEquals("src", src.name)
-        assertEquals("src", src.path)
-        val main = assertIs<DiffTreeNode.Folder>(src.children.single())
-        assertEquals("main", main.name)
-        assertEquals("src/main", main.path)
-        val foo = assertIs<DiffTreeNode.File>(main.children.single())
+        assertEquals("src/main", src.name)
+        assertEquals("src/main", src.path)
+        val foo = assertIs<DiffTreeNode.File>(src.children.single())
         assertEquals("Foo.kt", foo.name)
         assertEquals("src/main/Foo.kt", foo.path)
+    }
+
+    // ── Chain compression: one row per single-child folder chain ─────────────────────
+
+    @Test fun a_single_child_folder_chain_compresses_into_one_row() {
+        val tree = buildDiffTree(listOf(file("a/b/c/Foo.kt")))
+        val folder = assertIs<DiffTreeNode.Folder>(tree.single())
+        assertEquals("a/b/c", folder.name)
+        // The DEEPEST path is the identity, so expansion still keys on the folder listing these
+        // children.
+        assertEquals("a/b/c", folder.path)
+        assertEquals(listOf("Foo.kt"), names(folder.children))
+        // …and it costs ONE indent level instead of three.
+        assertEquals(listOf(0, 1), flattenVisible(tree, allFolderPaths(tree)).map { it.depth })
+    }
+
+    @Test fun a_chain_stops_compressing_where_the_folder_has_a_file_of_its_own() {
+        val tree = buildDiffTree(listOf(file("a/b/Foo.kt"), file("a/own.kt")))
+        val a = assertIs<DiffTreeNode.Folder>(tree.first())
+        assertEquals("a", a.name)
+        assertEquals(listOf("b", "own.kt"), names(a.children))
+    }
+
+    @Test fun a_chain_stops_compressing_where_the_folder_branches() {
+        val tree = buildDiffTree(listOf(file("a/b/Foo.kt"), file("a/c/Bar.kt")))
+        val a = assertIs<DiffTreeNode.Folder>(tree.single())
+        assertEquals("a", a.name)
+        assertEquals(listOf("b", "c"), names(a.children))
     }
 
     @Test fun files_in_the_same_folder_share_one_folder_node() {
@@ -74,7 +100,7 @@ class DiffTreeTest {
         val tree = buildDiffTree(listOf(file("src/main/Foo.kt"), file("README.md")))
         val rows = flattenVisible(tree, expanded = allFolderPaths(tree))
         assertEquals(
-            listOf("src" to 0, "main" to 1, "Foo.kt" to 2, "README.md" to 0),
+            listOf("src/main" to 0, "Foo.kt" to 1, "README.md" to 0),
             rows.map { it.node.name to it.depth },
         )
     }
@@ -82,12 +108,13 @@ class DiffTreeTest {
     @Test fun flatten_visible_hides_children_of_a_collapsed_folder() {
         val tree = buildDiffTree(listOf(file("src/main/Foo.kt"), file("README.md")))
         val rows = flattenVisible(tree, expanded = emptySet())
-        assertEquals(listOf("src" to 0, "README.md" to 0), rows.map { it.node.name to it.depth })
+        assertEquals(listOf("src/main" to 0, "README.md" to 0), rows.map { it.node.name to it.depth })
     }
 
     @Test fun all_folder_paths_walks_every_directory() {
         val tree = buildDiffTree(listOf(file("src/main/Foo.kt"), file("apps/a.kt")))
-        assertEquals(setOf("apps", "src", "src/main"), allFolderPaths(tree))
+        // `src` → `main` is one compressed row, so there is one path for it, not two.
+        assertEquals(setOf("apps", "src/main"), allFolderPaths(tree))
     }
 
     @Test fun folder_diff_stats_sum_the_non_binary_children() {

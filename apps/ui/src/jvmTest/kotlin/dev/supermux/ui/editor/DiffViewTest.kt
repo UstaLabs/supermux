@@ -2,13 +2,18 @@ package dev.supermux.ui.editor
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.InputMode
@@ -378,5 +383,80 @@ class DiffViewTest {
         onNodeWithTag("diff_base_option_branch:main").performClick()
         waitForIdle()
         assertEquals("branch:main", picked)
+    }
+
+    // ── Compact geometry: the phone header fits and the tree indent is bounded ─────────
+
+    /** The diff at a real phone width, so "does it fit" is an assertion and not a guess. */
+    private fun phone(
+        repos: List<RepoDiff>,
+        autoExpandAll: Boolean = false,
+    ): @androidx.compose.runtime.Composable () -> Unit = {
+        CompositionLocalProvider(
+            LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
+            LocalWindowWidthClass provides WindowWidthClass.Compact,
+            LocalInputMode provides InputMode.Touch,
+        ) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                Box(Modifier.width(360.dp)) {
+                    DiffView(
+                        repos = repos,
+                        comments = emptyList(),
+                        onAddComment = { _, _, _, _, _, _ -> },
+                        onResolve = {},
+                        onSubmit = {},
+                        onReload = {},
+                        onClose = {},
+                        autoExpandAll = autoExpandAll,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test fun the_compact_tree_indent_is_capped_at_four_levels() {
+        // Desktop keeps a full Space.lg per level…
+        assertEquals(32.dp, diffTreeIndent(depth = 2, compact = false, multiRepo = false))
+        assertEquals(144.dp, diffTreeIndent(depth = 9, compact = false, multiRepo = false))
+        // …the phone steps by Space.sm and stops after four, so a depth-9 path costs 32dp, not 144.
+        assertEquals(16.dp, diffTreeIndent(depth = 2, compact = true, multiRepo = false))
+        assertEquals(32.dp, diffTreeIndent(depth = 9, compact = true, multiRepo = false))
+        assertEquals(32.dp, diffTreeIndent(depth = 4, compact = true, multiRepo = false))
+    }
+
+    @Test
+    fun under_compact_the_header_controls_all_fit_without_overlapping() = runComposeUiTest {
+        setContent(phone(oneRepoDiff()))
+
+        onNodeWithTag("diff_base_chip").assertIsDisplayed()
+        onNodeWithTag("diff_tree_toggle").assertIsDisplayed()
+        onNodeWithTag("diff_wrap_toggle").assertIsDisplayed() // icon-only under Compact, same tag
+        onNodeWithTag("diff_back").assertIsDisplayed()
+
+        val chip = onNodeWithTag("diff_base_chip").getBoundsInRoot()
+        val wrap = onNodeWithTag("diff_wrap_toggle").getBoundsInRoot()
+        val close = onNodeWithTag("diff_back").getBoundsInRoot()
+        assertTrue(wrap.left >= chip.right, "wrap toggle overlaps the base chip: $wrap vs $chip")
+        assertTrue(close.left >= wrap.right, "close overlaps the wrap toggle: $close vs $wrap")
+        assertTrue(close.right.value <= 360f, "the close button is pushed off a 360dp screen: $close")
+    }
+
+    @Test
+    fun under_compact_the_diff_body_does_not_inherit_the_tree_indent() = runComposeUiTest {
+        // `a/` branches, so `a/b/x.txt` really sits one folder deep in the rendered tree.
+        val repos = listOf(
+            RepoDiff(
+                repo = "",
+                files = listOf(
+                    DiffFile(path = "a/b/x.txt", status = "modified", diff = "@@ -1 +1 @@\n+indented?\n"),
+                    DiffFile(path = "a/y.txt", status = "modified", diff = "@@ -1 +1 @@\n+other\n"),
+                ),
+            ),
+        )
+        setContent(phone(repos, autoExpandAll = true))
+
+        // Only the 28dp +-gutter is to the left of a diff line, whatever depth its file sits at.
+        val line = onNodeWithText("indented?").getBoundsInRoot()
+        assertTrue(line.left.value <= 32f, "the diff body inherited the tree indent: $line")
     }
 }

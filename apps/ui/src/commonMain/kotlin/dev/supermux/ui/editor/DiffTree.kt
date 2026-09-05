@@ -29,6 +29,15 @@ private class MutableFolder(val name: String, val path: String) {
     val files = mutableListOf<DiffTreeNode.File>()
 
     fun freeze(): DiffTreeNode.Folder {
+        // Chain compression: a folder holding exactly one sub-folder and no files of its own is
+        // drawn as ONE row (`a/b/c`) instead of one row — and one indent level — per segment. Deep
+        // single-child chains are the norm in a JVM/KMP source tree, and on a phone each level
+        // eats horizontal space the diff itself needs. The row keeps the DEEPEST path as its
+        // identity, so expansion state still keys on the folder whose children it lists.
+        if (files.isEmpty() && folders.size == 1) {
+            val child = folders.values.first().freeze()
+            return DiffTreeNode.Folder("$name/${child.name}", child.path, child.children)
+        }
         val children = folders.values.map { it.freeze() } + files
         return DiffTreeNode.Folder(name, path, children.sortedWith(diffTreeOrder))
     }
