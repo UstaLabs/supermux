@@ -37,6 +37,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 
@@ -70,7 +72,7 @@ class ProxiesSettingsScreenTest {
         topBarShown: Boolean = true,
     ) = ProxiesSettingsScreen(
         actions = ProxiesSettingsActions(
-            proxiesLoad, sessionNames, proxyCreate, proxySetPublic, proxyRemove,
+            proxiesLoad, flowOf(sessionNames()), proxyCreate, proxySetPublic, proxyRemove,
         ),
         topBarShown = topBarShown,
     )
@@ -563,7 +565,7 @@ class ProxiesSettingsScreenTest {
                 ProxiesSettingsScreen(
                     actions = ProxiesSettingsActions(
                         proxiesLoad = { sampleProxies() },
-                        sessionNames = { listOf("web") },
+                        sessionNames = flowOf(listOf("web")),
                     ),
                     onBack = { backs++ },
                     topBarShown = false,
@@ -655,5 +657,120 @@ class ProxiesSettingsScreenTest {
         onNodeWithTag("proxy_url_open_app.example.local").performClick()
         waitForIdle()
         assertEquals(listOf("https://app.example.local"), platform.openedUrls)
+    }
+
+    // ── E4 review fixes ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * `Route.Proxies` is its own destination: a phone in LANDSCAPE is Medium, not Compact, and
+     * there is no hub above it — so the title and Back have to be there anyway.
+     */
+    @Test fun a_standalone_route_keeps_its_chrome_above_compact() = runComposeUiTest {
+        var backs = 0
+        proxiesContent(pointer = false, widthClass = WindowWidthClass.Medium) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    actions = ProxiesSettingsActions(proxiesLoad = { sampleProxies() }),
+                    onBack = { backs++ },
+                    topBarShown = false,
+                    standalone = true,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxy_row_app.example.local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxies_settings_back").performClick()
+        assertEquals(1, backs)
+        onNodeWithTag("proxies_expose_action").assertIsDisplayed()
+    }
+
+    /** Inside the hub on a wide window there is exactly one chrome, and it is not the screen's. */
+    @Test fun a_hub_section_on_a_wide_window_paints_no_bar_of_its_own() = runComposeUiTest {
+        proxiesContent(widthClass = WindowWidthClass.Expanded) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    actions = ProxiesSettingsActions(proxiesLoad = { sampleProxies() }),
+                    topBarShown = false,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxy_row_app.example.local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxies_settings_back").assertDoesNotExist()
+        onNodeWithTag("proxies_expose_button").assertIsDisplayed()
+    }
+
+    /** The per-row copy/open buttons reach Material's 48dp minimum without a pointer. */
+    @Test fun touch_url_buttons_reach_the_minimum_target() {
+        fun buttonHeight(pointer: Boolean): Int {
+            var height = 0
+            runComposeUiTest {
+                proxiesContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
+                }
+                waitForIdle()
+                waitUntil(timeoutMillis = 5_000) {
+                    try {
+                        onNodeWithTag("proxy_url_copy_app.example.local").assertIsDisplayed()
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                height = onNodeWithTag("proxy_url_copy_app.example.local")
+                    .fetchSemanticsNode().size.height
+            }
+            return height
+        }
+        val touch = buttonHeight(pointer = false)
+        val mouse = buttonHeight(pointer = true)
+        assertTrue(touch > mouse, "touch button $touch should exceed pointer button $mouse")
+    }
+
+    /** A session spawned while the screen is open reaches the expose-port form. */
+    @Test fun the_expose_form_follows_the_live_session_list() = runComposeUiTest {
+        val names = MutableStateFlow(listOf("web"))
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    actions = ProxiesSettingsActions(
+                        proxiesLoad = { sampleProxies() },
+                        sessionNames = names,
+                    ),
+                    topBarShown = true,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxies_expose_button").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // The list changes AFTER the screen composed — the old snapshot getter never saw this.
+        names.value = listOf("web", "spawned-later")
+        waitForIdle()
+        onNodeWithTag("proxies_expose_button").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_create_session").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_create_session_item_spawned-later").assertIsDisplayed()
     }
 }

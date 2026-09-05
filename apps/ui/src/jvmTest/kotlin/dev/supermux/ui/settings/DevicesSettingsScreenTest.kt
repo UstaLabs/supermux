@@ -881,4 +881,59 @@ class DevicesSettingsScreenTest {
 
     private fun isoAt(epochMs: Long): String =
         java.time.Instant.ofEpochMilli(epochMs).toString()
+
+    // ── E4 review fixes ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * `Route.Devices` is its own destination: on a Medium window (a phone in landscape, a small
+     * tablet) no hub is above it, so it still paints the title, Back and the FAB.
+     */
+    @Test fun a_standalone_route_keeps_its_chrome_above_compact() = runComposeUiTest {
+        var backs = 0
+        devicesContent(pointer = false, widthClass = WindowWidthClass.Medium) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DevicesSettingsScreen(
+                    actions = DevicesSettingsActions(devicesLoad = { sampleDevices() }),
+                    onBack = { backs++ },
+                    topBarShown = false,
+                    standalone = true,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("devices_add_fab").assertIsDisplayed()
+        onNodeWithTag("devices_settings_back").performClick()
+        assertEquals(1, backs)
+    }
+
+    /** Inside the hub on a wide window the screen adds no chrome of its own. */
+    @Test fun a_hub_section_on_a_wide_window_paints_no_bar_of_its_own() = runComposeUiTest {
+        devicesContent(widthClass = WindowWidthClass.Expanded) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DevicesSettingsScreen(
+                    actions = DevicesSettingsActions(devicesLoad = { sampleDevices() }),
+                    topBarShown = false,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("devices_settings_back").assertDoesNotExist()
+        onNodeWithTag("devices_add_button").assertIsDisplayed()
+    }
 }

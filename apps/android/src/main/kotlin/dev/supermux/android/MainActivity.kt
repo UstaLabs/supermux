@@ -884,6 +884,9 @@ class MainActivity : ComponentActivity() {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { DevicesSettingsScreen(
                             actions = rememberDevicesSettingsActions(vm.fleet),
                             onBack = { navController.popBackStack() },
+                            // Its own destination, not a hub section: it paints the title and Back
+                            // at every width (a phone in landscape is Medium, not Compact).
+                            standalone = true,
                         ) } }
                     }
                     composable<Route.Archived> {
@@ -902,6 +905,7 @@ class MainActivity : ComponentActivity() {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ProxiesSettingsScreen(
                             actions = rememberProxiesSettingsActions(vm.fleet),
                             onBack = { navController.popBackStack() },
+                            standalone = true,
                         ) } }
                     }
                     composable<Route.Displays> {

@@ -228,7 +228,8 @@ private fun PersonalAssistantsBody(
             }
             else -> LazyColumn(
                 Modifier.fillMaxSize().testTag("pa_list"),
-                contentPadding = PaddingValues(bottom = Space.xxl + Space.xl),
+                // Android's 88dp: the last row's Kill must clear the FAB, not sit under it.
+                contentPadding = PaddingValues(bottom = Space.xxl + Space.xxl + Space.xl),
             ) {
                 items(assistants, key = { it.id }) { pa ->
                     ListItem(

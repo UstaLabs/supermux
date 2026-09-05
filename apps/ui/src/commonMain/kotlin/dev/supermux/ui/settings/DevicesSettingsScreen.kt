@@ -137,6 +137,9 @@ fun rememberDevicesSettingsActions(fleet: FleetStore): DevicesSettingsActions = 
  * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
  *   itself (pass the hub's `SettingsSlotScope.onClose`).
  * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ * @param standalone the screen is its own destination (Android's `Route.Devices`, reached from a
+ *   deep link or the drawer) rather than a hub section, so it owns its chrome at EVERY width — a
+ *   phone in landscape is Medium, and the hub is not above it to paint a title or a Back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -145,13 +148,14 @@ fun DevicesSettingsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit = {},
     topBarShown: Boolean = false,
+    standalone: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // The add affordance follows the chrome: with our own Scaffold it is Android's FAB, otherwise
     // desktop's header button (the hub's detail pane paints no Scaffold for us to hang one on).
     var showAdd by remember { mutableStateOf(false) }
-    if (compact && !topBarShown) {
+    if ((standalone || compact) && !topBarShown) {
         Scaffold(
             topBar = {
                 TopAppBar(

@@ -963,18 +963,19 @@ class FleetStore(
      * Session names on the ACTIVE host — what the expose-port form offers.
      *
      * Mirrors Android's `activeHostSessions`: with a single paired host (or none selected) every
-     * session belongs to it, so the whole list stands.
+     * session belongs to it, so the whole list stands. A Flow rather than a snapshot: a session
+     * spawned (or the active host switched) while the Proxies screen is open must reach the form,
+     * which a `.value` read at composition time never did.
      */
-    fun activeHostSessionNames(): List<String> {
-        val active = activeHost.value
-        val all = sessions.value
-        val scoped = if (hostViews.value.size >= 2 && active != null) {
-            all.filter { sessionHost.value[it.id] == active }
-        } else {
-            all
+    val activeHostSessionNames: Flow<List<String>> =
+        combine(sessions, sessionHost, hostViews, activeHost) { all, owner, hosts, active ->
+            val scoped = if (hosts.size >= 2 && active != null) {
+                all.filter { owner[it.id] == active }
+            } else {
+                all
+            }
+            scoped.map { it.name }
         }
-        return scoped.map { it.name }
-    }
 
     fun saveLauncherPrefs(prefs: LauncherPrefs) {
         fleetScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_PREFS, settingsJson.encodeToString(prefs)) }

@@ -48,6 +48,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,11 +76,18 @@ import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.widgets.submitOnEnter
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val ERROR_AUTO_RETRY_MS = 3_000L
+
+/** Material's minimum touch target. Applied to icon-only controls when there is no pointer. */
+private val TouchTargetMin = 48.dp
 
 /** Load model — failure is distinct from a legitimate empty proxy list. */
 internal sealed class ProxiesLoadState {
@@ -88,7 +96,6 @@ internal sealed class ProxiesLoadState {
     data class Ready(val proxies: List<ProxyDto>) : ProxiesLoadState()
     data class Error(val message: String) : ProxiesLoadState()
 }
-
 
 /**
  * Every broker call the Proxies screen makes, in one holder.
@@ -102,8 +109,14 @@ internal sealed class ProxiesLoadState {
 class ProxiesSettingsActions(
     /** `null` = transport/decode failure; empty = legitimately no proxies. */
     val proxiesLoad: suspend () -> List<ProxyDto>? = { null },
-    /** Session names available for the expose-port form (active host). */
-    val sessionNames: () -> List<String> = { emptyList() },
+    /**
+     * Session names available for the expose-port form, on the ACTIVE host.
+     *
+     * A Flow, not a snapshot getter: the form is opened long after the holder is built, and on
+     * Android the active host (and its session list) changes underneath it — a `() -> List` read
+     * during composition handed the dialog whatever was true when the screen first composed.
+     */
+    val sessionNames: Flow<List<String>> = flowOf(emptyList()),
     val proxyCreate: suspend (sessionName: String, port: Int, domain: String?) -> CreateProxyResponse? =
         { _, _, _ -> null },
     val proxySetPublic: suspend (domain: String, isPublic: Boolean) -> Boolean = { _, _ -> false },
@@ -115,7 +128,7 @@ class ProxiesSettingsActions(
 fun rememberProxiesSettingsActions(app: HostStore): ProxiesSettingsActions = remember(app) {
     ProxiesSettingsActions(
         proxiesLoad = { app.proxiesForSettings() },
-        sessionNames = { app.sessions.value.map { it.name } },
+        sessionNames = app.sessions.map { list -> list.map { it.name } },
         proxyCreate = { session, port, domain -> app.createProxy(session, port, domain) },
         proxySetPublic = { domain, isPublic -> app.setProxyPublic(domain, isPublic) },
         proxyRemove = { domain -> app.removeProxy(domain) },
@@ -127,7 +140,7 @@ fun rememberProxiesSettingsActions(app: HostStore): ProxiesSettingsActions = rem
 fun rememberProxiesSettingsActions(fleet: FleetStore): ProxiesSettingsActions = remember(fleet) {
     ProxiesSettingsActions(
         proxiesLoad = { fleet.proxiesForSettings() },
-        sessionNames = { fleet.activeHostSessionNames() },
+        sessionNames = fleet.activeHostSessionNames,
         proxyCreate = { session, port, domain -> fleet.createProxy(session, port, domain) },
         proxySetPublic = { domain, isPublic -> fleet.setProxyPublic(domain, isPublic) },
         proxyRemove = { domain -> fleet.removeProxy(domain) },
@@ -140,6 +153,9 @@ fun rememberProxiesSettingsActions(fleet: FleetStore): ProxiesSettingsActions = 
  * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
  *   itself (pass the hub's `SettingsSlotScope.onClose`).
  * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ * @param standalone the screen is its own destination (Android's `Route.Proxies`, reached from a
+ *   deep link or the session menu) rather than a hub section, so it owns its chrome at EVERY width
+ *   — a phone in landscape is Medium, and the hub is not above it to paint a title or a Back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -148,11 +164,12 @@ fun ProxiesSettingsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit = {},
     topBarShown: Boolean = false,
+    standalone: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     var showCreate by remember { mutableStateOf(false) }
-    if (compact && !topBarShown) {
+    if ((standalone || compact) && !topBarShown) {
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -226,7 +243,8 @@ private fun ProxiesSettingsBody(
     var publicBusy by remember { mutableStateOf(false) }
     var publicError by remember { mutableStateOf<String?>(null) }
     var toggleError by remember { mutableStateOf<String?>(null) }
-        val scope = rememberCoroutineScope()
+    val sessionNames by actions.sessionNames.collectAsState(initial = emptyList())
+    val scope = rememberCoroutineScope()
 
     suspend fun loadOnce() {
         val previous = loadState
@@ -530,7 +548,7 @@ private fun ProxiesSettingsBody(
 
     if (showCreate) {
         ExposePortDialog(
-            sessions = actions.sessionNames(),
+            sessions = sessionNames,
             onCreate = actions.proxyCreate,
             onDismiss = { created ->
                 onShowCreateChange(false)
@@ -551,8 +569,11 @@ private fun ProxyRow(
     val clipboard = LocalClipboardManager.current
     val tagSafe = proxy.domain.replace(Regex("[^A-Za-z0-9._-]"), "_")
     // Touch bump: LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard attached is
-    // still a finger-sized target.
-    val rowPadding = if (LocalPointerAvailable.current) Space.md else Space.lg
+    // still a finger-sized target. The row breathes AND the two icon buttons grow to the 48dp
+    // Material minimum (32dp is a comfortable mouse target and a missed tap).
+    val pointer = LocalPointerAvailable.current
+    val rowPadding = if (pointer) Space.md else Space.lg
+    val iconButtonSize = if (pointer) Space.xxl else TouchTargetMin
     Row(
         Modifier
             .fillMaxWidth()
@@ -593,7 +614,7 @@ private fun ProxyRow(
                     IconButton(
                         onClick = { clipboard.setText(AnnotatedString(url)) },
                         modifier = Modifier
-                            .size(Space.xxl)
+                            .size(iconButtonSize)
                             .testTag("proxy_url_copy_$tagSafe"),
                     ) {
                         Icon(
@@ -606,7 +627,7 @@ private fun ProxyRow(
                     IconButton(
                         onClick = { platform.openUrl(url) },
                         modifier = Modifier
-                            .size(Space.xxl)
+                            .size(iconButtonSize)
                             .testTag("proxy_url_open_$tagSafe"),
                     ) {
                         Icon(

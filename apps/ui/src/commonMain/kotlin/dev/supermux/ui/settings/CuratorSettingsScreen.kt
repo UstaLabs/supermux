@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -61,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
@@ -83,6 +85,9 @@ import dev.supermux.ui.widgets.SettingsSectionHeader
 import dev.supermux.util.curatorNextRunLabel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** Material's minimum touch target, applied to the picker chips when there is no pointer. */
+private val TouchTargetMin = 48.dp
 
 private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
 
@@ -574,9 +579,11 @@ private fun PickerChip(label: String, onClick: () -> Unit, testTag: String) {
     val cs = MaterialTheme.colorScheme
     // Touch bump (Android's chips were `minimumInteractiveComponentSize()`): keyed on
     // LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard still taps with a finger.
-    val chipPadding = if (LocalPointerAvailable.current) Space.sm else Space.md
+    val pointer = LocalPointerAvailable.current
+    val chipPadding = if (pointer) Space.sm else Space.md
     Row(
         Modifier
+            .then(if (pointer) Modifier else Modifier.heightIn(min = TouchTargetMin))
             .clip(RoundedCornerShape(Radii.sm))
             .background(cs.surfaceContainer)
             .border(Stroke.thin, cs.outline, RoundedCornerShape(Radii.sm))
