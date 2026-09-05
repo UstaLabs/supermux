@@ -145,6 +145,8 @@ val ANDROID_CAPS = Caps(
     localBroker = false,
     multiWindow = false,
     fileSystem = false,
+    // The walkthrough seam is installed in AppViewModel's HostStore factory (AndroidWalkthroughSeam).
+    walkthrough = true,
 )
 
 /** A pick that completed with nobody awaiting it, tagged with what asked for it. */

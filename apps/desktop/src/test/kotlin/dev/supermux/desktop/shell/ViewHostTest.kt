@@ -20,6 +20,8 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.desktop.DesktopWalkthroughSeam
+import dev.supermux.desktop.platform.DesktopPlatform
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.state.HostStore
 import dev.supermux.net.BrokerApi
@@ -389,5 +391,12 @@ class ViewHostTest {
  *  apps install it in their theme wrapper, so a bare `setContent` has to provide one itself. */
 @Composable
 private fun WithUiPrefs(content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalUiPrefs provides UiPrefs(InMemorySettingsStore()), content = content)
+    CompositionLocalProvider(
+        LocalUiPrefs provides UiPrefs(InMemorySettingsStore()),
+        // The diff pane reads `caps.walkthrough` to decide whether to offer the slideshow, so the
+        // panes need a platform. The real DesktopPlatform, minus the engine (these tests inject
+        // `noJcef` into ViewHost itself and must never touch the shared JCEF factory).
+        LocalPlatform provides DesktopPlatform(),
+        content = content,
+    )
 }

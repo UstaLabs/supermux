@@ -90,6 +90,9 @@ const val DEFAULT_REQUESTER: String = "default"
  * @property multiWindow panes can be detached into real OS windows.
  * @property fileSystem the app can read and write arbitrary local paths (desktop only; Android is
  *   confined to SAF-granted URIs, which is NOT a general file system).
+ * @property walkthrough the app builds its `HostStore` with a `WalkthroughSeam`, so the diff pane
+ *   can offer the walkthrough slideshow. False on a host that never installs the seam — reading a
+ *   walkthrough holder there would throw.
  */
 data class Caps(
     val push: Boolean,
@@ -100,6 +103,7 @@ data class Caps(
     val localBroker: Boolean,
     val multiWindow: Boolean,
     val fileSystem: Boolean,
+    val walkthrough: Boolean = false,
 )
 
 /**

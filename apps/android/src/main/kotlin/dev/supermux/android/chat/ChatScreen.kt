@@ -110,8 +110,10 @@ import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.ui.widgets.keepAlivePanel
-import dev.supermux.android.editor.EditorPanel
-import dev.supermux.android.editor.PendingEditorOpen
+import dev.supermux.ui.editor.EditorPanel
+import dev.supermux.ui.editor.EditorPanelActions
+import dev.supermux.ui.editor.EditorPanelState
+import dev.supermux.ui.editor.PendingEditorOpen
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
@@ -676,29 +678,35 @@ fun ChatScreen(
             }
             if (SessionPanel.Editor in shownPanels) {
                 EditorPanel(
-                    sessionId = session.id,
-                    workdir = session.workdir,
-                    fsList = fsList,
-                    fsRead = fsRead,
-                    fsWrite = fsWrite,
-                    fsSearch = fsSearch,
-                    fsDiff = fsDiff,
-                    fsRefs = fsRefs,
-                    reviewAddComment = reviewAddComment,
-                    reviewResolve = reviewResolve,
-                    reviewSubmit = reviewSubmit,
-                    fsChanges = fsChanges,
-                    lspStatus = lspStatus,
-                    lspRpc = lspRpc,
-                    editorOpen = editorOpen,
-                    editorClose = editorClose,
-                    lspStatusQuery = lspStatusQuery,
-                    lspOpen = lspOpen,
-                    lspRpcOut = lspRpcOut,
-                    lspClose = lspClose,
+                    state = EditorPanelState(
+                        sessionId = session.id,
+                        workdir = session.workdir,
+                        fsChanges = fsChanges,
+                        lspStatus = lspStatus,
+                        lspRpc = lspRpc,
+                    ),
+                    actions = EditorPanelActions(
+                        fsList = fsList,
+                        fsRead = fsRead,
+                        fsWrite = fsWrite,
+                        fsSearch = fsSearch,
+                        fsDiff = fsDiff,
+                        fsRefs = fsRefs,
+                        reviewAddComment = reviewAddComment,
+                        reviewResolve = reviewResolve,
+                        reviewSubmit = reviewSubmit,
+                        editorOpen = editorOpen,
+                        editorClose = editorClose,
+                        lspStatusQuery = lspStatusQuery,
+                        lspOpen = lspOpen,
+                        lspRpcOut = lspRpcOut,
+                        lspClose = lspClose,
+                    ),
                     onConsumesBackChange = onEditorConsumesBackChange,
                     pendingOpen = pendingEditorOpen,
                     onPendingOpenConsumed = { pendingEditorOpen = null },
+                    // Android's own markdown renderer until the shared MarkdownBody lands (cluster D).
+                    previewSlot = { text, onOpen -> MarkdownBody(text, onOpenFile = onOpen) },
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }

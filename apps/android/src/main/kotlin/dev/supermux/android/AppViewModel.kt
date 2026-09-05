@@ -15,7 +15,19 @@ import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.cioHttpFactory
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import dev.supermux.proto.ServerFrame
+import dev.supermux.state.WalkthroughSeam
+import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.prefs.UiPrefs
+
+/** The Android half of the walkthrough seam: `:shared`'s [WalkthroughSeam] over `:ui`'s
+ *  [WalkthroughState]. Identical to desktop's `DesktopWalkthroughSeam` and kept beside the DI that
+ *  installs it (the `HostStore` factory below), because the store's generic parameter is chosen
+ *  per app. */
+object AndroidWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
+    override fun create(sessionId: String) = WalkthroughState(sessionId)
+    override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
+}
 
 /**
  * Activity-scoped holder for the shared [FleetStore] (spec §5). All multi-host state and every
@@ -48,6 +60,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 HostStore(
                     url, token, viewModelScope, deps,
                     onConnectionChange = onConn,
+                    walkthroughSeam = AndroidWalkthroughSeam,
                     bindTts = { resolve, speak ->
                         MessageTts.resolveEngine = resolve
                         MessageTts.speakRemoteStream = speak

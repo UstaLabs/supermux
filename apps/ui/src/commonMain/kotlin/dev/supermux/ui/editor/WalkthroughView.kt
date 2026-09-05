@@ -1,4 +1,4 @@
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -53,7 +53,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.chat.MarkdownBody
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.AddCommentBody
@@ -67,16 +66,8 @@ import dev.supermux.ui.editor.engine.DiffRegionComment
 import dev.supermux.ui.editor.engine.DiffRegionComposer
 import dev.supermux.ui.editor.engine.DiffRegionRange
 import dev.supermux.ui.editor.engine.DiffRegionThread
-import dev.supermux.ui.editor.DiffLine
-import dev.supermux.ui.editor.DiffLineType
-import dev.supermux.ui.editor.DiffRows
-import dev.supermux.ui.editor.parseDiffLines
-import dev.supermux.ui.editor.CommentAnchor
-import dev.supermux.ui.editor.DiffRegionSurface
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.editor.WalkthroughState
-import dev.supermux.ui.editor.commentAnchor
 
 private val WalkthroughBlue = Color(0xFF5C8FEF)
 
@@ -92,6 +83,9 @@ fun WalkthroughView(
     onOpenFile: (repo: String, path: String, line: Int?) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Each app's markdown renderer (`MarkdownBody`). The shared one arrives in cluster D; until
+     *  then the step body is drawn by whatever the host passes in. */
+    markdownSlot: @Composable (text: String, modifier: Modifier) -> Unit = { text, m -> Text(text, modifier = m) },
 ) {
     val cs = MaterialTheme.colorScheme
     val engines = LocalPlatform.current.editorEngine
@@ -151,6 +145,7 @@ fun WalkthroughView(
                     onAddComment = onAddComment,
                     onResolve = onResolve,
                     onOpenFile = onOpenFile,
+                    markdownSlot = markdownSlot,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -234,6 +229,7 @@ private fun StepSlide(
     onAddComment: suspend (AddCommentBody) -> ReviewComment?,
     onResolve: suspend (String) -> Boolean,
     onOpenFile: (String, String, Int?) -> Unit,
+    markdownSlot: @Composable (text: String, modifier: Modifier) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -259,12 +255,12 @@ private fun StepSlide(
         }
         if (path == null) {
             Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())) {
-                MarkdownBody(step.bodyMd, modifier = Modifier.fillMaxWidth())
+                markdownSlot(step.bodyMd, Modifier.fillMaxWidth())
             }
             return@Column
         }
         Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
-            MarkdownBody(step.bodyMd, modifier = Modifier.fillMaxWidth())
+            markdownSlot(step.bodyMd, Modifier.fillMaxWidth())
         }
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

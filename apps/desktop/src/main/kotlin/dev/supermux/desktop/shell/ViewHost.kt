@@ -30,9 +30,9 @@ import dev.supermux.desktop.chat.ComposerExternalAttach
 import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
 import dev.supermux.ui.editor.WalkthroughState
-import dev.supermux.desktop.editor.DiffPane
-import dev.supermux.desktop.editor.ExplorerPane
-import dev.supermux.desktop.editor.FilePane
+import dev.supermux.ui.editor.DiffPane
+import dev.supermux.ui.editor.ExplorerPane
+import dev.supermux.ui.editor.FilePane
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
@@ -461,6 +461,8 @@ private fun FilePaneForWorkspace(
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { prefs.putEditorFontSize(px) } },
         engineFactory = engineFactory,
+        // Desktop's own markdown renderer until the shared MarkdownBody lands (cluster D).
+        previewSlot = { text, onOpen -> dev.supermux.desktop.chat.MarkdownBody(text, onOpenFile = onOpen) },
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -519,6 +521,7 @@ private fun DiffPaneForWorkspace(
         onWalkthroughClosed = onWalkthroughClosed,
         onReviewSubmit = { if (reviewSession != null) app.reviewSubmit(reviewSession) else null },
         onClose = onClose,
+        markdownSlot = { text, m -> dev.supermux.desktop.chat.MarkdownBody(text, modifier = m) },
         modifier = modifier.fillMaxSize(),
     )
 }

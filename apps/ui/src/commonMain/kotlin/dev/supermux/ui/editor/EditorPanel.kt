@@ -1,8 +1,18 @@
-package dev.supermux.android.editor
+// The COMPOSITE editor — header + tab row + tree + one code surface — as one panel.
+//
+// Where [ExplorerPane]/[FilePane]/[DiffPane] are the editor cut into three workspace panes (see
+// EditorPanes.kt), this is the single-pane shape a phone (and desktop's SessionDetail) needs: the
+// tree is a slide-over drawer under Compact and a 192dp side pane otherwise, the tabs live in the
+// panel rather than in a group's strip, and diff is a MODE that swaps the whole panel.
+//
+// Ported from `apps/android/.../editor/EditorScreen.kt` (cluster C4). Android's behaviour is kept
+// verbatim — the fs-watch lifecycle, the `onConsumesBackChange` contract, the haptics, the reveal
+// on a chat-initiated open — with three substitutions that make it multiplatform: drawable ids
+// become Material icons, `androidx.activity.compose.BackHandler` becomes Compose Multiplatform's
+// own (inert where the platform has no back gesture), and the markdown preview renders through
+// [previewSlot] until the shared `MarkdownBody` lands in cluster D.
+package dev.supermux.ui.editor
 
-import android.content.Context
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -20,6 +30,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Difference
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -31,34 +49,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import dev.supermux.android.R
-import dev.supermux.android.chat.MarkdownBody
-import dev.supermux.ui.editor.DiffView
-import dev.supermux.ui.editor.EditorLspHandle
-import dev.supermux.ui.editor.EditorSurface
-import dev.supermux.ui.editor.engine.EditorScrollReader
-import dev.supermux.ui.editor.engine.captureOutgoingScroll
-import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.WindowWidthClass
-import dev.supermux.ui.theme.HapticKind
-import dev.supermux.ui.theme.LocalPanes
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
@@ -67,71 +75,96 @@ import dev.supermux.net.FsSearchResult
 import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
+import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.editor.engine.EditorScrollReader
+import dev.supermux.ui.editor.engine.captureOutgoingScroll
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.LocalPanes
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.rememberHaptics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
-import androidx.compose.runtime.collectAsState
-import dev.supermux.ui.prefs.LocalUiPrefs
-import androidx.compose.runtime.produceState
 import kotlinx.coroutines.flow.first
-import dev.supermux.ui.editor.EditorSearchField
-import dev.supermux.ui.editor.EditorSearchOverlay
-import dev.supermux.ui.editor.EditorTabs
-import dev.supermux.ui.editor.FileTree
-import dev.supermux.ui.editor.LspBridge
-import dev.supermux.ui.editor.dirUri
-import dev.supermux.ui.editor.isMarkdownPath
-import dev.supermux.ui.editor.joinPath
-import dev.supermux.ui.editor.pathToUri
+import kotlinx.coroutines.launch
 
 /** A chat-initiated request to open a workdir-relative [path] at an optional [line]. */
 data class PendingEditorOpen(val path: String, val line: Int?, val endLine: Int?)
 
 /**
- * Code editor panel: lazy file tree, multi-tab editing, filename search.
- * Tablet (Expanded): split sidebar. Phone: slide-over tree drawer.
+ * WHAT the panel is looking at: the session it belongs to, that session's workdir, and the
+ * app-wide broker flows it filters by session (fs-watch pulses and the LSP channels).
  */
+data class EditorPanelState(
+    val sessionId: String,
+    val workdir: String,
+    /** Live file-watch pulses (all sessions); the panel keeps only its own. */
+    val fsChanges: Flow<ServerFrame.FsChanged> = MutableSharedFlow(),
+    val lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
+    val lspRpc: Flow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
+)
+
+/**
+ * Everything the panel DOES, as one holder rather than twelve parameters. Grouping matters beyond
+ * tidiness: these lambdas capture the caller's session object, so they are re-instanced on every
+ * background session update — see the `remember(sessionId)` note on [EditorState] below for why
+ * nothing in the panel may key on them.
+ */
+data class EditorPanelActions(
+    val fsList: suspend (String) -> Result<List<FsEntry>>,
+    val fsRead: suspend (String) -> Result<String>,
+    val fsWrite: suspend (String, String) -> Boolean,
+    val fsSearch: suspend (String) -> List<FsSearchResult>,
+    /** Takes the base spec; [fsRefs] lists refs for the adjustable diff-base picker. */
+    val fsDiff: suspend (String) -> FsDiffResult? = { null },
+    val fsRefs: suspend () -> FsRefsResult? = { null },
+    val reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
+    val reviewResolve: suspend (String) -> Boolean = { false },
+    val reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
+    /** Start / stop the broker's fs-watcher for this session. Without them fs_changed never
+     *  fires and the stale banner is dead. */
+    val editorOpen: (String) -> Unit = {},
+    val editorClose: (String) -> Unit = {},
+    val lspStatusQuery: (String, String) -> Unit = { _, _ -> },
+    val lspOpen: (String, String) -> Unit = { _, _ -> },
+    val lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
+    /** Broker-side teardown seam. The panel drops its client by cancelling the connect effect, so
+     *  nothing calls this yet; it stays wired so the call sites keep their broker plumbing. */
+    val lspClose: (String, String) -> Unit = { _, _ -> },
+)
+
+/**
+ * Code editor panel: lazy file tree, multi-tab editing, filename search.
+ * Non-Compact (tablet / desktop): split sidebar. Compact (phone): slide-over tree drawer.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun EditorPanel(
-    sessionId: String,
-    workdir: String,
-    fsList: suspend (String) -> Result<List<FsEntry>>,
-    fsRead: suspend (String) -> Result<String>,
-    fsWrite: suspend (String, String) -> Boolean,
-    fsSearch: suspend (String) -> List<FsSearchResult>,
-    // Phase 2 — diff + inline code-review. fsDiff takes the base spec; fsRefs lists refs
-    // for the adjustable diff-base picker.
-    fsDiff: suspend (String) -> FsDiffResult? = { null },
-    fsRefs: suspend () -> FsRefsResult? = { null },
-    reviewAddComment: suspend (AddCommentBody) -> ReviewComment? = { null },
-    reviewResolve: suspend (String) -> Boolean = { false },
-    reviewSubmit: suspend () -> ReviewSubmitResult? = { null },
-    // Phase 4 + 5 — LSP + live file-watch. Flows are app-wide; bridge/banner filter by session.
-    fsChanges: Flow<ServerFrame.FsChanged> = MutableSharedFlow(),
-    lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
-    lspRpc: Flow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
-    editorOpen: (String) -> Unit = {},
-    editorClose: (String) -> Unit = {},
-    lspStatusQuery: (String, String) -> Unit = { _, _ -> },
-    lspOpen: (String, String) -> Unit = { _, _ -> },
-    lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
-    lspClose: (String, String) -> Unit = { _, _ -> },
+    state: EditorPanelState,
+    actions: EditorPanelActions,
+    modifier: Modifier = Modifier,
     onConsumesBackChange: (Boolean) -> Unit = {},
     pendingOpen: PendingEditorOpen? = null,
     onPendingOpenConsumed: () -> Unit = {},
-    modifier: Modifier = Modifier,
+    /** Markdown preview renderer — each app's own `MarkdownBody` until cluster D shares one. */
+    previewSlot: @Composable (text: String, onOpenFile: (FilePathRef) -> Unit) -> Unit = { text, _ -> Text(text) },
+    /** Where a file link inside the markdown preview lands. Defaults to opening it in this panel. */
+    onOpenFile: ((FilePathRef) -> Unit)? = null,
 ) {
+    val sessionId = state.sessionId
+    val workdir = state.workdir
     val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
     val haptic = rememberHaptics()
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val expanded = LocalWindowWidthClass.current == WindowWidthClass.Expanded
+    // The tree is a drawer only where the window cannot hold both at once.
+    val expanded = LocalWindowWidthClass.current != WindowWidthClass.Compact
 
     // Own the editor state for the LIFETIME OF THE SESSION — deliberately NOT keyed on the
     // fs* lambdas. Those lambdas capture the whole `session` object, so every background
@@ -139,9 +172,7 @@ fun EditorPanel(
     // them; keying on them here would rebuild EditorState and wipe every open tab + unsaved
     // edit on each pulse. fsRead/fsWrite only ever call vm.<fs>(session.id, …) and session.id
     // is invariant for a given sessionId, so capturing the first instances stays correct.
-    val editor = remember(sessionId) {
-        dev.supermux.ui.editor.EditorState(fsRead, fsWrite, scope)
-    }
+    val editor = remember(sessionId) { EditorState(actions.fsRead, actions.fsWrite, scope) }
 
     if (editor.treeVisible == null) {
         SideEffect { editor.treeVisible = expanded }
@@ -157,7 +188,7 @@ fun EditorPanel(
             return@LaunchedEffect
         }
         searchResults.clear()
-        searchResults.addAll(fsSearch(q))
+        searchResults.addAll(actions.fsSearch(q))
     }
 
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt), whose reads are
@@ -175,14 +206,14 @@ fun EditorPanel(
     val fontSize by prefs.editorFontSize.collectAsState(initialFontSize)
 
     // LSP bridge — orchestrates the cm6 LSPClient over the Phase-2 flows, filtered by session.
-    val bridge = remember(sessionId, lspStatus, lspRpc) {
+    val bridge = remember(sessionId, state.lspStatus, state.lspRpc) {
         LspBridge(
             sessionId = sessionId,
-            lspStatus = lspStatus,
-            lspRpc = lspRpc,
-            lspStatusQuery = lspStatusQuery,
-            lspOpen = lspOpen,
-            lspRpcOut = lspRpcOut,
+            lspStatus = state.lspStatus,
+            lspRpc = state.lspRpc,
+            lspStatusQuery = actions.lspStatusQuery,
+            lspOpen = actions.lspOpen,
+            lspRpcOut = actions.lspRpcOut,
         )
     }
 
@@ -199,13 +230,13 @@ fun EditorPanel(
     // Editor lifecycle: tell the broker to start/stop the fs-watcher for this session.
     // This is ALSO what makes fs_changed fire — the stale banner is dead without it.
     DisposableEffect(sessionId) {
-        editorOpen(sessionId)
-        onDispose { editorClose(sessionId) }
+        actions.editorOpen(sessionId)
+        onDispose { actions.editorClose(sessionId) }
     }
 
     // Live file-watch: fold fs_changed pulses for this session into the stale set.
-    LaunchedEffect(sessionId, fsChanges) {
-        fsChanges.collect { f -> if (f.session == sessionId) editor.markChanged(f.paths) }
+    LaunchedEffect(sessionId, state.fsChanges) {
+        state.fsChanges.collect { f -> if (f.session == sessionId) editor.markChanged(f.paths) }
     }
 
     // (Re)wire code intelligence whenever the active file (or diff/preview mode) changes.
@@ -270,7 +301,7 @@ fun EditorPanel(
         editor.tabs.none { it.path == path }
     } == true
 
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().testTag("editor_panel")) {
         // Diff is a MODE of the panel (parity EditorPane.swift:44): when showDiff, the
         // DiffView swaps the whole pane — header/tabs/tree/editor — exactly like iOS.
         if (editor.showDiff) {
@@ -279,9 +310,9 @@ fun EditorPanel(
                 comments = editor.diffComments,
                 base = editor.diffBase,
                 refs = editor.diffRefs,
-                onSetBase = { base -> scope.launch { editor.setDiffBase(base, fsDiff) } },
+                onSetBase = { base -> scope.launch { editor.setDiffBase(base, actions.fsDiff) } },
                 onAddComment = { repo, path, anchorLine, anchorContext, hunkHeader, body ->
-                    reviewAddComment(
+                    actions.reviewAddComment(
                         AddCommentBody(
                             repo = repo,
                             path = path,
@@ -294,9 +325,9 @@ fun EditorPanel(
                     )
                     Unit
                 },
-                onResolve = { commentId -> reviewResolve(commentId); Unit },
-                onSubmit = { reviewSubmit(); Unit },
-                onReload = { scope.launch { editor.reloadDiff(fsDiff) } },
+                onResolve = { commentId -> actions.reviewResolve(commentId); Unit },
+                onSubmit = { actions.reviewSubmit(); Unit },
+                onReload = { scope.launch { editor.reloadDiff(actions.fsDiff) } },
                 onClose = { editor.showDiff = false },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -311,16 +342,17 @@ fun EditorPanel(
                     .padding(horizontal = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = {
-                    haptic.perform(HapticKind.Tick)
-                    focusManager.clearFocus()
-                    searchResults.clear()
-                    editor.treeVisible = !treeVisible
-                }) {
+                IconButton(
+                    onClick = {
+                        haptic.perform(HapticKind.Tick)
+                        focusManager.clearFocus()
+                        searchResults.clear()
+                        editor.treeVisible = !treeVisible
+                    },
+                    modifier = Modifier.testTag("editor_tree_toggle"),
+                ) {
                     Icon(
-                        painter = painterResource(
-                            if (treeVisible) R.drawable.ic_chevron_down else R.drawable.ic_folder_open,
-                        ),
+                        imageVector = if (treeVisible) Icons.Filled.KeyboardArrowDown else Icons.Filled.FolderOpen,
                         contentDescription = if (treeVisible) "Hide file tree" else "Show file tree",
                         tint = cs.onSurface,
                         modifier = Modifier.size(18.dp),
@@ -337,9 +369,7 @@ fun EditorPanel(
                 if (showPreviewToggle) {
                     IconButton(onClick = { haptic.perform(HapticKind.Tick); editor.previewMode = !editor.previewMode }) {
                         Icon(
-                            painter = painterResource(
-                                if (editor.previewMode) R.drawable.ic_pencil else R.drawable.ic_eye,
-                            ),
+                            imageVector = if (editor.previewMode) Icons.Filled.Edit else Icons.Filled.Visibility,
                             contentDescription = if (editor.previewMode) "Edit" else "Preview",
                             tint = if (editor.previewMode) cs.primary else cs.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
@@ -356,13 +386,16 @@ fun EditorPanel(
                         )
                     }
                 } else {
-                    IconButton(onClick = {
-                        haptic.perform(HapticKind.Tick)
-                        focusManager.clearFocus()
-                        scope.launch { editor.loadDiff(fsDiff, fsRefs) }
-                    }) {
+                    IconButton(
+                        onClick = {
+                            haptic.perform(HapticKind.Tick)
+                            focusManager.clearFocus()
+                            scope.launch { editor.loadDiff(actions.fsDiff, actions.fsRefs) }
+                        },
+                        modifier = Modifier.testTag("editor_diff_button"),
+                    ) {
                         Icon(
-                            painter = painterResource(R.drawable.ic_diff),
+                            imageVector = Icons.Filled.Difference,
                             contentDescription = "View changes",
                             tint = cs.onSurfaceVariant,
                             modifier = Modifier.size(18.dp),
@@ -386,7 +419,7 @@ fun EditorPanel(
                         enabled = editor.activeTab?.let { editor.isDirty(it.path) } == true,
                     ) {
                         Icon(
-                            painter = painterResource(R.drawable.ic_check),
+                            imageVector = Icons.Filled.Check,
                             contentDescription = "Save",
                             tint = if (editor.activeTab?.let { editor.isDirty(it.path) } == true) {
                                 cs.primary
@@ -407,9 +440,15 @@ fun EditorPanel(
                             Modifier
                                 .width(192.dp)
                                 .fillMaxHeight()
-                                .background(cs.surfaceContainerHigh),
+                                .background(cs.surfaceContainerHigh)
+                                .testTag("editor_tree_pane"),
                         ) {
-                            FileTree(fsList = fsList, explorer = editor.explorer, workdir = workdir, onOpenFile = { revealFile(it) })
+                            FileTree(
+                                fsList = actions.fsList,
+                                explorer = editor.explorer,
+                                workdir = workdir,
+                                onOpenFile = { revealFile(it) },
+                            )
                         }
                         Box(
                             Modifier
@@ -440,11 +479,12 @@ fun EditorPanel(
                                 Modifier
                                     .fillMaxWidth()
                                     .background(cs.errorContainer.copy(alpha = 0.5f))
-                                    .padding(horizontal = Space.md, vertical = Space.xs),
+                                    .padding(horizontal = Space.md, vertical = Space.xs)
+                                    .testTag("editor_stale_banner"),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_alert_triangle),
+                                    imageVector = Icons.Filled.Warning,
                                     contentDescription = null,
                                     tint = cs.error,
                                     modifier = Modifier.size(16.dp),
@@ -456,8 +496,8 @@ fun EditorPanel(
                                     modifier = Modifier.weight(1f).padding(start = Space.sm),
                                 )
                                 FilledTonalButton(
-                                    onClick = { scope.launch { editor.reload(activeTab.path, fsRead) } },
-                                    modifier = Modifier.heightIn(min = 36.dp),
+                                    onClick = { scope.launch { editor.reload(activeTab.path, actions.fsRead) } },
+                                    modifier = Modifier.heightIn(min = 36.dp).testTag("editor_reload"),
                                 ) {
                                     Text("Reload", style = MaterialTheme.typography.labelLarge)
                                 }
@@ -487,18 +527,22 @@ fun EditorPanel(
                                 modifier = Modifier.fillMaxSize(),
                             )
 
-                            // Markdown preview overlay — covers (but keeps warm) the WebView when
-                            // toggled on a .md tab (parity EditorPane.swift:240-245). Opaque so the
-                            // editor underneath is hidden; the engine stays alive in remember.
+                            // Markdown preview overlay — covers (but keeps warm) the code surface
+                            // when toggled on a .md tab (parity EditorPane.swift:240-245). Opaque so
+                            // the editor underneath is hidden; the engine stays alive in remember.
                             if (showPreview && activeTab != null) {
                                 Column(
                                     Modifier
                                         .fillMaxSize()
                                         .background(Color(c.code))
                                         .verticalScroll(rememberScrollState())
-                                        .padding(Space.lg),
+                                        .padding(Space.lg)
+                                        .testTag("editor_preview"),
                                 ) {
-                                    MarkdownBody(activeTab.content)
+                                    previewSlot(activeTab.content) { ref ->
+                                        val open = onOpenFile
+                                        if (open != null) open(ref) else revealFile(ref.path, ref.line, ref.endLine)
+                                    }
                                 }
                             }
 
@@ -522,7 +566,8 @@ fun EditorPanel(
                                     Modifier
                                         .fillMaxSize()
                                         .background(Color(c.code).copy(alpha = 0.92f))
-                                        .padding(Space.xl),
+                                        .padding(Space.xl)
+                                        .testTag("editor_load_error"),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Text(err, color = cs.onSurfaceVariant, fontSize = 13.sp)
@@ -534,7 +579,8 @@ fun EditorPanel(
                                 Box(
                                     Modifier
                                         .fillMaxSize()
-                                        .background(Color(c.code).copy(alpha = 0.72f)),
+                                        .background(Color(c.code).copy(alpha = 0.72f))
+                                        .testTag("editor_file_loading"),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -569,6 +615,7 @@ fun EditorPanel(
                             Modifier
                                 .fillMaxSize()
                                 .background(Color.Black.copy(alpha = 0.45f))
+                                .testTag("editor_tree_scrim")
                                 .clickable {
                                     haptic.perform(HapticKind.Tick)
                                     editor.treeVisible = false
@@ -578,9 +625,15 @@ fun EditorPanel(
                             Modifier
                                 .fillMaxHeight()
                                 .width(280.dp)
-                                .background(cs.surfaceContainerHigh),
+                                .background(cs.surfaceContainerHigh)
+                                .testTag("editor_tree_drawer"),
                         ) {
-                            FileTree(fsList = fsList, explorer = editor.explorer, workdir = workdir, onOpenFile = { revealFile(it) })
+                            FileTree(
+                                fsList = actions.fsList,
+                                explorer = editor.explorer,
+                                workdir = workdir,
+                                onOpenFile = { revealFile(it) },
+                            )
                         }
                     }
                 }
@@ -603,8 +656,3 @@ fun EditorPanel(
         }
     }
 }
-
-// ─── Editor helpers (markdown detection, file URIs) ───────────────────────────
-//
-// cm6's outbound `{serverId,message}` payload is parsed by the engine now (the shared
-// `parseLspOut`, kotlinx.serialization) — this file no longer sees raw JSON.

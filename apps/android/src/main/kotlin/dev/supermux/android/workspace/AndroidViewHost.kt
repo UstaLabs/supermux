@@ -27,13 +27,14 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.chat.ChatPanel
 import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
-import dev.supermux.ui.editor.DiffView
-import dev.supermux.ui.editor.FileTree
-import dev.supermux.ui.editor.EditorSurface
+import dev.supermux.android.chat.MarkdownBody
+import dev.supermux.ui.editor.DiffPane
+import dev.supermux.ui.editor.ExplorerPane
+import dev.supermux.ui.editor.FilePane
+import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.ui.theme.Space
-import dev.supermux.net.AddCommentBody
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
@@ -97,7 +98,7 @@ fun AndroidViewHost(
                 "file" ->
                     if (path == null) UnknownViewHint(view.kind, modifier)
                     else FileViewPane(workspace, path, session, vm, modifier)
-                "diff" -> DiffViewPane(workspace, view, vm, modifier)
+                "diff" -> DiffViewPane(workspace, view, session, vm, modifier)
                 else -> ExplorerViewPane(workspace, session, vm, modifier)
             }
         }
@@ -257,6 +258,12 @@ private fun AgentTerminalPane(
     }
 }
 
+/**
+ * The three editor panes are the SHARED ones (`:ui` `editor/EditorPanes.kt`) — desktop's
+ * ExplorerPane/FilePane/DiffPane, which Android used to re-implement one composable at a time.
+ * What stays here is the Android adapter: the view-kind dispatch above, and the `vm.fleet` lambdas
+ * each pane asks for.
+ */
 @Composable
 private fun ExplorerViewPane(
     workspace: WorkspaceDto,
@@ -264,12 +271,14 @@ private fun ExplorerViewPane(
     vm: AppViewModel,
     modifier: Modifier,
 ) {
+    // Per-explorer-pane state: two explorer panes may be expanded to different depths.
     val explorer = remember(workspace.id) { ExplorerState() }
-    FileTree(
+    ExplorerPane(
         fsList = { p -> vm.fleet.workspaceFsListResult(workspace.id, p) },
         explorer = explorer,
         workdir = workspace.workdir,
         onOpenFile = { p -> session.fileOpener.open(p) },
+        fsSearch = { q -> vm.fleet.workspaceFsSearch(workspace.id, q) },
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )
 }
@@ -282,33 +291,36 @@ private fun FileViewPane(
     vm: AppViewModel,
     modifier: Modifier,
 ) {
-    val documents = session.documents
-    LaunchedEffect(path) { documents.open(path) }
-    val doc = documents.get(path)
     val editorPrefs = LocalUiPrefs.current
+    // Hold the first frame until the persisted prefs land, so the surface is not born on the
+    // defaults and then re-pushed (the panel does the same).
     val loadedPrefs by produceState<Pair<Boolean, Int>?>(null, editorPrefs) {
         value = editorPrefs.editorLineWrap.first() to editorPrefs.editorFontSize.first()
     }
     val (lineWrap, initialFontSize) = loadedPrefs ?: return
     val fontSize by editorPrefs.editorFontSize.collectAsState(initialFontSize)
     val scope = rememberCoroutineScope()
-    if (doc == null) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Opening…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-        }
-        return
-    }
-    EditorSurface(
-        content = doc.content,
-        filename = path.substringAfterLast('/'),
+    val lspSessionId = workspace.primarySessionId
+    FilePane(
+        path = path,
+        documents = session.documents,
+        fsRead = { p -> vm.fleet.workspaceFsRead(workspace.id, p) },
+        workdir = workspace.workdir,
+        // LSP is still keyed by session: a workspace with no chat view gets no code intelligence,
+        // and the pane says so rather than looking broken.
+        lspSessionId = lspSessionId,
+        lspStatus = vm.fleet.lspStatus,
+        lspRpc = vm.fleet.lspRpc,
+        lspStatusQuery = { _, p -> if (lspSessionId != null) vm.fleet.lspStatusQuery(lspSessionId, p) },
+        lspOpen = { _, serverId -> if (lspSessionId != null) vm.fleet.lspOpen(lspSessionId, serverId) },
+        lspRpcOut = { _, serverId, message ->
+            if (lspSessionId != null) vm.fleet.lspRpcOut(lspSessionId, serverId, message)
+        },
         lineWrap = lineWrap,
         fontSize = fontSize,
-        scrollTop = doc.scrollTop,
-        revealLine = doc.revealLine,
-        onChange = { documents.update(path, it) },
-        onSave = { documents.save(doc) },
-        onRevealConsumed = { doc.revealLine = null },
         onFontSize = { px -> scope.launch { editorPrefs.putEditorFontSize(px) } },
+        previewMode = session.previewModes[path] == true,
+        previewSlot = { text, onOpen -> MarkdownBody(text, onOpenFile = onOpen) },
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )
 }
@@ -317,51 +329,46 @@ private fun FileViewPane(
 private fun DiffViewPane(
     workspace: WorkspaceDto,
     view: ViewDto,
+    session: WorkspaceSession,
     vm: AppViewModel,
     modifier: Modifier,
 ) {
     val diff = remember(workspace.id, view.id) {
         DiffState().apply { view.stateString("diffBase")?.let { diffBase = it } }
     }
-    val scope = rememberCoroutineScope()
     val primary = workspace.primarySessionId
-    LaunchedEffect(workspace.id, diff.diffBase) {
-        diff.loadDiff(
-            fsDiff = { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) },
-            fsRefs = { vm.fleet.workspaceFsRefs(workspace.id) },
-        )
+    val app = primary?.let { vm.fleet.appFor(it) }
+    val sessions by vm.fleet.sessions.collectAsState()
+    val reviewSession = primary?.let { id -> sessions.firstOrNull { it.id == id } }
+    val walkthrough = if (app != null && reviewSession != null) {
+        app.walkthroughState<WalkthroughState>(reviewSession.id)
+    } else {
+        null
     }
-    DiffView(
-        repos = diff.diffRepos,
-        comments = diff.diffComments,
-        base = diff.diffBase,
-        refs = diff.diffRefs,
-        onSetBase = { base ->
-            scope.launch {
-                diff.setDiffBase(base) { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) }
-            }
+    DiffPane(
+        diff = diff,
+        walkthrough = walkthrough,
+        fsDiff = { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) },
+        fsRefs = { vm.fleet.workspaceFsRefs(workspace.id) },
+        getWalkthrough = { if (app != null && reviewSession != null) app.getWalkthrough(reviewSession) else null },
+        getWalkthroughComments = {
+            if (app != null && reviewSession != null) app.reviewComments(reviewSession) else emptyList()
         },
-        onAddComment = { repo, path, line, ctx, hunk, body ->
-            if (primary != null) {
-                vm.fleet.reviewAddComment(
-                    primary,
-                    AddCommentBody(
-                        repo = repo,
-                        path = path,
-                        side = "RIGHT",
-                        anchorLine = line,
-                        anchorContext = ctx,
-                        body = body,
-                        diffHunkHeader = hunk,
-                    ),
-                )
-            }
+        getReviewComments = {
+            if (app != null && reviewSession != null) app.reviewComments(reviewSession) else emptyList()
         },
-        onResolve = { id -> if (primary != null) vm.fleet.reviewResolve(primary, id) },
-        onSubmit = { if (primary != null) vm.fleet.reviewSubmit(primary) },
-        onReload = { scope.launch { diff.reloadDiff { spec -> vm.fleet.workspaceFsDiff(workspace.id, spec) } } },
+        readWalkthroughFile = { repo, path ->
+            vm.fleet.workspaceFsRead(workspace.id, if (repo.isBlank()) path else "$repo/$path")
+        },
+        onOpenWalkthroughFile = { repo, path, _ ->
+            session.fileOpener.open(if (repo.isBlank()) path else "$repo/$path")
+        },
+        onReviewAddComment = { body -> if (primary != null) vm.fleet.reviewAddComment(primary, body) else null },
+        onReviewResolve = { id -> if (primary != null) vm.fleet.reviewResolve(primary, id) else false },
+        onReviewSubmit = { if (primary != null) vm.fleet.reviewSubmit(primary) else null },
+        markdownSlot = { text, m -> MarkdownBody(text, modifier = m) },
         onClose = {},
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )
 }
 

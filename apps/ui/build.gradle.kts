@@ -44,6 +44,11 @@ kotlin {
             // replacing Android's R.font and desktop's classpath lookup. `api`, because the font
             // families in theme/Type.kt are this module's public surface.
             api(compose.components.resources)
+            // Compose Multiplatform's own BackHandler (androidx.compose.ui.backhandler), used by
+            // EditorPanel's search-overlay / tree-drawer back contract. It is a SEPARATE artifact
+            // from compose.ui and there is no `compose.` accessor for it, hence the coordinates;
+            // the version is the one the Compose plugin resolves for every other compose artifact.
+            api("org.jetbrains.compose.ui:ui-backhandler:${libs.versions.composeMultiplatform.get()}")
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))

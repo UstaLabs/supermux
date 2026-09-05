@@ -37,6 +37,8 @@ class DesktopPlatform : Platform {
         localBroker = true,
         multiWindow = true,
         fileSystem = true,
+        // DesktopWalkthroughSeam is installed on every HostStore this app builds (Main.kt).
+        walkthrough = true,
     )
 
     /** The direct-JCEF browser that hosts CodeMirror; one per app, wrapping the process-global

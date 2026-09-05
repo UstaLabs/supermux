@@ -29,6 +29,7 @@ class DesktopPlatformTest {
                 localBroker = true,
                 multiWindow = true,
                 fileSystem = true,
+                walkthrough = true,
             ),
             DesktopPlatform().caps,
         )

@@ -19,7 +19,7 @@
 //     and it is load-bearing, not an optimisation. [FilePane] therefore builds its JCEF engine on
 //     composition; one live engine per background tab would exhaust memory. Nothing here may
 //     pre-warm a surface for a tab the user is not looking at.
-package dev.supermux.desktop.editor
+package dev.supermux.ui.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -65,15 +65,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.theme.LocalPanes
-import dev.supermux.ui.editor.DiffView
-import dev.supermux.ui.editor.DiffState
-import dev.supermux.ui.editor.EditorLspHandle
-import dev.supermux.ui.editor.EditorSurface
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.editor.DocumentStore
-import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.theme.Space
+import dev.supermux.ui.FilePathRef
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
@@ -85,21 +80,12 @@ import dev.supermux.proto.ServerFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
-import dev.supermux.ui.editor.EditorSearchField
-import dev.supermux.ui.editor.EditorSearchOverlay
-import dev.supermux.ui.editor.FileTree
-import dev.supermux.ui.editor.LspBridge
 import dev.supermux.ui.editor.engine.EditorScrollReader
-import dev.supermux.ui.editor.dirUri
-import dev.supermux.ui.editor.editorPreviewGate
-import dev.supermux.ui.editor.joinPath
-import dev.supermux.ui.editor.pathToUri
-import dev.supermux.ui.editor.WalkthroughState
 
 // ── Explorer ──────────────────────────────────────────────────────────────────────────────────
 
@@ -206,7 +192,7 @@ fun FilePane(
     /** LSP is still keyed by session. Null → no code intelligence, and the pane says so quietly. */
     lspSessionId: String? = null,
     lspStatus: StateFlow<Map<String, ServerFrame.LspStatus>> = MutableStateFlow(emptyMap()),
-    lspRpc: SharedFlow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
+    lspRpc: Flow<ServerFrame.LspRpcIn> = MutableSharedFlow(),
     lspStatusQuery: (String, String) -> Unit = { _, _ -> },
     lspOpen: (String, String) -> Unit = { _, _ -> },
     lspRpcOut: (String, String, String) -> Unit = { _, _, _ -> },
@@ -221,6 +207,12 @@ fun FilePane(
      * row; that row is gone (the tab carries the per-file controls now), so the caller holds it.
      */
     previewMode: Boolean = false,
+    /** Markdown renderer for the preview swap — each app's own `MarkdownBody` (the shared one
+     *  arrives in cluster D). [onOpenFile] is how a link inside the rendered document asks for
+     *  another file. */
+    previewSlot: @Composable (text: String, onOpenFile: (FilePathRef) -> Unit) -> Unit = { text, _ -> Text(text) },
+    /** Where a file link inside the preview lands. */
+    onOpenFile: (FilePathRef) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val c = LocalPanes.current
@@ -328,7 +320,7 @@ fun FilePane(
                         .padding(Space.lg)
                         .testTag("editor_preview"),
                 ) {
-                    dev.supermux.desktop.chat.MarkdownBody(doc?.content ?: "")
+                    previewSlot(doc?.content ?: "", onOpenFile)
                 }
             } else {
                 EditorSurface(
@@ -409,6 +401,8 @@ fun DiffPane(
     onWalkthroughClosed: () -> Unit = {},
     onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     onClose: () -> Unit = {},
+    /** Markdown renderer for the walkthrough's step bodies — each app's own `MarkdownBody`. */
+    markdownSlot: @Composable (text: String, modifier: Modifier) -> Unit = { text, m -> Text(text, modifier = m) },
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -440,7 +434,9 @@ fun DiffPane(
     // duplicate TestTag properties on one modifier chain, which would hide editor_diff_pane.
     Box(modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().testTag("editor_diff_pane")) {
-        val hasWalkthrough = walkthrough?.steps?.isNotEmpty() == true
+        // The toggle only exists where the app installed a WalkthroughSeam on its HostStore —
+        // both platforms do since cluster C4, but a host without one has no holder to read.
+        val hasWalkthrough = LocalPlatform.current.caps.walkthrough && walkthrough?.steps?.isNotEmpty() == true
         if (hasWalkthrough) {
             Row(
                 Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -473,6 +469,7 @@ fun DiffPane(
                     walkthrough.close()
                     onWalkthroughClosed()
                 },
+                markdownSlot = markdownSlot,
                 modifier = Modifier.weight(1f),
             )
         } else {
