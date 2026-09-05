@@ -1,4 +1,18 @@
-package dev.supermux.android.chat
+// The chat **Finish** flow, shared by both hosts (cluster D4).
+//
+// Base: desktop's `FinishDialogContent` (940-line `desktop/chat/FinishDialog.kt`), which was itself
+// a port of Android's `FinishSheet` — the 3-state machine, the 15 outcome bodies and `issueMessage`
+// are byte-faithful to both. What this file adds is the CONTAINER branch:
+//
+//   • WindowWidthClass.Compact → Material3 [ModalBottomSheet] (Android's `finish_sheet` shape)
+//   • anything wider           → the [Dialog] window (desktop's shape)
+//
+// Unioned in from Android: `onAck` (acking the unacked-result dot when the flow opens). Unioned in
+// from desktop: `finishDotIsError` off `:shared` (instead of an inline `status == "failed"`), the
+// extra test tags (`finish_dialog`, `finish_readiness_card`, `finish_running`, `finish_outcome`,
+// `finish_run_tests`, `finish_skip_tests`, `finish_done`, `finish_dismiss`), Material icons instead
+// of Android's `R.drawable.ic_*`, and `LocalPlatform.openUrl` instead of an Intent/AWT call.
+package dev.supermux.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +31,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallMerge
+import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,35 +55,39 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.android.R
-import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.theme.HapticKind
-import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.chat.canSkipTests
+import dev.supermux.chat.finishDotIsError
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FinishResult
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.SessionInfo
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.rememberHaptics
+import dev.supermux.ui.widgets.Dialog
 import kotlinx.coroutines.launch
 
 /** Header Finish button — a compact M3 [TextButton] with an unacked-result dot overlay.
@@ -78,7 +107,7 @@ fun FinishButton(
             modifier = Modifier.testTag("finish_button"),
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_git_merge),
+                imageVector = Icons.AutoMirrored.Filled.CallMerge,
                 contentDescription = null,
                 tint = cs.primary,
                 modifier = Modifier.size(16.dp),
@@ -97,7 +126,7 @@ fun FinishButton(
                     .padding(top = 6.dp, end = 4.dp)
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (finishJob?.status == "failed") cs.error else cs.primary)
+                    .background(if (finishDotIsError(finishJob)) cs.error else cs.primary)
                     .testTag("finish_unacked_dot"),
             )
         }
@@ -107,22 +136,28 @@ fun FinishButton(
 /** Local draft of an edited verify script (the no_verify recovery path). */
 data class VerifyDraft(val content: String, val source: String)
 
-/** The three render states of the sheet, derived from the live [FinishJobDto]. */
+/** The three render states of the flow, derived from the live [FinishJobDto]. */
 private enum class FinishView { Menu, Running, Outcome }
 
 /**
- * The chat **Finish** bottom sheet — native-M3 parity with iOS `FinishSheet.swift`.
+ * The chat **Finish** flow — one adaptive surface, native-M3 parity with iOS `FinishSheet.swift`.
  *
- * A three-state machine driven entirely by [finishJob] (kept fresh by the WS `finish_job`
- * frame via the VM `finishJobs` StateFlow): **Menu** (readiness preflight → Merge / Open PR /
+ * A three-state machine driven entirely by [finishJob] (kept fresh by the WS `finish_job` frame via
+ * [dev.supermux.state.HostStore.finishJobs]): **Menu** (readiness preflight → Merge / Open PR /
  * Keep / Discard) → **Running** (live `stage`) → **Outcome** (per-status recovery). Because
- * `finishJob` is a parameter, a WS flip `running → done|failed` recomposes the body with no
- * extra code. Local input drafts (readiness, runError, confirmingDiscard, commitMessage,
- * verifyDraft) live here as Compose state.
+ * `finishJob` is a parameter, a WS flip `running → done|failed` recomposes the body with no extra
+ * code.
+ *
+ * The container is the ONLY thing that differs by size class: a [ModalBottomSheet] tagged
+ * `finish_sheet` on a Compact window (a phone — Android's original shape), a [Dialog] window
+ * anywhere else (desktop's shape). Both wrap the same [FinishFlowContent], which is also the
+ * windowless `runComposeUiTest` seam.
+ *
+ * [onAck] (Android) marks the unacked-result dot seen the moment the flow opens.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FinishSheet(
+fun FinishFlow(
     session: SessionInfo,
     finishJob: FinishJobDto?,
     onReadiness: suspend () -> FinishReadiness?,
@@ -131,11 +166,71 @@ fun FinishSheet(
     onVerifySuggest: suspend () -> VerifySuggestResult?,
     onVerifySave: suspend (String) -> VerifySaveResult?,
     onSendToAgent: (String) -> Unit,
-    onAck: () -> Unit,
     onDismiss: () -> Unit,
+    onAck: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Block dismiss mid-job (a brief, self-resolving state); Android hides Done while running.
+    val running = finishJob != null && finishJob.status == "running"
+    val body: @Composable (Modifier) -> Unit = { mod ->
+        FinishFlowContent(
+            session = session,
+            finishJob = finishJob,
+            onReadiness = onReadiness,
+            onFinish = onFinish,
+            onClearJob = onClearJob,
+            onVerifySuggest = onVerifySuggest,
+            onVerifySave = onVerifySave,
+            onSendToAgent = onSendToAgent,
+            onDismiss = onDismiss,
+            onAck = onAck,
+            modifier = mod,
+        )
+    }
+    if (LocalWindowWidthClass.current == WindowWidthClass.Compact) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { if (!running) onDismiss() },
+            sheetState = sheetState,
+            containerColor = cs.surfaceContainerLow,
+            contentColor = cs.onSurface,
+            modifier = Modifier.testTag("finish_sheet"),
+        ) {
+            body(Modifier.fillMaxWidth())
+        }
+    } else {
+        Dialog(onDismissRequest = { if (!running) onDismiss() }) {
+            body(
+                Modifier
+                    .width(440.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(cs.surfaceContainerLow),
+            )
+        }
+    }
+}
+
+/**
+ * The Finish flow BODY (container-free) — the full 3-state machine + local input drafts (readiness,
+ * runError, confirmingDiscard, commitMessage, verifyDraft). Extracted so the state machine is
+ * testable under `runComposeUiTest` without a real window (the plan's seam). Internal, not private,
+ * so the tests in this module's `jvmTest` source set can render it.
+ */
+@Composable
+internal fun FinishFlowContent(
+    session: SessionInfo,
+    finishJob: FinishJobDto?,
+    onReadiness: suspend () -> FinishReadiness?,
+    onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit,
+    onClearJob: () -> Unit,
+    onVerifySuggest: suspend () -> VerifySuggestResult?,
+    onVerifySave: suspend (String) -> VerifySaveResult?,
+    onSendToAgent: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onAck: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
 
     var readiness by remember { mutableStateOf<FinishReadiness?>(null) }
     var loadingReadiness by remember { mutableStateOf(false) }
@@ -151,8 +246,8 @@ fun FinishSheet(
         else -> FinishView.Outcome
     }
 
-    // On open: clear any stale kickoff error, ack the badge, and (re)load readiness when there's
-    // no in-flight job (no job at all, or one that already finished). Mirrors iOS `.task`.
+    // On open: clear any stale kickoff error, ack the badge (Android), and (re)load readiness when
+    // there's no in-flight job (no job at all, or one that already finished). iOS `.task`.
     LaunchedEffect(Unit) {
         runError = null
         onAck()
@@ -168,63 +263,61 @@ fun FinishSheet(
         if (!ok) runError = "Couldn't start finish — check your connection and try again."
     }
 
-    ModalBottomSheet(
-        // Block swipe-dismiss mid-job (iOS hides Done while running); a brief, self-resolving state.
-        onDismissRequest = { if (view != FinishView.Running) onDismiss() },
-        sheetState = sheetState,
-        containerColor = cs.surfaceContainerLow,
-        contentColor = cs.onSurface,
-        modifier = Modifier.testTag("finish_sheet"),
+    Column(
+        modifier
+            .padding(bottom = 24.dp)
+            .testTag("finish_dialog"),
     ) {
-        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-            // ── Title ──────────────────────────────────────────────────────────
-            val title = when (view) {
-                FinishView.Menu -> "Finish · ${readiness?.branch ?: session.session_branch ?: ""}"
-                FinishView.Running -> "Finishing"
-                FinishView.Outcome -> "Finish"
-            }
-            Text(
-                text = title,
-                color = cs.onSurface,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-            )
+        // ── Title ──────────────────────────────────────────────────────────────────
+        val title = when (view) {
+            FinishView.Menu -> "Finish · ${readiness?.branch ?: session.session_branch ?: ""}"
+            FinishView.Running -> "Finishing"
+            FinishView.Outcome -> "Finish"
+        }
+        Text(
+            text = title,
+            color = cs.onSurface,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+        )
 
-            when (view) {
-                FinishView.Menu -> MenuBody(
-                    readiness = readiness,
-                    loadingReadiness = loadingReadiness,
-                    runError = runError,
-                    confirmingDiscard = confirmingDiscard,
-                    onConfirmDiscardChange = { confirmingDiscard = it },
-                    onFinish = onFinish,
-                    kickoff = kickoff,
-                    onDismiss = onDismiss,
-                )
-                FinishView.Running -> RunningBody(stage = finishJob?.stage)
-                FinishView.Outcome -> OutcomeBody(
-                    finishJob = finishJob,
-                    commitMessage = commitMessage,
-                    onCommitMessageChange = { commitMessage = it },
-                    verifyDraft = verifyDraft,
-                    onVerifyDraftChange = { verifyDraft = it },
-                    verifySaving = verifySaving,
-                    onVerifySavingChange = { verifySaving = it },
-                    onFinish = onFinish,
-                    kickoff = kickoff,
-                    onVerifySuggest = onVerifySuggest,
-                    onVerifySave = onVerifySave,
-                    onSendToAgent = onSendToAgent,
-                    onClearJob = onClearJob,
-                    onDismiss = onDismiss,
-                )
-            }
+        when (view) {
+            FinishView.Menu -> MenuBody(
+                readiness = readiness,
+                loadingReadiness = loadingReadiness,
+                runError = runError,
+                confirmingDiscard = confirmingDiscard,
+                onConfirmDiscardChange = { confirmingDiscard = it },
+                onFinish = onFinish,
+                kickoff = kickoff,
+                onDismiss = onDismiss,
+            )
+            FinishView.Running -> RunningBody(stage = finishJob?.stage)
+            FinishView.Outcome -> OutcomeBody(
+                finishJob = finishJob,
+                commitMessage = commitMessage,
+                onCommitMessageChange = { commitMessage = it },
+                verifyDraft = verifyDraft,
+                onVerifyDraftChange = { verifyDraft = it },
+                verifySaving = verifySaving,
+                onVerifySavingChange = { verifySaving = it },
+                onFinish = onFinish,
+                kickoff = kickoff,
+                onVerifySuggest = onVerifySuggest,
+                onVerifySave = onVerifySave,
+                onSendToAgent = onSendToAgent,
+                onClearJob = onClearJob,
+                onDismiss = onDismiss,
+            )
         }
     }
 }
+
+private typealias OnFinish =
+    (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit
 
 // ── Menu ─────────────────────────────────────────────────────────────────────
 
@@ -235,7 +328,7 @@ private fun MenuBody(
     runError: String?,
     confirmingDiscard: Boolean,
     onConfirmDiscardChange: (Boolean) -> Unit,
-    onFinish: (String, Boolean?, Boolean?, String?, (Boolean) -> Unit) -> Unit,
+    onFinish: OnFinish,
     kickoff: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -252,7 +345,7 @@ private fun MenuBody(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(
-                    painter = painterResource(R.drawable.ic_alert_triangle),
+                    imageVector = Icons.Filled.WarningAmber,
                     contentDescription = null,
                     tint = cs.error,
                     modifier = Modifier.size(16.dp),
@@ -289,14 +382,14 @@ private fun MenuBody(
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
             )
-            ActionRow("Keep", R.drawable.ic_archive) {
+            ActionRow("Keep", Icons.Filled.Archive) {
                 onFinish("keep", null, null, null, kickoff); onDismiss()
             }
             DiscardRows(confirmingDiscard, onConfirmDiscardChange, onFinish, kickoff)
         } else {
             ActionRow(
                 "Merge locally",
-                R.drawable.ic_git_merge,
+                Icons.AutoMirrored.Filled.CallMerge,
                 color = if (readiness?.recommended == "merge") cs.primary else cs.onSurface,
             ) { onConfirmDiscardChange(false); pendingVerify = if (pendingVerify == "merge") null else "merge" }
             if (pendingVerify == "merge") {
@@ -316,7 +409,7 @@ private fun MenuBody(
                     onSkip = { pendingVerify = null; onFinish("pr", true, null, null, kickoff) },
                 )
             }
-            ActionRow("Keep", R.drawable.ic_archive) {
+            ActionRow("Keep", Icons.Filled.Archive) {
                 pendingVerify = null; onFinish("keep", null, null, null, kickoff); onDismiss()
             }
             DiscardRows(
@@ -338,7 +431,8 @@ private fun ReadinessCard(r: FinishReadiness) {
             .padding(horizontal = 20.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(cs.surfaceContainer)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag("finish_readiness_card"),
     ) {
         Text(
             "${r.branch} → ${r.base}",
@@ -373,11 +467,11 @@ private fun ReadinessCard(r: FinishReadiness) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 when (r.conflictPreflight) {
-                    "will_conflict" -> Chip(R.drawable.ic_alert_triangle, "may conflict", cs.tertiary)
-                    "clean" -> Chip(R.drawable.ic_check, "no conflict", cs.primary)
+                    "will_conflict" -> Chip(Icons.Filled.WarningAmber, "may conflict", cs.tertiary)
+                    "clean" -> Chip(Icons.Filled.Check, "no conflict", cs.primary)
                 }
                 if (r.dirtyFiles.isNotEmpty()) {
-                    Chip(R.drawable.ic_alert_triangle, "${r.dirtyFiles.size} uncommitted", cs.tertiary)
+                    Chip(Icons.Filled.WarningAmber, "${r.dirtyFiles.size} uncommitted", cs.tertiary)
                 }
             }
         }
@@ -385,13 +479,13 @@ private fun ReadinessCard(r: FinishReadiness) {
 }
 
 @Composable
-private fun Chip(iconRes: Int, label: String, color: Color) {
+private fun Chip(icon: ImageVector, label: String, color: Color) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Icon(
-            painter = painterResource(iconRes),
+            imageVector = icon,
             contentDescription = null,
             tint = color,
             modifier = Modifier.size(13.dp),
@@ -411,7 +505,7 @@ private fun PrRow(
     val noRemote = readiness != null && !readiness.hasRemote
     ActionRow(
         label = label,
-        iconRes = R.drawable.ic_git_pull_request,
+        icon = Icons.AutoMirrored.Filled.CallSplit,
         color = if (readiness?.recommended == "pr") cs.primary else cs.onSurface,
         enabled = !noRemote,
         trailing = if (noRemote) {
@@ -424,11 +518,11 @@ private fun PrRow(
 private fun DiscardRows(
     confirmingDiscard: Boolean,
     onConfirmDiscardChange: (Boolean) -> Unit,
-    onFinish: (String, Boolean?, Boolean?, String?, (Boolean) -> Unit) -> Unit,
+    onFinish: OnFinish,
     kickoff: (Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    ActionRow("Discard", R.drawable.ic_trash, color = cs.error) { onConfirmDiscardChange(true) }
+    ActionRow("Discard", Icons.Filled.DeleteOutline, color = cs.error) { onConfirmDiscardChange(true) }
     if (confirmingDiscard) {
         Column(
             modifier = Modifier
@@ -468,11 +562,12 @@ private fun VerifyChoiceRows(
         Text(prompt, color = cs.onSurfaceVariant, fontSize = 12.sp)
         Spacer(Modifier.size(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onRun) { Text("Run tests") }
+            Button(onClick = onRun, modifier = Modifier.testTag("finish_run_tests")) { Text("Run tests") }
             if (showSkip) {
                 OutlinedButton(
                     onClick = onSkip,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = cs.tertiary),
+                    modifier = Modifier.testTag("finish_skip_tests"),
                 ) { Text("Skip tests") }
             }
         }
@@ -487,7 +582,8 @@ private fun RunningBody(stage: String?) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 32.dp),
+            .padding(horizontal = 24.dp, vertical = 32.dp)
+            .testTag("finish_running"),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -518,7 +614,7 @@ private fun OutcomeBody(
     onVerifyDraftChange: (VerifyDraft?) -> Unit,
     verifySaving: Boolean,
     onVerifySavingChange: (Boolean) -> Unit,
-    onFinish: (String, Boolean?, Boolean?, String?, (Boolean) -> Unit) -> Unit,
+    onFinish: OnFinish,
     kickoff: (Boolean) -> Unit,
     onVerifySuggest: suspend () -> VerifySuggestResult?,
     onVerifySave: suspend (String) -> VerifySaveResult?,
@@ -526,63 +622,62 @@ private fun OutcomeBody(
     onClearJob: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val o = finishJob?.outcome
     val oStatus = o?.status ?: ""
 
     // Done/Dismiss both clear the (terminal) job so reopening returns to the readiness menu.
     val done: () -> Unit = { onClearJob(); onDismiss() }
-    val platform = LocalPlatform.current
-    val openUrl: (String) -> Unit = { url -> platform.openUrl(url) }
     val letAgentFix: () -> Unit = {
         if (o != null) { onSendToAgent(issueMessage(o)); onClearJob(); onDismiss() }
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().testTag("finish_outcome")) {
         when (oStatus) {
             "integrated" -> {
-                OutcomeHeader("Merged into ${o?.base ?: "base"}", R.drawable.ic_check, cs.primary)
+                OutcomeHeader("Merged into ${o?.base ?: "base"}", Icons.Filled.Check, cs.primary)
                 DoneRow(done)
             }
 
             "pr_opened" -> {
-                OutcomeHeader("Pull request opened", R.drawable.ic_git_pull_request, cs.onSurface)
+                OutcomeHeader("Pull request opened", Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
                 o?.prUrl?.let { url ->
-                    ActionRow("View PR", R.drawable.ic_external_link) { openUrl(url) }
+                    ActionRow("View PR", Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
                 }
                 DismissRow(done)
                 DoneRow(done)
             }
 
             "branch_published" -> {
-                OutcomeHeader("Branch pushed", R.drawable.ic_git_pull_request, cs.onSurface)
+                OutcomeHeader("Branch pushed", Icons.AutoMirrored.Filled.CallSplit, cs.onSurface)
                 o?.prError?.let { Caption(it) }
                 o?.compareUrl?.let { url ->
-                    ActionRow("Open a PR", R.drawable.ic_external_link) { openUrl(url) }
+                    ActionRow("Open a PR", Icons.AutoMirrored.Filled.OpenInNew) { platform.openUrl(url) }
                 }
                 DismissRow(done)
                 DoneRow(done)
             }
 
             "tests_failed" -> {
-                OutcomeHeader("Tests failed", R.drawable.ic_x_circle, cs.error)
+                OutcomeHeader("Tests failed", Icons.Filled.Cancel, cs.error)
                 OutputBlock(o?.output)
                 DismissRow(done)
-                ActionRow("Merge anyway", R.drawable.ic_alert_triangle, color = cs.tertiary) {
+                ActionRow("Merge anyway", Icons.Filled.WarningAmber, color = cs.tertiary) {
                     onFinish("merge", true, null, null, kickoff)
                 }
-                ActionRow("Let the agent fix it", R.drawable.ic_send, onClick = letAgentFix)
+                ActionRow("Let the agent fix it", Icons.AutoMirrored.Filled.Send, onClick = letAgentFix)
             }
 
             "sync_conflict", "dirty_overlap" -> {
                 OutcomeHeader(
                     if (oStatus == "sync_conflict") "Merge conflicts" else "Base has unsaved changes",
-                    R.drawable.ic_alert_triangle,
+                    Icons.Filled.WarningAmber,
                     cs.tertiary,
                 )
                 FileList(o?.files ?: emptyList())
                 DismissRow(done)
-                ActionRow("Let the agent fix it", R.drawable.ic_send, onClick = letAgentFix)
+                ActionRow("Let the agent fix it", Icons.AutoMirrored.Filled.Send, onClick = letAgentFix)
             }
 
             "uncommitted" -> {
@@ -601,7 +696,7 @@ private fun OutcomeBody(
                 val isPr = finishJob?.action == "pr"
                 ActionRow(
                     if (isPr) "Commit & open PR" else "Commit & merge",
-                    R.drawable.ic_git_merge,
+                    Icons.AutoMirrored.Filled.CallMerge,
                 ) {
                     onFinish(if (isPr) "pr" else "merge", null, true, commitMessage, kickoff)
                 }
@@ -611,10 +706,10 @@ private fun OutcomeBody(
                 if (verifyDraft == null) {
                     OutcomeHeader("No .mux/verify.sh configured", null, cs.onSurface)
                     DismissRow(done)
-                    ActionRow("Merge without verifying", R.drawable.ic_alert_triangle, color = cs.tertiary) {
+                    ActionRow("Merge without verifying", Icons.Filled.WarningAmber, color = cs.tertiary) {
                         onFinish("merge", true, null, null, kickoff)
                     }
-                    LoadingActionRow("Generate verify", R.drawable.ic_sparkle) {
+                    LoadingActionRow("Generate verify", Icons.Filled.AutoAwesome) {
                         onVerifySuggest()?.let { onVerifyDraftChange(VerifyDraft(it.content, it.source)) }
                     }
                 } else {
@@ -629,7 +724,7 @@ private fun OutcomeBody(
                             .padding(horizontal = 20.dp, vertical = 6.dp),
                     )
                     DismissRow(done)
-                    LoadingActionRow("Save", R.drawable.ic_check, enabled = !verifySaving) {
+                    LoadingActionRow("Save", Icons.Filled.Check, enabled = !verifySaving) {
                         onVerifySavingChange(true)
                         try {
                             val r = onVerifySave(verifyDraft.content)
@@ -645,10 +740,10 @@ private fun OutcomeBody(
             }
 
             "push_auth_failed", "push_rejected" -> {
-                OutcomeHeader("Push failed", R.drawable.ic_x_circle, cs.error)
+                OutcomeHeader("Push failed", Icons.Filled.Cancel, cs.error)
                 o?.message?.let { Caption(it) }
                 DismissRow(done)
-                ActionRow("Retry", R.drawable.ic_git_pull_request) {
+                ActionRow("Retry", Icons.AutoMirrored.Filled.CallSplit) {
                     onFinish("pr", null, null, null, kickoff)
                 }
             }
@@ -661,23 +756,23 @@ private fun OutcomeBody(
             "kept", "discarded" -> {
                 OutcomeHeader(
                     if (oStatus == "kept") "Branch kept" else "Work discarded",
-                    R.drawable.ic_check,
+                    Icons.Filled.Check,
                     cs.primary,
                 )
                 DoneRow(done)
             }
 
             "non_ff" -> {
-                OutcomeHeader("Base branch moved", R.drawable.ic_alert_triangle, cs.tertiary)
+                OutcomeHeader("Base branch moved", Icons.Filled.WarningAmber, cs.tertiary)
                 Caption("The base branch moved while finishing. Re-sync and merge again.")
                 DismissRow(done)
-                ActionRow("Merge again", R.drawable.ic_git_merge) {
+                ActionRow("Merge again", Icons.AutoMirrored.Filled.CallMerge) {
                     onFinish("merge", null, null, null, kickoff)
                 }
             }
 
             else -> {
-                OutcomeHeader("Finish failed", R.drawable.ic_x_circle, cs.error)
+                OutcomeHeader("Finish failed", Icons.Filled.Cancel, cs.error)
                 Caption(o?.message ?: oStatus)
                 DismissRow(done)
             }
@@ -691,7 +786,7 @@ private fun OutcomeBody(
 @Composable
 private fun ActionRow(
     label: String,
-    iconRes: Int?,
+    icon: ImageVector?,
     color: Color = MaterialTheme.colorScheme.onSurface,
     enabled: Boolean = true,
     trailing: (@Composable () -> Unit)? = null,
@@ -712,9 +807,9 @@ private fun ActionRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (iconRes != null) {
+        if (icon != null) {
             Icon(
-                painter = painterResource(iconRes),
+                imageVector = icon,
                 contentDescription = null,
                 tint = tint,
                 modifier = Modifier.size(18.dp),
@@ -735,7 +830,7 @@ private fun ActionRow(
 @Composable
 private fun LoadingActionRow(
     label: String,
-    iconRes: Int,
+    icon: ImageVector,
     enabled: Boolean = true,
     onClick: suspend () -> Unit,
 ) {
@@ -763,7 +858,7 @@ private fun LoadingActionRow(
             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
         } else {
             Icon(
-                painter = painterResource(iconRes),
+                imageVector = icon,
                 contentDescription = null,
                 tint = if (active) cs.onSurface else cs.onSurfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.size(18.dp),
@@ -780,7 +875,7 @@ private fun LoadingActionRow(
 
 /** The status header line of an outcome: optional leading icon + colored label. */
 @Composable
-private fun OutcomeHeader(label: String, iconRes: Int?, color: Color) {
+private fun OutcomeHeader(label: String, icon: ImageVector?, color: Color) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -788,9 +883,9 @@ private fun OutcomeHeader(label: String, iconRes: Int?, color: Color) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (iconRes != null) {
+        if (icon != null) {
             Icon(
-                painter = painterResource(iconRes),
+                imageVector = icon,
                 contentDescription = null,
                 tint = color,
                 modifier = Modifier.size(18.dp),
@@ -853,14 +948,16 @@ private fun OutputBlock(text: String?) {
 @Composable
 private fun DoneRow(onClick: () -> Unit) {
     Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-        TextButton(onClick = onClick) { Text("Done", color = MaterialTheme.colorScheme.primary) }
+        TextButton(onClick = onClick, modifier = Modifier.testTag("finish_done")) {
+            Text("Done", color = MaterialTheme.colorScheme.primary)
+        }
     }
 }
 
 @Composable
 private fun DismissRow(onClick: () -> Unit) {
     Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-        TextButton(onClick = onClick) {
+        TextButton(onClick = onClick, modifier = Modifier.testTag("finish_dismiss")) {
             Text("Dismiss", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -878,4 +975,58 @@ fun issueMessage(o: FinishResult): String = when (o.status) {
     "dirty_overlap" -> "The base checkout has unsaved changes in: ${o.files.joinToString(", ")} — the same files my work touches. Please commit or stash them so Finish can fast-forward."
     "push_rejected" -> "Pushing the branch for a PR was rejected because the remote has diverged: ${o.message ?: ""}. Please reconcile (pull/rebase) and I'll run Finish again."
     else -> "Finish reported: ${o.message ?: o.status}"
+}
+
+/**
+ * Everything the Finish flow needs from the host, for ONE session. Passing this to a header
+ * ([FinishHeaderButton], [dev.supermux.ui.chat.ChatPanel]) is what puts Finish on screen; a null
+ * binding means the host has no finish plumbing and the button is not drawn at all.
+ */
+class FinishBindings(
+    val job: FinishJobDto?,
+    val readiness: suspend () -> FinishReadiness?,
+    val finish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit,
+    val clearJob: () -> Unit,
+    val verifySuggest: suspend () -> VerifySuggestResult?,
+    val verifySave: suspend (String) -> VerifySaveResult?,
+    val sendToAgent: (String) -> Unit,
+)
+
+/**
+ * The header affordance: [FinishButton] plus the flow it opens, with the unacked-dot bookkeeping
+ * both hosts were duplicating. Only worktree-backed sessions get it (iOS gates on
+ * `session.session_branch`), so callers can render it unconditionally.
+ *
+ * The acked `startedAt` is `rememberSaveable` so a result stays "seen" across a rotation or
+ * process death (Android's behaviour, now desktop's too).
+ */
+@Composable
+fun FinishHeaderButton(session: SessionInfo, bindings: FinishBindings) {
+    if (session.session_branch == null) return
+    var showFlow by remember(session.id) { mutableStateOf(false) }
+    var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
+    val job = bindings.job
+    val isUnacked = job != null && job.status != "running" && job.startedAt != ackedStartedAt
+    FinishButton(
+        finishJob = job,
+        isUnacked = isUnacked,
+        onClick = {
+            ackedStartedAt = job?.startedAt ?: ackedStartedAt
+            showFlow = true
+        },
+    )
+    if (showFlow) {
+        FinishFlow(
+            session = session,
+            finishJob = job,
+            onReadiness = bindings.readiness,
+            onFinish = bindings.finish,
+            onClearJob = bindings.clearJob,
+            onVerifySuggest = bindings.verifySuggest,
+            onVerifySave = bindings.verifySave,
+            onSendToAgent = bindings.sendToAgent,
+            onAck = { ackedStartedAt = job?.startedAt ?: ackedStartedAt },
+            onDismiss = { showFlow = false },
+        )
+    }
 }

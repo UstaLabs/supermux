@@ -33,12 +33,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.supermux.android.AppViewModel
 import dev.supermux.android.R
-import dev.supermux.android.chat.ContinueConversationSheet
 import dev.supermux.state.ContinueHandoff
-import dev.supermux.android.chat.ContinueMenuItem
-import dev.supermux.android.chat.rememberContinueSheetState
-import dev.supermux.android.chat.FinishButton
-import dev.supermux.android.chat.FinishSheet
+import dev.supermux.ui.chat.ContinueConversationFlow
+import dev.supermux.ui.chat.ContinueMenuItem
+import dev.supermux.ui.chat.rememberContinueSheetState
+import dev.supermux.ui.chat.FinishBindings
+import dev.supermux.ui.chat.FinishHeaderButton
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.ui.session.SessionStatusRail
@@ -139,35 +139,18 @@ fun ChatViewHeader(
                 modifier = Modifier.testTag("toggle_native"),
             )
         }
-        if (session.session_branch != null) {
-            var showFinishSheet by remember(session.id) { mutableStateOf(false) }
-            var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
-            val isUnacked = finishJob != null &&
-                finishJob.status != "running" &&
-                finishJob.startedAt != ackedStartedAt
-            FinishButton(
-                finishJob = finishJob,
-                isUnacked = isUnacked,
-                onClick = {
-                    ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
-                    showFinishSheet = true
-                },
-            )
-            if (showFinishSheet) {
-                FinishSheet(
-                    session = session,
-                    finishJob = finishJob,
-                    onReadiness = onFinishReadiness,
-                    onFinish = onFinish,
-                    onClearJob = onClearFinishJob,
-                    onVerifySuggest = onVerifySuggest,
-                    onVerifySave = onVerifySave,
-                    onSendToAgent = onSendToAgent,
-                    onAck = { ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt },
-                    onDismiss = { showFinishSheet = false },
-                )
-            }
-        }
+        FinishHeaderButton(
+            session = session,
+            bindings = FinishBindings(
+                job = finishJob,
+                readiness = onFinishReadiness,
+                finish = onFinish,
+                clearJob = onClearFinishJob,
+                verifySuggest = onVerifySuggest,
+                verifySave = onVerifySave,
+                sendToAgent = onSendToAgent,
+            ),
+        )
         ChatOverflowMenu(
             session = session,
             onGitOp = onGitOp,
@@ -325,7 +308,7 @@ internal fun ChatOverflowMenu(
         }
     }
     if (showContinue.value && onContinue != null) {
-        ContinueConversationSheet(
+        ContinueConversationFlow(
             session = session,
             onContinue = onContinue,
             onContinued = onContinued,

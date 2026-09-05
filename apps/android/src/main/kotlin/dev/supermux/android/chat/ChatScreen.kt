@@ -132,6 +132,15 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.gitBadge
 import dev.supermux.state.ContinueHandoff
+import dev.supermux.ui.chat.ChatActions
+import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.ChatState
+import dev.supermux.ui.chat.ComposerActions
+import dev.supermux.ui.chat.ContinueConversationFlow
+import dev.supermux.ui.chat.ContinueMenuItem
+import dev.supermux.ui.chat.FinishBindings
+import dev.supermux.ui.chat.FinishHeaderButton
+import dev.supermux.ui.chat.rememberContinueSheetState
 import dev.supermux.ui.prefs.LocalUiPrefs
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
@@ -390,37 +399,20 @@ fun ChatScreen(
                     }
                 }
 
-                // Finish — only for worktree-backed sessions (iOS gates on session.session_branch).
-                if (session.session_branch != null) {
-                    var showFinishSheet by remember(session.id) { mutableStateOf(false) }
-                    // Acked startedAt survives rotation/process-death so a result stays "seen".
-                    var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
-                    val isUnacked = finishJob != null &&
-                        finishJob.status != "running" &&
-                        finishJob.startedAt != ackedStartedAt
-                    FinishButton(
-                        finishJob = finishJob,
-                        isUnacked = isUnacked,
-                        onClick = {
-                            ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
-                            showFinishSheet = true
-                        },
-                    )
-                    if (showFinishSheet) {
-                        FinishSheet(
-                            session = session,
-                            finishJob = finishJob,
-                            onReadiness = onFinishReadiness,
-                            onFinish = onFinish,
-                            onClearJob = onClearFinishJob,
-                            onVerifySuggest = onVerifySuggest,
-                            onVerifySave = onVerifySave,
-                            onSendToAgent = onSendToAgent,
-                            onAck = { ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt },
-                            onDismiss = { showFinishSheet = false },
-                        )
-                    }
-                }
+                // Finish — only for worktree-backed sessions (the shared flow gates on
+                // session.session_branch itself, and owns the unacked-dot bookkeeping).
+                FinishHeaderButton(
+                    session = session,
+                    bindings = FinishBindings(
+                        job = finishJob,
+                        readiness = onFinishReadiness,
+                        finish = onFinish,
+                        clearJob = onClearFinishJob,
+                        verifySuggest = onVerifySuggest,
+                        verifySave = onVerifySave,
+                        sendToAgent = onSendToAgent,
+                    ),
+                )
 
                 // Overflow menu (⋮): Detail + rename / mute / displays / kill
                 Box {
@@ -624,30 +616,46 @@ fun ChatScreen(
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (SessionPanel.Chat in shownPanels) {
+                var chatDraft by remember { mutableStateOf("") }
                 ChatPanel(
                     session = session,
-                    messages = messages,
-                    activity = activity,
-                    agent = agent,
-                    bgTasks = bgTasks,
-                    sending = sending,
-                    activePanel = activePanel,
-                    onSendWith = onSendWith,
-                    onInterrupt = onInterrupt,
-                    commands = commands,
-                    commandsResolved = commandsResolved,
-                    onUpload = onUpload,
-                    loadBytes = loadBytes,
-                    transcribeAudio = transcribeAudio,
-                    transcribeDraft = transcribeDraft,
-                    loadGlossary = loadGlossary,
-                    vmModels = vmModels,
-                    vmReasoning = vmReasoning,
-                    onPickModel = onPickModel,
-                    onPickEffort = onPickEffort,
-                    loadDraft = loadDraft,
-                    saveDraft = saveDraft,
-                    consumePendingFirst = consumePendingFirst,
+                    state = ChatState(
+                        messages = messages,
+                        activity = activity,
+                        agent = agent,
+                        bgTasks = bgTasks,
+                        sending = sending,
+                        commands = commands,
+                        commandsResolved = commandsResolved,
+                    ),
+                    actions = remember(session.id) {
+                        ChatActions(
+                            send = onSendWith,
+                            interrupt = onInterrupt,
+                            upload = onUpload,
+                            transcribeAudio = transcribeAudio,
+                            loadBytes = loadBytes,
+                            composer = ComposerActions(
+                                loadDraft = { loadDraft(it) },
+                                saveDraft = { id, t -> saveDraft(id, t) },
+                                consumePendingFirst = { id ->
+                                    consumePendingFirst(id)?.let { it.text to it.attachments }
+                                },
+                                transcribeDraft = transcribeDraft,
+                                loadGlossary = loadGlossary,
+                            ),
+                            loadModels = { vmModels(session.id) },
+                            loadReasoning = { vmReasoning(session.id) },
+                            pickModel = { onPickModel(it); true },
+                            pickReasoning = { onPickEffort(it); true },
+                        )
+                    },
+                    draft = chatDraft,
+                    onDraftChange = { chatDraft = it },
+                    // This screen owns the identity header above, so the panel draws none — its
+                    // live status moves into the transcript's own working/sending/waiting rows.
+                    showHeader = false,
+                    active = activePanel == SessionPanel.Chat,
                     onOpenFile = onOpenFile,
                     onRequestRename = {
                         renameText = session.name
@@ -782,7 +790,7 @@ fun ChatScreen(
     }
 
     if (showContinueSheet.value && onContinue != null) {
-        ContinueConversationSheet(
+        ContinueConversationFlow(
             session = session,
             onContinue = onContinue,
             onContinued = onContinued,

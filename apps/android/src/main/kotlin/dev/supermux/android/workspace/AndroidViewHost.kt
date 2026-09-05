@@ -24,8 +24,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.AppViewModel
-import dev.supermux.android.chat.ChatPanel
-import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
 import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.ExplorerPane
@@ -47,6 +45,10 @@ import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.ui.workspace.WorkspaceSession
 import kotlinx.coroutines.launch
+import dev.supermux.ui.chat.ChatActions
+import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.ChatState
+import dev.supermux.ui.chat.ComposerActions
 import dev.supermux.ui.prefs.LocalUiPrefs
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.flow.first
@@ -140,33 +142,48 @@ private fun ChatViewPane(
     LaunchedEffect(sessionId, session.name) {
         sessionLinks = vm.fleet.proxies().filter { it.sessionName == session.name }
     }
+    var chatDraft by remember(sessionId) { mutableStateOf("") }
+    val chatActions = remember(sessionId) {
+        ChatActions(
+            send = { text, atts -> vm.fleet.sendWith(sessionId, text, atts) },
+            interrupt = { vm.fleet.interrupt(sessionId) },
+            upload = { source, name, mime, kind, onProgress ->
+                vm.fleet.uploadResumable(sessionId, source, name, mime, kind, onProgress)
+            },
+            transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(sessionId, bytes, name) },
+            loadBytes = { vm.fleet.fileBytes(it) },
+            composer = ComposerActions(
+                loadDraft = { vm.fleet.loadDraft(it) },
+                saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
+                consumePendingFirst = { id ->
+                    vm.fleet.consumePendingFirst(id)?.let { it.text to it.attachments }
+                },
+                transcribeDraft = { draft -> vm.fleet.transcribeDraft(sessionId, draft) },
+                loadGlossary = { vm.fleet.fetchGlossary() },
+            ),
+            loadModels = { vm.fleet.sessionModels(sessionId) },
+            loadReasoning = { vm.fleet.sessionReasoning(sessionId) },
+            pickModel = { vm.fleet.switchModel(sessionId, it); true },
+            pickReasoning = { vm.fleet.switchReasoning(sessionId, it); true },
+        )
+    }
     val chatBody: @Composable (Modifier) -> Unit = { paneMod ->
         ChatPanel(
             session = session,
-            messages = messages[sessionId] ?: emptyList(),
-            activity = activity[sessionId] ?: emptyList(),
-            agent = agentState[sessionId],
-            bgTasks = bgTasksAll[sessionId] ?: emptyList(),
-            sending = pendingSend.contains(sessionId),
-            activePanel = if (nativeView) SessionPanel.Native else SessionPanel.Chat,
-            onSendWith = { text, atts -> vm.fleet.sendWith(sessionId, text, atts) },
-            onInterrupt = { vm.fleet.interrupt(sessionId) },
-            commands = commands[sessionId] ?: emptyList(),
-            commandsResolved = commandsResolved[sessionId] ?: false,
-            onUpload = { source, name, mime, kind, onProgress ->
-                vm.fleet.uploadResumable(sessionId, source, name, mime, kind, onProgress)
-            },
-            loadBytes = { vm.fleet.fileBytes(it) },
-            transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(sessionId, bytes, name) },
-            transcribeDraft = { draft -> vm.fleet.transcribeDraft(sessionId, draft) },
-            loadGlossary = { vm.fleet.fetchGlossary() },
-            vmModels = { vm.fleet.sessionModels(it) },
-            vmReasoning = { vm.fleet.sessionReasoning(it) },
-            onPickModel = { vm.fleet.switchModel(sessionId, it) },
-            onPickEffort = { vm.fleet.switchReasoning(sessionId, it) },
-            loadDraft = { vm.fleet.loadDraft(it) },
-            saveDraft = { id, t -> vm.fleet.saveDraft(id, t) },
-            consumePendingFirst = { vm.fleet.consumePendingFirst(it) },
+            state = ChatState(
+                messages = messages[sessionId] ?: emptyList(),
+                activity = activity[sessionId] ?: emptyList(),
+                agent = agentState[sessionId],
+                bgTasks = bgTasksAll[sessionId] ?: emptyList(),
+                sending = pendingSend.contains(sessionId),
+                commands = commands[sessionId] ?: emptyList(),
+                commandsResolved = commandsResolved[sessionId] ?: false,
+            ),
+            actions = chatActions,
+            draft = chatDraft,
+            onDraftChange = { chatDraft = it },
+            showHeader = false,
+            active = !nativeView,
             onOpenFile = { ref ->
                 val rel = toWorkdirRelativePath(ref.path, workspace.workdir, inferHomeDir(workspace.workdir))
                 if (rel == null) {
@@ -175,9 +192,6 @@ private fun ChatViewPane(
                     wsSession.fileOpener.open(rel)
                 }
             },
-            onRequestRename = {},
-            onRequestMute = {},
-            onRequestKill = {},
             modifier = paneMod.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
         )
     }

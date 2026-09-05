@@ -73,6 +73,9 @@ kotlin {
             @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
             implementation(compose.desktop.uiTestJUnit4)
             implementation(compose.desktop.currentOs)
+            // ChatHeaderTest drives the real ChatPanel over a HostStore, which needs an HTTP
+            // engine; the mock engine answers "{}" and no socket is opened (connectOnInit = false).
+            implementation(libs.ktor.client.mock)
         }
     }
 }

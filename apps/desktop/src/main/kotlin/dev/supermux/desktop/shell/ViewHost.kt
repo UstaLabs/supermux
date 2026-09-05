@@ -25,7 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.chat.ChatPanel
+import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.FinishBindings
+import dev.supermux.ui.chat.rememberChatActions
+import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
@@ -274,26 +277,75 @@ private fun ChatPanelForSession(
     onPasteImageRequestConsumed: () -> Unit,
     modifier: Modifier,
 ) {
+    val scope = rememberCoroutineScope()
     val sessions by app.sessions.collectAsState()
+    val finishJobs by app.finishJobs.collectAsState()
     val session = sessions.firstOrNull { it.id == sessionId }
     if (session == null) {
         UnknownViewHint("chat", modifier)
         return
     }
     ChatPanel(
-        app = app,
         session = session,
+        state = rememberChatState(app, sessionId),
+        actions = rememberChatActions(app, session, loadProxies),
         draft = drafts[sessionId] ?: "",
         onDraftChange = { drafts[sessionId] = it },
         modifier = modifier.fillMaxSize().testTag("view_chat"),
         showHeader = true,
-        onSelectSession = onSelectSession,
         onOpenWalkthrough = onOpenWalkthrough,
-        // The globe (links) menu + the Chat⇄Native pill, both moved here off the deleted session
-        // header. Each belongs to ONE session, which is exactly what a chat view is.
-        loadProxies = loadProxies ?: { app.proxies() },
+        // Mute is the one session control this panel can perform without a dialog; rename/kill live
+        // in OverflowMenu (the header slot below), so they stay out of the slash menu here.
+        onRequestMute = { app.setMute(sessionId, !(session.mute ?: false)) },
+        // NEW ON DESKTOP (cluster D4): the Finish flow, which existed as dead code until now.
+        finish = FinishBindings(
+            job = finishJobs[sessionId],
+            readiness = { app.finishReadiness(sessionId) },
+            finish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
+                scope.launch {
+                    onKickoff(app.finish(sessionId, action, skipVerify, commitFirst, commitMessage))
+                }
+                Unit
+            },
+            clearJob = { app.clearFinishJob(sessionId) },
+            verifySuggest = { app.verifySuggest(sessionId) },
+            verifySave = { app.verifySave(sessionId, it) },
+            sendToAgent = { app.sendMessage(sessionId, it) },
+        ),
+        // The globe (links) menu + the ⋮ overflow stay in desktop's shell/ (cluster G moves them);
+        // the panel reaches them through these slots and only OWNS the proxy load-on-open.
         forceLinksMenu = forceLinksMenu,
         onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+        headerLinks = { proxies, force, onForceConsumed ->
+            SessionLinksMenu(
+                session = session,
+                proxies = proxies,
+                forceOpen = force,
+                onForceOpenConsumed = onForceConsumed,
+            )
+        },
+        headerActions = {
+            OverflowMenu(
+                session = session,
+                onRename = { name -> app.rename(sessionId, name) },
+                onToggleMute = { muted -> app.setMute(sessionId, muted) },
+                onKill = { app.kill(sessionId) },
+                onContinue = { handoff ->
+                    app.continueConversation(
+                        session,
+                        handoff.message,
+                        handoff.agent,
+                        handoff.model,
+                        handoff.reasoningLevel,
+                    )
+                },
+                loadContinueAgents = { app.launcherAgents() },
+                loadContinueModels = { app.launcherModels(it) },
+                loadContinueReasoning = { agent, model -> app.launcherReasoning(agent, model) },
+                onContinued = onSelectSession,
+                showManagementRows = false,
+            )
+        },
         // key(sessionId) so a view rebound to another session never reuses the previous session's
         // agent PTY: DesktopTerminalPanel's `remember { connect() }` is deliberately unkeyed.
         nativeContent = { onExit ->
@@ -305,10 +357,8 @@ private fun ChatPanelForSession(
         onExternalDictateConsumed = onExternalDictateConsumed,
         pasteImageRequestNonce = pasteImageRequestNonce,
         onPasteImageRequestConsumed = onPasteImageRequestConsumed,
-        // A tap on a file path in the transcript opens a `file` pane. This used to be dropped on
-        // the floor here: the parameter defaults to {} and nothing was passed, so the tap did
-        // nothing at all in a workspace. Same conversion SessionDetail does — a path outside the
-        // workspace has no workdir-relative form and is logged rather than opened.
+        // A tap on a file path in the transcript opens a `file` pane. A path outside the workspace
+        // has no workdir-relative form and is logged rather than opened.
         onOpenFile = { ref ->
             val rel = workspaceOpenPath(ref, workdir)
             if (rel == null) {

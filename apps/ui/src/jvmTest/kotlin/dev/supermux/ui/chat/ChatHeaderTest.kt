@@ -1,60 +1,45 @@
-package dev.supermux.desktop.chat
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.chat
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.DesktopWalkthroughSeam
-import dev.supermux.state.HostStore
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.ProxyDto
 import dev.supermux.proto.SessionInfo
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import dev.supermux.state.HostStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * The two per-session header affordances that moved off the deleted session header
- * (SessionDetail) and onto the chat view's own slim header: the session-links (proxies) globe
- * menu, and the Chat⇄Native pill.
+ * The chat header of the shared [ChatPanel]: the session-links (proxies) slot and the Chat⇄Native
+ * pill. Moved from desktop with its case names when both apps' `ChatPanel` collapsed into `:ui`
+ * (cluster D4).
  *
- * Both belong to ONE session and a chat view IS one session — unlike the git badge, which belongs
- * to the work tree and moved to the workspace header instead (see WorkspaceHeaderTest).
+ * The links menu itself stays in desktop's `shell/` (cluster G moves it), so the panel reaches it
+ * through the `headerLinks` SLOT and owns only the load-on-open. These cases therefore drive a
+ * pure-Compose stand-in slot with the same contract — exactly the way the native panel has always
+ * been faked here, because the real one is a heavyweight SwingPanel.
  *
- * These cases are rewrites of SessionDetailTest's
- * `forceLinksMenuOpensTheGlobeDropdownAndConsumesTheOneShotFlag`, `toggleShownForClaudeHidden…`,
- * `toggleHiddenForNonClaude`, `togglingSwapsContentButKeepsChatInTree`,
- * `onExitFlipsBackToChatAndClearsNativeView` and `clickingNativePillPersistsPreference…`,
- * retargeted at their new owner.
- *
- * HostStore is built with `connectOnInit = false` so no WebSocket/HTTP is opened.
+ * The store is built with `connectOnInit = false` so no WebSocket/HTTP is opened.
  */
-@OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalTestApi::class)
 class ChatHeaderTest {
-    private fun app() = HostStore(
-        baseUrl = "ws://test:9898",
-        token = "t",
-        scope = TestScope(UnconfinedTestDispatcher()),
-        deps = testDeps(),
-        connectOnInit = false,
-        walkthroughSeam = DesktopWalkthroughSeam,
-    )
+    private fun app(): HostStore = testHostStore()
 
     private val claudeSession =
         SessionInfo(id = "s1", name = "demo", workdir = "/w/s1", agent = "claude")
@@ -69,18 +54,48 @@ class ChatHeaderTest {
         Box(Modifier.fillMaxSize().testTag("native_fake"))
     }
 
+    /** Stand-in for desktop's `SessionLinksMenu`: hidden with no proxies, force-open lists them. */
+    private val fakeLinks:
+        @Composable androidx.compose.foundation.layout.RowScope.(List<ProxyDto>, Boolean, () -> Unit) -> Unit =
+        { proxies, force, onConsumed ->
+            if (proxies.isNotEmpty()) {
+                var open by androidx.compose.runtime.remember { mutableStateOf(false) }
+                LaunchedEffect(force) { if (force) { open = true; onConsumed() } }
+                Box(Modifier.size(20.dp).testTag("session_links")) {
+                    if (open) Text(proxies.joinToString { it.domain })
+                }
+            }
+        }
+
+    @Composable
+    private fun panel(
+        app: HostStore,
+        session: SessionInfo,
+        showHeader: Boolean = true,
+        loadProxies: suspend () -> List<ProxyDto> = { emptyList() },
+        forceLinksMenu: Boolean = false,
+        onForceLinksMenuConsumed: () -> Unit = {},
+        nativeContent: (@Composable (onExit: () -> Unit) -> Unit)? = null,
+    ) {
+        ChatPanel(
+            session = session,
+            state = rememberChatState(app, session.id),
+            actions = rememberChatActions(app, session, loadProxies),
+            draft = "",
+            onDraftChange = {},
+            showHeader = showHeader,
+            forceLinksMenu = forceLinksMenu,
+            onForceLinksMenuConsumed = onForceLinksMenuConsumed,
+            headerLinks = fakeLinks,
+            nativeContent = nativeContent,
+        )
+    }
+
     // ── Links (proxies) menu ──────────────────────────────────────────────────────────
 
     @Test
     fun linksMenuHiddenWhenTheSessionHasNoProxies() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                )
-            }
-        }
+        setPlatformContent { panel(app(), claudeSession, loadProxies = { emptyList() }) }
         onNodeWithTag("session_links").assertDoesNotExist()
     }
 
@@ -88,17 +103,13 @@ class ChatHeaderTest {
     fun forceLinksMenuOpensTheGlobeDropdownAndConsumesTheOneShotFlag() = runComposeUiTest {
         var consumed = 0
         var force by mutableStateOf(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    loadProxies = {
-                        listOf(ProxyDto(domain = "d.example", sessionName = "demo", port = 3000))
-                    },
-                    forceLinksMenu = force,
-                    onForceLinksMenuConsumed = { consumed++ },
-                )
-            }
+        setPlatformContent {
+            panel(
+                app(), claudeSession,
+                loadProxies = { listOf(ProxyDto(domain = "d.example", sessionName = "demo", port = 3000)) },
+                forceLinksMenu = force,
+                onForceLinksMenuConsumed = { consumed++ },
+            )
         }
         onNodeWithTag("session_links").assertIsDisplayed()
         runOnIdle { force = true }
@@ -111,14 +122,8 @@ class ChatHeaderTest {
     fun aHeaderlessChatNeverLoadsProxies() = runComposeUiTest {
         // Suppressing the header suppresses the load too — nothing would draw the result.
         var loads = 0
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    showHeader = false,
-                    loadProxies = { loads++; emptyList() },
-                )
-            }
+        setPlatformContent {
+            panel(app(), claudeSession, showHeader = false, loadProxies = { loads++; emptyList() })
         }
         runOnIdle { assertEquals(0, loads) }
     }
@@ -127,30 +132,14 @@ class ChatHeaderTest {
 
     @Test
     fun pillShownForClaudeWithANativeSurface() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                    nativeContent = fakeNative,
-                )
-            }
-        }
+        setPlatformContent { panel(app(), claudeSession, nativeContent = fakeNative) }
         onNodeWithTag("agent_view_chat").assertIsDisplayed()
         onNodeWithTag("agent_view_native").assertIsDisplayed()
     }
 
     @Test
     fun pillHiddenForNonClaude() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = codexSession, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                    nativeContent = fakeNative,
-                )
-            }
-        }
+        setPlatformContent { panel(app(), codexSession, nativeContent = fakeNative) }
         onNodeWithTag("agent_view_chat").assertDoesNotExist()
         onNodeWithTag("agent_view_native").assertDoesNotExist()
         // ...and the native panel is never composed for a session that has no native view.
@@ -159,29 +148,14 @@ class ChatHeaderTest {
 
     @Test
     fun pillHiddenWhenTheCallerSuppliesNoNativeSurface() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                )
-            }
-        }
+        setPlatformContent { panel(app(), claudeSession) }
         onNodeWithTag("agent_view_chat").assertDoesNotExist()
     }
 
     @Test
     fun togglingSwapsTheBodyButKeepsChatInTreeAndTheHeaderOnScreen() = runComposeUiTest {
         capturedOnExit = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                    nativeContent = fakeNative,
-                )
-            }
-        }
+        setPlatformContent { panel(app(), claudeSession, nativeContent = fakeNative) }
         // Native is lazy: not composed until first opened.
         onNodeWithTag("chat_body").assertIsDisplayed()
         onNodeWithTag("native_fake").assertDoesNotExist()
@@ -191,9 +165,7 @@ class ChatHeaderTest {
         onNodeWithTag("native_fake").assertIsDisplayed()
         // Chat STAYS in the tree (keep-alive, not remounted) so its draft/scroll survive...
         onNodeWithTag("chat_body").assertExists()
-        // ...and the header stays on screen, so the way back is always reachable. This is the one
-        // behaviour that IMPROVED in the move: the old shell drew the pill in a header ABOVE the
-        // pane, here it is in the pane's own header.
+        // ...and the header stays on screen, so the way back is always reachable.
         onNodeWithTag("agent_view_chat").assertIsDisplayed()
 
         onNodeWithTag("agent_view_chat").performClick()
@@ -206,15 +178,7 @@ class ChatHeaderTest {
     @Test
     fun ptyExitDropsThePanelAndReturnsToTheTranscript() = runComposeUiTest {
         capturedOnExit = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = claudeSession, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                    nativeContent = fakeNative,
-                )
-            }
-        }
+        setPlatformContent { panel(app(), claudeSession, nativeContent = fakeNative) }
         onNodeWithTag("agent_view_native").performClick()
         waitForIdle()
         onNodeWithTag("native_fake").assertIsDisplayed()
@@ -234,21 +198,19 @@ class ChatHeaderTest {
         val mounts = mutableListOf<String>()
         val disposals = mutableListOf<String>()
         var current by mutableStateOf(claudeSession)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ChatPanel(
-                    app = app(), session = current, draft = "", onDraftChange = {},
-                    loadProxies = { emptyList() },
-                    nativeContent = {
-                        val forSession = current.id
-                        DisposableEffect(Unit) {
-                            mounts.add(forSession)
-                            onDispose { disposals.add(forSession) }
-                        }
-                        Box(Modifier.fillMaxSize().testTag("native_fake_$forSession"))
-                    },
-                )
-            }
+        val store = app()
+        setPlatformContent {
+            panel(
+                store, current,
+                nativeContent = {
+                    val forSession = current.id
+                    DisposableEffect(Unit) {
+                        mounts.add(forSession)
+                        onDispose { disposals.add(forSession) }
+                    }
+                    Box(Modifier.fillMaxSize().testTag("native_fake_$forSession"))
+                },
+            )
         }
         onNodeWithTag("agent_view_native").performClick()
         waitForIdle()

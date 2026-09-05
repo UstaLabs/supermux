@@ -13,6 +13,8 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.UiPrefs
 
 /**
  * `setContent` with a [FakePlatform] on `LocalPlatform`.
@@ -32,6 +34,8 @@ internal fun ComposeUiTest.setPlatformContent(
     widthClass: WindowWidthClass = WindowWidthClass.Expanded,
     /** Drives the composer's Enter policy: Pointer == "there is a real keyboard", so Enter sends. */
     inputMode: InputMode = InputMode.Pointer,
+    /** ChatPanel reads the chat-detail level; an unprovided [LocalUiPrefs] throws by design. */
+    uiPrefs: UiPrefs = UiPrefs(FakeSettingsStore()),
     content: @Composable () -> Unit,
 ) = setContent {
     CompositionLocalProvider(
@@ -39,6 +43,7 @@ internal fun ComposeUiTest.setPlatformContent(
         LocalPointerAvailable provides pointer,
         LocalWindowWidthClass provides widthClass,
         LocalInputMode provides inputMode,
+        LocalUiPrefs provides uiPrefs,
     ) {
         content()
     }

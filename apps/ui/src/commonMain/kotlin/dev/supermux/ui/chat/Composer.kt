@@ -219,6 +219,10 @@ fun rememberComposerActions(
     )
 }
 
+/** The composer's default hint line (a pointer host shows it; touch hosts name the session). */
+const val DEFAULT_COMPOSER_PLACEHOLDER =
+    "Message the agent, tag @files, or use /commands and /skills"
+
 /** Kind guess from a MIME: audio → "voice", else null (broker infers). Mirrors the launcher. */
 internal fun composerKind(mime: String): String? =
     if (mime.startsWith("audio")) "voice" else null
@@ -368,7 +372,7 @@ fun Composer(
      * composer that never wires [onControl] offers insert-only commands and nothing dead.
      */
     handledControlKinds: Set<String> = emptySet(),
-    placeholder: String = "Message the agent, tag @files, or use /commands and /skills",
+    placeholder: String = DEFAULT_COMPOSER_PLACEHOLDER,
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
     externalDictate: ComposerExternalDictate? = null,
