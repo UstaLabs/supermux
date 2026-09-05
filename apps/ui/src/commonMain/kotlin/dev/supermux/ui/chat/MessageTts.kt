@@ -74,6 +74,10 @@ object MessageTts {
     /** Stream the broker's audio chunks into [tts] in arrival order; a newer [gen] abandons them. */
     private suspend fun speakCodex(tts: TtsEngine, plain: String, rawText: String) {
         val remote = speakRemoteStream ?: return speakPlatform(tts, plain)
+        // Silence whatever is speaking BEFORE starting the next one. Android's TextToSpeech
+        // QUEUE_FLUSH makes this look redundant; desktop's engine is a child `say`/`ffplay`
+        // process that keeps running until it is killed, so without this two messages overlap.
+        stop(tts)
         val g = gen.incrementAndGet()
         speakingKey = plain
         val queue = Channel<ByteArray>(Channel.UNLIMITED)
@@ -100,6 +104,8 @@ object MessageTts {
     }
 
     private suspend fun speakPlatform(tts: TtsEngine, plain: String) {
+        // See speakCodex: stop the previous utterance first, or desktop overlaps two processes.
+        stop(tts)
         val g = gen.incrementAndGet()
         speakingKey = plain
         try {

@@ -177,4 +177,76 @@ class ComposerPillsTest {
         assertEquals("effort", composerReasoningLabel(r.copy(current = null)))
     }
 
+
+    // ── live session state beats the catalog snapshot ───────────────────────────
+    // `models.current` / `reasoning.current` are whatever the fetch-on-open returned; the session's
+    // own model/level is kept current by session_state frames and by the optimistic write after a
+    // pick. Preferring the catalog makes both pills show the pre-switch value until the panel is
+    // re-opened.
+    @Test fun model_pill_prefers_the_live_session_model_over_the_catalog_snapshot() = runComposeUiTest {
+        setPlatformContent {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                models = ModelsResponse(
+                    agent = "claude",
+                    models = listOf(
+                        ModelInfo(id = "stale", displayName = "Stale"),
+                        ModelInfo(id = "fresh", displayName = "Fresh"),
+                    ),
+                    current = "stale",
+                ),
+                sessionModel = "fresh",
+            )
+        }
+        onNodeWithText("Fresh").assertExists()
+        onNodeWithText("Stale").assertDoesNotExist()
+    }
+
+    @Test fun model_pill_falls_back_to_the_catalog_when_the_session_has_no_model() = runComposeUiTest {
+        setPlatformContent {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                models = ModelsResponse(
+                    agent = "claude",
+                    models = listOf(ModelInfo(id = "opus", displayName = "Opus")),
+                    current = "opus",
+                ),
+                sessionModel = null,
+            )
+        }
+        onNodeWithText("Opus").assertExists()
+    }
+
+    @Test fun effort_pill_prefers_the_live_session_level_over_the_catalog_snapshot() = runComposeUiTest {
+        setPlatformContent {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                reasoning = ReasoningResponse(
+                    agent = "claude",
+                    visible = true,
+                    current = "low",
+                    levels = listOf(ReasoningLevel(id = "low"), ReasoningLevel(id = "high")),
+                ),
+                sessionReasoning = "high",
+            )
+        }
+        // The pill labels itself "high", and the menu checks "high" — not the stale "low".
+        onNodeWithTag("composer-reasoning-pill").assertExists()
+        onNodeWithText("high").assertExists()
+    }
+
+    @Test fun reasoning_label_prefers_the_session_level() {
+        val catalog = ReasoningResponse(
+            agent = "claude",
+            visible = true,
+            current = "low",
+            levels = listOf(ReasoningLevel(id = "low"), ReasoningLevel(id = "high")),
+        )
+        assertEquals("high", composerReasoningLabel(catalog, sessionCurrent = "high"))
+        assertEquals("low", composerReasoningLabel(catalog, sessionCurrent = null))
+        assertEquals("low", composerReasoningLabel(catalog, sessionCurrent = "   "))
+    }
 }

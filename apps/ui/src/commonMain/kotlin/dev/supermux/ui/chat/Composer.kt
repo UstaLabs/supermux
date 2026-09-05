@@ -16,9 +16,9 @@
 //     `caps.camera`.
 //   - Pickers: `ComposerPill` + `DropdownMenu` under a pointer, Android's `PickerSheet` bottom
 //     sheet under touch.
-//   - Enter: `shouldComposerSendOnEnter(..., fromPhysicalKeyboard = LocalInputMode == Pointer)`, so
-//     a soft-IME Return inserts a newline and a hardware Enter sends — desktop's old
-//     `isComposerSendKey` is exactly the `fromPhysicalKeyboard = true` case of that.
+//   - Enter: `isComposerSendEnter()`, which asks PER EVENT whether the key came from a real
+//     keyboard (Android inspects the native event; desktop always says yes), so a soft-IME Return
+//     inserts a newline even on a phone with a keyboard paired.
 //
 // Unlike the launcher (which STAGES files pre-spawn and uploads them post-spawn), the chat composer
 // uploads each chip IMMEDIATELY against the LIVE session — so a chip carries a live upload STATE
@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -99,8 +100,6 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.effortSpeedometerParams
 import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.SlashCommand
-import dev.supermux.ui.adaptive.InputMode
-import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
@@ -305,8 +304,13 @@ internal fun composerModelSelectedId(current: String?): String =
  * Display label for the composer's effort pill. Always the short wire id (`low` / `medium` /
  * `high` / `xhigh` / `max` / …) — never the long broker [ReasoningLevel.description].
  */
-internal fun composerReasoningLabel(reasoning: ReasoningResponse): String {
-    val current = reasoning.current?.takeIf { it.isNotBlank() } ?: return "effort"
+internal fun composerReasoningLabel(
+    reasoning: ReasoningResponse,
+    sessionCurrent: String? = null,
+): String {
+    val current = sessionCurrent?.takeIf { it.isNotBlank() }
+        ?: reasoning.current?.takeIf { it.isNotBlank() }
+        ?: return "effort"
     // Prefer catalog id when present (canonical casing); else the raw current value.
     return reasoning.levels.firstOrNull { it.id == current }?.id ?: current
 }
@@ -350,7 +354,20 @@ fun Composer(
     onTranscribeAudio: (suspend (bytes: ByteArray, filename: String) -> String?)? = null,
     commands: List<SlashCommand> = emptyList(),
     commandsResolved: Boolean = true,
+    /**
+     * A CONTROL command (one with an `action`) was picked. Return true when the host acted on it.
+     *
+     * The return value is load-bearing: a command whose kind this host does not handle is never
+     * OFFERED in the menu at all (see [handledControlKinds]), because picking it would clear the
+     * typed token and then do nothing.
+     */
     onControl: (SlashCommand) -> Unit = {},
+    /**
+     * The `ControlAction.kind`s this host can actually perform (`rename`, `mute`, `kill`, `model`,
+     * `stop`, …). Anything else is filtered out of the slash menu. The default is "none", so a
+     * composer that never wires [onControl] offers insert-only commands and nothing dead.
+     */
+    handledControlKinds: Set<String> = emptySet(),
     placeholder: String = "Message the agent, tag @files, or use /commands and /skills",
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
@@ -359,9 +376,22 @@ fun Composer(
     models: ModelsResponse? = null,
     reasoning: ReasoningResponse? = null,
     sessionModel: String? = null,
+    /**
+     * The session's stored reasoning/effort level, kept fresh by `session_state` frames and by the
+     * optimistic update after a pick. Preferred over [reasoning]'s `current`, which is only a
+     * snapshot of the catalog fetch — without this the pill goes stale the moment the level changes
+     * anywhere else (the same precedence [sessionModel] has for the model pill).
+     */
+    sessionReasoning: String? = null,
     sessionAgent: String? = null,
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
+    /**
+     * A model/effort pill was tapped, BEFORE the picker opens. A host that fetches its catalogs
+     * lazily (Android under touch — the phone should not spend a request on every chat it opens)
+     * refreshes them here; a host that fetched on open ignores it.
+     */
+    onPickerOpened: () -> Unit = {},
     /**
      * One-shot paste-image request from the native Edit ▸ Paste image menu (or tests). When the
      * nonce changes to a non-zero value, runs the same paste path as Ctrl/Cmd+V, then calls
@@ -378,7 +408,6 @@ fun Composer(
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
-    val physicalKeyboard = LocalInputMode.current == InputMode.Pointer
     val haptic = rememberHaptics()
     val scope = rememberCoroutineScope()
 
@@ -461,8 +490,13 @@ fun Composer(
     // picker was in the foreground) finishes with no coroutine left to await it. Collected for the
     // whole lifetime of the composer — a one-shot read would race the delivery — and tagged with
     // this screen's id so the launcher screen never steals it.
-    LaunchedEffect(platform, sessionKey) {
-        platform.pendingPicks(COMPOSER_PICK_REQUESTER).collect { stage(it) }
+    // Keyed on the PLATFORM only, never the session: re-subscribing on a session switch drops the
+    // recreation-stashed pick that is mid-delivery, which is exactly the case this seam exists for.
+    // `stage` reads the current session's list through the composition, so a late pick lands in the
+    // session that is on screen when it arrives.
+    val stageLatest by rememberUpdatedState<(PickedFile) -> Unit> { stage(it) }
+    LaunchedEffect(platform) {
+        platform.pendingPicks(COMPOSER_PICK_REQUESTER).collect { stageLatest(it) }
     }
 
     // ── per-session draft persistence (survives switch + process death) ──────────────────
@@ -597,7 +631,7 @@ fun Composer(
     //    whitespace), filtering on name OR family, capped at 8. Matching lives in SlashCommands.kt,
     //    shared with the New Session launcher. ──
     val slashQuery = activeSlashQuery(draft)
-    val slashMatches = slashCommandMatches(draft, commands)
+    val slashMatches = slashCommandMatches(draft, commands) { it in handledControlKinds }
     var selectedSlashIndex by remember { mutableIntStateOf(0) }
     var slashMenuDismissed by remember { mutableStateOf(false) }
     LaunchedEffect(slashQuery) { selectedSlashIndex = 0; slashMenuDismissed = false }
@@ -620,10 +654,14 @@ fun Composer(
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
     LaunchedEffect(openModelPickerNonce) { if (openModelPickerNonce > 0L) modelMenu = true }
-    val modelCurrent = models?.current ?: sessionModel
+    // LIVE session state first, catalog second: `session.model` is kept fresh by session_state
+    // frames and by the optimistic write after a pick, while `models.current` is a snapshot of the
+    // fetch that happened when the panel opened.
+    val modelCurrent = sessionModel?.takeIf { it.isNotBlank() } ?: models?.current
     val showModelPill = models != null || !sessionModel.isNullOrBlank()
     val r = reasoning
     val showReasoningPill = r != null && r.visible && r.levels.size > 1
+    val reasoningCurrent = sessionReasoning?.takeIf { it.isNotBlank() } ?: r?.current
 
     val cs = MaterialTheme.colorScheme
     val inputInteraction = remember { MutableInteractionSource() }
@@ -673,7 +711,9 @@ fun Composer(
             )
         }
 
-        dictation.banner?.let { msg ->
+        // ONE transient line, not two: a touch host gets the takeover-style banner above the card,
+        // a pointer host the quieter inline line under it (both carry the same text).
+        if (!pointer) dictation.banner?.let { msg ->
             Text(
                 msg,
                 color = cs.onSurfaceVariant,
@@ -756,11 +796,9 @@ fun Composer(
                                     slashMenuDismissed = true
                                     true
                                 }
-                                shouldComposerSendOnEnter(
-                                    isEnterKey = e.isComposerEnterKey(),
-                                    shiftPressed = e.isShiftPressed,
-                                    fromPhysicalKeyboard = physicalKeyboard,
-                                ) -> {
+                                // Per EVENT, not per window: a phone with a keyboard paired still
+                                // shows a soft IME, whose Return must insert a newline.
+                                e.isComposerSendEnter() -> {
                                     // Consume ONLY when we actually send; a blank/sending/upload-blocked
                                     // draft falls through so the multiline field handles Enter itself.
                                     if (canSend) {
@@ -851,7 +889,7 @@ fun Composer(
                                 ComposerPill(
                                     label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
                                     testTag = "composer-model-pill",
-                                    onClick = { modelMenu = true },
+                                    onClick = { onPickerOpened(); modelMenu = true },
                                     leadingIcon = {
                                         if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
                                             AgentLogo(sessionAgent, size = 12.dp)
@@ -905,14 +943,14 @@ fun Composer(
                             // Always low→high for menu + gauge (broker order is not trusted).
                             val effortLevels = sortEffortLevelsLowToHigh(r.levels)
                             val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
-                                current = r.current,
+                                current = reasoningCurrent,
                                 levels = r.levels,
                             )
                             Box(Modifier.testTag("composer-reasoning-picker")) {
                                 ComposerPill(
-                                    label = composerReasoningLabel(r),
+                                    label = composerReasoningLabel(r, reasoningCurrent),
                                     testTag = "composer-reasoning-pill",
-                                    onClick = { reasoningMenu = true },
+                                    onClick = { onPickerOpened(); reasoningMenu = true },
                                     leadingIcon = {
                                         Speedometer(
                                             levels = gaugeLevels,
@@ -933,7 +971,7 @@ fun Composer(
                                             DropdownMenuItem(
                                                 text = { Text(composerReasoningLevelLabel(level)) },
                                                 trailingIcon = {
-                                                    if (level.id == r.current) {
+                                                    if (level.id == reasoningCurrent) {
                                                         Icon(
                                                             Icons.Filled.Check,
                                                             null,
@@ -956,7 +994,7 @@ fun Composer(
                                 PickerSheet(
                                     title = "Select Effort Level",
                                     options = effortLevels.map { it.id to (it.description ?: it.id) },
-                                    current = r.current,
+                                    current = reasoningCurrent,
                                     onPick = { onPickReasoning(it) },
                                     onDismiss = { reasoningMenu = false },
                                 )
@@ -1017,7 +1055,7 @@ fun Composer(
                 }
             }
         }
-        dictation.errorMessage?.let { msg ->
+        if (pointer) dictation.errorMessage?.let { msg ->
             Text(
                 msg,
                 color = MaterialTheme.colorScheme.error,

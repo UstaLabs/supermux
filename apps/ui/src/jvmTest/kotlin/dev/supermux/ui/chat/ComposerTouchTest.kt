@@ -163,6 +163,7 @@ class ComposerTouchTest {
                     SlashCommand(id = "rename", name = "rename", family = "session", action = ControlAction(kind = "rename")),
                 ),
                 onControl = { controlled = it.name },
+                handledControlKinds = setOf("rename"),
             )
         }
         onNodeWithTag("composer-input").performTextInput("/ren")
@@ -183,5 +184,85 @@ class ComposerTouchTest {
             )
         }
         onNodeWithTag("chat_slash_loading").assertIsDisplayed()
+    }
+
+    // A control command the host cannot perform must not be OFFERED: picking it clears the typed
+    // token and then does nothing, which reads as the command having silently failed.
+    @Test fun a_control_command_with_no_handler_is_not_offered() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        setPlatformContent(touch()) {
+            Composer(
+                draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                commands = listOf(
+                    SlashCommand(id = "mute", name = "mute", family = "s", action = ControlAction(kind = "mute")),
+                    SlashCommand(id = "kill", name = "kill", family = "s", action = ControlAction(kind = "kill")),
+                    SlashCommand(id = "review", name = "review", family = "code"),
+                ),
+                // This host can mute but cannot kill.
+                handledControlKinds = setOf("mute"),
+            )
+        }
+        onNodeWithTag("composer-input").performTextInput("/")
+        waitForIdle()
+        onNodeWithTag("chat_slash_item_mute").assertIsDisplayed()
+        onNodeWithTag("chat_slash_item_review").assertIsDisplayed() // insert-only, always offered
+        onNodeWithTag("chat_slash_item_kill").assertDoesNotExist()
+    }
+
+    @Test fun with_no_handled_kinds_only_insert_only_commands_are_offered() = runComposeUiTest {
+        setPlatformContent(touch()) {
+            Composer(
+                draft = "/", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                commands = listOf(
+                    SlashCommand(id = "stop", name = "stop", family = "s", action = ControlAction(kind = "stop")),
+                    SlashCommand(id = "review", name = "review", family = "code"),
+                ),
+            )
+        }
+        onNodeWithTag("chat_slash_item_review").assertIsDisplayed()
+        onNodeWithTag("chat_slash_item_stop").assertDoesNotExist()
+    }
+
+    // ── drafts + pending-first, through the ComposerActions holder ───────────────
+    @Test fun the_draft_is_restored_on_open_and_saved_debounced() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        val saved = mutableListOf<Pair<String, String>>()
+        setPlatformContent(touch()) {
+            Composer(
+                draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
+                onSend = { _, _ -> }, onInterrupt = {},
+                sessionKey = "s1",
+                actions = ComposerActions(
+                    loadDraft = { id -> if (id == "s1") "restored text" else "" },
+                    saveDraft = { id, t -> saved.add(id to t) },
+                ),
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { draft == "restored text" }
+        // The restore itself is persisted back once the 400ms debounce elapses; no write per key.
+        waitUntil(timeoutMillis = 5_000L) { saved.isNotEmpty() }
+        assertEquals("s1" to "restored text", saved.last())
+    }
+
+    @Test fun the_pending_first_message_is_sent_exactly_once_on_open() = runComposeUiTest {
+        val sent = mutableListOf<Pair<String, List<String>>>()
+        var consumeCalls = 0
+        setPlatformContent(touch()) {
+            Composer(
+                draft = "", onDraftChange = {}, sending = false, agentWorking = false,
+                onSend = { t, a -> sent.add(t to a) }, onInterrupt = {},
+                sessionKey = "s1",
+                actions = ComposerActions(
+                    consumePendingFirst = { id ->
+                        consumeCalls++
+                        if (id == "s1" && consumeCalls == 1) "launch text" to listOf("file-1") else null
+                    },
+                ),
+            )
+        }
+        waitUntil(timeoutMillis = 5_000L) { sent.isNotEmpty() }
+        assertEquals(listOf("launch text" to listOf("file-1")), sent)
     }
 }

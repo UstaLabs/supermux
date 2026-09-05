@@ -59,7 +59,7 @@ import dev.supermux.ui.chat.MicDeniedDialog
 import dev.supermux.ui.chat.EffortPill
 import dev.supermux.ui.chat.ModelPill
 import dev.supermux.ui.chat.isComposerEnterKey
-import dev.supermux.android.chat.isComposerSendEnter
+import dev.supermux.ui.chat.isComposerSendEnter
 import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.ui.chat.PickerSheet
 import dev.supermux.ui.chat.RecordingBar

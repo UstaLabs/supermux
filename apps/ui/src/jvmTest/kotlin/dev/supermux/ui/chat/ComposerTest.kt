@@ -55,28 +55,10 @@ class ComposerTest {
         assertTrue(!sendsOnEnter(Key.A, KeyEventType.KeyDown, shift = false))
     }
 
-    // ── Touch host: a soft Return inserts a newline, never sends (Android's rule) ──
-    @Test fun softKeyboardEnter_underTouch_doesNotSend() = runComposeUiTest {
-        var draft by mutableStateOf("")
-        var sendCount = 0
-        setPlatformContent(pointer = false, inputMode = InputMode.Touch) {
-            Composer(
-                draft = draft,
-                onDraftChange = { draft = it },
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> sendCount++; draft = "" },
-                onInterrupt = {},
-            )
-        }
-        onNodeWithTag("composer-input").performTextInput("keep")
-        onNodeWithTag("composer-input").performKeyInput { pressKey(Key.Enter) }
-        waitForIdle()
-        assertEquals(0, sendCount)
-        // The tap-to-send path still works on a touch host.
-        onNodeWithTag("composer-send").performClick()
-        assertEquals(1, sendCount)
-    }
+    // The soft-Return-inserts-a-newline half of the policy cannot be exercised here: the JVM actual
+    // of `isFromPhysicalKeyboard()` is "always true" BY DESIGN (desktop has no on-screen keyboard),
+    // so every injected Enter is a real one. That half is pinned where the seam actually branches —
+    // `HardwareKeyboardTest` over the Android actual — plus `ComposerKeyboardTest`'s pure policy.
 
     // ── (a) typing + click Send fires trimmed text and clears via callback ──────
     @Test fun typingThenClickSend_firesTrimmed_andClears() = runComposeUiTest {

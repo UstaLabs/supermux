@@ -208,6 +208,25 @@ fun ChatPanel(
     LaunchedEffect(session.id) { modelsData = app.sessionModels(session.id) }
     LaunchedEffect(session.id) { reasoningData = app.sessionReasoning(session.id) }
 
+    // Bumped by the `/model` control command so the composer opens its own picker.
+    var openModelPicker by remember(session.id) { mutableStateOf(0L) }
+    // The control commands THIS panel can perform. `rename` and `kill` are deliberately absent:
+    // both need a dialog, and the dialogs live inside OverflowMenu (the header), which this panel
+    // does not own and which is not even rendered when `showHeader` is false. The composer filters
+    // whatever is missing out of the slash menu, so they are never offered as dead rows.
+    val handledControls = setOf("mute", "model", "stop")
+    val onControl: (dev.supermux.proto.SlashCommand) -> Unit = { cmd ->
+        when (cmd.action?.kind) {
+            "mute" -> app.setMute(session.id, !(session.mute ?: false))
+            "model" -> scope.launch {
+                modelsData = app.sessionModels(session.id)
+                openModelPicker++
+            }
+            "stop" -> app.interrupt(session.id)
+            else -> {}
+        }
+    }
+
     val chatDetail by LocalUiPrefs.current.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
     val detailMode = effectiveChatDetail(chatDetail)
     val hideTools = detailMode == ChatDetailLevel.LOW
@@ -532,6 +551,9 @@ fun ChatPanel(
                 actions = composerActions,
                 commands = commands,
                 commandsResolved = commandsResolvedMap[session.id] ?: false,
+                onControl = onControl,
+                handledControlKinds = handledControls,
+                openModelPickerNonce = openModelPicker,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
@@ -545,6 +567,7 @@ fun ChatPanel(
                 models = modelsData,
                 reasoning = reasoningData,
                 sessionModel = session.model,
+                sessionReasoning = session.reasoningLevel,
                 sessionAgent = session.agent,
                 onPickModel = { model ->
                     scope.launch {

@@ -1,5 +1,6 @@
 package dev.supermux.android.chat
 
+import dev.supermux.ui.chat.isPhysicalKeyboardSource
 import android.view.InputDevice
 import android.view.KeyEvent as AndroidKeyEvent
 import kotlin.test.Test
@@ -7,8 +8,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Android's physical-vs-soft keyboard heuristic (the device/flag/source matrix). The pure Enter
- * policy it feeds now lives in `:ui` — see `ComposerKeyboardTest` there.
+ * The ANDROID actual of `KeyEvent.isFromPhysicalKeyboard()` — the device/flag/source matrix that
+ * decides, per key event, whether Enter sends or inserts a newline. It lives in `:ui`'s androidMain
+ * (which has no unit-test source set), so its pure half is pinned from here; the policy it feeds is
+ * `ComposerKeyboardTest` in `:ui`.
  */
 class HardwareKeyboardTest {
 
