@@ -77,8 +77,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.view.ViewGroup
-import android.widget.Toast
-import androidx.core.content.FileProvider
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -115,6 +113,8 @@ import dev.supermux.ui.parseInlineMarkdown
 import dev.supermux.ui.parseMarkdownBlocks
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.ToolStatus
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.Platform
 
 fun mergeTimeline(
     messages: List<LogEntry>,
@@ -323,7 +323,7 @@ private fun formatMessageTime(ts: String?): String? {
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val speechKey = remember(text) { plainTextForSpeech(text) }
@@ -370,9 +370,9 @@ private fun MessageMetaRow(text: String, ts: String?) {
         IconButton(
             onClick = {
                 if (speechKey.isBlank()) {
-                    Toast.makeText(context, "Nothing to read", Toast.LENGTH_SHORT).show()
+                    platform.notices.show("Nothing to read")
                 } else {
-                    MessageTts.toggle(context, text)
+                    MessageTts.toggle(platform.tts, text)
                 }
             },
             modifier = Modifier
@@ -1201,6 +1201,7 @@ private fun AttachmentItem(att: Attachment, loadBytes: suspend (String) -> ByteA
 private fun InlineVideo(att: Attachment, loadBytes: suspend (String) -> ByteArray?) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
+    val platform = LocalPlatform.current
     var playing by remember(att.file_id) { mutableStateOf(false) }
     var file by remember(att.file_id) { mutableStateOf<File?>(null) }
     var failed by remember(att.file_id) { mutableStateOf(false) }
@@ -1301,8 +1302,8 @@ private fun InlineVideo(att: Attachment, loadBytes: suspend (String) -> ByteArra
                             val bytes = withContext(Dispatchers.IO) {
                                 runCatching { f.readBytes() }.getOrNull()
                             }
-                            if (bytes != null) openAttachment(context, att.name ?: "video", att.mime, bytes)
-                            else Toast.makeText(context, "Couldn't download video", Toast.LENGTH_SHORT).show()
+                            if (bytes != null) openAttachment(platform, att.name ?: "video", att.mime, bytes)
+                            else platform.notices.show("Couldn't download video")
                         }
                     },
                     modifier = Modifier
@@ -1335,7 +1336,8 @@ private fun ImageLightbox(
     bytes: ByteArray?,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
+    val scope = rememberCoroutineScope()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1377,7 +1379,7 @@ private fun ImageLightbox(
             ) {
                 if (bytes != null) {
                     IconButton(
-                        onClick = { openAttachment(context, name, mime, bytes) },
+                        onClick = { scope.launch { openAttachment(platform, name, mime, bytes) } },
                         modifier = Modifier.testTag("image_lightbox_download"),
                     ) {
                         Icon(
@@ -1407,7 +1409,7 @@ private fun AttachmentChip(
     loadBytes: suspend (String) -> ByteArray?,
 ) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
+    val platform = LocalPlatform.current
     val scope = rememberCoroutineScope()
     var busy by remember(att.file_id) { mutableStateOf(false) }
     val shape = RoundedCornerShape(Radii.sm)
@@ -1421,8 +1423,8 @@ private fun AttachmentChip(
                 scope.launch {
                     val bytes = loadBytes(att.file_id)
                     busy = false
-                    if (bytes != null) openAttachment(context, att.name ?: att.file_id, att.mime, bytes)
-                    else Toast.makeText(context, "Couldn't download attachment", Toast.LENGTH_SHORT).show()
+                    if (bytes != null) openAttachment(platform, att.name ?: att.file_id, att.mime, bytes)
+                    else platform.notices.show("Couldn't download attachment")
                 }
             }
             .padding(horizontal = Space.sm, vertical = Space.xs),
@@ -1456,28 +1458,21 @@ private fun AttachmentChip(
     }
 }
 
-/** Writes [bytes] to a cache file and opens it via the system (FileProvider), falling back to share. */
-private fun openAttachment(context: Context, name: String, mime: String?, bytes: ByteArray) {
-    try {
-        val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
-        val safeName = name.substringAfterLast('/').ifBlank { "file" }
-        val file = File(dir, safeName)
-        file.writeBytes(bytes)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val type = mime?.ifBlank { null } ?: context.contentResolver.getType(uri) ?: "*/*"
-        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
-        val view = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, type); addFlags(flags) }
-        try {
-            context.startActivity(Intent.createChooser(view, "Open $safeName").apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-        } catch (_: Exception) {
-            val send = Intent(Intent.ACTION_SEND).apply {
-                this.type = type
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(flags)
-            }
-            context.startActivity(Intent.createChooser(send, "Share $safeName").apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-        }
-    } catch (_: Exception) {
-        Toast.makeText(context, "Couldn't open attachment", Toast.LENGTH_SHORT).show()
+/**
+ * Hand [bytes] to whatever opens [mime], through `Platform.files` — the cache file, the
+ * `FileProvider` URI and the ACTION_VIEW-then-ACTION_SEND chain all moved behind the seam in
+ * cluster D1, so the shared timeline can do this without naming an Intent. The "couldn't open"
+ * toast is now `Platform.notices`.
+ */
+private suspend fun openAttachment(
+    platform: Platform,
+    name: String,
+    mime: String?,
+    bytes: ByteArray,
+) {
+    val safeName = name.substringAfterLast('/').ifBlank { "file" }
+    val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
+    if (!platform.files.openExternally(safeName, type, bytes)) {
+        platform.notices.show("Couldn't open attachment")
     }
 }

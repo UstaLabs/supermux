@@ -19,7 +19,7 @@ class TimelineLinkTest {
 
     @Test fun assistantMessage_bareUrl_getsLinkAnnotation() = runComposeUiTest {
         val body = "see https://example.com for details"
-        setContent { AssistantMessage(text = body) }
+        setPlatformContent { AssistantMessage(text = body) }
 
         val node = onNodeWithText(body, substring = true).fetchSemanticsNode()
         val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()

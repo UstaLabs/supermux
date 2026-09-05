@@ -1,5 +1,6 @@
 package dev.supermux.android.chat
 
+import dev.supermux.chat.isAttachableMediaMime
 import dev.supermux.ui.TestIds
 import android.content.ClipboardManager
 import android.content.Context

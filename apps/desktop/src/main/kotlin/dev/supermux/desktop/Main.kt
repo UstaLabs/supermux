@@ -51,7 +51,7 @@ import dev.supermux.desktop.chat.MessageTts
 import dev.supermux.desktop.chat.AssistantMessage
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.desktop.chat.loadMarkdownImageBitmap
-import dev.supermux.desktop.chat.prunePasteCache
+import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores

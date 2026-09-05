@@ -32,6 +32,8 @@ class AndroidPlatformTest {
                 localBroker = false,
                 multiWindow = false,
                 fileSystem = false,
+                clipboardImages = true,
+                saveAs = true,
                 walkthrough = true,
             ),
             ANDROID_CAPS,

@@ -23,12 +23,23 @@ import androidx.compose.ui.platform.LocalView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ContentResolverChunkSource
+import dev.supermux.android.chat.DictationEngine
+import dev.supermux.android.chat.VoiceRecorder
+import dev.supermux.android.chat.createImageUri
+import dev.supermux.android.chat.createVideoUri
 import dev.supermux.android.editor.AndroidEditorEngineFactory
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.android.pairing.rememberQrScanLauncher
 import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.platform.ClipboardAccess
+import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.LiveTranscript
+import dev.supermux.ui.platform.MicCapture
+import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickKind
+import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.theme.Haptics
@@ -40,6 +51,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -56,6 +68,9 @@ class AndroidPlatform(
     private val pickerHost: PickerHost<Uri>,
     private val qrScanHost: QrScanHost,
     override val haptics: Haptics,
+    private val captureHost: CaptureHost = CaptureHost(),
+    saveHost: SaveHost = SaveHost(),
+    permissionHost: PermissionHost = PermissionHost(),
 ) : Platform {
 
     override val caps: Caps get() = ANDROID_CAPS
@@ -99,6 +114,56 @@ class AndroidPlatform(
     override suspend fun scanQr(): String? = qrScanHost.scan()
 
     /**
+     * Delegates the photo capture to the system camera app, writing into a `FileProvider` URI we
+     * own (see [createImageUri]), then stages that URI exactly as a pick would be. Null when the
+     * user backed out or the camera wrote nothing.
+     */
+    override suspend fun captureImage(requester: String): PickedFile? =
+        capture(CaptureKind.Image, requester) { createImageUri(context) }
+
+    /** Same as [captureImage], with the video contract and a `.mp4` destination. */
+    override suspend fun captureVideo(requester: String): PickedFile? =
+        capture(CaptureKind.Video, requester) { createVideoUri(context) }
+
+    private suspend fun capture(
+        kind: CaptureKind,
+        requester: String,
+        target: () -> Uri,
+    ): PickedFile? {
+        val destination = runCatching { target() }.getOrNull() ?: return null
+        val uri = captureHost.capture(kind, destination, requester) ?: return null
+        return pickedFileFromUri(context, uri)
+    }
+
+    override val clipboard: ClipboardAccess = AndroidClipboardAccess(context)
+
+    override val files: FileAccess = AndroidFileAccess(context, saveHost)
+
+    /**
+     * The mic, with the on-device live transcript attached only when
+     * [DevConfig.ENABLE_ONDEVICE_STT] is on — otherwise `liveTranscript` is null and the dictation
+     * UI behaves exactly like desktop's (record, POST, append).
+     *
+     * `requestPermission` short-circuits on an existing grant, so dictating twice prompts once.
+     */
+    override val mic: MicCapture = AndroidMicCapture(
+        recorder = VoiceRecorder(context),
+        available = true,
+        liveTranscript = liveTranscriptOrNull(context),
+        onRequestPermission = {
+            hasRecordAudioPermission(context) ||
+                permissionHost.request(android.Manifest.permission.RECORD_AUDIO)
+        },
+    )
+
+    override val tts: TtsEngine = AndroidTtsEngine(
+        backend = PlatformTtsBackend(context.applicationContext),
+        player = MediaPlayerChunkPlayer(context.applicationContext),
+    )
+
+    override val notices: NoticeChannel = AndroidNotices(context.applicationContext)
+
+    /**
      * Decodes that completed with nobody left to await them — the activity was re-created while the
      * scanner was in the foreground. The re-created add-host screen collects this and claims the
      * host exactly as if its own `scanQr()` had returned, instead of the scan being silently lost.
@@ -118,14 +183,24 @@ class AndroidPlatform(
      * Only the screen that asked for the pick sees it: [requester] must match the one passed to
      * [pickFiles]. Collect it for the lifetime of the screen — a one-shot read races the delivery.
      */
-    fun pendingPicks(requester: String): Flow<PickedFile> =
+    override fun pendingPicks(requester: String): Flow<PickedFile> = merge(
         pickerHost.unclaimed
             .filterNotNull()
             .filter { it.requester == requester }
             .mapNotNull { stash ->
                 pickerHost.claim(stash)
                 pickedFileFromUri(context, stash.result)
-            }
+            },
+        // A camera capture is orphaned by exactly the same rotation, and the screen that asked for
+        // it wants the photo staged the same way — so both stashes come out of one flow.
+        captureHost.unclaimed
+            .filterNotNull()
+            .filter { it.requester == requester }
+            .mapNotNull { stash ->
+                captureHost.claim(stash)
+                pickedFileFromUri(context, stash.result)
+            },
+    )
 
     private companion object {
         const val CLIP_LABEL = "supermux"
@@ -145,6 +220,8 @@ val ANDROID_CAPS = Caps(
     localBroker = false,
     multiWindow = false,
     fileSystem = false,
+    clipboardImages = true,
+    saveAs = true,
     // The walkthrough seam is installed in AppViewModel's HostStore factory (AndroidWalkthroughSeam).
     walkthrough = true,
 )
@@ -456,9 +533,19 @@ fun rememberAndroidPlatform(): AndroidPlatform {
     val view = LocalView.current
     val host = rememberPickerHost()
     val qrHost = rememberQrScanHost()
+    val captureHost = rememberCaptureHost()
+    val saveHost = rememberSaveHost()
+    val permissionHost = rememberPermissionHost()
     val haptics = remember(view) { AndroidHaptics(view) }
-    return remember(context, host, qrHost, haptics) { AndroidPlatform(context, host, qrHost, haptics) }
+    return remember(context, host, qrHost, captureHost, saveHost, permissionHost, haptics) {
+        AndroidPlatform(context, host, qrHost, haptics, captureHost, saveHost, permissionHost)
+    }
 }
+
+/** The on-device STT seam, or null when the dev flag is off / the recognizer cannot be built. */
+private fun liveTranscriptOrNull(context: Context): LiveTranscript? =
+    if (!DevConfig.ENABLE_ONDEVICE_STT) null
+    else runCatching { AndroidLiveTranscript(DictationEngine(context)) }.getOrNull()
 
 /**
  * Name + byte size for a content URI (DISPLAY_NAME / SIZE, falling back to the fd's `statSize`),

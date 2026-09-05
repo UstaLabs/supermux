@@ -4,16 +4,23 @@ import dev.supermux.desktop.editor.DesktopEditorEngineFactory
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.Caps
+import dev.supermux.ui.platform.ClipboardAccess
+import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
+import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
+import java.awt.GraphicsEnvironment
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.io.File
@@ -37,6 +44,10 @@ class DesktopPlatform : Platform {
         localBroker = true,
         multiWindow = true,
         fileSystem = true,
+        // Both are AWT, so both are false on a headless box — where the save dialog would throw
+        // and the clipboard is empty — rather than offering an affordance that cannot work.
+        clipboardImages = !GraphicsEnvironment.isHeadless(),
+        saveAs = !GraphicsEnvironment.isHeadless(),
         // DesktopWalkthroughSeam is installed on every HostStore this app builds (Main.kt).
         walkthrough = true,
     )
@@ -74,6 +85,28 @@ class DesktopPlatform : Platform {
     /** No camera on a desktop (`caps.camera == false`), so nothing offers this; null keeps the
      *  contract total for a caller that asks anyway. */
     override suspend fun scanQr(): String? = null
+
+    /** No camera (`caps.camera == false`) — see [scanQr]. */
+    override suspend fun captureImage(requester: String): PickedFile? = null
+
+    /** No camera (`caps.camera == false`) — see [scanQr]. */
+    override suspend fun captureVideo(requester: String): PickedFile? = null
+
+    /** An AWT dialog cannot outlive its caller, so a pick is never orphaned and there is nothing
+     *  to re-deliver. */
+    override fun pendingPicks(requester: String): Flow<PickedFile> = emptyFlow()
+
+    override val clipboard: ClipboardAccess = DesktopClipboardAccess()
+
+    override val files: FileAccess = DesktopFileAccess()
+
+    override val mic: MicCapture = DesktopMicCapture()
+
+    override val tts: TtsEngine = DesktopTtsEngine()
+
+    /** Rendered by `DesktopTheme`'s snackbar host — one bus per window root, which is where
+     *  [DesktopPlatform] itself is constructed. */
+    override val notices: DesktopNotices = DesktopNotices()
 
     override val haptics: Haptics = NoHaptics
 }

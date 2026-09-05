@@ -2,6 +2,7 @@ package dev.supermux.ui.platform
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.net.ChunkSource
+import kotlinx.coroutines.flow.Flow
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.theme.Haptics
 
@@ -18,8 +19,6 @@ import dev.supermux.ui.theme.Haptics
  * `docs/superpowers/specs/2026-09-04-screens-into-ui-design.md` §Foundations 3) grows these
  * further seams as the screens that need them move into `:ui` — do NOT invent parallel
  * abstractions for them, add them here:
- *  - `val tts: TtsEngine` — `android.speech.tts` / desktop broker-stream player (cluster D, voice).
- *  - `val mic: MicCapture` — `AudioRecord` / `javax.sound` (cluster D, dictation).
  *  - `fun terminalView(): TerminalViewFactory` — termlib / jediterm (cluster C).
  *  - `fun videoDecoder(): VideoSurfaceFactory?` — MediaCodec / null (cluster D, displays).
  *  - `val updates: AppUpdater` — APK install / DMG-MSI download (cluster G).
@@ -67,6 +66,47 @@ interface Platform {
     val haptics: Haptics
 
     /**
+     * Take a photo with the system camera and stage it for upload, or null when the user backed out
+     * (and immediately on a machine with no camera).
+     *
+     * Ask [Caps.camera] before offering the affordance at all — desktop has none. Recreation-safe
+     * the same way [pickFiles] is: a capture that finishes while the activity is being re-created is
+     * re-delivered on [pendingPicks] under [requester] instead of being lost.
+     */
+    suspend fun captureImage(requester: String = DEFAULT_REQUESTER): PickedFile?
+
+    /** Record a video with the system camera. Same contract as [captureImage]. */
+    suspend fun captureVideo(requester: String = DEFAULT_REQUESTER): PickedFile?
+
+    /**
+     * Results of picks and captures that completed with nobody left to await them — on Android the
+     * user rotated the device while the system picker/camera was in the foreground, so the
+     * coroutine inside [pickFiles]/[captureImage] died with the old composition. The re-created
+     * screen collects this and stages the file exactly as if its own call had returned it.
+     *
+     * Only the screen that asked sees it: [requester] must match the one it passed. Collect it for
+     * the lifetime of the screen — a one-shot read races the delivery. Desktop (whose dialogs
+     * cannot outlive their caller) emits nothing.
+     */
+    fun pendingPicks(requester: String): Flow<PickedFile>
+
+    /** Images on the system clipboard, for paste-to-attach. Gated by [Caps.clipboardImages]. */
+    val clipboard: ClipboardAccess
+
+    /** "Save as…" / "Open with…" for bytes the app already holds. [FileAccess.saveAs] is gated by
+     *  [Caps.saveAs]; opening externally works everywhere. */
+    val files: FileAccess
+
+    /** The microphone, for dictation. [MicCapture.available] says whether to offer a mic button. */
+    val mic: MicCapture
+
+    /** Read-aloud output (OS synthesiser + broker audio playback). */
+    val tts: TtsEngine
+
+    /** Transient "that didn't work" text — a toast on Android, a snackbar on desktop. */
+    val notices: NoticeChannel
+
+    /**
      * Builds the browser that hosts CodeMirror — a `WebView` on Android, a direct-JCEF browser on
      * desktop. The shared editor surface reads this and never names either. A machine with no
      * browser at all installs `UnavailableEditorEngineFactory`, and every editor pane degrades to
@@ -90,6 +130,9 @@ const val DEFAULT_REQUESTER: String = "default"
  * @property multiWindow panes can be detached into real OS windows.
  * @property fileSystem the app can read and write arbitrary local paths (desktop only; Android is
  *   confined to SAF-granted URIs, which is NOT a general file system).
+ * @property clipboardImages the system clipboard can hand back pasted images.
+ * @property saveAs the user can be asked where to write a file ("Save as…"). False on a host with
+ *   no save dialog at all (a headless desktop), where [FileAccess.saveAs] returns false.
  * @property walkthrough the app builds its `HostStore` with a `WalkthroughSeam`, so the diff pane
  *   can offer the walkthrough slideshow. False on a host that never installs the seam — reading a
  *   walkthrough holder there would throw.
@@ -103,6 +146,8 @@ data class Caps(
     val localBroker: Boolean,
     val multiWindow: Boolean,
     val fileSystem: Boolean,
+    val clipboardImages: Boolean = false,
+    val saveAs: Boolean = false,
     val walkthrough: Boolean = false,
 )
 

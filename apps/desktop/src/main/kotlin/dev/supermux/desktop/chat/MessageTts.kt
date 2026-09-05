@@ -3,24 +3,25 @@ package dev.supermux.desktop.chat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import java.io.File
+import dev.supermux.ui.platform.TtsEngine
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
-import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 /**
- * Desktop read-aloud: OS CLI TTS (platform) or ChatGPT via broker /speak stream (codex).
- * Wire [resolveEngine] / [speakRemoteStream] from the host connection layer when available.
+ * Desktop read-aloud STATE: which message is speaking, and whether to use the OS synthesiser
+ * ("platform") or the broker's `/speak` stream ("codex"). Wire [resolveEngine] / [speakRemoteStream]
+ * from the host connection layer when available.
+ *
+ * The noise itself is [TtsEngine] (`Platform.tts`) — cluster D1 moved every `ProcessBuilder`,
+ * `which` probe and temp-mp3 write behind that seam, so this object is pure state + sequencing and
+ * moves to `:ui` in cluster D3 unchanged.
  */
 object MessageTts {
     private val gen = AtomicInteger(0)
-    private val process = AtomicReference<Process?>(null)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     var resolveEngine: (suspend () -> String)? = null
@@ -31,139 +32,65 @@ object MessageTts {
 
     fun isSpeaking(textKey: String): Boolean = speakingKey == textKey
 
-    fun toggle(rawText: String) {
+    fun toggle(tts: TtsEngine, rawText: String) {
         val plain = plainTextForSpeech(rawText)
         if (plain.isBlank()) return
         if (speakingKey == plain) {
-            stop()
+            stop(tts)
             return
         }
         scope.launch {
             val eng = runCatching { resolveEngine?.invoke() }.getOrNull()?.ifBlank { null } ?: "platform"
             if (eng == "codex" && speakRemoteStream != null) {
-                speakCodex(plain, rawText)
+                speakCodex(tts, plain, rawText)
             } else {
-                speakPlatform(plain)
+                speakPlatform(tts, plain)
             }
         }
     }
 
-    fun stop() {
+    fun stop(tts: TtsEngine) {
         gen.incrementAndGet()
-        process.getAndSet(null)?.destroyForcibly()
+        tts.stop()
         speakingKey = null
     }
 
-    private fun speakCodex(plain: String, rawText: String) {
-        val remote = speakRemoteStream ?: return speakPlatform(plain)
-        stop()
+    /** Stream the broker's audio chunks into [tts] in arrival order; a newer [gen] abandons them. */
+    private suspend fun speakCodex(tts: TtsEngine, plain: String, rawText: String) {
+        val remote = speakRemoteStream ?: return speakPlatform(tts, plain)
+        stop(tts)
         val g = gen.incrementAndGet()
         speakingKey = plain
-        thread(name = "message-tts-codex", isDaemon = true) {
-            val queue = Channel<ByteArray>(Channel.UNLIMITED)
-            val producer = Thread({
-                try {
-                    runBlocking {
-                        remote(rawText) { bytes ->
-                            if (gen.get() == g) queue.trySend(bytes)
-                        }
-                    }
-                } catch (_: Exception) {
-                } finally {
-                    queue.close()
-                }
-            }, "message-tts-codex-fetch").also { it.isDaemon = true; it.start() }
-
+        val queue = Channel<ByteArray>(Channel.UNLIMITED)
+        val producer = scope.launch(Dispatchers.IO) {
             try {
-                runBlocking {
-                    for (bytes in queue) {
-                        if (gen.get() != g) break
-                        playBytesBlocking(bytes, g)
-                    }
-                }
+                remote(rawText) { bytes -> if (gen.get() == g) queue.trySend(bytes) }
             } catch (_: Exception) {
+                // The consumer sees the close and clears the speaking marker.
             } finally {
-                producer.interrupt()
-                if (gen.get() == g) {
-                    process.compareAndSet(process.get(), null)
-                    speakingKey = null
-                }
+                queue.close()
             }
         }
-    }
-
-    private fun playBytesBlocking(bytes: ByteArray, g: Int) {
-        val file = File.createTempFile("read-aloud-", ".mp3")
-        file.deleteOnExit()
-        file.writeBytes(bytes)
-        val playCmd = playCommand(file.absolutePath) ?: return
         try {
-            val p = ProcessBuilder(playCmd).redirectErrorStream(true).start()
-            process.set(p)
-            p.waitFor()
-        } catch (_: Exception) {
+            for (bytes in queue) {
+                if (gen.get() != g) break
+                tts.playAudioChunk(bytes)
+            }
         } finally {
-            process.compareAndSet(process.get(), null)
-            try { file.delete() } catch (_: Exception) {}
+            producer.cancel()
+            queue.close()
+            if (gen.get() == g) speakingKey = null
         }
     }
 
-    private fun speakPlatform(plain: String) {
-        stop()
+    private suspend fun speakPlatform(tts: TtsEngine, plain: String) {
+        stop(tts)
         val g = gen.incrementAndGet()
         speakingKey = plain
-        val cmd = speechCommand(plain) ?: run {
-            speakingKey = null
-            return
-        }
-        thread(name = "message-tts", isDaemon = true) {
-            try {
-                val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
-                process.set(p)
-                p.waitFor()
-            } catch (_: Exception) {
-            } finally {
-                if (gen.get() == g) {
-                    process.compareAndSet(process.get(), null)
-                    speakingKey = null
-                }
-            }
-        }
-    }
-
-    private fun playCommand(path: String): List<String>? = when {
-        which("ffplay") -> listOf("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path)
-        which("mpv") -> listOf("mpv", "--no-video", "--really-quiet", path)
-        which("afplay") -> listOf("afplay", path) // macOS
-        else -> null
-    }
-
-    internal fun speechCommand(plain: String): List<String>? {
-        val os = System.getProperty("os.name").orEmpty().lowercase()
-        return when {
-            os.contains("mac") || os.contains("darwin") -> listOf("say", plain)
-            os.contains("win") -> {
-                val escaped = plain.replace("'", "''")
-                listOf(
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "Add-Type -AssemblyName System.Speech; " +
-                        "(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('$escaped')",
-                )
-            }
-            which("spd-say") -> listOf("spd-say", "-e", plain)
-            which("espeak-ng") -> listOf("espeak-ng", plain)
-            which("espeak") -> listOf("espeak", plain)
-            else -> null
-        }
-    }
-
-    private fun which(bin: String): Boolean {
-        return try {
-            ProcessBuilder("which", bin).start().waitFor() == 0
-        } catch (_: Exception) {
-            false
+        try {
+            tts.speak(plain)
+        } finally {
+            if (gen.get() == g) speakingKey = null
         }
     }
 }

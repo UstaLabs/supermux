@@ -65,6 +65,7 @@ import kotlinx.coroutines.launch
 import dev.supermux.ui.widgets.settingsFieldColors
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.submitOnEnter
+import dev.supermux.ui.platform.LocalPlatform
 
 private data class SttEngine(val id: String, val label: String)
 private data class VoiceEngine(val id: String, val label: String, val family: String)
@@ -131,6 +132,7 @@ fun VoiceSettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    val previewTts = LocalPlatform.current.tts
     val scope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var sttEngine by remember { mutableStateOf(DEFAULT_STT_ENGINE) }
@@ -296,7 +298,7 @@ fun VoiceSettingsScreen(
                             testTag = "voice_tts_chip",
                         )
                         TextButton(
-                            onClick = { MessageTts.toggle(PREVIEW_TTS_SAMPLE) },
+                            onClick = { MessageTts.toggle(previewTts, PREVIEW_TTS_SAMPLE) },
                             modifier = Modifier.testTag("voice_tts_preview"),
                         ) {
                             Text("Preview", style = MaterialTheme.typography.labelMedium)

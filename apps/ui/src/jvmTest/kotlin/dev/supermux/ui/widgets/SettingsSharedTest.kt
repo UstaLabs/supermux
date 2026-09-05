@@ -26,6 +26,7 @@ import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import dev.supermux.ui.platform.Platform
 import dev.supermux.ui.theme.Haptics
@@ -38,16 +39,10 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalTestApi::class)
 class SettingsSharedTest {
 
-    private class RecordingPlatform : Platform {
-        override val editorEngine = UnavailableEditorEngineFactory("no engine under test")
-        override val caps = Caps(false, false, false, false, false, false, false, false)
-        override val haptics: Haptics = NoHaptics
+    /** Thin alias over the shared [FakePlatform] — this suite only asserts the copy seam. */
+    private class RecordingPlatform : Platform by FakePlatform() {
         val copied = mutableListOf<String>()
-        override fun openUrl(url: String) = Unit
         override fun copyToClipboard(text: String) { copied.add(text) }
-        override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> =
-            listOf(PickedFile("a", "text/plain", ByteArrayChunkSource(ByteArray(0))))
-        override suspend fun scanQr(): String? = null
     }
 
     @Test

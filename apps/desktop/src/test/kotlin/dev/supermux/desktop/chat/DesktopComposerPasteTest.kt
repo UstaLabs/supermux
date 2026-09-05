@@ -1,6 +1,21 @@
 package dev.supermux.desktop.chat
 
 import androidx.compose.runtime.getValue
+import dev.supermux.desktop.platform.PASTE_CACHE_DIR_NAME
+import dev.supermux.desktop.platform.PASTE_CACHE_TTL
+import dev.supermux.desktop.platform.PASTE_IMAGE_ENCODE_MAX_EDGE
+import dev.supermux.desktop.platform.PASTE_IMAGE_MAX_EDGE
+import dev.supermux.desktop.platform.PASTE_IMAGE_MAX_PIXELS
+import dev.supermux.desktop.platform.clipboardImageToTempFile
+import dev.supermux.desktop.platform.clipboardImageWithinCaps
+import dev.supermux.desktop.platform.composerFilesFromClipboardTransferable
+import dev.supermux.desktop.platform.desktopConfigDirOverride
+import dev.supermux.desktop.platform.ensurePasteCacheDir
+import dev.supermux.desktop.platform.isComposerImageFile
+import dev.supermux.desktop.platform.isComposerPasteCacheEntryName
+import dev.supermux.desktop.platform.pasteCacheDir
+import dev.supermux.desktop.platform.prunePasteCache
+import dev.supermux.desktop.platform.transferableLikelyHasImage
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
@@ -281,21 +296,8 @@ class DesktopComposerPasteTest {
         assertTrue(isTestPasteCacheFile(file))
     }
 
-    // ── caps: dimension + pixel + encoded-byte + reject without huge alloc ──────
-    @Test fun clipboardImageWithinCaps_rejectsOversizeEdgeAndPixels() {
-        assertTrue(clipboardImageWithinCaps(4, 4))
-        assertTrue(clipboardImageWithinCaps(PASTE_IMAGE_MAX_EDGE, 1))
-        assertFalse(clipboardImageWithinCaps(PASTE_IMAGE_MAX_EDGE + 1, 1))
-        assertFalse(clipboardImageWithinCaps(1, PASTE_IMAGE_MAX_EDGE + 1))
-        // Pixel cap: even if each edge is under the edge cap, w*h can exceed.
-        val edge = (kotlin.math.sqrt(PASTE_IMAGE_MAX_PIXELS.toDouble()) + 100).toInt()
-            .coerceAtMost(PASTE_IMAGE_MAX_EDGE)
-        if (edge.toLong() * edge > PASTE_IMAGE_MAX_PIXELS) {
-            assertFalse(clipboardImageWithinCaps(edge, edge))
-        }
-        assertFalse(clipboardImageWithinCaps(0, 10))
-        assertFalse(clipboardImageWithinCaps(-1, 10))
-    }
+    // (clipboardImageWithinCaps / scaleBufferedImageToMaxEdge — the pure caps+resize policy —
+    //  moved to DesktopPlatformTest with the seam in cluster D1.)
 
     @Test fun clipboardImageToTempFile_rejectsHugeDimsWithoutEncoding() {
         // Fake Image reports absurd dimensions without allocating a pixel buffer.
@@ -314,16 +316,6 @@ class DesktopComposerPasteTest {
         val file = clipboardImageToTempFile(img, maxEncodedBytes = 1L)
         assertNull(file, "encoded-byte cap must drop the paste after write")
         // Oversize bytes may remain in paste-cache for the age pruner — never deleted by path here.
-    }
-
-    @Test fun scaleBufferedImageToMaxEdge_downscalesLargeImages() {
-        val big = BufferedImage(4000, 3000, BufferedImage.TYPE_INT_RGB)
-        val scaled = scaleBufferedImageToMaxEdge(big, maxEdge = 2048)
-        assertTrue(scaled.width <= 2048 && scaled.height <= 2048)
-        assertTrue(scaled.width == 2048 || scaled.height == 2048)
-        // Already small — same instance.
-        val small = BufferedImage(100, 80, BufferedImage.TYPE_INT_RGB)
-        assertTrue(scaleBufferedImageToMaxEdge(small, 2048) === small)
     }
 
     // ── paste-cache: app-owned dir, fresh names, age prune only ─────────────────

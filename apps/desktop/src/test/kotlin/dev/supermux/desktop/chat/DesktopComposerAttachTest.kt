@@ -22,6 +22,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.desktop.platform.composerMime
 
 /**
  * Attachment contract for [DesktopComposer] (M4d): the pure send-gating matrix + mime/kind helpers,

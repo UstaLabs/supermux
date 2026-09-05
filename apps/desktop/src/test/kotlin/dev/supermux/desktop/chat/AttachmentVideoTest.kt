@@ -33,7 +33,7 @@ class AttachmentVideoTest {
 
     @Test fun video_shows_a_poster_and_downloads_nothing_until_clicked() = runComposeUiTest {
         val fetches = AtomicInteger(0)
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(videoAtt()),
                 alignEnd = false,
@@ -46,7 +46,7 @@ class AttachmentVideoTest {
     }
 
     @Test fun video_note_and_mime_only_videos_also_get_the_poster() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(
                     videoAtt(kind = "video_note", mime = null),
@@ -61,7 +61,7 @@ class AttachmentVideoTest {
 
     @Test fun clicking_the_poster_downloads_then_mounts_the_player() = runComposeUiTest {
         val mounted = java.util.concurrent.atomic.AtomicReference<File?>(null)
-        setContent {
+        setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { ByteArray(16) },
@@ -84,7 +84,7 @@ class AttachmentVideoTest {
 
     @Test fun a_slow_download_shows_the_spinner_not_the_chip() = runComposeUiTest {
         val gate = CompletableDeferred<ByteArray?>()
-        setContent {
+        setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { gate.await() },
@@ -100,7 +100,7 @@ class AttachmentVideoTest {
     }
 
     @Test fun a_failed_download_falls_back_to_the_chip() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { null },
@@ -117,7 +117,7 @@ class AttachmentVideoTest {
     @Test fun a_backend_error_falls_back_to_the_chip() = runComposeUiTest {
         // The player reports a codec/source error (e.g. a container the OS backend cannot demux);
         // the transcript must not be left with a black rectangle.
-        setContent {
+        setPlatformContent {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { ByteArray(8) },

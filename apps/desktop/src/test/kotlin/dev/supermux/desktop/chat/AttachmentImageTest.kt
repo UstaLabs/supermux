@@ -25,7 +25,7 @@ class AttachmentImageTest {
         Attachment(file_id = "f1", kind = kind, mime = mime, name = "shot.png")
 
     @Test fun image_attachment_paints_inline() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
@@ -45,7 +45,7 @@ class AttachmentImageTest {
 
     @Test fun telegram_photo_kind_paints_inline() = runComposeUiTest {
         // Telegram sends kind="photo" with no mime — the pre-fix chip path covered it, so must this.
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(imageAtt(kind = "photo", mime = null)),
                 alignEnd = true,
@@ -59,7 +59,7 @@ class AttachmentImageTest {
     }
 
     @Test fun failed_image_load_falls_back_to_download_chip() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
@@ -78,7 +78,7 @@ class AttachmentImageTest {
     }
 
     @Test fun undecodable_bytes_fall_back_to_download_chip() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,
@@ -92,7 +92,7 @@ class AttachmentImageTest {
     }
 
     @Test fun non_image_attachment_keeps_the_chip() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(
                     Attachment(file_id = "f2", kind = "document", mime = "application/pdf", name = "spec.pdf"),
@@ -111,7 +111,7 @@ class AttachmentImageTest {
 
     @Test fun image_is_shown_before_it_loads_as_a_placeholder_not_a_chip() = runComposeUiTest {
         // Never-resolving loader: the timeline must reserve space, not flash the download chip.
-        setContent {
+        setPlatformContent {
             AttachmentList(
                 attachments = listOf(imageAtt()),
                 alignEnd = false,

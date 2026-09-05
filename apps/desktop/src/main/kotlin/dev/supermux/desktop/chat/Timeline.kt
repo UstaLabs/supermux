@@ -110,7 +110,8 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Sizes
 import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.platform.awtSaveFile
+import dev.supermux.desktop.platform.openLocalFile
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.desktop.platform.openInBrowser
 import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
@@ -345,6 +346,7 @@ private fun formatMessageTime(ts: String?): String? {
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
+    val tts = LocalPlatform.current.tts
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val speechKey = remember(text) { plainTextForSpeech(text) }
@@ -388,7 +390,7 @@ private fun MessageMetaRow(text: String, ts: String?) {
             )
         }
         IconButton(
-            onClick = { if (speechKey.isNotBlank()) MessageTts.toggle(text) },
+            onClick = { if (speechKey.isNotBlank()) MessageTts.toggle(tts, text) },
             modifier = Modifier
                 .size(28.dp)
                 .testTag("message_read_aloud"),
@@ -1624,7 +1626,7 @@ private fun InlineVideoPlayer(file: File, onError: () -> Unit) {
                 }
             }
 
-            override fun openExternally() = openLocalFile(file)
+            override fun openExternally() { openLocalFile(file) }
         }
     }
     VideoPlayerFrame(transport) { modifier ->
@@ -1948,6 +1950,7 @@ private fun AttachmentChip(
     att: Attachment,
     loadBytes: suspend (String) -> ByteArray?,
 ) {
+    val files = LocalPlatform.current.files
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Radii.sm)
     val scope = rememberCoroutineScope()
@@ -1968,12 +1971,15 @@ private fun AttachmentChip(
                         failed = true
                         return@launch
                     }
-                    val saved = withContext(Dispatchers.IO) {
-                        saveAttachmentBytes(bytes, att.name ?: att.file_id)
-                    }
+                    val name = att.name ?: att.file_id
+                    val mime = att.mime?.ifBlank { null } ?: files.probeMime(name)
+                    val saved = files.saveAs(name, mime, bytes)
                     busy = false
-                    failed = saved == null
-                    if (saved != null) openLocalFile(saved)
+                    // Cancelling the save dialog is not a failure — only a failed download is
+                    // (`saveAs` cannot tell cancel from write-error, and a red chip on cancel
+                    // would be worse than a silent one).
+                    failed = false
+                    if (saved) files.openExternally(name, mime, bytes)
                 }
             }
             .padding(horizontal = Space.sm, vertical = Space.xs)
@@ -2012,28 +2018,7 @@ private fun AttachmentChip(
     }
 }
 
-/** Save dialog (AWT FileDialog.SAVE). Returns the written file, or null if cancelled/failed.
- *  Must run off the Compose frame path's hot path; FileDialog itself is modal on the AWT EDT
- *  (Compose Desktop main == EDT on most hosts). */
-internal fun saveAttachmentBytes(bytes: ByteArray, name: String): File? {
-    val safeName = name.substringAfterLast('/').ifBlank { "file" }
-    val target = awtSaveFile(safeName) ?: return null
-    return runCatching { target.also { it.writeBytes(bytes) } }.getOrNull()
-}
-
-/** Open a local file with the OS default handler (viewer / player / folder). */
-internal fun openLocalFile(file: File) {
-    runCatching {
-        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
-            Desktop.getDesktop().open(file)
-            return
-        }
-        val os = System.getProperty("os.name")?.lowercase(Locale.US).orEmpty()
-        val cmd = when {
-            os.contains("win") -> arrayOf("cmd", "/c", "start", "", file.absolutePath)
-            os.contains("mac") || os.contains("darwin") -> arrayOf("open", file.absolutePath)
-            else -> arrayOf("xdg-open", file.absolutePath)
-        }
-        ProcessBuilder(*cmd).inheritIO().start()
-    }
-}
+// `saveAttachmentBytes` / `openLocalFile` moved behind `Platform.files` (cluster D1): the save
+// dialog and the OS open chain are `DesktopFileAccess` in `platform/DesktopChatSeams.kt`, so the
+// timeline can move to `:ui` in D2 without naming AWT. `openLocalFile` is still imported here for
+// the two File-shaped paths (an image / a video already staged on disk).

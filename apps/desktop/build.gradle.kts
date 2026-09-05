@@ -44,9 +44,8 @@ dependencies {
     // Native LazyList reorder (elevates, auto-scrolls, animates neighbors) — same library Android uses.
     // Custom detectDragGestures step-math was jumpy on desktop trackpads; Calvin is production-proven.
     implementation(libs.reorderable)
-    // Inline video in the chat timeline (Android has ExoPlayer; JVM desktop has no player at all).
-    // Renders frames into a Compose Canvas, so unlike JCEF it is not a heavyweight AWT child.
-    implementation(libs.compose.media.player)
+    // (composemediaplayer moved to :ui commonMain in cluster D1 — it comes in transitively with
+    //  the shared timeline, and both apps now use the same player.)
     // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub,
     // Archived, AppUpdate). Workspace shell stays outside the stack so chat/editor/term keep state.
     implementation(libs.jetbrains.navigation3.ui)
