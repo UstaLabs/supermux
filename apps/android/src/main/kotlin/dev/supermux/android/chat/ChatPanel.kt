@@ -76,7 +76,6 @@ import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
 import dev.supermux.net.ChunkSource
-import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.Composer
@@ -179,11 +178,10 @@ fun ChatPanel(
         )
     }
 
-    // Model + effort catalogs. LAZY on a phone (a request per opened chat is real battery and real
-    // latency on a handset — the pills label themselves from live session state, so the catalog is
-    // only needed once a picker actually opens) and EAGER under a pointer, which is desktop's
-    // behaviour and where the reasoning fetch also decides whether the effort pill shows at all.
-    val pointer = LocalPointerAvailable.current
+    // Model + effort catalogs. Fetched on open on BOTH hosts (desktop's behaviour): the composer's
+    // model pill labels itself from the catalog (display name, not the raw id) and only shows at
+    // all once a catalog or an explicit session model exists, so a lazy fetch would leave a
+    // default-model session with no pill to tap.
     var modelsData by remember(session.id) { mutableStateOf<ModelsResponse?>(null) }
     var reasoningData by remember(session.id) { mutableStateOf<ReasoningResponse?>(null) }
     // Bumped by the `/model` control command so the composer opens its own picker.
@@ -192,12 +190,7 @@ fun ChatPanel(
         modelsData = withContext(Dispatchers.IO) { vmModels(session.id) }
         reasoningData = withContext(Dispatchers.IO) { vmReasoning(session.id) }
     }
-    LaunchedEffect(session.id, pointer) {
-        // The effort pill's visibility comes from the reasoning payload, so a phone still fetches
-        // THAT on open — it is the model catalog (the big one) that waits for a tap.
-        reasoningData = withContext(Dispatchers.IO) { vmReasoning(session.id) }
-        if (pointer) modelsData = withContext(Dispatchers.IO) { vmModels(session.id) }
-    }
+    LaunchedEffect(session.id) { refreshCatalogs() }
 
 
     // ── onControl: composer-scoped control commands are handled here; session-control actions
@@ -446,8 +439,8 @@ fun ChatPanel(
                 sessionReasoning = session.reasoningLevel,
                 onPickModel = onPickModel,
                 onPickReasoning = onPickEffort,
-                // Lazy catalogs on a phone: the pills fetch on first tap.
-                onPickerOpened = { if (!pointer) scope.launch { refreshCatalogs() } },
+                // Re-fetch when a picker opens so a catalog that changed since open is current.
+                onPickerOpened = { scope.launch { refreshCatalogs() } },
                 // Every control command this screen can actually perform; anything else is filtered
                 // out of the slash menu rather than clearing the token and doing nothing.
                 handledControlKinds = setOf("rename", "mute", "kill", "model", "stop"),
