@@ -69,6 +69,7 @@ import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberAssistantSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
+import dev.supermux.ui.settings.rememberVoiceSettingsActions
 import dev.supermux.host.HostView
 import dev.supermux.host.ViewingSurface
 import dev.supermux.host.WorkspaceViewingSnapshot
@@ -735,7 +736,7 @@ class MainActivity : ComponentActivity() {
                                         cloneForge = { cid, owner, name -> vm.fleet.cloneForge(cid, owner, name) },
                                         createLocalRepo = { vm.fleet.createLocalRepo(it) },
                                         createForge = { cid, name -> vm.fleet.createForge(cid, name) },
-                                        loadGlossary = { vm.fleet.fetchGlossary() },
+                                        loadGlossary = { vm.fleet.fetchGlossary().orEmpty() },
                                         transcribeDraft = { draft -> vm.fleet.transcribeDraft(null, draft) },
                                         transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(null, bytes, name) },
                                         loadLauncherPrefs = { vm.fleet.launcherPrefs.first() },
@@ -775,7 +776,7 @@ class MainActivity : ComponentActivity() {
                                 cloneForge = { cid, owner, name -> vm.fleet.cloneForge(cid, owner, name) },
                                 createLocalRepo = { vm.fleet.createLocalRepo(it) },
                                 createForge = { cid, name -> vm.fleet.createForge(cid, name) },
-                                loadGlossary = { vm.fleet.fetchGlossary() },
+                                loadGlossary = { vm.fleet.fetchGlossary().orEmpty() },
                                 transcribeDraft = { draft -> vm.fleet.transcribeDraft(null, draft) },
                                 transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(null, bytes, name) },
                                 loadLauncherPrefs = { vm.fleet.launcherPrefs.first() },
@@ -829,13 +830,7 @@ class MainActivity : ComponentActivity() {
                             // Curator
                             curatorActions = rememberCuratorSettingsActions(vm.fleet),
                             // Voice
-                            voiceLoadModels = { family -> vm.fleet.launcherModels(family) },
-                            voiceLoadConfig = { vm.fleet.appConfig() },
-                            voiceSaveVoiceStt = { engine -> vm.fleet.saveVoiceStt(engine) },
-                            voiceSaveVoiceTts = { engine -> vm.fleet.saveVoiceTts(engine) },
-                            voiceSaveVoiceCleanup = { engine, model -> vm.fleet.saveVoiceCleanup(engine, model) },
-                            glossaryLoad = { vm.fleet.fetchGlossary() },
-                            glossarySave = { vm.fleet.updateGlossary(it) },
+                            voiceActions = rememberVoiceSettingsActions(vm.fleet),
                             // Editor / LSP
                             lspLoad = { vm.fleet.lspLoad() },
                             lspToggle = { id, enabled -> vm.fleet.lspToggle(id, enabled) },

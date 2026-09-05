@@ -84,6 +84,8 @@ import dev.supermux.ui.settings.SystemSettingsActions
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.settings.VoiceSettingsActions
+import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_MAX
@@ -117,14 +119,8 @@ fun SettingsScreen(
     agentActions: AgentSettingsActions,
     /** Nightly curator: one holder since E4 — `ui/settings/CuratorSettingsScreen.kt`. */
     curatorActions: CuratorSettingsActions,
-    // Voice (Voice track)
-    voiceLoadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
-    voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
-    voiceSaveVoiceStt: (engine: String?) -> Unit,
-    voiceSaveVoiceTts: (engine: String?) -> Unit = {},
-    voiceSaveVoiceCleanup: (engine: String?, model: String?) -> Unit,
-    glossaryLoad: suspend () -> List<String>,
-    glossarySave: suspend (List<String>) -> List<String>?,
+    /** Voice + dictation glossary: one holder since E5 — `ui/settings/VoiceSettingsScreen.kt`. */
+    voiceActions: VoiceSettingsActions,
     // Editor / LSP
     lspLoad: suspend () -> List<LspServer>,
     lspToggle: suspend (id: String, enabled: Boolean) -> List<LspServer>?,
@@ -196,27 +192,14 @@ fun SettingsScreen(
                 onBack = scope.onClose,
                 topBarShown = scope.topBarShown,
             )
-            // Voice pushes the glossary as its own sub-page — a Voice-local stack, not a hub row.
-            SettingsSection.Voice -> {
-                var glossary by remember { mutableStateOf(false) }
-                if (glossary) {
-                    VoiceGlossaryPage(
-                        onBack = { glossary = false },
-                        load = glossaryLoad,
-                        save = glossarySave,
-                    )
-                } else {
-                    VoiceSettingsPage(
-                        onBack = scope.onClose,
-                        loadModels = voiceLoadModels,
-                        loadConfig = voiceLoadConfig,
-                        saveVoiceStt = voiceSaveVoiceStt,
-                        saveVoiceTts = voiceSaveVoiceTts,
-                        saveVoiceCleanup = voiceSaveVoiceCleanup,
-                        onOpenGlossary = { glossary = true },
-                    )
-                }
-            }
+            // Shared since E5 — Android gained the load/save error states and the "failure is not
+            // an empty glossary" rule; the glossary sub-page and its own Back moved with it, and
+            // the page still owns the compact stack (this hub passes `compactTopBar = false`).
+            SettingsSection.Voice -> VoiceSettingsScreen(
+                actions = voiceActions,
+                onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
+            )
             SettingsSection.EditorLsp -> EditorSettingsPage(
                 onBack = scope.onClose,
                 lspLoad = lspLoad,

@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.dp
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto
@@ -716,8 +717,9 @@ class ProxiesSettingsScreenTest {
 
     /** The per-row copy/open buttons reach Material's 48dp minimum without a pointer. */
     @Test fun touch_url_buttons_reach_the_minimum_target() {
-        fun buttonHeight(pointer: Boolean): Int {
-            var height = 0
+        /** The button's height in px, and the 48dp minimum in the SAME px, at this density. */
+        fun buttonHeight(pointer: Boolean): Pair<Int, Int> {
+            var measured = 0 to 0
             runComposeUiTest {
                 proxiesContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
                     SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
@@ -731,13 +733,16 @@ class ProxiesSettingsScreenTest {
                         false
                     }
                 }
-                height = onNodeWithTag("proxy_url_copy_app.example.local")
+                val h = onNodeWithTag("proxy_url_copy_app.example.local")
                     .fetchSemanticsNode().size.height
+                measured = h to with(density) { 48.dp.roundToPx() }
             }
-            return height
+            return measured
         }
-        val touch = buttonHeight(pointer = false)
-        val mouse = buttonHeight(pointer = true)
+        val (touch, minTarget) = buttonHeight(pointer = false)
+        val (mouse, _) = buttonHeight(pointer = true)
+        // Absolute, not merely "bigger than the mouse one": Material's minimum is a floor.
+        assertTrue(touch >= minTarget, "touch button $touch should reach the ${minTarget}px minimum")
         assertTrue(touch > mouse, "touch button $touch should exceed pointer button $mouse")
     }
 
@@ -764,12 +769,14 @@ class ProxiesSettingsScreenTest {
                 false
             }
         }
-        // The list changes AFTER the screen composed — the old snapshot getter never saw this.
-        names.value = listOf("web", "spawned-later")
-        waitForIdle()
+        // Open the form, then open its session picker, and only THEN spawn the session: the list
+        // has to reach a form that is already on screen, not just one composed after the change.
         onNodeWithTag("proxies_expose_button").performClick()
         waitForIdle()
         onNodeWithTag("proxies_create_session").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_create_session_item_spawned-later").assertDoesNotExist()
+        names.value = listOf("web", "spawned-later")
         waitForIdle()
         onNodeWithTag("proxies_create_session_item_spawned-later").assertIsDisplayed()
     }

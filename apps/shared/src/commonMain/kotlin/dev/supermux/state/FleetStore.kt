@@ -913,11 +913,14 @@ class FleetStore(
      */
     suspend fun restartBroker(): Boolean = activeApp()?.restartBroker() == true
     fun bindMessageTts() { activeApp()?.bindMessageTts() }
-    fun saveVoiceStt(engine: String?) { fleetScope.launch { activeApp()?.saveVoiceStt(engine) } }
-    fun saveVoiceTts(engine: String?) { fleetScope.launch { activeApp()?.saveVoiceTts(engine) } }
-    fun saveVoiceCleanup(engine: String?, model: String?) {
-        fleetScope.launch { activeApp()?.saveVoiceCleanup(engine, model) }
-    }
+    // Voice settings mutations (cluster E5). These were fire-and-forget `Unit`s launched into
+    // [fleetScope], so a rejected save looked exactly like an accepted one and the picked chip
+    // stayed on a value the broker never stored. They now carry [HostStore]'s Boolean, which the
+    // shared `VoiceSettingsScreen` uses to revert the chip and show "couldn't save".
+    suspend fun saveVoiceStt(engine: String?): Boolean = activeApp()?.saveVoiceStt(engine) == true
+    suspend fun saveVoiceTts(engine: String?): Boolean = activeApp()?.saveVoiceTts(engine) == true
+    suspend fun saveVoiceCleanup(engine: String?, model: String?): Boolean =
+        activeApp()?.saveVoiceCleanup(engine, model) == true
     // Agents settings mutations (cluster E2). These used to be fire-and-forget `Unit`s that
     // launched into [fleetScope] and swallowed the result, so a failed save looked identical to a
     // successful one in the UI. They now carry [HostStore]'s typed suspend shapes — the shared
@@ -1002,7 +1005,8 @@ class FleetStore(
     suspend fun usageRaw(): String? = activeApp()?.usageRaw()
     suspend fun usage(): UsageResponse? = activeApp()?.usage()
     suspend fun redeemCodexReset(): CodexResetResult? = activeApp()?.redeemCodexReset()
-    suspend fun fetchGlossary(): List<String> = activeApp()?.fetchGlossary().orEmpty()
+    /** Null = the load FAILED (or no active host); empty = a real, empty glossary (cluster E5). */
+    suspend fun fetchGlossary(): List<String>? = activeApp()?.fetchGlossary()
     suspend fun updateGlossary(terms: List<String>): List<String>? = activeApp()?.updateGlossary(terms)
     suspend fun curatorSettings(): CuratorSettingsResponse? = activeApp()?.curatorSettings()
     suspend fun saveCurator(

@@ -159,7 +159,7 @@ private fun ChatViewPane(
                     vm.fleet.consumePendingFirst(id)?.let { it.text to it.attachments }
                 },
                 transcribeDraft = { draft -> vm.fleet.transcribeDraft(sessionId, draft) },
-                loadGlossary = { vm.fleet.fetchGlossary() },
+                loadGlossary = { vm.fleet.fetchGlossary().orEmpty() },
             ),
             loadModels = { vm.fleet.sessionModels(sessionId) },
             loadReasoning = { vm.fleet.sessionReasoning(sessionId) },

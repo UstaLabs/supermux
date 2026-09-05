@@ -510,7 +510,7 @@ private fun SessionChatLayer(
             onUpload = { source, name, mime, kind, onProgress -> vm.fleet.uploadResumable(session.id, source, name, mime, kind, onProgress) },
             transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(session.id, bytes, name) },
             transcribeDraft = { draft -> vm.fleet.transcribeDraft(session.id, draft) },
-            loadGlossary = { vm.fleet.fetchGlossary() },
+            loadGlossary = { vm.fleet.fetchGlossary().orEmpty() },
             onRename = { vm.fleet.rename(session.id, it) },
             onMute = { vm.fleet.setMute(session.id, it) },
             onKill = onKill,

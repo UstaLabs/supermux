@@ -18,6 +18,7 @@ import dev.supermux.ui.settings.AssistantSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.settings.LspSettingsScreen
 import dev.supermux.ui.settings.SystemSettingsScreen
+import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
@@ -26,6 +27,7 @@ import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.settings.rememberAssistantSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
+import dev.supermux.ui.settings.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.SettingsSlotScope
 
 /** Renders [section]'s desktop screen against [host]. Called from the hub's `content` slot. */
@@ -68,13 +70,9 @@ fun DesktopSettingsSection(
             topBarShown = scope.topBarShown,
         )
         SettingsSection.Voice -> VoiceSettingsScreen(
-            loadConfig = { host.appConfig() },
-            loadModels = { family -> host.launcherModels(family) },
-            saveVoiceStt = { engine -> host.saveVoiceStt(engine) },
-            saveVoiceTts = { engine -> host.saveVoiceTts(engine) },
-            saveVoiceCleanup = { engine, model -> host.saveVoiceCleanup(engine, model) },
-            glossaryLoad = { host.fetchGlossary() },
-            glossarySave = { terms -> host.updateGlossary(terms) },
+            actions = rememberVoiceSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.EditorLsp -> LspSettingsScreen(
             lspLoad = { host.lspLoad() },
