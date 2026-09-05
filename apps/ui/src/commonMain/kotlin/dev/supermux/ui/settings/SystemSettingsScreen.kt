@@ -373,7 +373,9 @@ private fun SystemSettingsBody(
                                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                     contentDescription = null,
                                     tint = cs.primary,
-                                    modifier = Modifier.size(Space.md + Space.xs),
+                                    modifier = Modifier
+                                        .size(Space.md + Space.xs)
+                                        .testTag("system_release_notes_chevron"),
                                 )
                             }
                         }

@@ -185,99 +185,21 @@ fun GitHostingScreen(
 
     LaunchedEffect(Unit) { reload() }
 
-    val body: @Composable (Modifier) -> Unit = { m ->
-        Box(
-            m
-                .fillMaxSize()
-                .background(cs.background)
-                .testTag("git_hosting_screen"),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            Column(
-                Modifier
-                    .widthIn(max = SettingsDetailMaxWidth)
-                    .fillMaxWidth()
-                    .fillMaxSize(),
-            ) {
-                when {
-                    loading && connections.isEmpty() -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                color = cs.primary,
-                                modifier = Modifier.testTag("git_hosting_loading"),
-                            )
-                        }
-                    }
-                    connections.isEmpty() -> ForgeEmptyState(
-                        error = error,
-                        cliStatus = cliStatus,
-                        connections = connections,
-                        onImport = { kind ->
-                            scope.launch {
-                                val ok = actions.forgeImport(kind, "https")
-                                if (ok) {
-                                    reload()
-                                } else {
-                                    error = "Couldn't import from ${cliName(kind)} — is it logged in?"
-                                }
-                            }
-                        },
-                        onManual = { kind ->
-                            presetKind = kind
-                            dialogOpen = true
-                        },
-                        onRetry = { scope.launch { reload() } },
-                    )
-                    else -> Column(Modifier.fillMaxSize()) {
-                        error?.let {
-                            Text(
-                                it,
-                                color = cs.error,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier
-                                    .padding(Space.lg)
-                                    .testTag("git_hosting_error"),
-                            )
-                        }
-                        LazyColumn(Modifier.weight(1f).testTag("git_hosting_list")) {
-                            items(connections, key = { it.id }) { c ->
-                                ForgeConnectionRow(
-                                    c = c,
-                                    onReconnect = {
-                                        presetKind = c.kind
-                                        dialogOpen = true
-                                    },
-                                    onDisconnect = { disconnectTarget = c },
-                                )
-                                HorizontalDivider(color = cs.outlineVariant)
-                            }
-                        }
-                        TextButton(
-                            onClick = {
-                                presetKind = null
-                                dialogOpen = true
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(Space.sm)
-                                .testTag("git_hosting_add_account"),
-                        ) {
-                            Icon(
-                                Icons.Filled.Add,
-                                contentDescription = null,
-                                modifier = Modifier.size(Space.md + Space.xs),
-                                tint = cs.primary,
-                            )
-                            Spacer(Modifier.width(Space.xs))
-                            Text("Add account", color = cs.primary)
-                        }
-                    }
-                }
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    val onManual: (String?) -> Unit = { kind ->
+        presetKind = kind
+        dialogOpen = true
+    }
+    val onImport: (String) -> Unit = { kind ->
+        scope.launch {
+            val ok = actions.forgeImport(kind, "https")
+            if (ok) {
+                reload()
+            } else {
+                error = "Couldn't import from ${cliName(kind)} — is it logged in?"
             }
         }
     }
-
-    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     if (compact && !topBarShown) {
         Scaffold(
             topBar = {
@@ -313,9 +235,31 @@ fun GitHostingScreen(
                 )
             },
             containerColor = cs.background,
-        ) { padding -> body(modifier.padding(padding)) }
+        ) { padding ->
+            GitHostingBody(
+                connections = connections,
+                cliStatus = cliStatus,
+                loading = loading,
+                error = error,
+                onImport = onImport,
+                onManual = onManual,
+                onRetry = { scope.launch { reload() } },
+                onDisconnect = { disconnectTarget = it },
+                modifier = modifier.padding(padding),
+            )
+        }
     } else {
-        body(modifier)
+        GitHostingBody(
+            connections = connections,
+            cliStatus = cliStatus,
+            loading = loading,
+            error = error,
+            onImport = onImport,
+            onManual = onManual,
+            onRetry = { scope.launch { reload() } },
+            onDisconnect = { disconnectTarget = it },
+            modifier = modifier,
+        )
     }
 
     if (dialogOpen) {
@@ -374,6 +318,100 @@ fun GitHostingScreen(
             },
             modifier = Modifier.testTag("git_hosting_disconnect_dialog"),
         )
+    }
+}
+
+/**
+ * The screen's content, under whatever chrome the width class asked for.
+ *
+ * A `@Composable` of its own rather than a lambda-valued local: a `val body: @Composable (…) -> …`
+ * is re-allocated on every recomposition of the screen, so nothing below it can ever skip.
+ *
+ * @param onManual open the add form; `null` means "no preset kind" (the "Add account" affordance).
+ */
+@Composable
+private fun GitHostingBody(
+    connections: List<ForgeConnection>,
+    cliStatus: ForgeCliStatus?,
+    loading: Boolean,
+    error: String?,
+    onImport: (String) -> Unit,
+    onManual: (String?) -> Unit,
+    onRetry: () -> Unit,
+    onDisconnect: (ForgeConnection) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        modifier
+            .fillMaxSize()
+            .background(cs.background)
+            .testTag("git_hosting_screen"),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Column(
+            Modifier
+                .widthIn(max = SettingsDetailMaxWidth)
+                .fillMaxWidth()
+                .fillMaxSize(),
+        ) {
+            when {
+                loading && connections.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            color = cs.primary,
+                            modifier = Modifier.testTag("git_hosting_loading"),
+                        )
+                    }
+                }
+                connections.isEmpty() -> ForgeEmptyState(
+                    error = error,
+                    cliStatus = cliStatus,
+                    connections = connections,
+                    onImport = onImport,
+                    onManual = { kind -> onManual(kind) },
+                    onRetry = onRetry,
+                )
+                else -> Column(Modifier.fillMaxSize()) {
+                    error?.let {
+                        Text(
+                            it,
+                            color = cs.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier
+                                .padding(Space.lg)
+                                .testTag("git_hosting_error"),
+                        )
+                    }
+                    LazyColumn(Modifier.weight(1f).testTag("git_hosting_list")) {
+                        items(connections, key = { it.id }) { c ->
+                            ForgeConnectionRow(
+                                c = c,
+                                onReconnect = { onManual(c.kind) },
+                                onDisconnect = { onDisconnect(c) },
+                            )
+                            HorizontalDivider(color = cs.outlineVariant)
+                        }
+                    }
+                    TextButton(
+                        onClick = { onManual(null) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(Space.sm)
+                            .testTag("git_hosting_add_account"),
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(Space.md + Space.xs),
+                            tint = cs.primary,
+                        )
+                        Spacer(Modifier.width(Space.xs))
+                        Text("Add account", color = cs.primary)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -607,13 +645,23 @@ private fun AddForgeForm(
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    val scope = rememberCoroutineScope()
     // Hoisted so the CONTAINER can refuse a dismiss mid-submit, exactly as desktop's dialog did.
     var submitting by remember { mutableStateOf(false) }
-    val guardedDismiss = { if (!submitting) onDismiss() }
     if (compact) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
-            onDismissRequest = guardedDismiss,
+            onDismissRequest = {
+                if (submitting) {
+                    // A sheet is NOT a dialog: Material 3 animates it to Hidden and only THEN
+                    // calls this, so merely returning here would leave it composed but invisible
+                    // while the screen still holds `dialogOpen = true` — the "+" action would go
+                    // dead until the user left the section. Bring the sheet back up instead.
+                    scope.launch { sheetState.show() }
+                } else {
+                    onDismiss()
+                }
+            },
             sheetState = sheetState,
             containerColor = cs.surfaceContainerLow,
         ) {
@@ -624,7 +672,7 @@ private fun AddForgeForm(
             )
         }
     } else {
-        Dialog(onDismissRequest = guardedDismiss) {
+        Dialog(onDismissRequest = { if (!submitting) onDismiss() }) {
             AddForgeBody(
                 presetKind, cliStatus, onAdd, onImport, onDismiss, onDone,
                 submitting = submitting,

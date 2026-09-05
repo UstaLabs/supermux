@@ -4,7 +4,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -29,6 +34,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 /**
@@ -611,7 +617,10 @@ class GitHostingScreenTest {
             }
         }
         onNodeWithText("Git hosting").assertIsDisplayed()
-        onNodeWithTag("git_hosting_back").assertIsDisplayed()
+        // Back is the screen's own, and it reaches the hub (the caller's `onClose`).
+        onNodeWithTag("git_hosting_back").performClick()
+        waitForIdle()
+        assertEquals(1, backs)
         onNodeWithTag("git_hosting_add_action").performClick()
         waitForIdle()
         // Same form, same tags — only the container differs (ModalBottomSheet on a phone).
@@ -635,5 +644,193 @@ class GitHostingScreenTest {
         waitForIdle()
         onNodeWithTag("git_hosting_back").assertDoesNotExist()
         onNodeWithTag("git_hosting_screen").assertIsDisplayed()
+    }
+
+    /**
+     * A sheet is not a dialog: swiping it away goes to Hidden FIRST and only then reports the
+     * dismiss. Ignoring that report (desktop's mid-submit guard) used to leave the form composed
+     * but invisible, with the screen still "open" — the "+" action went dead. The Compact branch
+     * brings the sheet back instead, so the form stays reachable.
+     */
+    @Test fun compact_add_sheet_survives_a_dismiss_while_submitting() = runComposeUiTest {
+        val gate = CompletableDeferred<Boolean>()
+        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
+                    forgesLoad = { response() },
+                    // Never returns: the form stays in its submitting state for the whole test.
+                    forgeAdd = { _, _, _, _ -> gate.await() },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                    topBarShown = false,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("git_hosting_manual_github").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_token").performTextInput("pat-xxx")
+        onNodeWithTag("git_hosting_connect").performClick()
+        waitForIdle()
+        // Swipe the sheet away mid-submit.
+        onNodeWithTag("git_hosting_add_dialog").performTouchInput { swipeDown() }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("git_hosting_token").assertIsDisplayed()
+        gate.complete(false)
+    }
+
+    /** The control for the case above: the SAME gesture closes the sheet when nothing is in flight. */
+    @Test fun compact_add_sheet_closes_on_a_dismiss_when_idle() = runComposeUiTest {
+        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
+                    forgesLoad = { response() },
+                    forgeAdd = { _, _, _, _ -> false },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                    topBarShown = false,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_manual_github").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("git_hosting_manual_github").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
+        onNodeWithTag("git_hosting_add_dialog").performTouchInput { swipeDown() }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("git_hosting_add_dialog").assertDoesNotExist()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // …and the "+" action opens it again.
+        onNodeWithTag("git_hosting_add_action").performClick()
+        waitForIdle()
+        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
+    }
+
+    /**
+     * The touch bump is real, not just a token swap: two connection rows sit FURTHER apart without
+     * a pointer. Keyed on `LocalPointerAvailable`, never `LocalInputMode` — a phone with a
+     * Bluetooth keyboard is still a thumb.
+     *
+     * Row PITCH, not the tagged node's own height: the tag sits after `Modifier.padding(…)` in the
+     * chain, so the node's own bounds are the padded-in content and identical either way. The
+     * distance from one row to the next is what the extra padding actually moves.
+     */
+    @Test fun touch_connection_rows_sit_further_apart_than_pointer_rows() {
+        fun rowPitch(pointer: Boolean): Float {
+            var pitch = 0f
+            runComposeUiTest {
+                gitContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) {
+                        GitHostingScreenUnderTest(
+                            forgesLoad = {
+                                response(listOf(conn(id = "c1"), conn(id = "c2", login = "bob")))
+                            },
+                            forgeAdd = { _, _, _, _ -> false },
+                            forgeImport = { _, _ -> false },
+                            forgeRemove = { true },
+                        )
+                    }
+                }
+                waitForIdle()
+                waitUntil(timeoutMillis = 5_000) {
+                    try {
+                        onNodeWithTag("forge_row_c2").assertIsDisplayed()
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                val first = onNodeWithTag("forge_row_c1").fetchSemanticsNode().positionInRoot.y
+                val second = onNodeWithTag("forge_row_c2").fetchSemanticsNode().positionInRoot.y
+                pitch = second - first
+            }
+            return pitch
+        }
+        val touch = rowPitch(pointer = false)
+        val mouse = rowPitch(pointer = true)
+        assertTrue(touch > mouse, "touch pitch $touch should exceed pointer pitch $mouse")
+    }
+
+    /**
+     * Android's per-kind forge icon colour survived the move: a GitLab row paints the brand
+     * orange, a GitHub row does not (it keeps the theme's primary).
+     */
+    @Test fun gitlab_rows_paint_the_brand_orange_and_github_rows_do_not() = runComposeUiTest {
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
+                    forgesLoad = {
+                        response(
+                            listOf(
+                                conn(id = "gh1", kind = "github", login = "alice"),
+                                conn(id = "gl1", kind = "gitlab", login = "bob", host = "gitlab.com"),
+                            ),
+                        )
+                    },
+                    forgeAdd = { _, _, _, _ -> false },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("forge_row_gl1").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertTrue(
+            onNodeWithTag("forge_row_gl1").captureToImage().hasGitLabOrange(),
+            "the GitLab row should paint its brand orange",
+        )
+        assertFalse(
+            onNodeWithTag("forge_row_gh1").captureToImage().hasGitLabOrange(),
+            "the GitHub row should keep the theme colour",
+        )
+    }
+
+    /** GitLab's #FC6D26, allowing for the icon's anti-aliased edges. */
+    private fun ImageBitmap.hasGitLabOrange(): Boolean {
+        val pixels = toPixelMap()
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val c = pixels[x, y]
+                if (c.red > 0.9f && c.green in 0.35f..0.5f && c.blue < 0.25f) return true
+            }
+        }
+        return false
     }
 }

@@ -918,4 +918,42 @@ class SystemSettingsScreenTest {
         onNodeWithTag("system_settings_back").assertDoesNotExist()
         onNodeWithTag("system_settings_screen").assertIsDisplayed()
     }
+
+    /**
+     * Android's chevron on the release-notes row is the Compact/touch affordance — a pointer host
+     * keeps desktop's bare text link, so its rendering is unchanged by the move.
+     */
+    @Test fun release_notes_row_gains_a_chevron_only_without_a_pointer() {
+        runComposeUiTest {
+            systemContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
+            }
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) {
+                try {
+                    onNodeWithTag("system_release_notes").assertIsDisplayed()
+                    true
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+            onNodeWithTag("system_release_notes_chevron", useUnmergedTree = true).assertExists()
+        }
+        runComposeUiTest {
+            systemContent {
+                SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
+            }
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) {
+                try {
+                    onNodeWithTag("system_release_notes").assertIsDisplayed()
+                    true
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+            onNodeWithTag("system_release_notes_chevron", useUnmergedTree = true)
+                .assertDoesNotExist()
+        }
+    }
 }
