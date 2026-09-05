@@ -1,16 +1,24 @@
 package dev.supermux.ui.settings
 
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.navigationevent.NavigationEvent
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventDispatcherOwner
+import androidx.navigationevent.NavigationEventInput
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
@@ -384,7 +392,94 @@ class SettingsHubTest {
         onNodeWithTag("section_agents").assertDoesNotExist()
     }
 
+    @Test fun a_pushed_detail_survives_the_host_rewriting_its_section_state() = runComposeUiTest {
+        // Desktop re-supplies `section` from `onSectionChange` (it rewrites Route.Settings), so a
+        // compact row-tap immediately recomposes the hub with a NEW section value. The push stack
+        // has to live through that — before the E1 review it did not (the host also keyed on the
+        // section, and the remount dropped the detail straight back to the index).
+        var closed = 0
+        setPlatformContent(
+            pointer = false,
+            widthClass = WindowWidthClass.Compact,
+            inputMode = InputMode.Touch,
+        ) {
+            var current by remember { mutableStateOf(SettingsSection.Agents) }
+            SettingsHub(
+                section = current,
+                onSectionChange = { current = it },
+                onBack = { closed++ },
+                hostKey = "h1",
+                content = sectionStub(),
+            )
+        }
+        onNodeWithTag("settings_row_voice").performClick()
+        waitForIdle()
+        onNodeWithTag("section_voice").assertExists()
+        onNodeWithTag("settings_index").assertDoesNotExist()
+
+        // And a second row, reached after going back, behaves the same.
+        onNodeWithTag("settings_detail_back").performClick()
+        waitForIdle()
+        onNodeWithTag("settings_row_system").performClick()
+        waitForIdle()
+        onNodeWithTag("section_system").assertExists()
+        assertEquals(0, closed)
+    }
+
+    // Compose Multiplatform's BackHandler listens on its OWN dispatcher local, and injecting one is
+    // @InternalComposeUiApi — opted into here, in a test, so the back GESTURE is exercised for real
+    // rather than by calling the hub's close closure and trusting it is the same line.
+    @OptIn(InternalComposeUiApi::class)
+    @Test fun the_system_back_gesture_pops_the_detail_then_closes_the_hub() = runComposeUiTest {
+        val input = TestBackInput()
+        val dispatcher = NavigationEventDispatcher()
+        dispatcher.addInput(input)
+        val owner = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = dispatcher
+        }
+        var closed = 0
+        setPlatformContent(
+            pointer = false,
+            widthClass = WindowWidthClass.Compact,
+            inputMode = InputMode.Touch,
+        ) {
+            CompositionLocalProvider(LocalCompatNavigationEventDispatcherOwner provides owner) {
+                SettingsHub(
+                    section = SettingsSection.Agents,
+                    onSectionChange = {},
+                    onBack = { closed++ },
+                    content = sectionStub(),
+                )
+            }
+        }
+        onNodeWithTag("settings_row_voice").performClick()
+        waitForIdle()
+        onNodeWithTag("section_voice").assertExists()
+
+        // Back out of the detail: the index, NOT a close.
+        runOnIdle { input.back() }
+        waitForIdle()
+        onNodeWithTag("settings_index").assertExists()
+        onNodeWithTag("section_voice").assertDoesNotExist()
+        assertEquals(0, closed)
+
+        // Back from the index closes the hub.
+        runOnIdle { input.back() }
+        waitForIdle()
+        assertEquals(1, closed)
+    }
+
     @Test fun every_section_has_an_index_description() {
         SettingsSection.entries.forEach { assertTrue(it.desc().isNotBlank(), "no desc for $it") }
+    }
+}
+
+/** Fires a real completed back gesture at whatever `BackHandler`s the composition registered. */
+private class TestBackInput : NavigationEventInput() {
+    /** A whole gesture: a real predictive-back sequence ends with `completed`. */
+    fun back() {
+        dispatchOnBackStarted(NavigationEvent())
+        dispatchOnBackProgressed(NavigationEvent(progress = 1f))
+        dispatchOnBackCompleted()
     }
 }

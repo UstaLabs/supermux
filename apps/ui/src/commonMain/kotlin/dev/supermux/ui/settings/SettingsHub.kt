@@ -64,6 +64,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -228,11 +229,18 @@ fun SettingsHub(
         onDispose { onRegisterCloseHandler?.invoke { onBack() } }
     }
 
-    val scope = SettingsSlotScope(
-        onClose = { leave() },
-        onDirtyChange = { identityDirty = it },
-        topBarShown = compact && compactTopBar,
-    )
+    // The slot scope is `@Immutable`, so it must not be a fresh object every recomposition —
+    // that would defeat skipping in every section body underneath. The two callbacks are held in
+    // `rememberUpdatedState` so the remembered scope always runs the CURRENT `leave()`.
+    val leaveNow = rememberUpdatedState<() -> Unit> { leave() }
+    val dirtyNow = rememberUpdatedState<(Boolean) -> Unit> { identityDirty = it }
+    val scope = remember(compact, compactTopBar) {
+        SettingsSlotScope(
+            onClose = { leaveNow.value() },
+            onDirtyChange = { dirtyNow.value(it) },
+            topBarShown = compact && compactTopBar,
+        )
+    }
 
     if (compact) {
         BackHandler { leave() }

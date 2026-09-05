@@ -1328,7 +1328,12 @@ fun AppShell(
                             Column(Modifier.fillMaxSize()) {
                                 HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
                                 Box(Modifier.weight(1f)) {
-                                    androidx.compose.runtime.key(activeHostId, route.section) {
+                                    // Keyed on the host ONLY: `route.section` here would remount
+                                    // the hub on every section change, and under a compact desktop
+                                    // window that throws away the hub's push stack the moment a row
+                                    // reports its section back (E1 review). Switching sections still
+                                    // swaps the detail composable, so wide behaviour is unchanged.
+                                    androidx.compose.runtime.key(activeHostId) {
                                         SettingsHub(
                                             section = route.section,
                                             onSectionChange = { ui.settingsSection = it },

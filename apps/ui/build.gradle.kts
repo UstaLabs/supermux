@@ -76,6 +76,10 @@ kotlin {
             // ChatHeaderTest drives the real ChatPanel over a HostStore, which needs an HTTP
             // engine; the mock engine answers "{}" and no socket is opened (connectOnInit = false).
             implementation(libs.ktor.client.mock)
+            // SettingsHubTest fires a REAL back gesture (NavigationEventInput) at the hub's
+            // BackHandler. The artifact is already on the runtime classpath via ui-backhandler;
+            // naming it here only puts it on the test COMPILE classpath.
+            implementation(libs.jetbrains.navigationevent.compose)
         }
     }
 }

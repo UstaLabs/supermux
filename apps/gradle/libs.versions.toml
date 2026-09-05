@@ -26,6 +26,10 @@ composeHotReload = "1.2.0"
 # Navigation 3 (Compose Multiplatform / JetBrains fork). Stable 1.1.1 works on desktop JVM.
 # Desktop pilot: full-pane workspace overlays (Settings / Usage / Archived / AppUpdate).
 navigation3 = "1.1.1"
+# androidx navigation-event, the dispatcher Compose Multiplatform's BackHandler listens on. Only
+# :ui's jvmTest names it (to fire a real back gesture at a shared screen); production pulls the
+# same artifact transitively through ui-backhandler.
+navigationEvent = "1.0.1"
 jediterm = "3.73"
 # JBR API facade (Maven Central, Apache-2.0). Compiles against any JDK; at run time
 # JBR.getWindowDecorations() returns the real service under the pinned JetBrains Runtime used by
@@ -98,6 +102,7 @@ reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reo
 compose-media-player = { module = "io.github.kdroidfilter:composemediaplayer", version.ref = "composeMediaPlayer" }
 # JetBrains multiplatform Navigation 3 UI (pulls navigation3-runtime transitively).
 jetbrains-navigation3-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
+jetbrains-navigationevent-compose = { module = "org.jetbrains.androidx.navigationevent:navigationevent-compose", version.ref = "navigationEvent" }
 
 [plugins]
 multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
