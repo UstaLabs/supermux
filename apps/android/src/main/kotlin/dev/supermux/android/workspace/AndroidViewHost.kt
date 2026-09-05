@@ -231,7 +231,7 @@ private fun ChatViewPane(
                     ?: throw IllegalStateException("No host")
                 vm.fleet.continueInNewConversation(recordId, sessionId, handoff)
             },
-            loadContinueAgents = { vm.fleet.agentStatuses().filter { it.installed }.map { it.kind } },
+            loadContinueAgents = { vm.fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } },
             loadContinueModels = { vm.fleet.launcherModels(it) },
             loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },
             onContinued = onSelectSession,

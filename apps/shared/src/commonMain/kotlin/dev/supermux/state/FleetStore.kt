@@ -24,6 +24,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.AddViewBody
+import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
@@ -909,13 +910,18 @@ class FleetStore(
     fun saveVoiceCleanup(engine: String?, model: String?) {
         fleetScope.launch { activeApp()?.saveVoiceCleanup(engine, model) }
     }
-    fun agentSendCode(kind: String, code: String) { fleetScope.launch { activeApp()?.sendAgentLoginCode(kind, code) } }
-    fun agentCancelLogin(kind: String) { fleetScope.launch { activeApp()?.cancelAgentLogin(kind) } }
-    fun agentSaveSecret(kind: String, value: String) { fleetScope.launch { activeApp()?.saveAgentSecret(kind, value) } }
-    fun openCodeSetKey(providerId: String, key: String) { fleetScope.launch { activeApp()?.setOpenCodeKey(providerId, key) } }
-    fun openCodeFinishOAuth(providerId: String, method: Int, code: String) {
-        fleetScope.launch { activeApp()?.finishOpenCodeOAuth(providerId, method, code) }
-    }
+    // Agents settings mutations (cluster E2). These used to be fire-and-forget `Unit`s that
+    // launched into [fleetScope] and swallowed the result, so a failed save looked identical to a
+    // successful one in the UI. They now carry [HostStore]'s typed suspend shapes — the shared
+    // `AgentSettingsScreen` reports "couldn't save" off the returned Boolean.
+    suspend fun agentSendCode(kind: String, code: String) { activeApp()?.sendAgentLoginCode(kind, code) }
+    suspend fun agentCancelLogin(kind: String) { activeApp()?.cancelAgentLogin(kind) }
+    suspend fun agentSaveSecret(kind: String, value: String): Boolean =
+        activeApp()?.saveAgentSecret(kind, value) == true
+    suspend fun openCodeSetKey(providerId: String, key: String): Boolean =
+        activeApp()?.setOpenCodeKey(providerId, key) == true
+    suspend fun openCodeFinishOAuth(providerId: String, method: Int, code: String): Boolean =
+        activeApp()?.finishOpenCodeOAuth(providerId, method, code) == true
     fun forgeRemove(id: String) { fleetScope.launch { activeApp()?.forgeRemove(id) } }
     fun createProxy(sessionName: String, port: Int, domain: String? = null) {
         fleetScope.launch { activeApp()?.createProxy(sessionName, port, domain) }
@@ -998,8 +1004,17 @@ class FleetStore(
     ): LspMutationResult? = activeApp()?.lspAddCustom(id, label, command, extensions, args, languageId, installCmd)
     suspend fun lspRemoveCustom(id: String): LspMutationResult? = activeApp()?.lspRemoveCustom(id)
 
-    suspend fun agentStatuses(): List<AgentInstallStatus> = activeApp()?.agentStatuses().orEmpty()
+    /**
+     * Agent install/auth statuses off the active host.
+     *
+     * `null` — no active host, or the request failed — is DISTINCT from an empty list (a broker
+     * that genuinely reports no agents), which is what the settings screen needs to tell "couldn't
+     * load" from "nothing installed". Callers that only want kinds use `.orEmpty()`.
+     */
+    suspend fun agentStatuses(): List<AgentInstallStatus>? = activeApp()?.agentStatuses()
     suspend fun startAgentLogin(kind: String): AgentLoginState? = activeApp()?.startAgentLogin(kind)
+    suspend fun startAgentInstall(kind: String): AgentInstallJob? = activeApp()?.startAgentInstall(kind)
+    suspend fun agentInstallState(kind: String): AgentInstallJob? = activeApp()?.agentInstallState(kind)
     suspend fun agentLoginState(kind: String): AgentLoginState? = activeApp()?.agentLoginState(kind)
     suspend fun openCodeProviders(): List<OpenCodeProvider> = activeApp()?.openCodeProviders().orEmpty()
     suspend fun startOpenCodeOAuth(providerId: String, method: Int): OpenCodeOAuthStart? =

@@ -65,6 +65,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import dev.supermux.ui.host.AddHostScreen
 import dev.supermux.ui.host.HostScopePicker
+import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.host.HostView
 import dev.supermux.host.ViewingSurface
 import dev.supermux.host.WorkspaceViewingSnapshot
@@ -272,7 +273,7 @@ class MainActivity : ComponentActivity() {
                 var hostFilter by rememberSaveable { mutableStateOf<String?>(null) }
                 LaunchedEffect(Unit) { hostFilter = vm.fleet.hostFilter.first() }
                 val setHostFilter: (String?) -> Unit = { hostFilter = it; vm.fleet.saveHostFilter(it) }
-                val loadHostAgents: suspend () -> List<String> = { vm.fleet.agentStatuses().filter { it.installed }.map { it.kind } }
+                val loadHostAgents: suspend () -> List<String> = { vm.fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } }
                 val lastBySession = messages.mapValues { it.value.lastOrNull() }
                 var selected by rememberSaveable { mutableStateOf<String?>(null) }
                 val newChatScope = rememberCoroutineScope()
@@ -820,16 +821,7 @@ class MainActivity : ComponentActivity() {
                             assistantLoad = { vm.fleet.assistantLoad() },
                             assistantSave = { paName, soul -> vm.fleet.assistantSave(paName, soul) == null },
                             // Agents
-                            agentStatuses = { vm.fleet.agentStatuses() },
-                            agentStartLogin = { vm.fleet.startAgentLogin(it) },
-                            agentPollLogin = { vm.fleet.agentLoginState(it) },
-                            agentSendCode = { kind, code -> vm.fleet.agentSendCode(kind, code) },
-                            agentCancelLogin = { vm.fleet.agentCancelLogin(it) },
-                            agentSaveSecret = { kind, value -> vm.fleet.agentSaveSecret(kind, value) },
-                            openCodeProviders = { vm.fleet.openCodeProviders() },
-                            openCodeSetKey = { id, key -> vm.fleet.openCodeSetKey(id, key) },
-                            openCodeStartOAuth = { id, method -> vm.fleet.startOpenCodeOAuth(id, method) },
-                            openCodeFinishOAuth = { id, method, code -> vm.fleet.openCodeFinishOAuth(id, method, code) },
+                            agentActions = rememberAgentSettingsActions(vm.fleet),
                             // Curator
                             curatorLoad = { vm.fleet.curatorSettings() },
                             curatorSave = { e, h, m, agent, model, reasoning ->

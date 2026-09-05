@@ -562,7 +562,7 @@ private fun SessionChatLayer(
                 vm.fleet.continueInNewConversation(recordId, session.id, handoff)
             },
             loadContinueAgents = {
-                vm.fleet.agentStatuses().filter { it.installed }.map { it.kind }
+                vm.fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind }
             },
             loadContinueModels = { vm.fleet.launcherModels(it) },
             loadContinueReasoning = { ag, md -> vm.fleet.launcherReasoning(ag, md) },

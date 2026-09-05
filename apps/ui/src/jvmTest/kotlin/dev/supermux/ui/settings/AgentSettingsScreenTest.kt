@@ -1,12 +1,11 @@
-package dev.supermux.desktop.settings
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,19 +16,15 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
-import dev.supermux.state.FleetStore
-import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.FakeSettingsStore
+import dev.supermux.ui.chat.FixedClock
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.desktop.platform.openInBrowserOverride
-import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.host.HostPersistence
-import dev.supermux.host.PairedHost
-import dev.supermux.host.PairedHostStore
+import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.net.AgentInstallJob
 import dev.supermux.net.AgentInstallStatus
 import dev.supermux.net.AgentLoginState
@@ -45,45 +40,30 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlin.test.AfterTest
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.runBlocking
 
 /**
- * Desktop-parity Task 1: [AgentSettingsScreen] state machines + Settings hub wiring.
+ * The shared [AgentSettingsScreen] (cluster E2) — desktop's suite, moved by name.
  *
- * Covers mutation failure handling, load Error vs Empty, poll cancel/timeout, install cancel,
- * Enter-to-submit, multi-host isolation, and reconnect recovery — not just literal labels.
+ * Covers the login and install state machines, mutation failure handling, load Error vs Empty,
+ * poll cancel/timeout, Enter-to-submit and the real `HostStore` + mocked `BrokerApi` paths, plus
+ * the Compact branch Android contributed (its own top bar, every section rendered, install offered
+ * only for the agents the host reports as missing). Desktop's `AppShell` overlay wiring — Escape,
+ * the rail, multi-host keying — stays in `:desktop` (`AgentSettingsHubTest`).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class AgentSettingsScreenTest {
-
-    // OAuth / "Open sign-in" paths call openInBrowser; never spawn a real browser from tests.
-    private val openedUrls = mutableListOf<String>()
-
-    @kotlin.test.BeforeTest
-    fun installBrowserSeam() {
-        openedUrls.clear()
-        openInBrowserOverride = { openedUrls.add(it) }
-    }
-
-    @AfterTest
-    fun restoreBrowserSeam() {
-        openInBrowserOverride = null
-        openedUrls.clear()
-    }
 
     // ── pure helpers (keep the non-trivial ones) ────────────────────────────────────────────────
 
@@ -104,6 +84,7 @@ class AgentSettingsScreenTest {
         assertFalse(isActiveLoginPhase(null))
     }
 
+
     // ── screen harness ──────────────────────────────────────────────────────────────────────────
 
     private fun statuses() = listOf(
@@ -113,6 +94,21 @@ class AgentSettingsScreenTest {
         AgentInstallStatus(kind = "opencode", installed = true, authed = false),
         AgentInstallStatus(kind = "grok", installed = true, authed = false),
     )
+
+    /**
+     * `setContent` with the theme, a [FakePlatform] on `LocalPlatform` (the OAuth / "Open sign-in"
+     * paths call `openUrl`, and a real browser must never launch from a test) and an explicit
+     * width class. Defaults are the DESKTOP shape, so every suite ported from `:desktop` asserts
+     * exactly what it always asserted.
+     */
+    private fun ComposeUiTest.agentContent(
+        platform: FakePlatform = FakePlatform(),
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(platform = platform, pointer = pointer, widthClass = widthClass) {
+        content()
+    }
 
     private fun screen(
         agentStatuses: suspend () -> List<AgentInstallStatus>? = { statuses() },
@@ -127,25 +123,32 @@ class AgentSettingsScreenTest {
         openCodeSetKey: suspend (String, String) -> Boolean = { _, _ -> true },
         openCodeStartOAuth: suspend (String, Int) -> OpenCodeOAuthStart? = { _, _ -> null },
         openCodeFinishOAuth: suspend (String, Int, String) -> Boolean = { _, _, _ -> true },
+        /** Compact suites flip this to false to prove the screen brings Android's own bar. */
+        topBarShown: Boolean = true,
+        onBack: () -> Unit = {},
     ) = @Composable {
         AgentSettingsScreen(
-            agentStatuses = agentStatuses,
-            agentStartLogin = agentStartLogin,
-            agentPollLogin = agentPollLogin,
-            agentSendCode = agentSendCode,
-            agentCancelLogin = agentCancelLogin,
-            agentSaveSecret = agentSaveSecret,
-            agentStartInstall = agentStartInstall,
-            agentPollInstall = agentPollInstall,
-            openCodeProviders = openCodeProviders,
-            openCodeSetKey = openCodeSetKey,
-            openCodeStartOAuth = openCodeStartOAuth,
-            openCodeFinishOAuth = openCodeFinishOAuth,
+            actions = AgentSettingsActions(
+                agentStatuses = agentStatuses,
+                agentStartLogin = agentStartLogin,
+                agentPollLogin = agentPollLogin,
+                agentSendCode = agentSendCode,
+                agentCancelLogin = agentCancelLogin,
+                agentSaveSecret = agentSaveSecret,
+                agentStartInstall = agentStartInstall,
+                agentPollInstall = agentPollInstall,
+                openCodeProviders = openCodeProviders,
+                openCodeSetKey = openCodeSetKey,
+                openCodeStartOAuth = openCodeStartOAuth,
+                openCodeFinishOAuth = openCodeFinishOAuth,
+            ),
+            onBack = onBack,
+            topBarShown = topBarShown,
         )
     }
 
     @Test fun agents_render_from_a_fake_status_list() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        agentContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -163,8 +166,8 @@ class AgentSettingsScreenTest {
 
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = {
                     loads.incrementAndGet()
                     null
@@ -181,8 +184,8 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun empty_status_list_shows_empty_state_not_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = { emptyList() })()
             }
         }
@@ -194,8 +197,8 @@ class AgentSettingsScreenTest {
 
     @Test fun retry_after_load_failure_recovers() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null
@@ -219,8 +222,8 @@ class AgentSettingsScreenTest {
 
     @Test fun auto_retry_recovers_after_reconnect_without_manual_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(agentStatuses = {
                     // First load fails; auto-retry (3s) should succeed.
                     val n = loads.incrementAndGet()
@@ -247,8 +250,8 @@ class AgentSettingsScreenTest {
     @Test fun login_idle_to_pending_shows_awaiting_user_url_and_cancel() = runComposeUiTest {
         val startCalls = AtomicInteger(0)
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -290,8 +293,8 @@ class AgentSettingsScreenTest {
         val pollCount = AtomicInteger(0)
         val loadCount = AtomicInteger(0)
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         val n = loadCount.incrementAndGet()
@@ -335,8 +338,8 @@ class AgentSettingsScreenTest {
 
     @Test fun login_pending_to_error_shows_failure_message() = runComposeUiTest {
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "codex", installed = true, authed = false))
@@ -366,8 +369,8 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun login_start_failure_surfaces_error_instead_of_spinning() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -394,8 +397,8 @@ class AgentSettingsScreenTest {
     @Test fun login_cancel_calls_broker_cancel() = runComposeUiTest {
         val cancelled = AtomicReference<String?>(null)
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -433,8 +436,8 @@ class AgentSettingsScreenTest {
         val pollCalls = AtomicInteger(0)
         // Actually close + reopen composition (unmount/remount), not just first-mount resume.
         var mounted by mutableStateOf(true)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 if (mounted) {
                     screen(
                         agentStatuses = {
@@ -491,8 +494,8 @@ class AgentSettingsScreenTest {
 
     @Test fun login_null_poll_streak_times_out_and_start_works_again() = runComposeUiTest {
         val startCalls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -527,8 +530,8 @@ class AgentSettingsScreenTest {
         val startCalls = AtomicInteger(0)
         val pollCalls = AtomicInteger(0)
         var mounted by mutableStateOf(true)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 if (mounted) {
                     screen(
                         agentStatuses = {
@@ -577,8 +580,8 @@ class AgentSettingsScreenTest {
 
     @Test fun install_idle_to_running_shows_progress_and_cancel() = runComposeUiTest {
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "cursor", installed = false, authed = false))
@@ -610,8 +613,8 @@ class AgentSettingsScreenTest {
     @Test fun install_stop_watching_is_local_only_and_honest() = runComposeUiTest {
         val started = AtomicReference(false)
         val pollCount = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "cursor", installed = false, authed = false))
@@ -662,8 +665,8 @@ class AgentSettingsScreenTest {
         val loadCount = AtomicInteger(0)
         val pollN = AtomicInteger(0)
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         val n = loadCount.incrementAndGet()
@@ -704,8 +707,8 @@ class AgentSettingsScreenTest {
 
     @Test fun install_running_to_failed_shows_error() = runComposeUiTest {
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "cursor", installed = false, authed = false))
@@ -740,8 +743,8 @@ class AgentSettingsScreenTest {
     @Test fun secret_save_failure_keeps_input_and_shows_error() = runComposeUiTest {
         val savedValue = AtomicReference<String?>(null)
         val saveCalls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "codex", installed = true, authed = false))
@@ -777,8 +780,8 @@ class AgentSettingsScreenTest {
 
     @Test fun secret_save_success_clears_input() = runComposeUiTest {
         val loadCount = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         val n = loadCount.incrementAndGet()
@@ -809,8 +812,8 @@ class AgentSettingsScreenTest {
     @Test fun opencode_key_failure_keeps_input_and_shows_error() = runComposeUiTest {
         val seen = AtomicInteger(0)
         val lastKey = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -844,8 +847,8 @@ class AgentSettingsScreenTest {
     @Test fun opencode_key_success_clears_and_reloads() = runComposeUiTest {
         val setCalls = AtomicInteger(0)
         val providerLoads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -872,8 +875,8 @@ class AgentSettingsScreenTest {
     }
 
     @Test fun opencode_oauth_finish_failure_keeps_code() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -918,8 +921,8 @@ class AgentSettingsScreenTest {
 
     @Test fun enter_submits_secret_field() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "codex", installed = true, authed = false))
@@ -939,8 +942,8 @@ class AgentSettingsScreenTest {
 
     @Test fun enter_submits_opencode_zen_key() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -961,8 +964,8 @@ class AgentSettingsScreenTest {
 
     @Test fun enter_submits_provider_key() = runComposeUiTest {
         val saved = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -998,8 +1001,8 @@ class AgentSettingsScreenTest {
 
     @Test fun enter_submits_oauth_code() = runComposeUiTest {
         val finished = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "opencode", installed = true, authed = false))
@@ -1046,8 +1049,8 @@ class AgentSettingsScreenTest {
     @Test fun enter_submits_login_code() = runComposeUiTest {
         val sent = AtomicReference<String?>(null)
         val started = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     agentStatuses = {
                         listOf(AgentInstallStatus(kind = "claude", installed = true, authed = false))
@@ -1085,19 +1088,6 @@ class AgentSettingsScreenTest {
     }
 
     // ── HostStore + mocked BrokerApi ──────────────────────────────────────────────────────
-
-    private val tempFiles = mutableListOf<Path>()
-
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("agent_settings_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
-
-    @AfterTest fun cleanup() {
-        tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
-    }
 
     private fun appForAgents(
         statusJson: String? = """[{"kind":"claude","installed":true,"authed":true},{"kind":"codex","installed":true,"authed":false}]""",
@@ -1145,7 +1135,11 @@ class AgentSettingsScreenTest {
             baseUrl = baseUrl,
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
+            deps = HostStoreDeps(
+                httpFactory = { HttpClient(engine) },
+                settings = FakeSettingsStore(),
+                clock = FixedClock(),
+            ),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = api,
@@ -1155,24 +1149,27 @@ class AgentSettingsScreenTest {
     @Test fun desktop_app_state_agent_statuses_decodes_mock_broker() = runComposeUiTest {
         val app = appForAgents()
         var listed: List<AgentInstallStatus>? = emptyList()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 AgentSettingsScreen(
-                    agentStatuses = {
-                        listed = app.agentStatuses()
-                        listed
-                    },
-                    agentStartLogin = { app.startAgentLogin(it) },
-                    agentPollLogin = { app.agentLoginState(it) },
-                    agentSendCode = { k, c -> app.sendAgentLoginCode(k, c) },
-                    agentCancelLogin = { app.cancelAgentLogin(it) },
-                    agentSaveSecret = { k, v -> app.saveAgentSecret(k, v) },
-                    agentStartInstall = { app.startAgentInstall(it) },
-                    agentPollInstall = { app.agentInstallState(it) },
-                    openCodeProviders = { app.openCodeProviders() },
-                    openCodeSetKey = { id, key -> app.setOpenCodeKey(id, key) },
-                    openCodeStartOAuth = { id, m -> app.startOpenCodeOAuth(id, m) },
-                    openCodeFinishOAuth = { id, m, c -> app.finishOpenCodeOAuth(id, m, c) },
+                    actions = AgentSettingsActions(
+                        agentStatuses = {
+                            listed = app.agentStatuses()
+                            listed
+                        },
+                        agentStartLogin = { app.startAgentLogin(it) },
+                        agentPollLogin = { app.agentLoginState(it) },
+                        agentSendCode = { k, c -> app.sendAgentLoginCode(k, c) },
+                        agentCancelLogin = { app.cancelAgentLogin(it) },
+                        agentSaveSecret = { k, v -> app.saveAgentSecret(k, v) },
+                        agentStartInstall = { app.startAgentInstall(it) },
+                        agentPollInstall = { app.agentInstallState(it) },
+                        openCodeProviders = { app.openCodeProviders() },
+                        openCodeSetKey = { id, key -> app.setOpenCodeKey(id, key) },
+                        openCodeStartOAuth = { id, m -> app.startOpenCodeOAuth(id, m) },
+                        openCodeFinishOAuth = { id, m, c -> app.finishOpenCodeOAuth(id, m, c) },
+                    ),
+                    topBarShown = true,
                 )
             }
         }
@@ -1188,25 +1185,28 @@ class AgentSettingsScreenTest {
         val app = appForAgents(statusJson = null)
         var result: List<AgentInstallStatus>? = emptyList() // sentinel non-null so we can detect null
         var called = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 AgentSettingsScreen(
-                    agentStatuses = {
-                        result = app.agentStatuses()
-                        called = true
-                        result
-                    },
-                    agentStartLogin = { null },
-                    agentPollLogin = { null },
-                    agentSendCode = { _, _ -> },
-                    agentCancelLogin = {},
-                    agentSaveSecret = { _, _ -> false },
-                    agentStartInstall = { null },
-                    agentPollInstall = { null },
-                    openCodeProviders = { emptyList() },
-                    openCodeSetKey = { _, _ -> false },
-                    openCodeStartOAuth = { _, _ -> null },
-                    openCodeFinishOAuth = { _, _, _ -> false },
+                    actions = AgentSettingsActions(
+                        agentStatuses = {
+                            result = app.agentStatuses()
+                            called = true
+                            result
+                        },
+                        agentStartLogin = { null },
+                        agentPollLogin = { null },
+                        agentSendCode = { _, _ -> },
+                        agentCancelLogin = {},
+                        agentSaveSecret = { _, _ -> false },
+                        agentStartInstall = { null },
+                        agentPollInstall = { null },
+                        openCodeProviders = { emptyList() },
+                        openCodeSetKey = { _, _ -> false },
+                        openCodeStartOAuth = { _, _ -> null },
+                        openCodeFinishOAuth = { _, _, _ -> false },
+                    ),
+                    topBarShown = true,
                 )
             }
         }
@@ -1214,233 +1214,6 @@ class AgentSettingsScreenTest {
         waitUntil(timeoutMillis = 5_000) { called }
         assertNull(result)
         onNodeWithTag("agent_settings_error").assertIsDisplayed()
-    }
-
-    // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
-
-    @Test fun settings_hub_opens_from_ui_and_loads_agents() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val app = appForAgents()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_hub").assertIsDisplayed()
-        onNodeWithTag("agent_settings_screen").assertIsDisplayed()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("agent_row_claude").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-    }
-
-    @Test fun escape_closes_the_settings_hub() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings() }
-        val app = appForAgents()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("settings_overlay").performKeyInput { pressKey(Key.Escape) }
-        waitForIdle()
-        assertFalse(ui.settingsOpen)
-        onNodeWithTag("settings_overlay").assertDoesNotExist()
-    }
-
-    @Test fun shell_shortcuts_are_gated_off_while_settings_hub_is_up() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings() }
-        val app = appForAgents()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        assertFalse(ui.sidebarCollapsed)
-        onNodeWithTag("settings_hub").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.B) }
-        }
-        waitForIdle()
-        assertFalse(ui.sidebarCollapsed)
-        assertTrue(ui.settingsOpen)
-    }
-
-    @Test fun opening_settings_closes_any_other_open_overlay() {
-        val ui = ShellUiState()
-        ui.openUsage()
-        ui.openSettings()
-        assertFalse(ui.usageOpen)
-        assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Agents, ui.settingsSection)
-    }
-
-    @Test fun rail_switches_to_editor_lsp_without_nested_back() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val app = HostStore(
-            baseUrl = "ws://test:9898",
-            token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
-            connectOnInit = false,
-            sendFrameOverride = { },
-            apiOverride = BrokerApi(
-                "ws://test:9898",
-                "t",
-                HttpClient(MockEngine { req ->
-                    val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-                    when {
-                        req.url.encodedPath == "/agents/status" ->
-                            respond("[]", HttpStatusCode.OK, jsonHeaders)
-                        req.url.encodedPath == "/settings/editor" ->
-                            respond(
-                                """{"lsp":{"servers":[{"id":"typescript","label":"TypeScript","extensions":[".ts"],"enabled":true,"state":"ready","installable":true}]}}""",
-                                HttpStatusCode.OK, jsonHeaders,
-                            )
-                        else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
-                    }
-                }),
-            ),
-        )
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state2")),
-                    LauncherStore(tempPath("launcher2")),
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("settings_section_editorlsp").performClick()
-        waitForIdle()
-        assertEquals(SettingsSection.EditorLsp, ui.settingsSection)
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("lsp_settings_screen").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        // Nested back must be gone when embedded in the hub.
-        onNodeWithTag("lsp_settings_back").assertDoesNotExist()
-        onNodeWithText("TypeScript").assertIsDisplayed()
-        // Hub back remains.
-        onNodeWithTag("settings_hub_back").assertIsDisplayed()
-    }
-
-    @Test fun multi_host_keying_reloads_per_active_host() = runComposeUiTest {
-        // Go through Fleet + AppShell (key(activeHostId) + hostApp), not a manual remount.
-        val statusA =
-            """[{"kind":"claude","installed":true,"authed":true}]"""
-        val statusB =
-            """[{"kind":"cursor","installed":false,"authed":false}]"""
-        val scope = TestScope(UnconfinedTestDispatcher())
-        val store = PairedHostStore(
-            object : HostPersistence {
-                var hosts = mutableListOf(
-                    PairedHost(
-                        recordId = "h1",
-                        hostId = "host-a",
-                        displayName = "Host A",
-                        token = "t",
-                        relayUrl = "https://a.relay.supermux.dev",
-                    ),
-                    PairedHost(
-                        recordId = "h2",
-                        hostId = "host-b",
-                        displayName = "Host B",
-                        token = "t",
-                        relayUrl = "https://b.relay.supermux.dev",
-                    ),
-                )
-                override fun loadAll() = hosts.toList()
-                override fun saveAll(hosts: List<PairedHost>) {
-                    this.hosts = hosts.toMutableList()
-                }
-            },
-        ) { "rec-unused" }
-        val fleet = FleetStore(
-            store = store,
-            scope = scope,
-            deps = testDeps(),
-            appFactory = { url, token, onConn ->
-                val statusJson = when {
-                    url.contains("a.relay") -> statusA
-                    else -> statusB
-                }
-                val engine = MockEngine { req ->
-                    val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-                    when {
-                        req.url.encodedPath == "/agents/status" ->
-                            respond(statusJson, HttpStatusCode.OK, jsonHeaders)
-                        else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
-                    }
-                }
-                HostStore(
-                    baseUrl = url,
-                    token = token,
-                    scope = scope,
-                    deps = testDeps(),
-                    connectOnInit = false,
-                    sendFrameOverride = { },
-                    apiOverride = BrokerApi(url, token, HttpClient(engine)),
-                    onConnectionChange = onConn,
-                )
-            },
-        )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val primary = fleet.appForRecord("h1")!!
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    primary, ui,
-                    ShellStateStore(tempPath("mh-state")),
-                    LauncherStore(tempPath("mh-launcher")),
-                    fleet = fleet,
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("agent_row_claude").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        fleet.setActiveHost("h2")
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("agent_row_cursor").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("agent_row_claude").assertDoesNotExist()
-        fleet.close()
     }
 
     @Test fun desktop_app_state_mutation_non2xx_is_failure() = runBlocking {
@@ -1464,24 +1237,27 @@ class AgentSettingsScreenTest {
             mutationStatus = HttpStatusCode.InternalServerError,
         )
         var secretOk: Boolean? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        agentContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 AgentSettingsScreen(
-                    agentStatuses = { app.agentStatuses() },
-                    agentStartLogin = { app.startAgentLogin(it) },
-                    agentPollLogin = { app.agentLoginState(it) },
-                    agentSendCode = { k, c -> app.sendAgentLoginCode(k, c) },
-                    agentCancelLogin = { app.cancelAgentLogin(it) },
-                    agentSaveSecret = { k, v ->
-                        secretOk = app.saveAgentSecret(k, v)
-                        secretOk!!
-                    },
-                    agentStartInstall = { app.startAgentInstall(it) },
-                    agentPollInstall = { app.agentInstallState(it) },
-                    openCodeProviders = { app.openCodeProviders() },
-                    openCodeSetKey = { id, key -> app.setOpenCodeKey(id, key) },
-                    openCodeStartOAuth = { id, m -> app.startOpenCodeOAuth(id, m) },
-                    openCodeFinishOAuth = { id, m, c -> app.finishOpenCodeOAuth(id, m, c) },
+                    actions = AgentSettingsActions(
+                        agentStatuses = { app.agentStatuses() },
+                        agentStartLogin = { app.startAgentLogin(it) },
+                        agentPollLogin = { app.agentLoginState(it) },
+                        agentSendCode = { k, c -> app.sendAgentLoginCode(k, c) },
+                        agentCancelLogin = { app.cancelAgentLogin(it) },
+                        agentSaveSecret = { k, v ->
+                            secretOk = app.saveAgentSecret(k, v)
+                            secretOk!!
+                        },
+                        agentStartInstall = { app.startAgentInstall(it) },
+                        agentPollInstall = { app.agentInstallState(it) },
+                        openCodeProviders = { app.openCodeProviders() },
+                        openCodeSetKey = { id, key -> app.setOpenCodeKey(id, key) },
+                        openCodeStartOAuth = { id, m -> app.startOpenCodeOAuth(id, m) },
+                        openCodeFinishOAuth = { id, m, c -> app.finishOpenCodeOAuth(id, m, c) },
+                    ),
+                    topBarShown = true,
                 )
             }
         }
@@ -1523,5 +1299,135 @@ class AgentSettingsScreenTest {
         assertTrue(app.saveAgentSecret("codex", "sk-ok"))
         assertTrue(app.setOpenCodeKey("opencode", "k"))
         assertTrue(app.finishOpenCodeOAuth("google", 0, "code"))
+    }
+
+    // ── Compact branch (Android's phone layout) ─────────────────────────────────────────────────
+
+    @Test fun compact_renders_every_agent_section_the_host_reports() = runComposeUiTest {
+        // A phone: the whole list scrolls in one LazyColumn, and every un-authed row starts
+        // expanded, so each kind's section body must be reachable — install for the missing CLI,
+        // the provider list for opencode, the secret field + link login for the rest.
+        agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(
+                            AgentInstallStatus(kind = "codex", installed = true, authed = false),
+                            AgentInstallStatus(kind = "cursor", installed = false, authed = false),
+                            AgentInstallStatus(kind = "opencode", installed = true, authed = false),
+                        )
+                    },
+                    topBarShown = false,
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_row_codex").assertExists()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // codex: installed but not authed → paste-a-key + authorize-via-link.
+        onNodeWithTag("agent_secret_codex").assertExists()
+        onNodeWithTag("agent_login_start_codex").assertExists()
+        // cursor: the host says it is missing → the install section Android just gained.
+        onNodeWithTag("agent_install_cursor").assertExists()
+        onNodeWithTag("agent_install_start_cursor").assertExists()
+        // opencode: the provider sub-list, with the synthetic Zen key row.
+        onNodeWithTag("opencode_providers_section").assertExists()
+        onNodeWithTag("opencode_zen_key_row").assertExists()
+    }
+
+    @Test fun compact_grok_offers_the_link_login_and_no_key_field() = runComposeUiTest {
+        // grok authenticates only via `grok login --device-auth`; there is no key to paste. Its
+        // own render because a phone-height LazyColumn does not compose a fourth expanded row.
+        agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(AgentInstallStatus(kind = "grok", installed = true, authed = false))
+                    },
+                    topBarShown = false,
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_login_start_grok").assertExists()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("agent_secret_grok").assertDoesNotExist()
+    }
+
+    @Test fun compact_brings_its_own_top_bar_when_the_hub_did_not() = runComposeUiTest {
+        var backs = 0
+        agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(topBarShown = false, onBack = { backs++ })()
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("agent_settings_back").assertIsDisplayed()
+        onNodeWithText("Agents").assertIsDisplayed()
+        onNodeWithTag("agent_settings_back").performClick()
+        assertEquals(1, backs)
+    }
+
+    @Test fun compact_leaves_the_chrome_alone_when_the_hub_painted_it() = runComposeUiTest {
+        agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { screen(topBarShown = true)() }
+        }
+        waitForIdle()
+        onNodeWithTag("agent_settings_screen").assertExists()
+        onNodeWithTag("agent_settings_back").assertDoesNotExist()
+    }
+
+    @Test fun a_wide_window_never_paints_the_screens_own_top_bar() = runComposeUiTest {
+        // The E1 reviewer's double-chrome bug: on a tablet the hub owns the header, so the
+        // section must not add one even though `topBarShown` is false there.
+        agentContent(pointer = false, widthClass = WindowWidthClass.Expanded) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { screen(topBarShown = false)() }
+        }
+        waitForIdle()
+        onNodeWithTag("agent_settings_screen").assertExists()
+        onNodeWithTag("agent_settings_back").assertDoesNotExist()
+    }
+
+    @Test fun install_is_offered_only_for_the_agents_the_host_reports_as_missing() = runComposeUiTest {
+        agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(
+                    agentStatuses = {
+                        listOf(
+                            AgentInstallStatus(kind = "codex", installed = true, authed = false),
+                            AgentInstallStatus(kind = "cursor", installed = false, authed = false),
+                        )
+                    },
+                    topBarShown = false,
+                )()
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("agent_install_cursor").assertExists()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        // codex IS installed — no install button, and the secret field takes the slot instead.
+        onNodeWithTag("agent_install_codex").assertDoesNotExist()
+        onNodeWithTag("agent_install_start_codex").assertDoesNotExist()
+        onNodeWithTag("agent_secret_codex").assertExists()
+        // cursor is not installed — no key field until it is there to authenticate.
+        onNodeWithTag("agent_secret_cursor").assertDoesNotExist()
     }
 }

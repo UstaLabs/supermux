@@ -1,12 +1,14 @@
-// Ported from apps/android/.../settings/AgentSettingsScreen.kt (+ iOS install section).
-// Desktop adaptations:
-//   - painterResource icons → Icons.Filled (Check / Settings / Close / Expand)
-//   - LocalContext openUrl/copy → LocalPlatform.openUrl + LocalClipboardManager
-//   - Install flow from iOS AgentSettingsView (Android screen had status only, no install button)
-//   - testTags for compose UI tests + headless verification
-//   - Login/install poll resumes from broker state when the overlay is reopened
-//   - Bounded poll loops, mutation-result handling, Loading/Empty/Error load model
-package dev.supermux.desktop.settings
+// The one Agents settings screen for both apps (cluster E2).
+//
+// Base = desktop's `settings/AgentSettingsScreen.kt`: the bounded login/install poll loops, the
+// resume-from-broker paths, the Loading/Empty/Error load model, typed mutation results and every
+// test tag. Android's page was the same screen minus install, minus the error states and on
+// `R.drawable` icons — it contributes the Compact branch: its own `TopAppBar` when the hub did not
+// paint one, and touch-sized row targets keyed on `LocalPointerAvailable`.
+//
+// Store calls arrive as one [AgentSettingsActions] holder (the `ChatActions` pattern from cluster
+// D) so neither host repeats a twelve-lambda call site.
+package dev.supermux.ui.settings
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -33,9 +35,11 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,8 +47,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +67,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -119,24 +132,137 @@ internal sealed class AgentsLoadState {
     data class Error(val message: String) : AgentsLoadState()
 }
 
-@Composable
-fun AgentSettingsScreen(
+/**
+ * Every broker call the Agents screen makes, in one holder.
+ *
+ * Shapes are desktop's: `null` means "the call failed", distinct from a legitimate empty list, and
+ * a mutation returns whether it took. Android's `FleetStore` wrappers were fire-and-forget
+ * `Unit`s — retyped in `:shared` rather than dumbing this down, so a failed save now surfaces on
+ * both hosts instead of silently clearing the field.
+ */
+@Immutable
+class AgentSettingsActions(
     /**
      * Load agent install/auth statuses.
      * `null` = transport/decode failure; empty list = legitimate empty; non-empty = data.
      */
-    agentStatuses: suspend () -> List<AgentInstallStatus>?,
-    agentStartLogin: suspend (kind: String) -> AgentLoginState?,
-    agentPollLogin: suspend (kind: String) -> AgentLoginState?,
-    agentSendCode: suspend (kind: String, code: String) -> Unit,
-    agentCancelLogin: suspend (kind: String) -> Unit,
-    agentSaveSecret: suspend (kind: String, value: String) -> Boolean,
-    agentStartInstall: suspend (kind: String) -> AgentInstallJob?,
-    agentPollInstall: suspend (kind: String) -> AgentInstallJob?,
-    openCodeProviders: suspend () -> List<OpenCodeProvider>,
-    openCodeSetKey: suspend (providerId: String, key: String) -> Boolean,
-    openCodeStartOAuth: suspend (providerId: String, method: Int) -> OpenCodeOAuthStart?,
-    openCodeFinishOAuth: suspend (providerId: String, method: Int, code: String) -> Boolean,
+    val agentStatuses: suspend () -> List<AgentInstallStatus>? = { null },
+    val agentStartLogin: suspend (kind: String) -> AgentLoginState? = { null },
+    val agentPollLogin: suspend (kind: String) -> AgentLoginState? = { null },
+    val agentSendCode: suspend (kind: String, code: String) -> Unit = { _, _ -> },
+    val agentCancelLogin: suspend (kind: String) -> Unit = {},
+    val agentSaveSecret: suspend (kind: String, value: String) -> Boolean = { _, _ -> false },
+    val agentStartInstall: suspend (kind: String) -> AgentInstallJob? = { null },
+    val agentPollInstall: suspend (kind: String) -> AgentInstallJob? = { null },
+    val openCodeProviders: suspend () -> List<OpenCodeProvider> = { emptyList() },
+    val openCodeSetKey: suspend (providerId: String, key: String) -> Boolean = { _, _ -> false },
+    val openCodeStartOAuth: suspend (providerId: String, method: Int) -> OpenCodeOAuthStart? =
+        { _, _ -> null },
+    val openCodeFinishOAuth: suspend (providerId: String, method: Int, code: String) -> Boolean =
+        { _, _, _ -> false },
+)
+
+/** [AgentSettingsActions] against one paired host — desktop's wiring, unchanged. */
+@Composable
+fun rememberAgentSettingsActions(app: HostStore): AgentSettingsActions = remember(app) {
+    AgentSettingsActions(
+        agentStatuses = { app.agentStatuses() },
+        agentStartLogin = { app.startAgentLogin(it) },
+        agentPollLogin = { app.agentLoginState(it) },
+        agentSendCode = { kind, code -> app.sendAgentLoginCode(kind, code) },
+        agentCancelLogin = { app.cancelAgentLogin(it) },
+        agentSaveSecret = { kind, value -> app.saveAgentSecret(kind, value) },
+        agentStartInstall = { app.startAgentInstall(it) },
+        agentPollInstall = { app.agentInstallState(it) },
+        openCodeProviders = { app.openCodeProviders() },
+        openCodeSetKey = { id, key -> app.setOpenCodeKey(id, key) },
+        openCodeStartOAuth = { id, method -> app.startOpenCodeOAuth(id, method) },
+        openCodeFinishOAuth = { id, method, code -> app.finishOpenCodeOAuth(id, method, code) },
+    )
+}
+
+/**
+ * [AgentSettingsActions] against the fleet's ACTIVE host — Android's wiring.
+ *
+ * Every call resolves `activeApp()` when it runs, so a host switch under the open screen reaches
+ * the new broker; the screen itself is remounted by the host's `key(activeHost)` wrapper anyway.
+ */
+@Composable
+fun rememberAgentSettingsActions(fleet: FleetStore): AgentSettingsActions = remember(fleet) {
+    AgentSettingsActions(
+        agentStatuses = { fleet.agentStatuses() },
+        agentStartLogin = { fleet.startAgentLogin(it) },
+        agentPollLogin = { fleet.agentLoginState(it) },
+        agentSendCode = { kind, code -> fleet.agentSendCode(kind, code) },
+        agentCancelLogin = { fleet.agentCancelLogin(it) },
+        agentSaveSecret = { kind, value -> fleet.agentSaveSecret(kind, value) },
+        agentStartInstall = { fleet.startAgentInstall(it) },
+        agentPollInstall = { fleet.agentInstallState(it) },
+        openCodeProviders = { fleet.openCodeProviders() },
+        openCodeSetKey = { id, key -> fleet.openCodeSetKey(id, key) },
+        openCodeStartOAuth = { id, method -> fleet.startOpenCodeOAuth(id, method) },
+        openCodeFinishOAuth = { id, method, code -> fleet.openCodeFinishOAuth(id, method, code) },
+    )
+}
+
+/**
+ * Agents: one expandable row per agent CLI the broker reports.
+ *
+ * The expanded body is, in order: the INSTALL section when the host says the CLI is missing, the
+ * OpenCode provider list for `opencode`, the device-code login flow while one is running, and
+ * otherwise the API-key / OAuth-token field plus "Authorize via link".
+ *
+ * @param onBack leave the screen — only reachable from the Compact top bar this screen paints for
+ *   itself; pass the hub's `SettingsSlotScope.onClose`.
+ * @param topBarShown the hub already painted a `TopAppBar` for this detail
+ *   (`SettingsSlotScope.topBarShown`). When it is false AND the window is Compact this screen
+ *   brings Android's own bar, so a phone never loses its title/back and a tablet's rail layout
+ *   never gets a second one.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AgentSettingsScreen(
+    actions: AgentSettingsActions,
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit = {},
+    topBarShown: Boolean = false,
+) {
+    val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    if (compact && !topBarShown) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Agents", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("agent_settings_back"),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = cs.surfaceContainerHigh,
+                    ),
+                )
+            },
+            containerColor = cs.background,
+        ) { padding ->
+            AgentSettingsBody(actions, modifier.padding(padding))
+        }
+    } else {
+        AgentSettingsBody(actions, modifier)
+    }
+}
+
+@Composable
+private fun AgentSettingsBody(
+    actions: AgentSettingsActions,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -149,7 +275,7 @@ fun AgentSettingsScreen(
         if (previous !is AgentsLoadState.Ready) {
             loadState = AgentsLoadState.Loading
         }
-        val result = agentStatuses()
+        val result = actions.agentStatuses()
         loadState = when {
             result == null -> AgentsLoadState.Error("Couldn't load agent statuses.")
             result.isEmpty() -> AgentsLoadState.Empty
@@ -164,7 +290,7 @@ fun AgentSettingsScreen(
         if (loadState !is AgentsLoadState.Error) return@LaunchedEffect
         while (isActive) {
             delay(ERROR_AUTO_RETRY_MS)
-            val result = agentStatuses()
+            val result = actions.agentStatuses()
             if (result != null) {
                 loadState = if (result.isEmpty()) AgentsLoadState.Empty else AgentsLoadState.Ready(result)
                 break
@@ -247,17 +373,7 @@ fun AgentSettingsScreen(
                         AgentRow(
                             status = status,
                             onAuthChanged = { reloadKey++ },
-                            agentStartLogin = agentStartLogin,
-                            agentPollLogin = agentPollLogin,
-                            agentSendCode = agentSendCode,
-                            agentCancelLogin = agentCancelLogin,
-                            agentSaveSecret = agentSaveSecret,
-                            agentStartInstall = agentStartInstall,
-                            agentPollInstall = agentPollInstall,
-                            openCodeProviders = openCodeProviders,
-                            openCodeSetKey = openCodeSetKey,
-                            openCodeStartOAuth = openCodeStartOAuth,
-                            openCodeFinishOAuth = openCodeFinishOAuth,
+                            actions = actions,
                         )
                         HorizontalDivider(color = cs.outlineVariant)
                     }
@@ -279,20 +395,14 @@ fun AgentSettingsScreen(
 private fun AgentRow(
     status: AgentInstallStatus,
     onAuthChanged: () -> Unit,
-    agentStartLogin: suspend (kind: String) -> AgentLoginState?,
-    agentPollLogin: suspend (kind: String) -> AgentLoginState?,
-    agentSendCode: suspend (kind: String, code: String) -> Unit,
-    agentCancelLogin: suspend (kind: String) -> Unit,
-    agentSaveSecret: suspend (kind: String, value: String) -> Boolean,
-    agentStartInstall: suspend (kind: String) -> AgentInstallJob?,
-    agentPollInstall: suspend (kind: String) -> AgentInstallJob?,
-    openCodeProviders: suspend () -> List<OpenCodeProvider>,
-    openCodeSetKey: suspend (providerId: String, key: String) -> Boolean,
-    openCodeStartOAuth: suspend (providerId: String, method: Int) -> OpenCodeOAuthStart?,
-    openCodeFinishOAuth: suspend (providerId: String, method: Int, code: String) -> Boolean,
+    actions: AgentSettingsActions,
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    // The whole header row is the expand/collapse target, so it gets the touch bump: ask
+    // LocalPointerAvailable, NOT LocalInputMode — a phone with a Bluetooth keyboard is still a
+    // thumb. With a pointer this is desktop's original 12dp, unchanged.
+    val rowPadding = if (LocalPointerAvailable.current) Space.md else Space.lg
     var expanded by remember(status.kind) { mutableStateOf(!status.authed) }
 
     var loginActive by remember(status.kind) { mutableStateOf(false) }
@@ -316,7 +426,7 @@ private fun AgentRow(
     // closing+reopening the Settings hub does not drop progress (spec Task 1).
     LaunchedEffect(status.kind, status.installed, status.authed) {
         if (!status.authed && isLoginKind && status.installed) {
-            val s = agentPollLogin(status.kind)
+            val s = actions.agentPollLogin(status.kind)
             if (s != null && isActiveLoginPhase(s.phase)) {
                 login = s
                 loginResumed = true
@@ -325,7 +435,7 @@ private fun AgentRow(
             }
         }
         if (!status.installed) {
-            val job = agentPollInstall(status.kind)
+            val job = actions.agentPollInstall(status.kind)
             if (job != null && normalizeInstallState(job.state) == "running") {
                 install = job
                 installResumed = true
@@ -348,7 +458,7 @@ private fun AgentRow(
         loginResumed = false
         if (!alreadyInProgress) {
             login = null
-            val started = agentStartLogin(status.kind)
+            val started = actions.agentStartLogin(status.kind)
             if (started == null) {
                 loginStartFailed = true
                 login = null
@@ -362,7 +472,7 @@ private fun AgentRow(
         while (isActive) {
             delay(POLL_INTERVAL_MS)
             ticks++
-            val s = agentPollLogin(status.kind)
+            val s = actions.agentPollLogin(status.kind)
             if (s == null) {
                 nullStreak++
                 if (nullStreak >= POLL_NULL_STREAK_LIMIT || ticks >= POLL_MAX_TICKS) {
@@ -403,7 +513,7 @@ private fun AgentRow(
             installResumed || normalizeInstallState(install?.state) == "running"
         installResumed = false
         if (!alreadyInProgress) {
-            val initial = agentStartInstall(status.kind)
+            val initial = actions.agentStartInstall(status.kind)
             if (initial == null) {
                 installRequestFailed = true
                 installActive = false
@@ -426,7 +536,7 @@ private fun AgentRow(
             }
             delay(1_000L)
             ticks++
-            val next = agentPollInstall(status.kind)
+            val next = actions.agentPollInstall(status.kind)
             if (next == null) {
                 nullStreak++
                 if (nullStreak >= POLL_NULL_STREAK_LIMIT || ticks >= POLL_MAX_TICKS) {
@@ -447,7 +557,7 @@ private fun AgentRow(
     }
 
     val cancelLogin: () -> Unit = {
-        scope.launch { agentCancelLogin(status.kind) }
+        scope.launch { actions.agentCancelLogin(status.kind) }
         loginActive = false
         login = null
         codeValue = ""
@@ -473,7 +583,7 @@ private fun AgentRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = Space.lg, vertical = Space.md)
+                .padding(horizontal = Space.lg, vertical = rowPadding)
                 .testTag("agent_row_header_${status.kind}"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.md),
@@ -561,10 +671,10 @@ private fun AgentRow(
                         onCancel = cancelInstall,
                     )
                     status.kind == "opencode" -> OpenCodeProvidersSection(
-                        load = openCodeProviders,
-                        setKey = openCodeSetKey,
-                        startOAuth = openCodeStartOAuth,
-                        finishOAuth = openCodeFinishOAuth,
+                        load = actions.openCodeProviders,
+                        setKey = actions.openCodeSetKey,
+                        startOAuth = actions.openCodeStartOAuth,
+                        finishOAuth = actions.openCodeFinishOAuth,
                     )
                     loginActive -> LoginFlow(
                         kind = status.kind,
@@ -574,7 +684,7 @@ private fun AgentRow(
                         onSubmitCode = {
                             val c = codeValue.trim()
                             if (c.isNotEmpty()) {
-                                scope.launch { agentSendCode(status.kind, c) }
+                                scope.launch { actions.agentSendCode(status.kind, c) }
                                 codeValue = ""
                             }
                         },
@@ -600,7 +710,7 @@ private fun AgentRow(
                         if (status.kind != "grok") {
                             ApiKeyField(
                                 kind = status.kind,
-                                onSave = { v -> agentSaveSecret(status.kind, v) },
+                                onSave = { v -> actions.agentSaveSecret(status.kind, v) },
                                 onSaved = onAuthChanged,
                             )
                         }

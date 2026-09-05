@@ -49,8 +49,6 @@ import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import kotlin.math.roundToInt
 import dev.supermux.net.AddDeviceResponse
-import dev.supermux.net.AgentInstallStatus
-import dev.supermux.net.AgentLoginState
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CuratorSettingsResponse
@@ -60,8 +58,6 @@ import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
-import dev.supermux.net.OpenCodeOAuthStart
-import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
@@ -97,6 +93,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.supermux.ui.settings.LspSettingsScreen
+import dev.supermux.ui.settings.AgentSettingsActions
+import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.nav.SettingsSection
@@ -130,17 +128,8 @@ fun SettingsScreen(
     // Assistant
     assistantLoad: suspend () -> Pair<String, String>?,
     assistantSave: suspend (paName: String, soul: String) -> Boolean,
-    // Agents
-    agentStatuses: suspend () -> List<AgentInstallStatus>,
-    agentStartLogin: suspend (kind: String) -> AgentLoginState?,
-    agentPollLogin: suspend (kind: String) -> AgentLoginState?,
-    agentSendCode: (kind: String, code: String) -> Unit,
-    agentCancelLogin: (kind: String) -> Unit,
-    agentSaveSecret: (kind: String, value: String) -> Unit,
-    openCodeProviders: suspend () -> List<OpenCodeProvider>,
-    openCodeSetKey: (providerId: String, key: String) -> Unit,
-    openCodeStartOAuth: suspend (providerId: String, method: Int) -> OpenCodeOAuthStart?,
-    openCodeFinishOAuth: (providerId: String, method: Int, code: String) -> Unit,
+    /** Agents: one holder since E2 — the screen itself is `ui/settings/AgentSettingsScreen.kt`. */
+    agentActions: AgentSettingsActions,
     // Curator
     curatorLoad: suspend () -> CuratorSettingsResponse?,
     curatorSave: suspend (
@@ -223,18 +212,12 @@ fun SettingsScreen(
                 load = assistantLoad,
                 save = assistantSave,
             )
-            SettingsSection.Agents -> AgentSettingsPage(
+            // Shared since E2 — Android gained the install section with it. The page paints its
+            // own compact TopAppBar because this hub still passes `compactTopBar = false`.
+            SettingsSection.Agents -> AgentSettingsScreen(
+                actions = agentActions,
                 onBack = scope.onClose,
-                agentStatuses = agentStatuses,
-                agentStartLogin = agentStartLogin,
-                agentPollLogin = agentPollLogin,
-                agentSendCode = agentSendCode,
-                agentCancelLogin = agentCancelLogin,
-                agentSaveSecret = agentSaveSecret,
-                openCodeProviders = openCodeProviders,
-                openCodeSetKey = openCodeSetKey,
-                openCodeStartOAuth = openCodeStartOAuth,
-                openCodeFinishOAuth = openCodeFinishOAuth,
+                topBarShown = scope.topBarShown,
             )
             SettingsSection.Curator -> CuratorSettingsPage(
                 onBack = scope.onClose,

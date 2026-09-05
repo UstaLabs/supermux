@@ -9,7 +9,9 @@ package dev.supermux.desktop.settings
 import androidx.compose.runtime.Composable
 import dev.supermux.state.HostStore
 import dev.supermux.ui.nav.SettingsSection
+import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.LspSettingsScreen
+import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.SettingsSlotScope
 
 /** Renders [section]'s desktop screen against [host]. Called from the hub's `content` slot. */
@@ -21,18 +23,9 @@ fun DesktopSettingsSection(
 ) {
     when (section) {
         SettingsSection.Agents -> AgentSettingsScreen(
-            agentStatuses = { host.agentStatuses() },
-            agentStartLogin = { host.startAgentLogin(it) },
-            agentPollLogin = { host.agentLoginState(it) },
-            agentSendCode = { kind, code -> host.sendAgentLoginCode(kind, code) },
-            agentCancelLogin = { host.cancelAgentLogin(it) },
-            agentSaveSecret = { kind, value -> host.saveAgentSecret(kind, value) },
-            agentStartInstall = { host.startAgentInstall(it) },
-            agentPollInstall = { host.agentInstallState(it) },
-            openCodeProviders = { host.openCodeProviders() },
-            openCodeSetKey = { id, k -> host.setOpenCodeKey(id, k) },
-            openCodeStartOAuth = { id, method -> host.startOpenCodeOAuth(id, method) },
-            openCodeFinishOAuth = { id, method, code -> host.finishOpenCodeOAuth(id, method, code) },
+            actions = rememberAgentSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.Devices -> DevicesSettingsScreen(
             devicesLoad = { host.devices() },
