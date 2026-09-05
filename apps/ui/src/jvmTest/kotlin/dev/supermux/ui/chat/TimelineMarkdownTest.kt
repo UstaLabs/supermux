@@ -368,6 +368,28 @@ class TimelineMarkdownTest {
         assertEquals(280.dp, h2)
     }
 
+    /**
+     * The composable's load path must not read a socket on the MAIN dispatcher — a `LaunchedEffect`
+     * body runs there, and a blocking read would stutter the frame loop (and park the EDT on
+     * desktop). Replaces the old `loadMarkdownImageBitmap` dispatcher test, whose subject went away
+     * when decoding moved to Coil.
+     */
+    @Test fun loadMarkdownImageBytes_runsTheFetchOffTheMainThread() = runBlocking {
+        val threadName = AtomicReference<String?>(null)
+        val bytes = loadMarkdownImageBytes("https://example.com/pic.png") { _ ->
+            threadName.set(Thread.currentThread().name)
+            TINY_PNG_BYTES
+        }
+        assertTrue(bytes != null && bytes.contentEquals(TINY_PNG_BYTES))
+        val name = threadName.get()
+        assertTrue(name != null, "expected a worker thread name")
+        assertTrue(
+            name!!.contains("DefaultDispatcher") || name.contains("IO") || name.contains("worker"),
+            "fetch should run on a worker thread, got: $name",
+        )
+        assertTrue(!name.contains("AWT-EventQueue"), "fetch must not run on the AWT UI thread, got: $name")
+    }
+
     @Test fun fetch_rejects_non_https() = runBlocking {
         assertNull(fetchImageBytesWithPolicy("http://example.com/x.png"))
         assertNull(fetchImageBytesWithPolicy("file:///tmp/x.png"))

@@ -546,7 +546,7 @@ private fun CoilMarkdownImage(image: MdBlock.Image, onOpenUrl: (String) -> Unit)
     var bytes by remember(image.url) { mutableStateOf<ByteArray?>(null) }
     var fetchFailed by remember(image.url) { mutableStateOf(false) }
     LaunchedEffect(image.url) {
-        val fetched = runCatching { fetchImageBytesWithPolicy(image.url) }.getOrNull()
+        val fetched = runCatching { loadMarkdownImageBytes(image.url) }.getOrNull()
         if (fetched == null) fetchFailed = true else bytes = fetched
     }
     if (fetchFailed) {

@@ -170,8 +170,11 @@ class AttachmentImageTest {
             onAllNodesWithTag("image_lightbox_download").fetchSemanticsNodes().isNotEmpty()
         }
         onNodeWithTag("image_lightbox_download").performClick()
-        waitUntil(timeoutMillis = 5_000L) { platform.files.opened.isNotEmpty() }
-        assertEquals(listOf("shot.png|image/png|${TINY_PNG_BYTES.size}"), platform.files.opened)
+        // Default host here is a pointer one, so the lightbox takes the same save-as branch the
+        // chip does (ImageLightboxTest covers the touch branch).
+        waitUntil(timeoutMillis = 5_000L) { platform.files.openedSaved.isNotEmpty() }
+        assertEquals(listOf("shot.png|image/png|${TINY_PNG_BYTES.size}"), platform.files.saved)
+        assertEquals("shot.png", platform.files.openedSaved.single().name)
     }
 
     // ── The file chip's two modes ─────────────────────────────────────────────────────

@@ -1,12 +1,15 @@
 package dev.supermux.ui.chat
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentLength
 import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The inline-markdown-image fetch policy, ported from desktop's `HttpURLConnection` loader to
@@ -88,8 +91,26 @@ internal val imageHttpClient: HttpClient by lazy {
     HttpClient {
         followRedirects = false
         expectSuccess = false
+        // Desktop's old HttpURLConnection values. Without them a server that accepts the socket and
+        // then goes quiet leaves the spinner up forever.
+        install(HttpTimeout) {
+            connectTimeoutMillis = 10_000
+            requestTimeoutMillis = 15_000
+        }
     }
 }
+
+/**
+ * [fetchImageBytesWithPolicy] on a worker thread.
+ *
+ * The composable calls this, never the raw fetch: a `LaunchedEffect` body runs on the MAIN
+ * dispatcher, and a socket read there stutters the whole frame loop (and, on desktop, parks the
+ * EDT). [fetch] is the seam the dispatcher test drives.
+ */
+suspend fun loadMarkdownImageBytes(
+    url: String,
+    fetch: suspend (String) -> ByteArray? = { fetchImageBytesWithPolicy(it) },
+): ByteArray? = withContext(Dispatchers.Default) { fetch(url) }
 
 /**
  * GET [url] and return the body when every hop is allowed by [isAllowedUrl], the status is 2xx, and

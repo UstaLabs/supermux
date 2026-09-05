@@ -169,8 +169,9 @@ class AttachmentVideoTest {
             onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty()
         }
         external.get()!!.invoke()
-        waitUntil(timeoutMillis = 5_000L) { platform.files.opened.isNotEmpty() }
-        assertEquals(listOf("clip.mp4|video/mp4|9"), platform.files.opened)
+        // Pointer host → the shared save-as branch, same as the chip.
+        waitUntil(timeoutMillis = 5_000L) { platform.files.saved.isNotEmpty() }
+        assertEquals(listOf("clip.mp4|video/mp4|9"), platform.files.saved)
     }
 
     @Test fun temp_name_keeps_the_extension_and_falls_back_to_a_default() {

@@ -17,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
@@ -48,6 +49,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -83,10 +86,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -875,10 +880,68 @@ private fun InlineImageAttachment(
 }
 
 /**
- * Fullscreen image lightbox (Android's, now on both hosts): black backdrop, fit-scaled image with
- * pinch-to-zoom + pan (clamped ≥1×), close + download. A Dialog with
- * `usePlatformDefaultWidth = false` is the idiomatic fullscreen overlay, and predictive-back
- * dismisses it for free on Android.
+ * The lightbox's zoom/pan state, hoisted out of the composable so the clamping rules are unit
+ * testable and a UI test can assert what a wheel, a drag or a button actually did.
+ *
+ * Clamping is what makes panning usable rather than a way to fling the picture off-screen: the
+ * offset can never exceed the overflow the current [scale] creates, so at 1× the image is pinned
+ * and at 3× it can be dragged to any edge but no further.
+ */
+@Stable
+internal class LightboxTransform {
+    var scale by mutableFloatStateOf(MIN)
+        private set
+
+    var offset by mutableStateOf(Offset.Zero)
+        private set
+
+    /** The viewport in px, from the backdrop's own layout — the clamp needs it. */
+    var viewport by mutableStateOf(androidx.compose.ui.geometry.Size.Zero)
+
+    fun zoomBy(factor: Float) = scaleTo(scale * factor)
+
+    fun scaleTo(value: Float) {
+        scale = value.coerceIn(MIN, MAX)
+        offset = clamp(offset)
+    }
+
+    fun panBy(pan: Offset) {
+        offset = clamp(offset + pan)
+    }
+
+    /** Double-click / double-tap: snap between fit and a 2× look, recentring on the way out. */
+    fun toggleZoom() {
+        scaleTo(if (scale > MIN) MIN else DOUBLE_TAP)
+    }
+
+    private fun clamp(candidate: Offset): Offset {
+        val maxX = (viewport.width * (scale - 1f) / 2f).coerceAtLeast(0f)
+        val maxY = (viewport.height * (scale - 1f) / 2f).coerceAtLeast(0f)
+        return Offset(candidate.x.coerceIn(-maxX, maxX), candidate.y.coerceIn(-maxY, maxY))
+    }
+
+    companion object {
+        const val MIN = 1f
+        const val MAX = 5f
+        const val DOUBLE_TAP = 2f
+
+        /** One wheel notch / one button press. */
+        const val STEP = 1.25f
+    }
+}
+
+/**
+ * Fullscreen image lightbox: black backdrop, fit-scaled image, zoom + pan, download and close.
+ *
+ * It opens on both hosts (cluster D2), so every gesture has a mouse equivalent — pinch alone would
+ * leave a desktop user with an inert full-screen picture, and desktop's old "open the original in
+ * the OS viewer" is now the download button rather than the only way to see it bigger:
+ *  - wheel scroll zooms, pinch zooms, `+` / `−` zoom
+ *  - drag pans (one finger or the mouse), clamped to the image's own bounds
+ *  - double-click / double-tap toggles fit ↔ 2×
+ *
+ * A Dialog with `usePlatformDefaultWidth = false` is the idiomatic fullscreen overlay, and
+ * predictive-back dismisses it for free on Android.
  */
 @Composable
 internal fun ImageLightbox(
@@ -887,23 +950,43 @@ internal fun ImageLightbox(
     mime: String?,
     bytes: ByteArray?,
     onDismiss: () -> Unit,
+    transform: LightboxTransform = remember { LightboxTransform() },
 ) {
     val platform = LocalPlatform.current
+    val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        var scale by remember { mutableFloatStateOf(1f) }
-        var offset by remember { mutableStateOf(Offset.Zero) }
         Box(
             Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .onSizeChanged { transform.viewport = androidx.compose.ui.geometry.Size(it.width.toFloat(), it.height.toFloat()) }
+                // Separate pointerInput blocks, not one: a single detector cannot both consume the
+                // scroll wheel and arbitrate taps against drags.
                 .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type != PointerEventType.Scroll) continue
+                            val dy = event.changes.fold(0f) { acc, c -> acc + c.scrollDelta.y }
+                            if (dy == 0f) continue
+                            // Scrolling DOWN (positive) zooms out, as every image viewer does.
+                            transform.zoomBy(if (dy < 0f) LightboxTransform.STEP else 1f / LightboxTransform.STEP)
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(onDoubleTap = { transform.toggleZoom() })
+                }
+                .pointerInput(Unit) {
+                    // Pinch on touch, single-pointer drag everywhere — the clamp decides how far.
                     detectTransformGestures { _, pan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(1f, 5f)
-                        offset = if (scale > 1f) offset + pan else Offset.Zero
+                        if (zoom != 1f) transform.zoomBy(zoom)
+                        transform.panBy(pan)
                     }
                 }
                 .testTag("image_lightbox"),
@@ -916,10 +999,10 @@ internal fun ImageLightbox(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offset.x
-                        translationY = offset.y
+                        scaleX = transform.scale
+                        scaleY = transform.scale
+                        translationX = transform.offset.x
+                        translationY = transform.offset.y
                     },
             )
             Row(
@@ -929,27 +1012,44 @@ internal fun ImageLightbox(
                     .padding(Space.md),
                 horizontalArrangement = Arrangement.spacedBy(Space.xs),
             ) {
+                LightboxButton(
+                    icon = Icons.Filled.Remove,
+                    label = "Zoom out",
+                    tag = "image_lightbox_zoom_out",
+                    onClick = { transform.zoomBy(1f / LightboxTransform.STEP) },
+                )
+                LightboxButton(
+                    icon = Icons.Filled.Add,
+                    label = "Zoom in",
+                    tag = "image_lightbox_zoom_in",
+                    onClick = { transform.zoomBy(LightboxTransform.STEP) },
+                )
                 if (bytes != null) {
-                    IconButton(
-                        onClick = { scope.launch { saveOrOpenAttachment(platform, name, mime, bytes) } },
-                        modifier = Modifier.testTag("image_lightbox_download"),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Download,
-                            contentDescription = "Download",
-                            tint = Color.White,
-                        )
-                    }
-                }
-                IconButton(onClick = onDismiss, modifier = Modifier.testTag("image_lightbox_close")) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Close",
-                        tint = Color.White,
+                    LightboxButton(
+                        icon = Icons.Filled.Download,
+                        label = "Download",
+                        tag = "image_lightbox_download",
+                        onClick = { scope.launch { saveOrOpenAttachment(platform, pointer, name, mime, bytes) } },
                     )
                 }
+                LightboxButton(
+                    icon = Icons.Filled.Close,
+                    label = "Close",
+                    tag = "image_lightbox_close",
+                    onClick = onDismiss,
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun LightboxButton(icon: ImageVector, label: String, tag: String, onClick: () -> Unit) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).testTag(tag),
+    ) {
+        Icon(imageVector = icon, contentDescription = label, tint = Color.White)
     }
 }
 
@@ -977,6 +1077,7 @@ internal fun InlineVideo(
 ) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
+    val pointer = LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
     var playing by remember(att.file_id) { mutableStateOf(false) }
     var uri by remember(att.file_id) { mutableStateOf<String?>(null) }
@@ -1045,7 +1146,7 @@ internal fun InlineVideo(
                 {
                     val body = staged
                     if (body != null) {
-                        scope.launch { saveOrOpenAttachment(platform, att.name ?: "video", att.mime, body) }
+                        scope.launch { saveOrOpenAttachment(platform, pointer, att.name ?: "video", att.mime, body) }
                     }
                 },
                 { failed = true },
@@ -1174,10 +1275,23 @@ internal fun VideoPlayerFrame(
     transport: VideoTransport,
     surface: @Composable (Modifier) -> Unit,
 ) {
+    val pointer = LocalPointerAvailable.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     var scrubbing by remember { mutableStateOf(false) }
-    val controlsVisible = hovered || scrubbing || !transport.isPlaying
+    // Touch has no hover, so "show the controls while the pointer is over the video" would mean a
+    // phone never sees them during playback. There, a tap REVEALS them for [CONTROLS_REVEAL_MS]
+    // (the standard mobile-player gesture) instead of toggling play — play/pause is the button.
+    var revealedAt by remember { mutableStateOf(0L) }
+    var revealed by remember { mutableStateOf(false) }
+    LaunchedEffect(revealedAt) {
+        if (revealedAt == 0L) return@LaunchedEffect
+        revealed = true
+        delay(CONTROLS_REVEAL_MS)
+        revealed = false
+    }
+    val controlsVisible =
+        scrubbing || !transport.isPlaying || (if (pointer) hovered else revealed)
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1189,7 +1303,7 @@ internal fun VideoPlayerFrame(
             .clickable(
                 interactionSource = interaction,
                 indication = null,
-                onClick = { transport.togglePlay() },
+                onClick = { if (pointer) transport.togglePlay() else revealedAt = revealedAt + 1 },
             )
             .testTag("attachment_video_player"),
         contentAlignment = Alignment.Center,
@@ -1332,6 +1446,9 @@ private fun VideoControlButton(
  * Video controls paint over arbitrary frames, so they use their own fixed palette rather than the
  * theme's — a themed tint would vanish against the wrong picture.
  */
+/** How long a tap keeps the controls on screen on a touch host. */
+internal const val CONTROLS_REVEAL_MS = 3_000L
+
 internal object VideoControls {
     val Foreground = Color.White
     const val ScrimAlpha = 0.72f
@@ -1382,14 +1499,7 @@ private fun AttachmentChip(
                         failed = true
                         return@launch
                     }
-                    val name = att.name ?: att.file_id
-                    if (pointer) {
-                        val mime = att.mime?.ifBlank { null } ?: platform.files.probeMime(name)
-                        // The file the user CHOSE, not a second temp copy of the same bytes.
-                        platform.files.saveAs(name, mime, bytes)?.let { platform.files.openSaved(it) }
-                    } else {
-                        saveOrOpenAttachment(platform, name, att.mime, bytes)
-                    }
+                    saveOrOpenAttachment(platform, pointer, att.name ?: att.file_id, att.mime, bytes)
                 }
             }
             .padding(horizontal = Space.sm, vertical = Space.xs)
@@ -1429,18 +1539,26 @@ private fun AttachmentChip(
 }
 
 /**
- * Hand [bytes] to whatever opens [mime], through `Platform.files` — the cache/temp file, the
- * provider URI and the view-then-share chain all live behind the seam. The "couldn't open" line is
- * `Platform.notices`.
+ * Put [bytes] somewhere the user can get at them, the way this host does it.
+ *
+ * Two behaviours, one helper, so the chip and the lightbox can never drift apart:
+ *  - Pointer (desktop): "Save as…", then open the file the user CHOSE — never a second temp copy.
+ *  - Touch (Android): straight to the system chooser; a phone has no browsable file system to save
+ *    into, and the platform gesture there is "open with".
  */
 internal suspend fun saveOrOpenAttachment(
     platform: Platform,
+    pointer: Boolean,
     name: String,
     mime: String?,
     bytes: ByteArray,
 ) {
     val safeName = name.substringAfterLast('/').ifBlank { "file" }
     val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
+    if (pointer) {
+        platform.files.saveAs(safeName, type, bytes)?.let { platform.files.openSaved(it) }
+        return
+    }
     if (!platform.files.openExternally(safeName, type, bytes)) {
         platform.notices.show("Couldn't open attachment")
     }

@@ -509,9 +509,10 @@ fun ChatPanel(
                     }
             }
         } else {
+            // Full-bleed on a phone, reading-width capped AND centred on a tablet — desktop's rule.
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             LazyColumn(
                 state = listState,
-                // Full-bleed on a phone, reading-width capped on a tablet — the shared rule.
                 modifier = Modifier
                     .timelineReadingWidth()
                     .fillMaxHeight()
@@ -571,6 +572,7 @@ fun ChatPanel(
                         WaitingIndicator(agent.bgOpen)
                     }
                 }
+            }
             }
         }
 

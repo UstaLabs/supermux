@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.ui.adaptive.WindowWidthClass
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -82,6 +83,34 @@ class VideoControlsTest {
             onAllNodesWithTag("attachment_video_center_play", useUnmergedTree = true).fetchSemanticsNodes().size,
             "a slow first frame must read as buffering, not as paused",
         )
+    }
+
+    @Test fun on_a_touch_host_a_tap_reveals_the_controls_instead_of_toggling_play() = runComposeUiTest {
+        // No hover on a phone, so the pointer rule would hide the controls for the whole clip.
+        val t = FakeTransport(playing = true)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) { frame(t)() }
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("attachment_video_controls", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
+        onNodeWithTag("attachment_video_player").performClick()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("attachment_video_controls", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        assertTrue(t.isPlaying, "the reveal tap must not double as play/pause on touch")
+    }
+
+    @Test fun the_touch_reveal_hides_itself_again() = runComposeUiTest {
+        val t = FakeTransport(playing = true)
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact) { frame(t)() }
+        onNodeWithTag("attachment_video_player").performClick()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("attachment_video_controls", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        // CONTROLS_REVEAL_MS later they are gone again — the picture is not permanently boxed in.
+        mainClock.advanceTimeBy(CONTROLS_REVEAL_MS + 500L)
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("attachment_video_controls", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
     }
 
     @Test fun clicking_the_surface_toggles_playback() = runComposeUiTest {
