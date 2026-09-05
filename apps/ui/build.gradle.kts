@@ -66,6 +66,11 @@ kotlin {
             // MessageTts's generation counter — a plain Int would be a data race between the
             // Compose frame that toggles and the coroutine that streams audio chunks.
             implementation(libs.atomicfu)
+            // The ONE QR encoder (widgets/QrCode.kt). Pure-Java ZXing core — NOT the Android
+            // `zxing-android-embedded` scanner Android's copy pulled in just to draw a bitmap.
+            // Only the module matrix comes from it; the raster is a Compose Canvas, so this stays
+            // `implementation`: no ZXing type appears in `:ui`'s own public API.
+            implementation(libs.zxing.core)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))
@@ -80,6 +85,10 @@ kotlin {
             // BackHandler. The artifact is already on the runtime classpath via ui-backhandler;
             // naming it here only puts it on the test COMPILE classpath.
             implementation(libs.jetbrains.navigationevent.compose)
+            // QrCodeTest decodes what widgets/QrCode.kt encoded, through ZXing's own reader.
+            // (commonMain declares zxing as `implementation`, which a KMP test source set does
+            // not inherit.)
+            implementation(libs.zxing.core)
         }
     }
 }

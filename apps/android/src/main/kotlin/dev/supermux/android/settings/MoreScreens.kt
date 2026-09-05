@@ -1,11 +1,9 @@
 package dev.supermux.android.settings
 
 import android.app.Application
-import android.content.Context
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,12 +12,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
@@ -29,17 +24,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.AppViewModel
 import androidx.compose.ui.platform.LocalContext
-import dev.supermux.android.R
-import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.android.update.AppUpdatePage
 import dev.supermux.chat.mergeTimeline
 import dev.supermux.ui.chat.TimelineItemRow
@@ -48,22 +38,12 @@ import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import kotlin.math.roundToInt
-import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.CodexResetResult
-import dev.supermux.net.CuratorSettingsResponse
-import dev.supermux.net.DeviceDto
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
 import dev.supermux.net.ModelInfo
-import dev.supermux.net.PADto
-import dev.supermux.net.ProxyDto
-import dev.supermux.net.ReasoningResponse
-import dev.supermux.net.resolveReasoningLevel
-import dev.supermux.net.showReasoningPicker
-import dev.supermux.ui.chat.EffortPill
-import dev.supermux.ui.chat.ModelPill
 import dev.supermux.ui.chat.PickerSheet
 import dev.supermux.android.session.deriveArchivedWorkspaceRow
 import dev.supermux.android.session.relTime
@@ -74,13 +54,9 @@ import dev.supermux.session.formatWorkdir
 import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
-import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
-import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -91,6 +67,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.supermux.ui.settings.LspSettingsScreen
 import dev.supermux.ui.settings.AgentSettingsActions
+import dev.supermux.ui.settings.CuratorSettingsActions
+import dev.supermux.ui.settings.CuratorSettingsScreen
+import dev.supermux.ui.settings.DevicesSettingsActions
+import dev.supermux.ui.settings.DevicesSettingsScreen
+import dev.supermux.ui.settings.PersonalAssistantsActions
+import dev.supermux.ui.settings.PersonalAssistantsScreen
+import dev.supermux.ui.settings.ProxiesSettingsActions
+import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.AssistantSettingsActions
 import dev.supermux.ui.settings.AssistantSettingsScreen
@@ -125,27 +109,14 @@ import dev.supermux.net.AddCustomLspArgs
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    // Personal assistants
-    paLoad: suspend () -> List<PADto>,
-    paCreate: suspend (name: String, agent: String, focus: String?) -> Boolean,
-    paKill: suspend (id: String) -> Unit,
+    /** Personal assistants: one holder since E4 — `ui/settings/PersonalAssistantsScreen.kt`. */
+    paActions: PersonalAssistantsActions,
     /** Assistant identity: one holder since E3 — `ui/settings/AssistantSettingsScreen.kt`. */
     assistantActions: AssistantSettingsActions,
     /** Agents: one holder since E2 — the screen itself is `ui/settings/AgentSettingsScreen.kt`. */
     agentActions: AgentSettingsActions,
-    // Curator
-    curatorLoad: suspend () -> CuratorSettingsResponse?,
-    curatorSave: suspend (
-        enabled: Boolean,
-        hour: Int,
-        minute: Int,
-        agent: String,
-        model: String?,
-        reasoningLevel: String?,
-    ) -> CuratorSettingsResponse?,
-    curatorRunNow: suspend () -> Unit,
-    curatorLoadModels: suspend (agent: String) -> List<ModelInfo>,
-    curatorLoadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse?,
+    /** Nightly curator: one holder since E4 — `ui/settings/CuratorSettingsScreen.kt`. */
+    curatorActions: CuratorSettingsActions,
     // Voice (Voice track)
     voiceLoadModels: suspend (family: String) -> List<dev.supermux.net.ModelInfo>,
     voiceLoadConfig: suspend () -> dev.supermux.net.AppConfigDto?,
@@ -167,15 +138,9 @@ fun SettingsScreen(
     /** Broker system/maintenance: one holder since E3 — `ui/settings/SystemSettingsScreen.kt`. */
     systemActions: SystemSettingsActions,
     // Devices + Proxies: standalone routes too (Route.Devices / Route.Proxies), and hub sections
-    // since E1 — the same screens, reached either way.
-    devicesLoad: suspend () -> List<DeviceDto>,
-    deviceAdd: suspend (String) -> AddDeviceResponse?,
-    deviceRevoke: (String) -> Unit,
-    proxiesLoad: suspend () -> List<ProxyDto>,
-    proxySessions: List<SessionInfo>,
-    proxyCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
-    proxySetPublic: (domain: String, isPublic: Boolean) -> Unit,
-    proxyRemove: (domain: String) -> Unit,
+    // since E1 — the same shared screens since E4, reached either way.
+    devicesActions: DevicesSettingsActions,
+    proxiesActions: ProxiesSettingsActions,
     /** The Appearance extra row (`Caps.appearanceControls`): theme / Material You / text scale
      *  live in MainActivity's prefs, so the page arrives as a slot. Shared in E7. */
     appearanceContent: @Composable (onBack: () -> Unit) -> Unit,
@@ -202,11 +167,11 @@ fun SettingsScreen(
         },
     ) { s, scope ->
         when (s) {
-            SettingsSection.PersonalAssistants -> PersonalAssistantsSettingsPage(
+            // Shared since E4 — the screen carries test tags for the first time on either host.
+            SettingsSection.PersonalAssistants -> PersonalAssistantsScreen(
+                actions = paActions,
                 onBack = scope.onClose,
-                load = paLoad,
-                create = paCreate,
-                kill = paKill,
+                topBarShown = scope.topBarShown,
             )
             // Shared since E3 — Android gained the dirty guard, the overwrite confirm and the
             // typed save error with it.
@@ -223,13 +188,13 @@ fun SettingsScreen(
                 onBack = scope.onClose,
                 topBarShown = scope.topBarShown,
             )
-            SettingsSection.Curator -> CuratorSettingsPage(
+            // Shared since E4 — Android gained the load error/retry, the save failure line and
+            // the "Saved" confirmation; its PickerSheet/TimePicker copies gave way to the shared
+            // adaptive menus.
+            SettingsSection.Curator -> CuratorSettingsScreen(
+                actions = curatorActions,
                 onBack = scope.onClose,
-                curatorLoad = curatorLoad,
-                curatorSave = curatorSave,
-                curatorRunNow = curatorRunNow,
-                loadModels = curatorLoadModels,
-                loadReasoning = curatorLoadReasoning,
+                topBarShown = scope.topBarShown,
             )
             // Voice pushes the glossary as its own sub-page — a Voice-local stack, not a hub row.
             SettingsSection.Voice -> {
@@ -275,559 +240,22 @@ fun SettingsScreen(
                 onBack = scope.onClose,
                 topBarShown = scope.topBarShown,
             )
-            SettingsSection.Devices -> DevicesScreen(
+            // Shared since E4 — Android gained "the load failed" as a state of its own, the
+            // revoke confirm that survives a rejected DELETE, and the shared QR encoder.
+            SettingsSection.Devices -> DevicesSettingsScreen(
+                actions = devicesActions,
                 onBack = scope.onClose,
-                onLoad = devicesLoad,
-                onAdd = deviceAdd,
-                onRevoke = deviceRevoke,
+                topBarShown = scope.topBarShown,
             )
-            SettingsSection.Proxies -> ProxyScreen(
-                onLoad = proxiesLoad,
-                sessions = proxySessions,
-                onCreate = proxyCreate,
-                onTogglePublic = proxySetPublic,
-                onRemove = proxyRemove,
+            // Shared since E4 — Android gained the make-public confirm, the per-row URL with
+            // copy/open, and mutations that report what the broker actually did.
+            SettingsSection.Proxies -> ProxiesSettingsScreen(
+                actions = proxiesActions,
                 onBack = scope.onClose,
+                topBarShown = scope.topBarShown,
             )
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PersonalAssistantsSettingsPage(
-    onBack: () -> Unit,
-    load: suspend () -> List<PADto>,
-    create: suspend (name: String, agent: String, focus: String?) -> Boolean,
-    kill: suspend (id: String) -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<PADto>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var showCreate by remember { mutableStateOf(false) }
-    var killTarget by remember { mutableStateOf<PADto?>(null) }
-
-    suspend fun refresh() {
-        loading = true
-        items = load()
-        loading = false
-    }
-
-    BackHandler { onBack() }
-    LaunchedEffect(Unit) { refresh() }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Personal assistants", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showCreate = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Create personal assistant")
-            }
-        },
-        containerColor = cs.background,
-    ) { padding ->
-        when {
-            loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            items.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding).padding(32.dp), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("No personal assistants", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Personal assistants are optional. Tap + to create a persistent orchestrator.",
-                        color = cs.onSurfaceVariant,
-                        fontSize = 13.sp,
-                    )
-                }
-            }
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(bottom = 88.dp),
-            ) {
-                items(items, key = { it.id }) { pa ->
-                    ListItem(
-                        headlineContent = {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(pa.name, fontWeight = FontWeight.Medium)
-                                if (pa.isDefault) Text("default", color = cs.primary, fontSize = 11.sp)
-                            }
-                        },
-                        supportingContent = {
-                            Text(
-                                listOfNotNull(pa.agent, pa.model).joinToString(" · ").ifBlank { pa.workdir },
-                                maxLines = 1,
-                            )
-                        },
-                        leadingContent = {
-                            Box(
-                                Modifier.size(9.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                                    .background(if (pa.connected) cs.primary else cs.outline),
-                            )
-                        },
-                        trailingContent = {
-                            IconButton(onClick = { killTarget = pa }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Kill ${pa.name}")
-                            }
-                        },
-                    )
-                    HorizontalDivider(color = cs.outlineVariant)
-                }
-            }
-        }
-    }
-
-    if (showCreate) {
-        PersonalAssistantCreateDialog(
-            onDismiss = { showCreate = false },
-            onCreate = { name, agent, focus ->
-                scope.launch {
-                    if (create(name, agent, focus)) {
-                        showCreate = false
-                        refresh()
-                    }
-                }
-            },
-        )
-    }
-
-    killTarget?.let { pa ->
-        AlertDialog(
-            onDismissRequest = { killTarget = null },
-            title = { Text("Kill ${pa.name}?") },
-            text = { Text("Its session will be archived. You can create another personal assistant later.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    killTarget = null
-                    scope.launch { kill(pa.id); refresh() }
-                }) { Text("Kill") }
-            },
-            dismissButton = { TextButton(onClick = { killTarget = null }) { Text("Cancel") } },
-        )
-    }
-}
-
-@Composable
-private fun PersonalAssistantCreateDialog(
-    onDismiss: () -> Unit,
-    onCreate: (name: String, agent: String, focus: String?) -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var agent by remember { mutableStateOf("claude") }
-    var focus by remember { mutableStateOf("") }
-    val agents = listOf("claude", "codex", "cursor", "opencode", "grok")
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Create personal assistant") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text("Agent", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                agents.chunked(2).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row.forEach { value ->
-                            FilterChip(
-                                selected = agent == value,
-                                onClick = { agent = value },
-                                label = { Text(value) },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = focus,
-                    onValueChange = { focus = it },
-                    label = { Text("Focus (optional)") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = name.isNotBlank(),
-                onClick = { onCreate(name.trim(), agent, focus.trim().takeIf { it.isNotEmpty() }) },
-            ) { Text("Create") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-/** A 36dp rounded icon box used by the Curator rows. */
-@Composable
-private fun SettingsIconBox(iconRes: Int) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(cs.surfaceContainer)
-            .border(1.dp, cs.outline, RoundedCornerShape(10.dp)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            painterResource(iconRes),
-            contentDescription = null,
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-    }
-}
-
-// ─── Curator page ──────────────────────────────────────────────────────────────
-
-private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
-private const val CURATOR_DEFAULT_MODEL = "__default__"
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CuratorSettingsPage(
-    onBack: () -> Unit,
-    curatorLoad: suspend () -> CuratorSettingsResponse?,
-    curatorSave: suspend (
-        enabled: Boolean,
-        hour: Int,
-        minute: Int,
-        agent: String,
-        model: String?,
-        reasoningLevel: String?,
-    ) -> CuratorSettingsResponse?,
-    curatorRunNow: suspend () -> Unit,
-    loadModels: suspend (agent: String) -> List<ModelInfo>,
-    loadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse?,
-) {
-    val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-
-    var loaded by remember { mutableStateOf(false) }
-    var enabled by remember { mutableStateOf(false) }
-    var hour by remember { mutableStateOf(1) }
-    var minute by remember { mutableStateOf(0) }
-    var agent by remember { mutableStateOf("claude") }
-    var model by remember { mutableStateOf<String?>(null) }
-    var reasoningLevel by remember { mutableStateOf<String?>(null) }
-    var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
-    var reasoningVisible by remember { mutableStateOf(false) }
-    var reasoningOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var nextRun by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
-    var running by remember { mutableStateOf(false) }
-    var showTimePicker by remember { mutableStateOf(false) }
-    var showModelSheet by remember { mutableStateOf(false) }
-    var showReasoningSheet by remember { mutableStateOf(false) }
-    var agentMenu by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        val r = curatorLoad()
-        if (r != null) {
-            enabled = r.config.enabled
-            hour = r.config.hour
-            minute = r.config.minute
-            agent = r.config.agent.takeIf { it in CURATOR_AGENTS } ?: "claude"
-            model = r.config.model
-            reasoningLevel = r.config.reasoningLevel
-            nextRun = r.nextRun
-        }
-        loaded = true
-    }
-
-    LaunchedEffect(agent, loaded) {
-        if (!loaded) return@LaunchedEffect
-        models = loadModels(agent)
-        if (model != null && models.none { it.id == model }) model = null
-    }
-
-    LaunchedEffect(agent, model, loaded) {
-        if (!loaded) return@LaunchedEffect
-        val resp = loadReasoning(agent, model)
-        val levels = resp?.levels.orEmpty()
-        reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
-        reasoningOptions = levels.map { it.id to (it.description ?: it.id) }
-        reasoningLevel = if (reasoningVisible) resolveReasoningLevel(levels, reasoningLevel) else null
-    }
-
-    BackHandler { onBack() }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Curator", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = cs.onSurface,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = cs.surfaceContainerHigh,
-                ),
-            )
-        },
-        containerColor = cs.background,
-    ) { padding ->
-        if (!loaded) {
-            Box(
-                Modifier.fillMaxSize().padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(color = cs.primary)
-            }
-        } else {
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                // 1. Nightly curator toggle
-                CuratorRow(
-                    iconRes = R.drawable.ic_sparkle,
-                    label = "Nightly curator",
-                    desc = "Curate ~/.mux daily, commit + push, and post a digest.",
-                ) {
-                    Switch(
-                        checked = enabled,
-                        onCheckedChange = { enabled = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = cs.onPrimary,
-                            checkedTrackColor = cs.primary,
-                        ),
-                    )
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-
-                // 2. Run at — opens the M3 TimePicker dialog
-                CuratorRow(
-                    label = "Run at",
-                    desc = "Daily, host local time.",
-                ) {
-                    Box(
-                        Modifier
-                            .minimumInteractiveComponentSize()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(cs.surfaceContainer)
-                            .border(1.dp, cs.outline, RoundedCornerShape(6.dp))
-                            .clickable { showTimePicker = true }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    ) {
-                        Text(
-                            String.format(Locale.US, "%02d:%02d", hour, minute),
-                            color = cs.onSurface,
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace,
-                        )
-                    }
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-
-                // 3. Agent / model / thinking (same knobs as session launch)
-                CuratorRow(
-                    label = "Agent",
-                    desc = "Which agent runs the nightly curation.",
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box {
-                            FilterChip(
-                                selected = true,
-                                onClick = { agentMenu = true },
-                                label = {
-                                    Text(agent.replaceFirstChar { it.uppercase() }, fontSize = 12.sp)
-                                },
-                            )
-                            DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
-                                CURATOR_AGENTS.forEach { a ->
-                                    DropdownMenuItem(
-                                        text = { Text(a.replaceFirstChar { it.uppercase() }) },
-                                        onClick = {
-                                            if (a != agent) {
-                                                agent = a
-                                                model = null
-                                                reasoningLevel = null
-                                            }
-                                            agentMenu = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                        val modelLabel = model?.let { id -> models.firstOrNull { it.id == id }?.displayName ?: id }
-                            ?: "Default"
-                        ModelPill(current = modelLabel, onClick = { showModelSheet = true })
-                        if (reasoningVisible) {
-                            EffortPill(
-                                current = reasoningLevel?.replaceFirstChar { it.uppercase() },
-                                onClick = { showReasoningSheet = true },
-                            )
-                        }
-                    }
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-
-                // 4. Next run (read-only)
-                CuratorRow(
-                    label = "Next run",
-                    desc = "The digest notifies all your devices.",
-                ) {
-                    Text(
-                        curatorNextRunLabel(enabled, nextRun),
-                        color = cs.onSurfaceVariant,
-                        fontSize = 14.sp,
-                    )
-                }
-                HorizontalDivider(color = cs.outlineVariant)
-
-                // Footer actions
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                saving = true
-                                val r = curatorSave(enabled, hour, minute, agent, model, reasoningLevel)
-                                if (r != null) nextRun = r.nextRun
-                                saving = false
-                            }
-                        },
-                        enabled = !saving,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = cs.primary),
-                    ) {
-                        Text(if (saving) "Saving…" else "Save", color = cs.onPrimary)
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            scope.launch {
-                                running = true
-                                curatorRunNow()
-                                running = false
-                            }
-                        },
-                        enabled = !running,
-                        border = BorderStroke(1.dp, cs.outline),
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_play),
-                            contentDescription = null,
-                            tint = cs.onSurface,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (running) "Starting…" else "Run now", color = cs.onSurface)
-                    }
-                }
-            }
-        }
-    }
-
-    // M3 time picker, hosted in an AlertDialog (24h). Confirm writes hour/minute
-    // back into the hoisted state exactly as the framework dialog's callback did.
-    if (showTimePicker) {
-        val tpState = rememberTimePickerState(
-            initialHour = hour,
-            initialMinute = minute,
-            is24Hour = true,
-        )
-        AlertDialog(
-            onDismissRequest = { showTimePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    hour = tpState.hour
-                    minute = tpState.minute
-                    showTimePicker = false
-                }) { Text("OK", color = cs.primary) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTimePicker = false }) { Text("Cancel") }
-            },
-            text = {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    TimePicker(state = tpState)
-                }
-            },
-        )
-    }
-
-    if (showModelSheet) {
-        val options = listOf(CURATOR_DEFAULT_MODEL to "Default") +
-            models.map { it.id to it.displayName }
-        PickerSheet(
-            title = "Model",
-            options = options,
-            current = model ?: CURATOR_DEFAULT_MODEL,
-            onPick = { id ->
-                model = id.takeUnless { it == CURATOR_DEFAULT_MODEL }
-                showModelSheet = false
-            },
-            onDismiss = { showModelSheet = false },
-        )
-    }
-
-    if (showReasoningSheet) {
-        PickerSheet(
-            title = "Thinking level",
-            options = reasoningOptions,
-            current = reasoningLevel,
-            onPick = { id ->
-                reasoningLevel = id
-                showReasoningSheet = false
-            },
-            onDismiss = { showReasoningSheet = false },
-        )
-    }
-}
-
-/** Curator list row: optional icon box + label/desc + trailing control slot. */
-@Composable
-private fun CuratorRow(
-    label: String,
-    desc: String,
-    iconRes: Int? = null,
-    trailing: @Composable () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (iconRes != null) SettingsIconBox(iconRes)
-        Column(Modifier.weight(1f)) {
-            Text(label, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(desc, color = cs.onSurfaceVariant, fontSize = 11.sp)
-        }
-        trailing()
-    }
-}
-
-/** Mirrors the web's nextRunLabel: disabled / formatted local datetime / raw / —. */
-private fun curatorNextRunLabel(enabled: Boolean, nextRun: String?): String {
-    if (!enabled) return "Disabled"
-    val raw = nextRun ?: return "—"
-    return runCatching {
-        val dt = LocalDateTime.ofInstant(Instant.parse(raw), ZoneId.systemDefault())
-        dt.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
-    }.getOrNull() ?: raw
 }
 
 // ─── Editor page (local appearance prefs + broker Language-servers section) ───────
@@ -886,7 +314,7 @@ private fun EditorSettingsPage(
                 .verticalScroll(rememberScrollState()),
         ) {
             // 1. Wrap long lines
-            CuratorRow(
+            SettingsRow(
                 label = "Wrap long lines",
                 desc = "Wrap instead of horizontal scroll.",
             ) {
@@ -902,7 +330,7 @@ private fun EditorSettingsPage(
             HorizontalDivider(color = cs.outlineVariant)
 
             // 2. Font size stepper (clamp 10..24)
-            CuratorRow(
+            SettingsRow(
                 label = "Font size",
                 desc = "Code editor text size.",
             ) {
@@ -947,6 +375,32 @@ private fun EditorSettingsPage(
 }
 
 /** Small bordered −/+ button for the font-size stepper. */
+/**
+ * Label/description + trailing control row for the pages still on this file (the Editor page).
+ *
+ * Was `CuratorRow`, shared with the curator page until cluster E4 moved that screen into `:ui`;
+ * it keeps the same metrics so the Editor page looks unchanged. E7 takes it along with the page.
+ */
+@Composable
+private fun SettingsRow(
+    label: String,
+    desc: String,
+    trailing: @Composable () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(desc, color = cs.onSurfaceVariant, fontSize = 11.sp)
+        }
+        trailing()
+    }
+}
+
 @Composable
 private fun StepperButton(text: String, enabled: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -1606,258 +1060,6 @@ private fun GrokUsageCard(grok: GrokUsageData?, error: String?) {
     }
 }
 
-// ─── DevicesScreen ────────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DevicesScreen(
-    onBack: () -> Unit,
-    onLoad: suspend () -> List<DeviceDto>,
-    onAdd: suspend (String) -> AddDeviceResponse?,
-    onRevoke: (String) -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    var devices by remember { mutableStateOf<List<DeviceDto>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var revokeTarget by remember { mutableStateOf<String?>(null) }
-    var showAdd by remember { mutableStateOf(false) }
-    var reloadKey by remember { mutableStateOf(0) }
-
-    LaunchedEffect(reloadKey) {
-        devices = onLoad()
-        loading = false
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Devices", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = cs.onSurface,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = cs.surfaceContainerHigh,
-                ),
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showAdd = true },
-                containerColor = cs.primary,
-                contentColor = cs.onPrimary,
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = "Add device")
-            }
-        },
-        containerColor = cs.background,
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                loading -> CircularProgressIndicator(
-                    color = cs.primary,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                devices.isEmpty() -> Text(
-                    "No devices registered.",
-                    color = cs.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                    items(devices, key = { it.name }) { device ->
-                        DeviceRow(
-                            device = device,
-                            onRevoke = { revokeTarget = device.name },
-                        )
-                        HorizontalDivider(color = cs.outlineVariant)
-                    }
-                }
-            }
-        }
-    }
-
-    // Confirm revoke dialog
-    revokeTarget?.let { name ->
-        AlertDialog(
-            onDismissRequest = { revokeTarget = null },
-            title = { Text("Revoke device?") },
-            text = { Text("Remove \"$name\" from authorized devices?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    onRevoke(name)
-                    devices = devices.filterNot { it.name == name }
-                    revokeTarget = null
-                }) { Text("Revoke", color = cs.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { revokeTarget = null }) { Text("Cancel") }
-            },
-        )
-    }
-
-    // Add-device dialog: name → one-time pairing link with QR + copy.
-    if (showAdd) {
-        AddDeviceDialog(
-            onAdd = onAdd,
-            onDismiss = { minted ->
-                showAdd = false
-                if (minted) reloadKey++
-            },
-        )
-    }
-}
-
-@Composable
-private fun AddDeviceDialog(
-    onAdd: suspend (String) -> AddDeviceResponse?,
-    onDismiss: (minted: Boolean) -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val platform = LocalPlatform.current
-    val scope = rememberCoroutineScope()
-    var name by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var result by remember { mutableStateOf<AddDeviceResponse?>(null) }
-    var copied by remember { mutableStateOf(false) }
-    val minted = result != null
-
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss(minted) },
-        title = { Text(if (minted) "Pairing link" else "Add device") },
-        text = {
-            if (result == null) {
-                Column {
-                    Text(
-                        "Give the new device a name. You'll get a one-time link to open on it.",
-                        color = cs.onSurfaceVariant,
-                        fontSize = 13.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it; error = null },
-                        singleLine = true,
-                        placeholder = { Text("e.g. Work laptop") },
-                        isError = error != null,
-                        enabled = !busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    error?.let {
-                        Spacer(Modifier.height(6.dp))
-                        Text(it, color = cs.error, fontSize = 12.sp)
-                    }
-                }
-            } else {
-                val url = result!!.url
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "Open this link on the new device, or scan it:",
-                        color = cs.onSurfaceVariant,
-                        fontSize = 13.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    val qr = remember(url) { qrBitmap(url) }
-                    if (qr != null) {
-                        Image(
-                            bitmap = qr,
-                            contentDescription = "Pairing QR code",
-                            modifier = Modifier
-                                .size(200.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White)
-                                .padding(8.dp),
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    Text(
-                        url,
-                        color = cs.onSurface,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(cs.surfaceContainerHigh)
-                            .padding(8.dp),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Treat this link like a password — anyone who opens it gets access until you revoke the device.",
-                        color = cs.onSurfaceVariant,
-                        fontSize = 11.sp,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            if (result == null) {
-                TextButton(
-                    enabled = !busy && name.isNotBlank(),
-                    onClick = {
-                        val trimmed = name.trim()
-                        if (trimmed.isEmpty()) return@TextButton
-                        busy = true
-                        error = null
-                        scope.launch {
-                            val r = onAdd(trimmed)
-                            busy = false
-                            if (r == null) error = "Couldn't create the device. Try again."
-                            else result = r
-                        }
-                    },
-                ) {
-                    if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = cs.primary, strokeWidth = 2.dp)
-                    else Text("Create")
-                }
-            } else {
-                TextButton(onClick = {
-                    platform.copyToClipboard(result!!.url)
-                    copied = true
-                }) { Text(if (copied) "Copied" else "Copy link") }
-            }
-        },
-        dismissButton = {
-            TextButton(enabled = !busy, onClick = { onDismiss(minted) }) {
-                Text(if (minted) "Done" else "Cancel")
-            }
-        },
-    )
-}
-
-/** Render a URL as a black-on-white QR bitmap for Compose; null if encoding fails. */
-private fun qrBitmap(content: String): androidx.compose.ui.graphics.ImageBitmap? =
-    runCatching {
-        com.journeyapps.barcodescanner.BarcodeEncoder()
-            .encodeBitmap(content, com.google.zxing.BarcodeFormat.QR_CODE, 512, 512)
-            .asImageBitmap()
-    }.getOrNull()
-
-@Composable
-private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(device.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-            val lastSeen = relTime(device.last_seen_at)
-            if (lastSeen.isNotEmpty()) {
-                Text("Last seen $lastSeen", color = cs.onSurfaceVariant, fontSize = 11.sp)
-            }
-        }
-        TextButton(onClick = onRevoke) {
-            Text("Revoke", color = cs.error, fontSize = 13.sp)
-        }
-    }
-}
-
 // ─── ArchivedScreen ───────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2190,290 +1392,4 @@ private fun ArchivedChatScreen(
             }
         }
     }
-}
-
-// ─── ProxyScreen ──────────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ProxyScreen(
-    onLoad: suspend () -> List<ProxyDto>,
-    sessions: List<SessionInfo>,
-    onCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
-    onTogglePublic: (domain: String, isPublic: Boolean) -> Unit,
-    onRemove: (domain: String) -> Unit,
-    onBack: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val proxies = remember { mutableStateListOf<ProxyDto>() }
-    var loading by remember { mutableStateOf(true) }
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var removeTarget by remember { mutableStateOf<String?>(null) }
-    var reloadKey by remember { mutableStateOf(0) }
-
-    LaunchedEffect(reloadKey) {
-        loading = true
-        val loaded = onLoad()
-        proxies.clear()
-        proxies.addAll(loaded)
-        loading = false
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Proxies", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = cs.onSurface,
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showCreateDialog = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Expose port", tint = cs.onSurface)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-            )
-        },
-        containerColor = cs.background,
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                loading -> CircularProgressIndicator(
-                    color = cs.primary,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                proxies.isEmpty() -> Text(
-                    "No proxies configured.",
-                    color = cs.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                else -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
-                    items(proxies, key = { it.domain }) { proxy ->
-                        ProxyRow(
-                            proxy = proxy,
-                            onTogglePublic = { isPublic ->
-                                onTogglePublic(proxy.domain, isPublic)
-                                val idx = proxies.indexOfFirst { it.domain == proxy.domain }
-                                if (idx >= 0) proxies[idx] = proxy.copy(isPublic = isPublic)
-                            },
-                            onRemove = { removeTarget = proxy.domain },
-                        )
-                        HorizontalDivider(color = cs.outlineVariant)
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Expose port dialog ────────────────────────────────────────────────────
-    if (showCreateDialog) {
-        ExposePortDialog(
-            sessions = sessions,
-            onDismiss = { showCreateDialog = false },
-            onCreate = { sessionName, port, domain ->
-                onCreate(sessionName, port, domain)
-                showCreateDialog = false
-                reloadKey++
-            },
-        )
-    }
-
-    // ── Confirm remove dialog ─────────────────────────────────────────────────
-    removeTarget?.let { domain ->
-        AlertDialog(
-            onDismissRequest = { removeTarget = null },
-            title = { Text("Remove proxy?") },
-            text = { Text("Remove proxy for \"$domain\"?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    onRemove(domain)
-                    proxies.removeAll { it.domain == domain }
-                    removeTarget = null
-                }) { Text("Remove", color = cs.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { removeTarget = null }) { Text("Cancel") }
-            },
-        )
-    }
-}
-
-@Composable
-private fun ProxyRow(
-    proxy: ProxyDto,
-    onTogglePublic: (Boolean) -> Unit,
-    onRemove: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                proxy.domain,
-                color = cs.onSurface,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
-            )
-            if (proxy.sessionName.isNotEmpty() || proxy.port != 0) {
-                Text(
-                    "→ ${proxy.sessionName}:${proxy.port}",
-                    color = cs.onSurfaceVariant,
-                    fontSize = 11.sp,
-                )
-            }
-        }
-        Text(
-            if (proxy.isPublic) "public" else "private",
-            color = cs.onSurfaceVariant,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(end = 4.dp),
-        )
-        Switch(
-            checked = proxy.isPublic,
-            onCheckedChange = onTogglePublic,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = cs.onPrimary,
-                checkedTrackColor = cs.primary,
-            ),
-        )
-        IconButton(onClick = onRemove) {
-            Icon(
-                Icons.Filled.Delete,
-                contentDescription = "Remove",
-                tint = cs.error,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ExposePortDialog(
-    sessions: List<SessionInfo>,
-    onDismiss: () -> Unit,
-    onCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    var selectedSession by remember { mutableStateOf(sessions.firstOrNull()?.name ?: "") }
-    var portText by remember { mutableStateOf("") }
-    var domainText by remember { mutableStateOf("") }
-    var sessionDropdownExpanded by remember { mutableStateOf(false) }
-
-    val portValid = portText.toIntOrNull()?.let { it in 1..65535 } == true
-    val canCreate = selectedSession.isNotBlank() && portValid
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Expose port") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Session picker
-                Box {
-                    OutlinedTextField(
-                        value = selectedSession,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Session") },
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            IconButton(onClick = { sessionDropdownExpanded = true }) {
-                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = cs.onSurface,
-                            unfocusedTextColor = cs.onSurface,
-                            focusedBorderColor = cs.primary,
-                            unfocusedBorderColor = cs.outline,
-                            focusedLabelColor = cs.primary,
-                            unfocusedLabelColor = cs.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenu(
-                        expanded = sessionDropdownExpanded,
-                        onDismissRequest = { sessionDropdownExpanded = false },
-                    ) {
-                        sessions.forEach { session ->
-                            DropdownMenuItem(
-                                text = { Text(session.name) },
-                                onClick = {
-                                    selectedSession = session.name
-                                    sessionDropdownExpanded = false
-                                },
-                            )
-                        }
-                        if (sessions.isEmpty()) {
-                            DropdownMenuItem(
-                                text = { Text("No sessions", color = cs.onSurfaceVariant) },
-                                onClick = { sessionDropdownExpanded = false },
-                            )
-                        }
-                    }
-                }
-
-                // Port field
-                OutlinedTextField(
-                    value = portText,
-                    onValueChange = { portText = it.filter { ch -> ch.isDigit() } },
-                    label = { Text("Port") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = portText.isNotBlank() && !portValid,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = cs.onSurface,
-                        unfocusedTextColor = cs.onSurface,
-                        focusedBorderColor = cs.primary,
-                        unfocusedBorderColor = cs.outline,
-                        focusedLabelColor = cs.primary,
-                        unfocusedLabelColor = cs.onSurfaceVariant,
-                        cursorColor = cs.primary,
-                    ),
-                )
-
-                // Optional domain field
-                OutlinedTextField(
-                    value = domainText,
-                    onValueChange = { domainText = it },
-                    label = { Text("Domain (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = cs.onSurface,
-                        unfocusedTextColor = cs.onSurface,
-                        focusedBorderColor = cs.primary,
-                        unfocusedBorderColor = cs.outline,
-                        focusedLabelColor = cs.primary,
-                        unfocusedLabelColor = cs.onSurfaceVariant,
-                        cursorColor = cs.primary,
-                    ),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val port = portText.toIntOrNull() ?: return@TextButton
-                    val domain = domainText.trim().ifBlank { null }
-                    onCreate(selectedSession, port, domain)
-                },
-                enabled = canCreate,
-            ) {
-                Text("Create", color = if (canCreate) cs.primary else cs.onSurfaceVariant)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
 }

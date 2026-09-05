@@ -10,11 +10,19 @@ import androidx.compose.runtime.Composable
 import dev.supermux.state.HostStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentSettingsScreen
+import dev.supermux.ui.settings.CuratorSettingsScreen
+import dev.supermux.ui.settings.DevicesSettingsScreen
+import dev.supermux.ui.settings.PersonalAssistantsScreen
+import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.AssistantSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.settings.LspSettingsScreen
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.rememberAgentSettingsActions
+import dev.supermux.ui.settings.rememberCuratorSettingsActions
+import dev.supermux.ui.settings.rememberDevicesSettingsActions
+import dev.supermux.ui.settings.rememberPersonalAssistantsActions
+import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.settings.rememberAssistantSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
@@ -34,9 +42,9 @@ fun DesktopSettingsSection(
             topBarShown = scope.topBarShown,
         )
         SettingsSection.Devices -> DevicesSettingsScreen(
-            devicesLoad = { host.devices() },
-            deviceAdd = { name -> host.addDevice(name) },
-            deviceRevoke = { name -> host.revokeDevice(name) },
+            actions = rememberDevicesSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.System -> SystemSettingsScreen(
             actions = rememberSystemSettingsActions(host),
@@ -44,11 +52,9 @@ fun DesktopSettingsSection(
             topBarShown = scope.topBarShown,
         )
         SettingsSection.Proxies -> ProxiesSettingsScreen(
-            proxiesLoad = { host.proxiesForSettings() },
-            sessionNames = { host.sessions.value.map { it.name } },
-            proxyCreate = { session, port, domain -> host.createProxy(session, port, domain) },
-            proxySetPublic = { domain, isPublic -> host.setProxyPublic(domain, isPublic) },
-            proxyRemove = { domain -> host.removeProxy(domain) },
+            actions = rememberProxiesSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.Assistant -> AssistantSettingsScreen(
             actions = rememberAssistantSettingsActions(host),
@@ -57,13 +63,9 @@ fun DesktopSettingsSection(
             topBarShown = scope.topBarShown,
         )
         SettingsSection.Curator -> CuratorSettingsScreen(
-            curatorLoad = { host.curatorSettings() },
-            curatorSave = { enabled, hour, minute, agent, model, reasoning ->
-                host.saveCurator(enabled, hour, minute, agent, model, reasoning)
-            },
-            curatorRunNow = { host.runCuratorNow() },
-            loadModels = { agent -> host.launcherModels(agent) },
-            loadReasoning = { agent, model -> host.launcherReasoning(agent, model) },
+            actions = rememberCuratorSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.Voice -> VoiceSettingsScreen(
             loadConfig = { host.appConfig() },
@@ -91,11 +93,9 @@ fun DesktopSettingsSection(
             showTopBar = false,
         )
         SettingsSection.PersonalAssistants -> PersonalAssistantsScreen(
-            load = { host.personalAssistants() },
-            create = { name, agent, focus -> host.createPersonalAssistant(name, agent, focus) },
-            kill = { host.killPersonalAssistant(it) },
+            actions = rememberPersonalAssistantsActions(host),
             onBack = scope.onClose,
-            showTopBar = false,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.GitHosting -> GitHostingScreen(
             actions = rememberGitHostingActions(host),

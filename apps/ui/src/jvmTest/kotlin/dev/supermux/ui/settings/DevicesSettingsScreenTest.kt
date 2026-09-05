@@ -1,7 +1,4 @@
-// Desktop-parity Task 2: Devices section — list / add (QR) / revoke with confirm.
-package dev.supermux.desktop.settings
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -11,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -26,22 +24,19 @@ import com.google.zxing.DecodeHintType
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
-import dev.supermux.state.FleetStore
-import dev.supermux.desktop.host.encodeQr
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.host.HostPersistence
-import dev.supermux.host.PairedHost
-import dev.supermux.host.PairedHostStore
 import dev.supermux.net.AddDeviceResponse
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.DeviceDto
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.FakeSettingsStore
+import dev.supermux.ui.chat.FixedClock
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
+import dev.supermux.ui.widgets.encodeQr
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -50,12 +45,9 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -67,29 +59,42 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 
 /**
- * Desktop-parity Task 2: [DevicesSettingsScreen] list/add/revoke + Settings hub wiring.
+ * The shared [DevicesSettingsScreen] (cluster E4) — desktop's suite, moved by name.
  *
- * Seeds [BrokerApi] via libs.ktor.client.mock; covers load Error vs Empty, mint pairing link,
- * revoke confirm/error/reload, null last-seen, QR decode, clipboard, autofocus, retry disposal,
- * multi-host isolation, and HostStore GET/POST/DELETE status correctness.
+ * Covers load Error vs Empty (Android used to render "No devices registered." for a failed GET),
+ * the auto-retry, the minted pairing link with its QR, the revoke confirm that keeps the row when
+ * the broker refuses, and the real `HostStore` + mocked `BrokerApi` paths — plus the Compact branch
+ * Android contributed. The `AppShell`-driven hub wiring stays in `:desktop`
+ * (`DevicesSettingsHubTest`).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class DevicesSettingsScreenTest {
 
-    private val tempFiles = mutableListOf<Path>()
-
-    @AfterTest
-    fun cleanup() {
-        tempFiles.forEach { p -> runCatching { Files.deleteIfExists(p) } }
-        tempFiles.clear()
+    private fun ComposeUiTest.devicesContent(
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
+        content()
     }
 
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("devices_settings_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
+    /** The holder is an E4 detail; every test keeps naming the three calls it always named. */
+    @Composable
+    private fun DevicesScreenUnderTest(
+        devicesLoad: suspend () -> List<DeviceDto>?,
+        deviceAdd: suspend (String) -> AddDeviceResponse?,
+        deviceRevoke: suspend (String) -> Boolean,
+        topBarShown: Boolean = true,
+    ) = DevicesSettingsScreen(
+        actions = DevicesSettingsActions(devicesLoad, deviceAdd, deviceRevoke),
+        topBarShown = topBarShown,
+    )
+
+    private fun uiTestDeps(client: HttpClient) = HostStoreDeps(
+        httpFactory = { client },
+        settings = FakeSettingsStore(),
+        clock = FixedClock(),
+    )
 
     private fun sampleDevices() = listOf(
         DeviceDto(
@@ -109,7 +114,7 @@ class DevicesSettingsScreenTest {
         deviceAdd: suspend (String) -> AddDeviceResponse? = { null },
         deviceRevoke: suspend (String) -> Boolean = { true },
     ) = @Composable {
-        DevicesSettingsScreen(
+        DevicesScreenUnderTest(
             devicesLoad = devicesLoad,
             deviceAdd = deviceAdd,
             deviceRevoke = deviceRevoke,
@@ -118,8 +123,9 @@ class DevicesSettingsScreenTest {
 
     // ── screen load states ──────────────────────────────────────────────────────────────────────
 
+
     @Test fun devices_render_from_a_fake_list_with_last_seen() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        devicesContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -137,8 +143,8 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun null_last_seen_renders_without_subtitle() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = {
                         listOf(
@@ -165,8 +171,8 @@ class DevicesSettingsScreenTest {
 
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = {
                     loads.incrementAndGet()
                     null
@@ -182,8 +188,8 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun empty_list_shows_empty_state_not_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = { emptyList() })()
             }
         }
@@ -195,8 +201,8 @@ class DevicesSettingsScreenTest {
 
     @Test fun retry_after_load_failure_recovers() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null else sampleDevices()
@@ -219,8 +225,8 @@ class DevicesSettingsScreenTest {
 
     @Test fun auto_retry_recovers_after_reconnect_without_manual_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null else sampleDevices()
@@ -243,8 +249,8 @@ class DevicesSettingsScreenTest {
     @Test fun disposing_error_state_stops_retry_loop() = runComposeUiTest {
         val loads = AtomicInteger(0)
         var show by mutableStateOf(true)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 if (show) {
                     screen(devicesLoad = {
                         loads.incrementAndGet()
@@ -277,8 +283,8 @@ class DevicesSettingsScreenTest {
 
     @Test fun add_device_mints_pairing_link_and_shows_qr() = runComposeUiTest {
         val added = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { sampleDevices() },
                     deviceAdd = { name ->
@@ -320,8 +326,8 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun add_dialog_autofocuses_name_field() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(devicesLoad = { sampleDevices() })()
             }
         }
@@ -342,8 +348,8 @@ class DevicesSettingsScreenTest {
 
     @Test fun add_dialog_enter_submits_name() = runComposeUiTest {
         val added = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { sampleDevices() },
                     deviceAdd = {
@@ -396,8 +402,8 @@ class DevicesSettingsScreenTest {
             override fun getText(): AnnotatedString? = copied.get()?.let { AnnotatedString(it) }
             override fun hasText(): Boolean = copied.get() != null
         }
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 CompositionLocalProvider(LocalClipboardManager provides fakeClipboard) {
                     screen(
                         devicesLoad = { emptyList() },
@@ -426,8 +432,8 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun add_device_failure_surfaces_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { emptyList() },
                     deviceAdd = { null },
@@ -453,8 +459,8 @@ class DevicesSettingsScreenTest {
 
     @Test fun add_device_done_reloads_list() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = {
                         val n = loads.incrementAndGet()
@@ -511,8 +517,8 @@ class DevicesSettingsScreenTest {
     @Test fun revoke_requires_confirm_then_removes_row() = runComposeUiTest {
         val revoked = AtomicReference<String?>(null)
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = {
                         loads.incrementAndGet()
@@ -560,8 +566,8 @@ class DevicesSettingsScreenTest {
     }
 
     @Test fun revoke_failure_shows_visible_error_and_keeps_row() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     devicesLoad = { sampleDevices() },
                     deviceRevoke = { false },
@@ -628,7 +634,7 @@ class DevicesSettingsScreenTest {
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
+            deps = uiTestDeps(client),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", client),
@@ -639,9 +645,9 @@ class DevicesSettingsScreenTest {
     @Test fun desktop_app_state_devices_decodes_mock_broker() = runComposeUiTest {
         val harness = appForDevices()
         var listed: List<DeviceDto>? = emptyList()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                DevicesSettingsScreen(
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DevicesScreenUnderTest(
                     devicesLoad = {
                         listed = harness.app.devices()
                         listed
@@ -663,9 +669,9 @@ class DevicesSettingsScreenTest {
         val harness = appForDevices(devicesJson = null)
         var result: List<DeviceDto>? = emptyList()
         var called = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                DevicesSettingsScreen(
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DevicesScreenUnderTest(
                     devicesLoad = {
                         result = harness.app.devices()
                         called = true
@@ -724,9 +730,9 @@ class DevicesSettingsScreenTest {
             """[{"name":"pixel-8","last_seen_at":"2024-06-01T12:00:00Z"},{"name":"macbook","last_seen_at":"2024-07-01T08:30:00Z"}]""",
         )
         val harness = appForDevices(mutableDevices = devices)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                DevicesSettingsScreen(
+        devicesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DevicesScreenUnderTest(
                     devicesLoad = { harness.app.devices() },
                     deviceAdd = { harness.app.addDevice(it) },
                     deviceRevoke = { name ->
@@ -774,22 +780,28 @@ class DevicesSettingsScreenTest {
 
     // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
 
-    @Test fun settings_hub_opens_devices_section_and_loads() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
-        val harness = appForDevices()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    harness.app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
+    // ── Compact / touch (Android's branch) ──────────────────────────────────────────────────────
+
+    /**
+     * The phone page paints its own chrome when the hub did not: Android's `TopAppBar` + FAB
+     * instead of the header button the wide detail pane uses.
+     */
+    @Test fun compact_page_paints_its_own_top_bar_and_fab() = runComposeUiTest {
+        var backs = 0
+        devicesContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                DevicesSettingsScreen(
+                    actions = DevicesSettingsActions(
+                        devicesLoad = { sampleDevices() },
+                        deviceAdd = { null },
+                        deviceRevoke = { true },
+                    ),
+                    onBack = { backs++ },
+                    topBarShown = false,
                 )
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_hub").assertIsDisplayed()
-        onNodeWithTag("devices_settings_screen").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
@@ -798,59 +810,23 @@ class DevicesSettingsScreenTest {
                 false
             }
         }
-        onNodeWithTag("settings_section_devices").assertIsDisplayed()
-        harness.client.close()
+        onNodeWithTag("devices_add_button").assertDoesNotExist()
+        onNodeWithTag("devices_add_fab").assertIsDisplayed()
+        onNodeWithTag("devices_add_fab").performClick()
+        waitForIdle()
+        onNodeWithTag("devices_add_dialog").assertIsDisplayed()
+        onNodeWithTag("devices_add_dismiss").performClick()
+        waitForIdle()
+        onNodeWithTag("devices_settings_back").performClick()
+        assertEquals(1, backs)
     }
 
-    @Test fun rail_switches_from_agents_to_devices() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val engine = MockEngine { req ->
-            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-            when (req.url.encodedPath) {
-                "/agents/status" ->
-                    respond(
-                        """[{"kind":"claude","installed":true,"authed":true}]""",
-                        HttpStatusCode.OK, jsonHeaders,
-                    )
-                "/devices" ->
-                    respond(
-                        """[{"name":"pixel-8","last_seen_at":"2024-06-01T12:00:00Z"}]""",
-                        HttpStatusCode.OK, jsonHeaders,
-                    )
-                else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
-            }
-        }
-        val client = HttpClient(engine)
-        val app = HostStore(
-            baseUrl = "ws://test:9898",
-            token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
-            connectOnInit = false,
-            sendFrameOverride = { },
-            apiOverride = BrokerApi("ws://test:9898", "t", client),
-        )
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("rail-state")),
-                    LauncherStore(tempPath("rail-launcher")),
-                )
-            }
+    /** When the hub already painted a top bar, the page adds no second one (and keeps the button). */
+    @Test fun compact_page_defers_to_the_hub_chrome() = runComposeUiTest {
+        devicesContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
         }
         waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("agent_row_claude").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("settings_section_devices").performClick()
-        waitForIdle()
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("device_row_pixel-8").assertIsDisplayed()
@@ -859,107 +835,50 @@ class DevicesSettingsScreenTest {
                 false
             }
         }
-        onNodeWithTag("settings_hub_back").assertIsDisplayed()
-        client.close()
+        onNodeWithTag("devices_settings_back").assertDoesNotExist()
+        onNodeWithTag("devices_add_fab").assertDoesNotExist()
+        onNodeWithTag("devices_add_button").assertIsDisplayed()
     }
 
-    @Test fun multi_host_keying_reloads_devices_per_active_host() = runComposeUiTest {
-        val devicesA = """[{"name":"host-a-phone"}]"""
-        val devicesB = """[{"name":"host-b-tablet"}]"""
-        val scope = TestScope(UnconfinedTestDispatcher())
-        val store = PairedHostStore(
-            object : HostPersistence {
-                var hosts = mutableListOf(
-                    PairedHost(
-                        recordId = "h1",
-                        hostId = "host-a",
-                        displayName = "Host A",
-                        token = "t",
-                        relayUrl = "https://a.relay.supermux.dev",
-                    ),
-                    PairedHost(
-                        recordId = "h2",
-                        hostId = "host-b",
-                        displayName = "Host B",
-                        token = "t",
-                        relayUrl = "https://b.relay.supermux.dev",
-                    ),
-                )
-                override fun loadAll() = hosts.toList()
-                override fun saveAll(hosts: List<PairedHost>) {
-                    this.hosts = hosts.toMutableList()
+    /** Hit targets key on `LocalPointerAvailable`: a finger gets more room between rows. */
+    @Test fun touch_device_rows_sit_further_apart_than_pointer_rows() {
+        fun rowPitch(pointer: Boolean): Float {
+            var pitch = 0f
+            runComposeUiTest {
+                devicesContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
                 }
-            },
-        ) { "rec-unused" }
-        val fleet = FleetStore(
-            store = store,
-            scope = scope,
-            deps = testDeps(),
-            appFactory = { url, token, onConn ->
-                val devicesJson = when {
-                    url.contains("a.relay") -> devicesA
-                    else -> devicesB
-                }
-                val engine = MockEngine { req ->
-                    val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-                    when {
-                        req.url.encodedPath == "/devices" ->
-                            respond(devicesJson, HttpStatusCode.OK, jsonHeaders)
-                        else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
+                waitForIdle()
+                waitUntil(timeoutMillis = 5_000) {
+                    try {
+                        onNodeWithTag("device_row_macbook").assertIsDisplayed()
+                        true
+                    } catch (_: Throwable) {
+                        false
                     }
                 }
-                HostStore(
-                    baseUrl = url,
-                    token = token,
-                    scope = scope,
-                    deps = testDeps(),
-                    connectOnInit = false,
-                    sendFrameOverride = { },
-                    apiOverride = BrokerApi(url, token, HttpClient(engine)),
-                    onConnectionChange = onConn,
-                )
-            },
-        )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Devices) }
-        val primary = fleet.appForRecord("h1")!!
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    primary, ui,
-                    ShellStateStore(tempPath("mh-state")),
-                    LauncherStore(tempPath("mh-launcher")),
-                    fleet = fleet,
-                )
+                val first = onNodeWithTag("device_row_pixel-8").fetchSemanticsNode().positionInRoot.y
+                val second = onNodeWithTag("device_row_macbook").fetchSemanticsNode().positionInRoot.y
+                pitch = second - first
             }
+            return pitch
         }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("device_row_host-a-phone").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        fleet.setActiveHost("h2")
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("device_row_host-b-tablet").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("device_row_host-a-phone").assertDoesNotExist()
-        fleet.close()
+        val touch = rowPitch(pointer = false)
+        val mouse = rowPitch(pointer = true)
+        assertTrue(touch > mouse, "touch pitch $touch should exceed pointer pitch $mouse")
     }
 
-    @Test fun open_settings_devices_selects_section() {
-        val ui = ShellUiState()
-        ui.openSettings(SettingsSection.Devices)
-        assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.Devices, ui.settingsSection)
-        assertTrue(ui.overlayOpen)
-        assertFalse(ui.launcherOpen)
+    /** The last-seen buckets both apps' `relTime` produced, now over the shared epoch parser. */
+    @Test fun last_seen_buckets_match_the_old_relTime() {
+        val now = 1_800_000_000_000L
+        assertEquals("", deviceLastSeen(null, now))
+        assertEquals("", deviceLastSeen("not-a-timestamp", now))
+        assertEquals("now", deviceLastSeen(isoAt(now - 30_000L), now))
+        assertEquals("5m", deviceLastSeen(isoAt(now - 5 * 60_000L), now))
+        assertEquals("3h", deviceLastSeen(isoAt(now - 3 * 3_600_000L), now))
+        assertEquals("2d", deviceLastSeen(isoAt(now - 2 * 86_400_000L), now))
     }
+
+    private fun isoAt(epochMs: Long): String =
+        java.time.Instant.ofEpochMilli(epochMs).toString()
 }

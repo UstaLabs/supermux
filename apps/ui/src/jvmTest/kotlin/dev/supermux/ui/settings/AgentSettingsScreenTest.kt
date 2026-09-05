@@ -1386,9 +1386,15 @@ class AgentSettingsScreenTest {
      * Keyed on `LocalPointerAvailable`, never `LocalInputMode` — a phone with a Bluetooth keyboard
      * is still a thumb. (Folded in from the E2 review, which noted the padding had no assertion.)
      */
+    /**
+     * Hit targets key on `LocalPointerAvailable`. Measured as row PITCH, not node height: the
+     * padding sits inside the tagged row, so two consecutive rows' offsets are what actually moves
+     * (the E3 reviewer's note — the old height probe only passed because the two rows' CONTENT
+     * differed).
+     */
     @Test fun touch_agent_rows_are_taller_than_pointer_rows() {
-        fun headerHeight(pointer: Boolean): Int {
-            var height = 0
+        fun rowPitch(pointer: Boolean): Float {
+            var pitch = 0f
             runComposeUiTest {
                 agentContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
                     SupermuxTheme(appearance = AppearanceMode.DARK) { screen(topBarShown = true)() }
@@ -1396,19 +1402,21 @@ class AgentSettingsScreenTest {
                 waitForIdle()
                 waitUntil(timeoutMillis = 5_000) {
                     try {
-                        onNodeWithTag("agent_row_header_claude").assertExists()
+                        onNodeWithTag("agent_row_codex").assertExists()
                         true
                     } catch (_: Throwable) {
                         false
                     }
                 }
-                height = onNodeWithTag("agent_row_header_claude").fetchSemanticsNode().size.height
+                val first = onNodeWithTag("agent_row_claude").fetchSemanticsNode().positionInRoot.y
+                val second = onNodeWithTag("agent_row_codex").fetchSemanticsNode().positionInRoot.y
+                pitch = second - first
             }
-            return height
+            return pitch
         }
-        val touch = headerHeight(pointer = false)
-        val mouse = headerHeight(pointer = true)
-        assertTrue(touch > mouse, "touch row $touch should exceed pointer row $mouse")
+        val touch = rowPitch(pointer = false)
+        val mouse = rowPitch(pointer = true)
+        assertTrue(touch > mouse, "touch pitch $touch should exceed pointer pitch $mouse")
     }
 
     @Test fun compact_leaves_the_chrome_alone_when_the_hub_painted_it() = runComposeUiTest {

@@ -30,6 +30,7 @@ import dev.supermux.net.AgentLoginState
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.CodexResetResult
+import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
 import dev.supermux.net.DisplayStream
@@ -936,11 +937,44 @@ class FleetStore(
      * UI lying until the next reload. The shared `GitHostingScreen` keeps the row on false.
      */
     suspend fun forgeRemove(id: String): Boolean = activeApp()?.forgeRemove(id) == true
-    fun createProxy(sessionName: String, port: Int, domain: String? = null) {
-        fleetScope.launch { activeApp()?.createProxy(sessionName, port, domain) }
+    /**
+     * Proxies for the Settings section; `null` = the call failed (cluster E4).
+     *
+     * [proxies] stays the fire-and-forget list the session-links menu reads — it cannot tell a
+     * transport failure from "no proxies", which is exactly the distinction the shared
+     * `ProxiesSettingsScreen` needs.
+     */
+    suspend fun proxiesForSettings(): List<ProxyDto>? = activeApp()?.proxiesForSettings()
+
+    /**
+     * The three proxy mutations, typed as the broker answers them (cluster E4).
+     *
+     * All three used to be fire-and-forget `launch`es into [fleetScope]: a rejected create, a
+     * refused visibility flip and a failed delete each looked exactly like success, so Android's
+     * page flipped the switch locally and dropped the row whatever the broker said.
+     */
+    suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse? =
+        activeApp()?.createProxy(sessionName, port, domain)
+    suspend fun setProxyPublic(domain: String, isPublic: Boolean): Boolean =
+        activeApp()?.setProxyPublic(domain, isPublic) == true
+    suspend fun removeProxy(domain: String): Boolean = activeApp()?.removeProxy(domain) == true
+
+    /**
+     * Session names on the ACTIVE host — what the expose-port form offers.
+     *
+     * Mirrors Android's `activeHostSessions`: with a single paired host (or none selected) every
+     * session belongs to it, so the whole list stands.
+     */
+    fun activeHostSessionNames(): List<String> {
+        val active = activeHost.value
+        val all = sessions.value
+        val scoped = if (hostViews.value.size >= 2 && active != null) {
+            all.filter { sessionHost.value[it.id] == active }
+        } else {
+            all
+        }
+        return scoped.map { it.name }
     }
-    fun setProxyPublic(domain: String, isPublic: Boolean) { fleetScope.launch { activeApp()?.setProxyPublic(domain, isPublic) } }
-    fun removeProxy(domain: String) { fleetScope.launch { activeApp()?.removeProxy(domain) } }
 
     fun saveLauncherPrefs(prefs: LauncherPrefs) {
         fleetScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_PREFS, settingsJson.encodeToString(prefs)) }
@@ -985,8 +1019,11 @@ class FleetStore(
     suspend fun createPersonalAssistant(name: String, agent: String, focus: String?): Boolean =
         activeApp()?.createPersonalAssistant(name, agent, focus) == true
     suspend fun killPersonalAssistant(id: String) { (appFor(id) ?: activeApp())?.killPersonalAssistant(id) }
-    suspend fun devices(): List<DeviceDto> = activeApp()?.devices().orEmpty()
+    /** Paired devices; `null` = the call failed (cluster E4 — Android showed "No devices" for it). */
+    suspend fun devices(): List<DeviceDto>? = activeApp()?.devices()
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)
+    /** Revoke a device; true when the broker accepted the DELETE (cluster E4). */
+    suspend fun revokeDevice(name: String): Boolean = activeApp()?.revokeDevice(name) == true
     suspend fun archived(): List<ArchivedDto> = activeApp()?.archived().orEmpty()
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()

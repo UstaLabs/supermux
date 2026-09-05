@@ -1,12 +1,15 @@
-// Ported from apps/android/.../settings/MoreScreens.kt DevicesScreen / AddDeviceDialog.
-// Desktop adaptations:
-//   - FAB → header "Add device" button (desktop pointer chrome; matches Personal Assistants)
-//   - Android BarcodeEncoder QR → host/QrCode.kt qrBitmap (zxing already on desktop classpath)
-//   - LocalContext copy → LocalClipboardManager
-//   - sp/dp hardcodes → theme Space / Radii / IconSize / Stroke / MaterialTheme.typography
-//   - null load = Error (Agents pattern); empty list = "No devices registered."
-//   - testTags for compose UI tests + SM_DEVICES headless verification
-package dev.supermux.desktop.settings
+// The one paired-devices settings screen for both apps (cluster E4).
+//
+// Base = desktop's `settings/DevicesSettingsScreen.kt`: the Loading/Empty/Error load model (a
+// failed GET is never "no devices"), the auto-retry that recovers from a broker reconnect, the
+// revoke confirm that keeps the row when the DELETE fails, the pairing-link dialog with its QR and
+// every test tag. Android's `MoreScreens.kt` `DevicesScreen` contributes the Compact branch — its
+// `TopAppBar` (when the hub did not paint one) and its FAB — and gains all of the above; it used
+// to filter the revoked row out locally whether or not the broker agreed, and to show "No devices
+// registered." for a transport failure.
+//
+// The QR comes from the shared `widgets/QrCode.kt` now; Android's `BarcodeEncoder` is gone.
+package dev.supermux.ui.settings
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -25,16 +28,26 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import dev.supermux.ui.widgets.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,21 +64,28 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import dev.supermux.desktop.host.qrBitmap
-import dev.supermux.desktop.session.relTime
+import dev.supermux.chat.parseChatTs
+import dev.supermux.net.AddDeviceResponse
+import dev.supermux.net.DeviceDto
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.Stroke
-import dev.supermux.net.AddDeviceResponse
-import dev.supermux.net.DeviceDto
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.qrBitmap
+import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.ui.widgets.submitOnEnter
+import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import dev.supermux.ui.widgets.settingsFieldColors
-import dev.supermux.ui.widgets.submitOnEnter
-import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 
 private const val ERROR_AUTO_RETRY_MS = 3_000L
 
@@ -77,16 +97,120 @@ internal sealed class DevicesLoadState {
     data class Error(val message: String) : DevicesLoadState()
 }
 
+/**
+ * Every broker call the Devices screen makes, in one holder.
+ *
+ * Shapes are desktop's: the load returns `null` for a transport/decode failure (an empty list means
+ * "no devices"), and the revoke reports whether the broker actually accepted the DELETE.
+ */
+@Immutable
+class DevicesSettingsActions(
+    /** `null` = transport/decode failure; empty = legitimately no devices. */
+    val devicesLoad: suspend () -> List<DeviceDto>? = { null },
+    val deviceAdd: suspend (name: String) -> AddDeviceResponse? = { null },
+    val deviceRevoke: suspend (name: String) -> Boolean = { false },
+)
+
+/** [DevicesSettingsActions] against one paired host — desktop's wiring. */
+@Composable
+fun rememberDevicesSettingsActions(app: HostStore): DevicesSettingsActions = remember(app) {
+    DevicesSettingsActions(
+        devicesLoad = { app.devices() },
+        deviceAdd = { name -> app.addDevice(name) },
+        deviceRevoke = { name -> app.revokeDevice(name) },
+    )
+}
+
+/** [DevicesSettingsActions] against the fleet's ACTIVE host — Android's wiring. */
+@Composable
+fun rememberDevicesSettingsActions(fleet: FleetStore): DevicesSettingsActions = remember(fleet) {
+    DevicesSettingsActions(
+        devicesLoad = { fleet.devices() },
+        deviceAdd = { name -> fleet.addDevice(name) },
+        deviceRevoke = { name -> fleet.revokeDevice(name) },
+    )
+}
+
+/**
+ * Paired devices: list, mint a one-time pairing link, revoke.
+ *
+ * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
+ *   itself (pass the hub's `SettingsSlotScope.onClose`).
+ * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DevicesSettingsScreen(
-    /**
-     * Load paired devices.
-     * `null` = transport/decode failure; empty list = legitimate empty; non-empty = data.
-     */
-    devicesLoad: suspend () -> List<DeviceDto>?,
-    deviceAdd: suspend (name: String) -> AddDeviceResponse?,
-    deviceRevoke: suspend (name: String) -> Boolean,
+    actions: DevicesSettingsActions,
     modifier: Modifier = Modifier,
+    onBack: () -> Unit = {},
+    topBarShown: Boolean = false,
+) {
+    val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    // The add affordance follows the chrome: with our own Scaffold it is Android's FAB, otherwise
+    // desktop's header button (the hub's detail pane paints no Scaffold for us to hang one on).
+    var showAdd by remember { mutableStateOf(false) }
+    if (compact && !topBarShown) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Devices", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("devices_settings_back"),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = cs.surfaceContainerHigh,
+                    ),
+                )
+            },
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = { showAdd = true },
+                    containerColor = cs.primary,
+                    contentColor = cs.onPrimary,
+                    modifier = Modifier.testTag("devices_add_fab"),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "Add device")
+                }
+            },
+            containerColor = cs.background,
+        ) { padding ->
+            DevicesSettingsBody(
+                actions = actions,
+                modifier = modifier.padding(padding),
+                showHeaderAdd = false,
+                showAdd = showAdd,
+                onShowAddChange = { showAdd = it },
+            )
+        }
+    } else {
+        DevicesSettingsBody(
+            actions = actions,
+            modifier = modifier,
+            showHeaderAdd = true,
+            showAdd = showAdd,
+            onShowAddChange = { showAdd = it },
+        )
+    }
+}
+
+@Composable
+private fun DevicesSettingsBody(
+    actions: DevicesSettingsActions,
+    modifier: Modifier,
+    showHeaderAdd: Boolean,
+    showAdd: Boolean,
+    onShowAddChange: (Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var loadState by remember { mutableStateOf<DevicesLoadState>(DevicesLoadState.Loading) }
@@ -94,7 +218,6 @@ fun DevicesSettingsScreen(
     var revokeTarget by remember { mutableStateOf<String?>(null) }
     var revokeBusy by remember { mutableStateOf(false) }
     var revokeError by remember { mutableStateOf<String?>(null) }
-    var showAdd by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun loadOnce() {
@@ -102,7 +225,7 @@ fun DevicesSettingsScreen(
         if (previous !is DevicesLoadState.Ready) {
             loadState = DevicesLoadState.Loading
         }
-        val result = devicesLoad()
+        val result = actions.devicesLoad()
         loadState = when {
             result == null -> DevicesLoadState.Error("Couldn't load devices.")
             result.isEmpty() -> DevicesLoadState.Empty
@@ -118,7 +241,7 @@ fun DevicesSettingsScreen(
         if (loadState !is DevicesLoadState.Error) return@LaunchedEffect
         while (isActive) {
             delay(ERROR_AUTO_RETRY_MS)
-            val result = devicesLoad()
+            val result = actions.devicesLoad()
             if (result != null) {
                 loadState = if (result.isEmpty()) DevicesLoadState.Empty else DevicesLoadState.Ready(result)
                 break
@@ -132,25 +255,27 @@ fun DevicesSettingsScreen(
             .background(cs.background)
             .testTag("devices_settings_screen"),
     ) {
-        // Hub chrome: action row aligned to the same max width as the list (not the full pane).
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Space.lg, vertical = Space.md),
-            contentAlignment = Alignment.Center,
-        ) {
-            Row(
-                Modifier.widthIn(max = SettingsDetailMaxWidth).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End,
+        if (showHeaderAdd) {
+            // Hub chrome: action row aligned to the same max width as the list (not the full pane).
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.lg, vertical = Space.md),
+                contentAlignment = Alignment.Center,
             ) {
-                Button(
-                    onClick = { showAdd = true },
-                    modifier = Modifier.testTag("devices_add_button"),
-                ) { Text("Add device") }
+                Row(
+                    Modifier.widthIn(max = SettingsDetailMaxWidth).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Button(
+                        onClick = { onShowAddChange(true) },
+                        modifier = Modifier.testTag("devices_add_button"),
+                    ) { Text("Add device") }
+                }
             }
+            HorizontalDivider(color = cs.outlineVariant)
         }
-        HorizontalDivider(color = cs.outlineVariant)
 
         Box(
             Modifier.fillMaxSize().weight(1f, fill = true),
@@ -259,7 +384,7 @@ fun DevicesSettingsScreen(
                         revokeBusy = true
                         revokeError = null
                         scope.launch {
-                            val ok = deviceRevoke(name)
+                            val ok = actions.deviceRevoke(name)
                             revokeBusy = false
                             if (ok) {
                                 revokeTarget = null
@@ -288,12 +413,13 @@ fun DevicesSettingsScreen(
         )
     }
 
-    // Add-device dialog: name → one-time pairing link with QR + copy.
+    // Add-device dialog: name → one-time pairing link with QR + copy. A dialog on BOTH hosts —
+    // Android's page opened the same `AlertDialog`, so there is no compact sheet to branch to.
     if (showAdd) {
         AddDeviceDialog(
-            onAdd = deviceAdd,
+            onAdd = actions.deviceAdd,
             onDismiss = { minted ->
-                showAdd = false
+                onShowAddChange(false)
                 if (minted) reloadKey++
             },
         )
@@ -476,10 +602,13 @@ private fun AddDeviceDialog(
 @Composable
 private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    // Touch bump: ask LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard attached
+    // is still a finger-sized target.
+    val rowPadding = if (LocalPointerAvailable.current) Space.md else Space.lg
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = Space.lg, vertical = Space.md)
+            .padding(horizontal = Space.lg, vertical = rowPadding)
             .testTag("device_row_${device.name}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -490,7 +619,7 @@ private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
                 fontWeight = FontWeight.Medium,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            val lastSeen = relTime(device.last_seen_at)
+            val lastSeen = deviceLastSeen(device.last_seen_at)
             if (lastSeen.isNotEmpty()) {
                 Text(
                     "Last seen $lastSeen",
@@ -506,5 +635,24 @@ private fun DeviceRow(device: DeviceDto, onRevoke: () -> Unit) {
         ) {
             Text("Revoke", color = cs.error)
         }
+    }
+}
+
+/**
+ * "now" / "5m" / "3h" / "2d" for a device's last-seen timestamp — the buckets both apps' `relTime`
+ * produced, over the shared epoch-millis parser instead of `java.time` (which `:ui` commonMain
+ * cannot have). Unparseable or absent → empty, and the row then shows no subtitle at all.
+ */
+internal fun deviceLastSeen(
+    ts: String?,
+    nowMs: Long = Clock.System.now().toEpochMilliseconds(),
+): String {
+    val epochMs = parseChatTs(ts) ?: return ""
+    val diffSec = (nowMs - epochMs) / 1000L
+    return when {
+        diffSec < 60L -> "now"
+        diffSec < 3600L -> "${diffSec / 60}m"
+        diffSec < 86_400L -> "${diffSec / 3600}h"
+        else -> "${diffSec / 86_400}d"
     }
 }

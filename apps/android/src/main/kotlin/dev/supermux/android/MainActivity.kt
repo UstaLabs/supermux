@@ -98,8 +98,12 @@ import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
 import dev.supermux.android.settings.ArchivedScreen
-import dev.supermux.android.settings.DevicesScreen
-import dev.supermux.android.settings.ProxyScreen
+import dev.supermux.ui.settings.DevicesSettingsScreen
+import dev.supermux.ui.settings.ProxiesSettingsScreen
+import dev.supermux.ui.settings.rememberCuratorSettingsActions
+import dev.supermux.ui.settings.rememberDevicesSettingsActions
+import dev.supermux.ui.settings.rememberPersonalAssistantsActions
+import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.update.AppUpdateNotifier
@@ -817,21 +821,13 @@ class MainActivity : ComponentActivity() {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { SettingsScreen(
                             onBack = { navController.popBackStack() },
                             // Personal assistants
-                            paLoad = { vm.fleet.personalAssistants() },
-                            paCreate = { name, agent, focus -> vm.fleet.createPersonalAssistant(name, agent, focus) },
-                            paKill = { vm.fleet.killPersonalAssistant(it) },
+                            paActions = rememberPersonalAssistantsActions(vm.fleet),
                             // Assistant
                             assistantActions = rememberAssistantSettingsActions(vm.fleet),
                             // Agents
                             agentActions = rememberAgentSettingsActions(vm.fleet),
                             // Curator
-                            curatorLoad = { vm.fleet.curatorSettings() },
-                            curatorSave = { e, h, m, agent, model, reasoning ->
-                                vm.fleet.saveCurator(e, h, m, agent, model, reasoning)
-                            },
-                            curatorRunNow = { vm.fleet.runCuratorNow() },
-                            curatorLoadModels = { agent -> vm.fleet.launcherModels(agent) },
-                            curatorLoadReasoning = { agent, model -> vm.fleet.launcherReasoning(agent, model) },
+                            curatorActions = rememberCuratorSettingsActions(vm.fleet),
                             // Voice
                             voiceLoadModels = { family -> vm.fleet.launcherModels(family) },
                             voiceLoadConfig = { vm.fleet.appConfig() },
@@ -853,14 +849,8 @@ class MainActivity : ComponentActivity() {
                             // System
                             systemActions = rememberSystemSettingsActions(vm.fleet),
                             // Devices + Proxies are hub sections too (same screens as their routes).
-                            devicesLoad = { vm.fleet.devices() },
-                            deviceAdd = { vm.fleet.addDevice(it) },
-                            deviceRevoke = { vm.fleet.revoke(it) },
-                            proxiesLoad = { vm.fleet.proxies() },
-                            proxySessions = activeHostSessions,
-                            proxyCreate = { s, p, d -> vm.fleet.createProxy(s, p, d) },
-                            proxySetPublic = { d, pub -> vm.fleet.setProxyPublic(d, pub) },
-                            proxyRemove = { vm.fleet.removeProxy(it) },
+                            devicesActions = rememberDevicesSettingsActions(vm.fleet),
+                            proxiesActions = rememberProxiesSettingsActions(vm.fleet),
                             appearanceContent = { back ->
                                 AppearanceSettingsPage(
                                     appearance = appearance,
@@ -891,11 +881,9 @@ class MainActivity : ComponentActivity() {
                         ) } }
                     }
                     composable<Route.Devices> {
-                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { DevicesScreen(
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { DevicesSettingsScreen(
+                            actions = rememberDevicesSettingsActions(vm.fleet),
                             onBack = { navController.popBackStack() },
-                            onLoad = { vm.fleet.devices() },
-                            onAdd = { vm.fleet.addDevice(it) },
-                            onRevoke = { vm.fleet.revoke(it) },
                         ) } }
                     }
                     composable<Route.Archived> {
@@ -911,12 +899,8 @@ class MainActivity : ComponentActivity() {
                         ) } }
                     }
                     composable<Route.Proxies> {
-                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ProxyScreen(
-                            onLoad = { vm.fleet.proxies() },
-                            sessions = activeHostSessions,
-                            onCreate = { s, p, d -> vm.fleet.createProxy(s, p, d) },
-                            onTogglePublic = { d, pub -> vm.fleet.setProxyPublic(d, pub) },
-                            onRemove = { vm.fleet.removeProxy(it) },
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ProxiesSettingsScreen(
+                            actions = rememberProxiesSettingsActions(vm.fleet),
                             onBack = { navController.popBackStack() },
                         ) } }
                     }

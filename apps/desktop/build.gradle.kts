@@ -40,7 +40,6 @@ dependencies {
     // class loading (verified by smokeJcefEditor), keeping its Java classes and native Chromium an
     // exact build pair. That JBR image is prepared below for :run/:hotRun and every distribution.
     implementation(libs.jcef)
-    implementation(libs.zxing.core) // Plan 3 Task 3: pure-Java QR encoder for the first-run host wizard's pairing QR
     // Native LazyList reorder (elevates, auto-scrolls, animates neighbors) — same library Android uses.
     // Custom detectDragGestures step-math was jumpy on desktop trackpads; Calvin is production-proven.
     implementation(libs.reorderable)

@@ -1,11 +1,12 @@
-// Ported from apps/android/.../settings/MoreScreens.kt ProxyScreen / ExposePortDialog.
-// Desktop adaptations:
-//   - FAB → header "Expose port" button (matches Devices / Personal Assistants hub chrome)
-//   - sp/dp hardcodes → theme Space / Radii / MaterialTheme.typography
-//   - null load = Error; empty list = "No proxies configured."
-//   - create/remove return success so reload and error banners work
-//   - testTags for compose UI tests + SM_PROXIES headless verification
-package dev.supermux.desktop.settings
+// The one reverse-proxy settings screen for both apps (cluster E4).
+//
+// Base = desktop's `settings/ProxiesSettingsScreen.kt`: the Loading/Empty/Error load model, the
+// auto-retry, the make-public confirm (exposing a port to the internet is not a silent toggle),
+// the per-row URL with copy + open, and every test tag. Android's `MoreScreens.kt` `ProxyScreen`
+// contributes the Compact branch — its `TopAppBar` with the "+" action, when the hub did not paint
+// one — and the numeric keyboard on the port field; it gains the error states, the confirm and the
+// create/remove results its fire-and-forget calls never had.
+package dev.supermux.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -20,13 +21,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
-import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -36,11 +38,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,17 +59,25 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.platform.LocalPlatform
+import androidx.compose.ui.text.input.KeyboardType
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.settingsFieldColors
+import dev.supermux.ui.widgets.submitOnEnter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import dev.supermux.ui.widgets.settingsFieldColors
-import dev.supermux.ui.widgets.SettingsDetailMaxWidth
-import dev.supermux.ui.widgets.submitOnEnter
 
 private const val ERROR_AUTO_RETRY_MS = 3_000L
 
@@ -75,19 +89,131 @@ internal sealed class ProxiesLoadState {
     data class Error(val message: String) : ProxiesLoadState()
 }
 
+
+/**
+ * Every broker call the Proxies screen makes, in one holder.
+ *
+ * Shapes are desktop's: the load returns `null` for a transport/decode failure, create returns the
+ * created proxy (or null), and the two mutations report whether the broker accepted them. Android's
+ * `FleetStore` wrappers were fire-and-forget `launch`es — a rejected PATCH looked exactly like a
+ * successful one — and are retyped to these.
+ */
+@Immutable
+class ProxiesSettingsActions(
+    /** `null` = transport/decode failure; empty = legitimately no proxies. */
+    val proxiesLoad: suspend () -> List<ProxyDto>? = { null },
+    /** Session names available for the expose-port form (active host). */
+    val sessionNames: () -> List<String> = { emptyList() },
+    val proxyCreate: suspend (sessionName: String, port: Int, domain: String?) -> CreateProxyResponse? =
+        { _, _, _ -> null },
+    val proxySetPublic: suspend (domain: String, isPublic: Boolean) -> Boolean = { _, _ -> false },
+    val proxyRemove: suspend (domain: String) -> Boolean = { false },
+)
+
+/** [ProxiesSettingsActions] against one paired host — desktop's wiring. */
+@Composable
+fun rememberProxiesSettingsActions(app: HostStore): ProxiesSettingsActions = remember(app) {
+    ProxiesSettingsActions(
+        proxiesLoad = { app.proxiesForSettings() },
+        sessionNames = { app.sessions.value.map { it.name } },
+        proxyCreate = { session, port, domain -> app.createProxy(session, port, domain) },
+        proxySetPublic = { domain, isPublic -> app.setProxyPublic(domain, isPublic) },
+        proxyRemove = { domain -> app.removeProxy(domain) },
+    )
+}
+
+/** [ProxiesSettingsActions] against the fleet's ACTIVE host — Android's wiring. */
+@Composable
+fun rememberProxiesSettingsActions(fleet: FleetStore): ProxiesSettingsActions = remember(fleet) {
+    ProxiesSettingsActions(
+        proxiesLoad = { fleet.proxiesForSettings() },
+        sessionNames = { fleet.activeHostSessionNames() },
+        proxyCreate = { session, port, domain -> fleet.createProxy(session, port, domain) },
+        proxySetPublic = { domain, isPublic -> fleet.setProxyPublic(domain, isPublic) },
+        proxyRemove = { domain -> fleet.removeProxy(domain) },
+    )
+}
+
+/**
+ * Reverse proxies: list, expose a port, flip a proxy public/private, remove.
+ *
+ * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
+ *   itself (pass the hub's `SettingsSlotScope.onClose`).
+ * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProxiesSettingsScreen(
-    /**
-     * Load proxies.
-     * `null` = transport/decode failure; empty list = legitimate empty; non-empty = data.
-     */
-    proxiesLoad: suspend () -> List<ProxyDto>?,
-    /** Session names available for the expose-port dialog (active host). */
-    sessionNames: () -> List<String>,
-    proxyCreate: suspend (sessionName: String, port: Int, domain: String?) -> CreateProxyResponse?,
-    proxySetPublic: suspend (domain: String, isPublic: Boolean) -> Boolean,
-    proxyRemove: suspend (domain: String) -> Boolean,
+    actions: ProxiesSettingsActions,
     modifier: Modifier = Modifier,
+    onBack: () -> Unit = {},
+    topBarShown: Boolean = false,
+) {
+    val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    var showCreate by remember { mutableStateOf(false) }
+    if (compact && !topBarShown) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Proxies", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("proxies_settings_back"),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = { showCreate = true },
+                            modifier = Modifier.testTag("proxies_expose_action"),
+                        ) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "Expose port",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = cs.surfaceContainerHigh,
+                    ),
+                )
+            },
+            containerColor = cs.background,
+        ) { padding ->
+            ProxiesSettingsBody(
+                actions = actions,
+                modifier = modifier.padding(padding),
+                showHeaderExpose = false,
+                showCreate = showCreate,
+                onShowCreateChange = { showCreate = it },
+            )
+        }
+    } else {
+        ProxiesSettingsBody(
+            actions = actions,
+            modifier = modifier,
+            showHeaderExpose = true,
+            showCreate = showCreate,
+            onShowCreateChange = { showCreate = it },
+        )
+    }
+}
+
+@Composable
+private fun ProxiesSettingsBody(
+    actions: ProxiesSettingsActions,
+    modifier: Modifier,
+    showHeaderExpose: Boolean,
+    showCreate: Boolean,
+    onShowCreateChange: (Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var loadState by remember { mutableStateOf<ProxiesLoadState>(ProxiesLoadState.Loading) }
@@ -100,15 +226,14 @@ fun ProxiesSettingsScreen(
     var publicBusy by remember { mutableStateOf(false) }
     var publicError by remember { mutableStateOf<String?>(null) }
     var toggleError by remember { mutableStateOf<String?>(null) }
-    var showCreate by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+        val scope = rememberCoroutineScope()
 
     suspend fun loadOnce() {
         val previous = loadState
         if (previous !is ProxiesLoadState.Ready) {
             loadState = ProxiesLoadState.Loading
         }
-        val result = proxiesLoad()
+        val result = actions.proxiesLoad()
         loadState = when {
             result == null -> ProxiesLoadState.Error("Couldn't load proxies.")
             result.isEmpty() -> ProxiesLoadState.Empty
@@ -122,7 +247,7 @@ fun ProxiesSettingsScreen(
         if (loadState !is ProxiesLoadState.Error) return@LaunchedEffect
         while (isActive) {
             delay(ERROR_AUTO_RETRY_MS)
-            val result = proxiesLoad()
+            val result = actions.proxiesLoad()
             if (result != null) {
                 loadState = if (result.isEmpty()) ProxiesLoadState.Empty else ProxiesLoadState.Ready(result)
                 break
@@ -136,24 +261,28 @@ fun ProxiesSettingsScreen(
             .background(cs.background)
             .testTag("proxies_settings_screen"),
     ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Space.lg, vertical = Space.md),
-            contentAlignment = Alignment.Center,
-        ) {
-            Row(
-                Modifier.widthIn(max = SettingsDetailMaxWidth).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End,
+        // Hub chrome: the action row. The compact page hangs "+" in its own top bar instead
+        // (Android's shape), so it asks for no header here.
+        if (showHeaderExpose) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.lg, vertical = Space.md),
+                contentAlignment = Alignment.Center,
             ) {
-                Button(
-                    onClick = { showCreate = true },
-                    modifier = Modifier.testTag("proxies_expose_button"),
-                ) { Text("Expose port") }
+                Row(
+                    Modifier.widthIn(max = SettingsDetailMaxWidth).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    Button(
+                        onClick = { onShowCreateChange(true) },
+                        modifier = Modifier.testTag("proxies_expose_button"),
+                    ) { Text("Expose port") }
+                }
             }
+            HorizontalDivider(color = cs.outlineVariant)
         }
-        HorizontalDivider(color = cs.outlineVariant)
 
         Box(
             Modifier.fillMaxSize().weight(1f, fill = true),
@@ -241,7 +370,7 @@ fun ProxiesSettingsScreen(
                                         } else {
                                             scope.launch {
                                                 toggleError = null
-                                                val ok = proxySetPublic(proxy.domain, isPublic)
+                                                val ok = actions.proxySetPublic(proxy.domain, isPublic)
                                                 if (ok) {
                                                     val current =
                                                         (loadState as? ProxiesLoadState.Ready)?.proxies.orEmpty()
@@ -307,7 +436,7 @@ fun ProxiesSettingsScreen(
                         removeBusy = true
                         removeError = null
                         scope.launch {
-                            val ok = proxyRemove(domain)
+                            val ok = actions.proxyRemove(domain)
                             removeBusy = false
                             if (ok) {
                                 removeTarget = null
@@ -367,7 +496,7 @@ fun ProxiesSettingsScreen(
                         publicBusy = true
                         publicError = null
                         scope.launch {
-                            val ok = proxySetPublic(domain, true)
+                            val ok = actions.proxySetPublic(domain, true)
                             publicBusy = false
                             if (ok) {
                                 publicTarget = null
@@ -401,10 +530,10 @@ fun ProxiesSettingsScreen(
 
     if (showCreate) {
         ExposePortDialog(
-            sessions = sessionNames(),
-            onCreate = proxyCreate,
+            sessions = actions.sessionNames(),
+            onCreate = actions.proxyCreate,
             onDismiss = { created ->
-                showCreate = false
+                onShowCreateChange(false)
                 if (created) reloadKey++
             },
         )
@@ -421,10 +550,13 @@ private fun ProxyRow(
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
     val tagSafe = proxy.domain.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    // Touch bump: LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard attached is
+    // still a finger-sized target.
+    val rowPadding = if (LocalPointerAvailable.current) Space.md else Space.lg
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = Space.md, vertical = Space.md)
+            .padding(horizontal = Space.md, vertical = rowPadding)
             .testTag("proxy_row_$tagSafe"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -598,6 +730,8 @@ private fun ExposePortDialog(
                     onValueChange = { portText = it.filter { ch -> ch.isDigit() }; error = null },
                     label = { Text("Port") },
                     singleLine = true,
+                    // Android's: a port is digits, so bring up the number pad on a phone.
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     isError = portText.isNotBlank() && !portValid,
                     enabled = !busy,
                     modifier = Modifier

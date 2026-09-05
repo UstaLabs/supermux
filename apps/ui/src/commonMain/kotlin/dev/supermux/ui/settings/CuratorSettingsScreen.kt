@@ -1,6 +1,17 @@
-// Nightly curator settings — own Settings hub section (was side-by-side under Identity).
-// testTags keep the assistant_curator_* names so existing UI tests stay stable.
-package dev.supermux.desktop.settings
+// The one nightly-curator settings screen for both apps (cluster E4).
+//
+// Base = desktop's `settings/CuratorSettingsScreen.kt`: the load/error/retry states, the save and
+// "Run now" results, and the `assistant_curator_*` test tags (kept from when curator sat inside the
+// Assistant section). Android's `MoreScreens.kt` `CuratorSettingsPage` contributes the Compact
+// branch — its `TopAppBar` when the hub did not paint one, and touch-sized picker chips — and gains
+// the error/retry state, the save + run failure lines and the "Saved" confirmation it never had.
+//
+// The pickers are the shared `widgets/DropdownMenu`, which is already a Material menu without a
+// pointer and a desktop menu with one, so Android's separate `PickerSheet`/`TimePicker` copies of
+// the same three choices are gone. "Next run" formats through `:shared`'s
+// `curatorNextRunLabel` — the identical `java.time` output, minus the `java.time` import `:ui`
+// commonMain cannot have.
+package dev.supermux.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,20 +31,25 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import dev.supermux.ui.widgets.DropdownMenu
-import dev.supermux.ui.widgets.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,43 +61,133 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.theme.Radii
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.theme.Stroke
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.Stroke
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.util.curatorNextRunLabel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val CURATOR_AGENTS = listOf("claude", "codex", "cursor", "opencode", "grok")
 
-@Composable
-fun CuratorSettingsScreen(
-    curatorLoad: suspend () -> CuratorSettingsResponse?,
-    curatorSave: suspend (
+
+/**
+ * Every broker call the Curator screen makes, in one holder.
+ *
+ * Shapes are desktop's: load and save return the response (null = the call failed), and "Run now"
+ * reports whether the broker accepted it — Android's page threw all three away.
+ */
+@Immutable
+class CuratorSettingsActions(
+    val curatorLoad: suspend () -> CuratorSettingsResponse? = { null },
+    val curatorSave: suspend (
         enabled: Boolean,
         hour: Int,
         minute: Int,
         agent: String,
         model: String?,
         reasoningLevel: String?,
-    ) -> CuratorSettingsResponse?,
-    curatorRunNow: suspend () -> Boolean,
-    loadModels: suspend (agent: String) -> List<ModelInfo>,
-    loadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse?,
+    ) -> CuratorSettingsResponse? = { _, _, _, _, _, _ -> null },
+    val curatorRunNow: suspend () -> Boolean = { false },
+    val loadModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
+    val loadReasoning: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
+)
+
+/** [CuratorSettingsActions] against one paired host — desktop's wiring. */
+@Composable
+fun rememberCuratorSettingsActions(app: HostStore): CuratorSettingsActions = remember(app) {
+    CuratorSettingsActions(
+        curatorLoad = { app.curatorSettings() },
+        curatorSave = { enabled, hour, minute, agent, model, reasoning ->
+            app.saveCurator(enabled, hour, minute, agent, model, reasoning)
+        },
+        curatorRunNow = { app.runCuratorNow() },
+        loadModels = { agent -> app.launcherModels(agent) },
+        loadReasoning = { agent, model -> app.launcherReasoning(agent, model) },
+    )
+}
+
+/** [CuratorSettingsActions] against the fleet's ACTIVE host — Android's wiring. */
+@Composable
+fun rememberCuratorSettingsActions(fleet: FleetStore): CuratorSettingsActions = remember(fleet) {
+    CuratorSettingsActions(
+        curatorLoad = { fleet.curatorSettings() },
+        curatorSave = { enabled, hour, minute, agent, model, reasoning ->
+            fleet.saveCurator(enabled, hour, minute, agent, model, reasoning)
+        },
+        curatorRunNow = { fleet.runCuratorNow() },
+        loadModels = { agent -> fleet.launcherModels(agent) },
+        loadReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
+    )
+}
+
+/**
+ * Nightly curator: enable, schedule, agent/model/thinking, save, run now.
+ *
+ * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
+ *   itself (pass the hub's `SettingsSlotScope.onClose`).
+ * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CuratorSettingsScreen(
+    actions: CuratorSettingsActions,
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit = {},
+    topBarShown: Boolean = false,
+) {
+    val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    if (compact && !topBarShown) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Curator", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("curator_settings_back"),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = cs.surfaceContainerHigh,
+                    ),
+                )
+            },
+            containerColor = cs.background,
+        ) { padding ->
+            CuratorSettingsBody(actions, modifier.padding(padding))
+        }
+    } else {
+        CuratorSettingsBody(actions, modifier)
+    }
+}
+
+@Composable
+private fun CuratorSettingsBody(
+    actions: CuratorSettingsActions,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -113,7 +219,7 @@ fun CuratorSettingsScreen(
 
     suspend fun loadCuratorOnce() {
         curatorLoaded = false
-        val r = curatorLoad()
+        val r = actions.curatorLoad()
         if (r != null) {
             enabled = r.config.enabled
             hour = r.config.hour.coerceIn(0, 23)
@@ -135,13 +241,13 @@ fun CuratorSettingsScreen(
 
     LaunchedEffect(agent, curatorLoaded) {
         if (!curatorLoaded || curatorError) return@LaunchedEffect
-        models = loadModels(agent)
+        models = actions.loadModels(agent)
         if (model != null && models.none { it.id == model }) model = null
     }
 
     LaunchedEffect(agent, model, curatorLoaded) {
         if (!curatorLoaded || curatorError) return@LaunchedEffect
-        val resp = loadReasoning(agent, model)
+        val resp = actions.loadReasoning(agent, model)
         val levels = resp?.levels.orEmpty()
         reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
         reasoningOptions = levels.map { it.id to (it.description ?: it.id) }
@@ -223,14 +329,14 @@ fun CuratorSettingsScreen(
                     ) {
                         Box {
                             PickerChip(
-                                label = "%02d".format(hour),
+                                label = pad2(hour),
                                 onClick = { hourMenu = true },
                                 testTag = "assistant_curator_hour",
                             )
                             DropdownMenu(expanded = hourMenu, onDismissRequest = { hourMenu = false }) {
                                 (0..23).forEach { h ->
                                     DropdownMenuItem(
-                                        text = { Text("%02d".format(h)) },
+                                        text = { Text(pad2(h)) },
                                         onClick = { hour = h; hourMenu = false },
                                     )
                                 }
@@ -239,14 +345,14 @@ fun CuratorSettingsScreen(
                         Text(":", color = cs.onSurface)
                         Box {
                             PickerChip(
-                                label = "%02d".format(minute),
+                                label = pad2(minute),
                                 onClick = { minuteMenu = true },
                                 testTag = "assistant_curator_minute",
                             )
                             DropdownMenu(expanded = minuteMenu, onDismissRequest = { minuteMenu = false }) {
                                 (0..59).forEach { m ->
                                     DropdownMenuItem(
-                                        text = { Text("%02d".format(m)) },
+                                        text = { Text(pad2(m)) },
                                         onClick = { minute = m; minuteMenu = false },
                                         modifier = Modifier.testTag("assistant_curator_minute_item_$m"),
                                     )
@@ -373,7 +479,7 @@ fun CuratorSettingsScreen(
                                 curatorSaving = true
                                 curatorSaved = false
                                 curatorSaveError = null
-                                val r = curatorSave(
+                                val r = actions.curatorSave(
                                     enabled, hour, minute, agent, model, reasoningLevel,
                                 )
                                 if (r != null) {
@@ -407,7 +513,7 @@ fun CuratorSettingsScreen(
                             scope.launch {
                                 running = true
                                 runError = null
-                                val ok = curatorRunNow()
+                                val ok = actions.curatorRunNow()
                                 running = false
                                 if (!ok) {
                                     runError = "Couldn't start curator run."
@@ -466,13 +572,16 @@ private fun CuratorRow(
 @Composable
 private fun PickerChip(label: String, onClick: () -> Unit, testTag: String) {
     val cs = MaterialTheme.colorScheme
+    // Touch bump (Android's chips were `minimumInteractiveComponentSize()`): keyed on
+    // LocalPointerAvailable, NOT LocalInputMode — a phone with a keyboard still taps with a finger.
+    val chipPadding = if (LocalPointerAvailable.current) Space.sm else Space.md
     Row(
         Modifier
             .clip(RoundedCornerShape(Radii.sm))
             .background(cs.surfaceContainer)
             .border(Stroke.thin, cs.outline, RoundedCornerShape(Radii.sm))
             .clickable(onClick = onClick)
-            .padding(horizontal = Space.md, vertical = Space.sm)
+            .padding(horizontal = Space.md, vertical = chipPadding)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.xs),
@@ -487,12 +596,5 @@ private fun PickerChip(label: String, onClick: () -> Unit, testTag: String) {
     }
 }
 
-/** Mirrors Android curatorNextRunLabel: disabled / formatted local datetime / raw / —. */
-internal fun curatorNextRunLabel(enabled: Boolean, nextRun: String?): String {
-    if (!enabled) return "Disabled"
-    val raw = nextRun ?: return "—"
-    return runCatching {
-        val dt = LocalDateTime.ofInstant(Instant.parse(raw), ZoneId.systemDefault())
-        dt.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
-    }.getOrNull() ?: raw
-}
+/** Two-digit clock field ("07"), replacing the JVM-only `"%02d".format(n)`. */
+private fun pad2(n: Int): String = if (n in 0..9) "0$n" else n.toString()

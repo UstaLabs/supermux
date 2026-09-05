@@ -1,5 +1,6 @@
-package dev.supermux.desktop.host
+package dev.supermux.ui.widgets
 
+import androidx.compose.ui.graphics.toPixelMap
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.LuminanceSource
@@ -14,7 +15,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Pure round-trip proofs for the wizard's QR encoder (Plan 3 Task 3): a payload encoded with
+ * Pure round-trip proofs for the ONE QR encoder (cluster E4; was desktop's `host/QrCodeTest`): a
+ * payload encoded with
  * [encodeQr] decodes back to the exact original string via ZXing's own [QRCodeReader]. No Skiko /
  * display / network needed — the [BitMatrix] is turned into a synthetic luminance grid the reader
  * consumes directly.
@@ -71,5 +73,23 @@ class QrCodeTest {
         val bmp = qrBitmap("dimension-check", sizePx = 256)
         assertEquals(256, bmp.width)
         assertEquals(256, bmp.height)
+    }
+
+    /**
+     * The RENDERED image decodes — the part that changed in E4. The matrix is now rasterised
+     * through a Compose `Canvas` (no `java.awt.BufferedImage`, no Android `BarcodeEncoder`), so
+     * the run-length rectangle painting has to land on exactly the same modules.
+     */
+    @Test fun renderedBitmapDecodesBackToItsContent() {
+        val url = "https://pair.example/rendered-bitmap-token"
+        val bmp = qrBitmap(url, sizePx = 512)
+        val map = bmp.toPixelMap()
+        val pixels = IntArray(bmp.width * bmp.height) { i ->
+            val px = map[i % bmp.width, i / bmp.width]
+            if (px.red < 0.5f) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+        }
+        val bitmap = BinaryBitmap(HybridBinarizer(RGBLuminanceSource(bmp.width, bmp.height, pixels)))
+        val decoded = QRCodeReader().decode(bitmap, mapOf(DecodeHintType.PURE_BARCODE to true)).text
+        assertEquals(url, decoded)
     }
 }

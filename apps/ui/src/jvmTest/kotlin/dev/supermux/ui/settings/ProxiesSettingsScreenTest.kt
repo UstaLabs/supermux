@@ -1,9 +1,7 @@
-// Desktop-parity Task 5: Proxies section — list / create / toggle public / remove.
-package dev.supermux.desktop.settings
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -11,17 +9,18 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.CreateProxyResponse
 import dev.supermux.net.ProxyDto
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.FakeSettingsStore
+import dev.supermux.ui.chat.FixedClock
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -30,12 +29,9 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -44,23 +40,46 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 
+/**
+ * The shared [ProxiesSettingsScreen] (cluster E4) — desktop's suite, moved by name.
+ *
+ * Covers load Error vs Empty, the create form, the make-public confirm, the remove confirm and the
+ * failure paths of all three against a real `HostStore` over a mocked `BrokerApi` — plus the
+ * Compact branch Android contributed. The `AppShell` hub wiring stays in `:desktop`
+ * (`ProxiesSettingsHubTest`).
+ */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class ProxiesSettingsScreenTest {
 
-    private val tempFiles = mutableListOf<Path>()
-
-    @AfterTest
-    fun cleanup() {
-        tempFiles.forEach { p -> runCatching { Files.deleteIfExists(p) } }
-        tempFiles.clear()
+    private fun ComposeUiTest.proxiesContent(
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
+        content()
     }
 
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("proxies_settings_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
+    /** The holder is an E4 detail; every test keeps naming the five calls it always named. */
+    @Composable
+    private fun ProxiesScreenUnderTest(
+        proxiesLoad: suspend () -> List<ProxyDto>?,
+        sessionNames: () -> List<String>,
+        proxyCreate: suspend (String, Int, String?) -> CreateProxyResponse?,
+        proxySetPublic: suspend (String, Boolean) -> Boolean,
+        proxyRemove: suspend (String) -> Boolean,
+        topBarShown: Boolean = true,
+    ) = ProxiesSettingsScreen(
+        actions = ProxiesSettingsActions(
+            proxiesLoad, sessionNames, proxyCreate, proxySetPublic, proxyRemove,
+        ),
+        topBarShown = topBarShown,
+    )
+
+    private fun uiTestDeps(client: HttpClient) = HostStoreDeps(
+        httpFactory = { client },
+        settings = FakeSettingsStore(),
+        clock = FixedClock(),
+    )
 
     private fun sampleProxies() = listOf(
         ProxyDto(
@@ -86,7 +105,7 @@ class ProxiesSettingsScreenTest {
         proxySetPublic: suspend (String, Boolean) -> Boolean = { _, _ -> true },
         proxyRemove: suspend (String) -> Boolean = { true },
     ) = @Composable {
-        ProxiesSettingsScreen(
+        ProxiesScreenUnderTest(
             proxiesLoad = proxiesLoad,
             sessionNames = sessionNames,
             proxyCreate = proxyCreate,
@@ -96,7 +115,7 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun proxies_render_from_a_fake_list() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        proxiesContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -116,8 +135,8 @@ class ProxiesSettingsScreenTest {
 
     @Test fun load_failure_shows_error_with_retry_not_empty() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(proxiesLoad = {
                     loads.incrementAndGet()
                     null
@@ -133,8 +152,8 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun empty_list_shows_empty_state_not_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(proxiesLoad = { emptyList() })()
             }
         }
@@ -147,8 +166,8 @@ class ProxiesSettingsScreenTest {
     @Test fun create_proxy_dialog_posts_and_reloads() = runComposeUiTest {
         val created = AtomicReference<Triple<String, Int, String?>?>(null)
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     proxiesLoad = {
                         loads.incrementAndGet()
@@ -197,8 +216,8 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun create_proxy_failure_keeps_dialog_and_shows_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(proxyCreate = { _, _, _ -> null })()
             }
         }
@@ -222,8 +241,8 @@ class ProxiesSettingsScreenTest {
     @Test fun remove_requires_confirm_then_reloads() = runComposeUiTest {
         val removed = AtomicReference<String?>(null)
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     proxiesLoad = {
                         loads.incrementAndGet()
@@ -265,8 +284,8 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun remove_failure_shows_error_in_dialog() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(proxyRemove = { false })()
             }
         }
@@ -288,8 +307,8 @@ class ProxiesSettingsScreenTest {
 
     @Test fun toggle_public_requires_confirm_then_calls_set() = runComposeUiTest {
         val toggled = AtomicReference<Pair<String, Boolean>?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     proxySetPublic = { domain, isPublic ->
                         toggled.set(domain to isPublic)
@@ -319,8 +338,8 @@ class ProxiesSettingsScreenTest {
     }
 
     @Test fun toggle_public_failure_shows_error_in_dialog() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(proxySetPublic = { _, _ -> false })()
             }
         }
@@ -338,8 +357,6 @@ class ProxiesSettingsScreenTest {
         }
         onNodeWithTag("proxies_public_dialog").assertIsDisplayed()
     }
-
-    // ── HostStore + BrokerApi (ktor mock) ─────────────────────────────────────────────────
 
     private fun appForProxies(
         listJson: String? = """[{"domain":"app.example.local","sessionName":"web","port":3000,"isPublic":false}]""",
@@ -376,7 +393,7 @@ class ProxiesSettingsScreenTest {
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
+            deps = uiTestDeps(client),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", client),
@@ -387,9 +404,9 @@ class ProxiesSettingsScreenTest {
     @Test fun desktop_app_state_proxies_decodes_mock_broker() = runComposeUiTest {
         val (app, methods) = appForProxies()
         var listed: List<ProxyDto>? = emptyList()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ProxiesSettingsScreen(
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesScreenUnderTest(
                     proxiesLoad = {
                         listed = app.proxiesForSettings()
                         listed
@@ -418,9 +435,9 @@ class ProxiesSettingsScreenTest {
         val (app, _) = appForProxies(listJson = null)
         var result: List<ProxyDto>? = emptyList()
         var called = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ProxiesSettingsScreen(
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesScreenUnderTest(
                     proxiesLoad = {
                         result = app.proxiesForSettings()
                         called = true
@@ -442,9 +459,9 @@ class ProxiesSettingsScreenTest {
     @Test fun desktop_app_state_remove_proxy_false_on_http_500() = runComposeUiTest {
         val (app, methods) = appForProxies(deleteStatus = HttpStatusCode.InternalServerError)
         var removed = true
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ProxiesSettingsScreen(
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesScreenUnderTest(
                     proxiesLoad = { app.proxiesForSettings() },
                     sessionNames = { listOf("web") },
                     proxyCreate = { _, _, _ -> null },
@@ -478,9 +495,9 @@ class ProxiesSettingsScreenTest {
     @Test fun desktop_app_state_create_proxy_null_on_http_500() = runComposeUiTest {
         val (app, _) = appForProxies(createStatus = HttpStatusCode.InternalServerError)
         var created: CreateProxyResponse? = CreateProxyResponse("u", "d", 1)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ProxiesSettingsScreen(
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesScreenUnderTest(
                     proxiesLoad = { app.proxiesForSettings() },
                     sessionNames = { listOf("web") },
                     proxyCreate = { s, p, d ->
@@ -511,9 +528,9 @@ class ProxiesSettingsScreenTest {
     @Test fun desktop_app_state_toggle_public_false_on_http_500() = runComposeUiTest {
         val (app, methods) = appForProxies(patchStatus = HttpStatusCode.InternalServerError)
         var ok = true
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                ProxiesSettingsScreen(
+        proxiesContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesScreenUnderTest(
                     proxiesLoad = { app.proxiesForSettings() },
                     sessionNames = { listOf("web") },
                     proxyCreate = { _, _, _ -> null },
@@ -536,28 +553,107 @@ class ProxiesSettingsScreenTest {
         onNodeWithTag("proxies_public_error").assertIsDisplayed()
     }
 
-    @Test fun settings_hub_opens_proxies_section() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Proxies) }
-        val (app, _) = appForProxies()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
+    // ── Compact / touch (Android's branch) ──────────────────────────────────────────────────────
+
+    /** The phone page paints Android's chrome: its own top bar with the "+" expose action. */
+    @Test fun compact_page_paints_its_own_top_bar_with_the_expose_action() = runComposeUiTest {
+        var backs = 0
+        proxiesContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ProxiesSettingsScreen(
+                    actions = ProxiesSettingsActions(
+                        proxiesLoad = { sampleProxies() },
+                        sessionNames = { listOf("web") },
+                    ),
+                    onBack = { backs++ },
+                    topBarShown = false,
                 )
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_section_proxies").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("proxies_settings_screen").assertIsDisplayed()
+                onNodeWithTag("proxy_row_app.example.local").assertIsDisplayed()
                 true
             } catch (_: Throwable) {
                 false
             }
         }
+        onNodeWithTag("proxies_expose_button").assertDoesNotExist()
+        onNodeWithTag("proxies_expose_action").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_create_dialog").assertIsDisplayed()
+        onNodeWithTag("proxies_create_cancel").performClick()
+        waitForIdle()
+        onNodeWithTag("proxies_settings_back").performClick()
+        assertEquals(1, backs)
+    }
+
+    /** When the hub already painted a top bar, the page keeps the header button and adds no bar. */
+    @Test fun compact_page_defers_to_the_hub_chrome() = runComposeUiTest {
+        proxiesContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxy_row_app.example.local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxies_settings_back").assertDoesNotExist()
+        onNodeWithTag("proxies_expose_button").assertIsDisplayed()
+    }
+
+    /** Hit targets key on `LocalPointerAvailable`: a finger gets more room between rows. */
+    @Test fun touch_proxy_rows_sit_further_apart_than_pointer_rows() {
+        fun rowPitch(pointer: Boolean): Float {
+            var pitch = 0f
+            runComposeUiTest {
+                proxiesContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
+                }
+                waitForIdle()
+                waitUntil(timeoutMillis = 5_000) {
+                    try {
+                        onNodeWithTag("proxy_row_api.example.local").assertIsDisplayed()
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                val first =
+                    onNodeWithTag("proxy_row_app.example.local").fetchSemanticsNode().positionInRoot.y
+                val second =
+                    onNodeWithTag("proxy_row_api.example.local").fetchSemanticsNode().positionInRoot.y
+                pitch = second - first
+            }
+            return pitch
+        }
+        val touch = rowPitch(pointer = false)
+        val mouse = rowPitch(pointer = true)
+        assertTrue(touch > mouse, "touch pitch $touch should exceed pointer pitch $mouse")
+    }
+
+    /** The per-row URL row Android never had: copy writes the URL, open hands it to the platform. */
+    @Test fun row_url_copies_and_opens() = runComposeUiTest {
+        val platform = FakePlatform()
+        setPlatformContent(platform = platform) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxy_url_app.example.local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("proxy_url_open_app.example.local").performClick()
+        waitForIdle()
+        assertEquals(listOf("https://app.example.local"), platform.openedUrls)
     }
 }
