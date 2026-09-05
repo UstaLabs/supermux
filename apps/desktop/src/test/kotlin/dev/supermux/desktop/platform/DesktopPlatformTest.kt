@@ -16,6 +16,7 @@ import kotlin.test.Test
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -128,39 +129,56 @@ class DesktopPlatformTest {
     fun `saveAs returns false when headless instead of throwing`() = runTest {
         if (!GraphicsEnvironment.isHeadless()) return@runTest
         val saved = DesktopPlatform().files.saveAs("notes.txt", "text/plain", byteArrayOf(1, 2, 3))
-        assertFalse(saved, "a headless save must fail closed")
+        assertNull(saved, "a headless save must fail closed")
     }
 
     /**
-     * The open chain's ORDER: `java.awt.Desktop.open` first, then the per-OS shell opener. Under
-     * xvfb neither may be available, so what is asserted is the contract that holds either way —
-     * a boolean answer, no throw, and the staged file actually written before anything is asked to
-     * open it.
+     * The STAGING step of the open chain, which is the half a test can drive: the bytes must be a
+     * real file under the app's temp directory before any handler is asked for. Deliberately does
+     * NOT call `openExternally` — that would fork a real image viewer on the developer's desktop —
+     * so the fallback ORDER is asserted separately, on [openLocalFile] against an unopenable path.
      */
     @Test
-    fun `openExternally stages the bytes and answers instead of throwing`() = runTest {
+    fun `openExternally stages the bytes under the app temp directory before opening`() {
         val name = "attachment-${System.nanoTime()}.txt"
-        DesktopPlatform().files.openExternally(name, "text/plain", "hello".toByteArray())
-        val staged = File(File(System.getProperty("java.io.tmpdir"), "supermux-attachments"), name)
+        val staged = stageAttachmentForTest(name, "hello".toByteArray())
+        assertNotNull(staged)
         assertTrue(staged.isFile, "the bytes must be on disk before a handler is invoked")
         assertEquals("hello", staged.readText())
+        assertEquals(
+            File(System.getProperty("java.io.tmpdir"), "supermux-attachments"),
+            staged.parentFile,
+        )
         staged.delete()
     }
 
+    /**
+     * The fallback ORDER, safely: `java.awt.Desktop.open` first (it throws for a missing file, so
+     * it cannot report success), then the per-OS shell opener. A path that cannot exist means no
+     * viewer window can appear either way — the contract under test is that the call ANSWERS
+     * rather than propagating.
+     */
     @Test
-    fun `openLocalFile never throws for a file that cannot be opened`() {
+    fun `openLocalFile falls through to the shell opener and never throws`() {
         val gone = File("/nonexistent/supermux/${System.nanoTime()}.bin")
-        // Either branch may report success (xdg-open forks before it fails) — the contract is that
-        // the call returns rather than propagating.
         openLocalFile(gone)
     }
 
     @Test
-    fun `probeMime answers from the name alone, falling back to octet-stream`() {
+    fun `probeMime asks the OS first and falls back to the shared table`() {
         val files = DesktopPlatform().files
         assertEquals("image/png", files.probeMime("shot.png"))
+        // Nothing on a bare JVM knows .m4a — this is the `:shared` MediaMime table answering.
         assertEquals("audio/mp4", files.probeMime("dictation-1.m4a"))
         assertEquals("application/octet-stream", files.probeMime("archive.sm-unknown-ext"))
+    }
+
+    /** Read-aloud is process-wide: a second window's platform must hand back the SAME engine, or
+     *  its `stop()` could not silence what the first window started. */
+    @Test
+    fun `every platform instance shares one process-wide tts engine`() {
+        assertSame(DesktopPlatform().tts, DesktopPlatform().tts)
+        assertSame(SharedDesktopTts, DesktopPlatform().tts)
     }
 
     // ── clipboard caps + resize policy (moved from DesktopComposerPasteTest) ──

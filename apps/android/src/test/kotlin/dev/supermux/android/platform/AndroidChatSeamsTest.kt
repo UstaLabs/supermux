@@ -1,6 +1,9 @@
 package dev.supermux.android.platform
 
 import dev.supermux.ui.platform.CapturedAudio
+import dev.supermux.ui.platform.TtsEngine
+import kotlin.test.AfterTest
+import kotlin.test.assertSame
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -107,6 +110,48 @@ class AndroidChatSeamsTest {
         assertEquals(1, backend.shutdowns)
     }
 
+    // ── the process-wide engine holder ───────────────────────────────────────
+
+    @AfterTest
+    fun clearSharedTts() = AndroidTts.resetForTest()
+
+    private class NoopTts : TtsEngine {
+        var shutdowns = 0
+        override suspend fun speak(text: String) = Unit
+        override suspend fun playAudioChunk(bytes: ByteArray) = Unit
+        override fun stop() = Unit
+        override fun shutdown() { shutdowns++ }
+    }
+
+    /**
+     * The rotation bug in one assertion: `AndroidPlatform` is rebuilt from the ACTIVITY, so every
+     * configuration change asks for the engine again. If each ask built its own, the OLD
+     * `TextToSpeech` would keep reading with nothing able to stop it — and leak a service
+     * connection per rotation. (Asserted on the holder rather than on two `AndroidPlatform`s: the
+     * platform needs a real `Context`, which a JVM unit test has no way to produce.)
+     */
+    @Test
+    fun `the tts engine is created once per process, not once per activity`() {
+        AndroidTts.resetForTest()
+        var built = 0
+        val first = AndroidTts.shared { built++; NoopTts() }
+        val second = AndroidTts.shared { built++; NoopTts() }
+        assertSame(first, second, "a rotation must not orphan a talking engine")
+        assertEquals(1, built)
+    }
+
+    @Test
+    fun `shutdown releases the engine and the next ask builds a fresh one`() {
+        AndroidTts.resetForTest()
+        val engine = NoopTts()
+        assertSame(engine, AndroidTts.shared { engine })
+        AndroidTts.shutdown()
+        assertEquals(1, engine.shutdowns)
+
+        val next = NoopTts()
+        assertSame(next, AndroidTts.shared { next }, "a shutdown engine must not be handed out again")
+    }
+
     // ── AndroidMicCapture ────────────────────────────────────────────────────
 
     private class FakeRecorder(private val produce: () -> File?) : AudioFileRecorder {
@@ -197,4 +242,12 @@ class AndroidChatSeamsTest {
         assertEquals("file", safeFileName("dir/"))
         assertEquals("c.png", safeFileName("x\\c.png"))
     }
+
+    // ── saved files ──────────────────────────────────────────────────────────
+    //
+    // `AndroidFileAccess.openSaved` returning false (a SAF document is not ours to launch — the
+    // platform gesture after "save" is the system Files app) is not asserted here: the class needs
+    // a real `Context`, which a JVM unit test cannot produce (`Context` is an abstract stub, not an
+    // interface). The behaviour it protects — the chip opening through ACTION_VIEW rather than a
+    // second intent — is unchanged on Android and covered on desktop by `DesktopPlatformTest`.
 }

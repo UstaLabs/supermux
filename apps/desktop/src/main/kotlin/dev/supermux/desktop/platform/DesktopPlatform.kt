@@ -102,7 +102,8 @@ class DesktopPlatform : Platform {
 
     override val mic: MicCapture = DesktopMicCapture()
 
-    override val tts: TtsEngine = DesktopTtsEngine()
+    /** Process-wide, not per-window — see [SharedDesktopTts]. */
+    override val tts: TtsEngine get() = SharedDesktopTts
 
     /** Rendered by `DesktopTheme`'s snackbar host — one bus per window root, which is where
      *  [DesktopPlatform] itself is constructed. */

@@ -96,9 +96,17 @@ internal class FakeFiles(
     val saved = mutableListOf<String>()
     val opened = mutableListOf<String>()
 
-    override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): Boolean {
+    /** [SavedFile]s handed back to [openSaved] — proves the chip opens what the user SAVED. */
+    val openedSaved = mutableListOf<SavedFile>()
+
+    override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
         saved.add("$name|$mime|${bytes.size}")
-        return saveResult
+        return if (saveResult) SavedFile(name, "/fake/$name") else null
+    }
+
+    override suspend fun openSaved(saved: SavedFile): Boolean {
+        openedSaved.add(saved)
+        return openResult
     }
 
     override suspend fun openExternally(name: String, mime: String, bytes: ByteArray): Boolean {

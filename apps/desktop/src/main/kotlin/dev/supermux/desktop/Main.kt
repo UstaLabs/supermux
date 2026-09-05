@@ -96,6 +96,7 @@ import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.desktop.platform.SharedDesktopTts
 
 /** The desktop half of the walkthrough seam: `:shared`'s [WalkthroughSeam] over `:ui`'s
  *  [WalkthroughState]. Five lines, kept beside the DI that installs it (see the `HostStore`
@@ -1526,6 +1527,10 @@ fun main() {
         // has been disposed, but before JVM shutdown, so Chromium helper processes exit cleanly.
         dev.supermux.desktop.editor.DesktopEditorEngineFactory.shared.dispose()
         dev.supermux.desktop.editor.JcefRuntime.dispose()
+        // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
+        // process; release it here so a quit mid-sentence does not outlive the window.
+        runCatching { MessageTts.stop(SharedDesktopTts) }
+        runCatching { SharedDesktopTts.shutdown() }
     }
 }
 

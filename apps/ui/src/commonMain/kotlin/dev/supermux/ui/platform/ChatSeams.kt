@@ -48,12 +48,24 @@ interface ClipboardAccess {
  */
 interface FileAccess {
     /**
-     * Ask the user where to put [bytes] and write them there. True when the file was written,
-     * false when the user cancelled, when the write failed, or on a host with
-     * `caps.saveAs == false` (a headless desktop under CI, say — which must return false, not
-     * throw).
+     * Ask the user where to put [bytes] and write them there, returning WHERE it landed — or null
+     * when the user cancelled, when the write failed, or on a host with `caps.saveAs == false` (a
+     * headless desktop under CI, say — which must return null, not throw).
+     *
+     * It returns a [SavedFile] rather than a bare boolean so "save, then open what I just saved"
+     * is one file, not two: handing the bytes to [openExternally] afterwards would stage a SECOND
+     * copy in a temp directory and open that instead of the user's file.
      */
-    suspend fun saveAs(name: String, mime: String, bytes: ByteArray): Boolean
+    suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile?
+
+    /**
+     * Hand a file the user just saved (via [saveAs]) to the OS. True when a handler took it.
+     *
+     * Android returns false and does nothing: a SAF document is not ours to launch, and the
+     * platform flow after "save" is the system Files app, not an implicit intent from us. Ask
+     * [Caps.saveAs] — a host that cannot save cannot open a save either.
+     */
+    suspend fun openSaved(saved: SavedFile): Boolean
 
     /**
      * Write [bytes] somewhere the OS can reach and hand them to whatever opens [mime] — desktop's
@@ -67,6 +79,15 @@ interface FileAccess {
      *  when the host cannot tell. The pure part of the guess lives in `:shared`'s `MediaMime`. */
     fun probeMime(name: String): String
 }
+
+/**
+ * Where a [FileAccess.saveAs] actually landed.
+ *
+ * [location] is deliberately opaque to shared code — an absolute path on desktop, a SAF document
+ * URI on Android — and is only ever handed back to [FileAccess.openSaved]. [name] is the leaf the
+ * user ended up with, which is the only part a screen may show.
+ */
+data class SavedFile(val name: String, val location: String)
 
 /** One finished recording, ready to POST to the broker's transcribe endpoint. */
 data class CapturedAudio(

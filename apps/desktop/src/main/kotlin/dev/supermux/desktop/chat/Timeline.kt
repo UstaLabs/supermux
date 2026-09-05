@@ -131,7 +131,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.awt.Desktop
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -140,7 +139,6 @@ import java.net.URI
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 import org.jetbrains.skia.Codec
 import org.jetbrains.skia.Data
 
@@ -1979,7 +1977,8 @@ private fun AttachmentChip(
                     // (`saveAs` cannot tell cancel from write-error, and a red chip on cancel
                     // would be worse than a silent one).
                     failed = false
-                    if (saved) files.openExternally(name, mime, bytes)
+                    // The file the user CHOSE, not a second temp copy of the same bytes.
+                    if (saved != null) files.openSaved(saved)
                 }
             }
             .padding(horizontal = Space.sm, vertical = Space.xs)

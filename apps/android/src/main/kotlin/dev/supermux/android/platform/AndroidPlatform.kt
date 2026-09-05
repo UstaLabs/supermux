@@ -156,10 +156,18 @@ class AndroidPlatform(
         },
     )
 
-    override val tts: TtsEngine = AndroidTtsEngine(
-        backend = PlatformTtsBackend(context.applicationContext),
-        player = MediaPlayerChunkPlayer(context.applicationContext),
-    )
+    /**
+     * Process-wide, not per-activity — see [AndroidTts]. A rotation rebuilds this platform, and a
+     * per-instance engine would leave the OLD `TextToSpeech` reading aloud with nothing able to
+     * stop it (and leak one service connection per rotation).
+     */
+    override val tts: TtsEngine
+        get() = AndroidTts.shared {
+            AndroidTtsEngine(
+                backend = PlatformTtsBackend(context.applicationContext),
+                player = MediaPlayerChunkPlayer(context.applicationContext),
+            )
+        }
 
     override val notices: NoticeChannel = AndroidNotices(context.applicationContext)
 

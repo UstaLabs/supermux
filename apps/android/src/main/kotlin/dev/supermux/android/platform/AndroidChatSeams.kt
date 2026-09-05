@@ -21,6 +21,7 @@ import androidx.core.content.FileProvider
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.DictationEngine
 import dev.supermux.android.chat.DictationStart
+import dev.supermux.android.chat.MessageTts
 import dev.supermux.chat.mimeForFileName
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.ClipboardAccess
@@ -29,6 +30,7 @@ import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.platform.SavedFile
 import dev.supermux.ui.platform.TtsEngine
 import java.io.File
 import java.util.Locale
@@ -100,15 +102,24 @@ internal class AndroidFileAccess(
     private val saveHost: SaveHost,
 ) : FileAccess {
 
-    override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): Boolean {
-        val target = saveHost.save(mime.ifBlank { "application/octet-stream" }, safeFileName(name))
-            ?: return false
-        return withContext(Dispatchers.IO) {
+    override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
+        val safeName = safeFileName(name)
+        val target = saveHost.save(mime.ifBlank { "application/octet-stream" }, safeName)
+            ?: return null
+        val written = withContext(Dispatchers.IO) {
             runCatching {
                 context.contentResolver.openOutputStream(target)?.use { it.write(bytes) } != null
             }.getOrDefault(false)
         }
+        return if (written) SavedFile(safeName, target.toString()) else null
     }
+
+    /**
+     * Not the Android flow: a SAF document belongs to the provider the user picked, and the
+     * platform gesture after "save" is the system Files app — not an implicit intent from us. The
+     * chip's own "open" affordance goes through [openExternally] instead, exactly as before.
+     */
+    override suspend fun openSaved(saved: SavedFile): Boolean = false
 
     /**
      * Write [bytes] to `cacheDir/attachments` and offer them to the system.
@@ -301,13 +312,10 @@ internal class AndroidTtsEngine(
         }
     }
 
-    override suspend fun playAudioChunk(bytes: ByteArray) {
-        val g = gen.get()
-        player.play(bytes)
-        // A stop() during playback already released the player; the generation check keeps a
-        // caller from queueing the NEXT chunk of an abandoned stream.
-        if (gen.get() != g) return
-    }
+    /** Ordering and abandonment are the caller's (`MessageTts.speakCodex` drains one queue and
+     *  checks its own generation); [stop] has already released the player by the time this
+     *  returns, so there is nothing left for this to decide. */
+    override suspend fun playAudioChunk(bytes: ByteArray) = player.play(bytes)
 
     override fun stop() {
         gen.incrementAndGet()
@@ -319,6 +327,42 @@ internal class AndroidTtsEngine(
     override fun shutdown() {
         stop()
         runCatching { backend.shutdown() }
+    }
+}
+
+/**
+ * THE Android read-aloud engine, process-wide.
+ *
+ * Deliberately NOT one per [dev.supermux.android.platform.AndroidPlatform]: the platform is built
+ * from the ACTIVITY, so a rotation makes a new one — and a per-platform engine would leave the old
+ * `TextToSpeech` connection talking with nothing able to stop it, leaking one service binding per
+ * rotation. The old process-wide `object MessageTts` had this right; the seam keeps it.
+ *
+ * [create] is only consulted the first time. Keyed on nothing: an app has exactly one
+ * `applicationContext`, and that is the context the engine is built from.
+ */
+internal object AndroidTts {
+    private val instance = AtomicReference<TtsEngine?>(null)
+
+    fun shared(create: () -> TtsEngine): TtsEngine {
+        instance.get()?.let { return it }
+        return synchronized(this) {
+            instance.get() ?: create().also { instance.set(it) }
+        }
+    }
+
+    /** Silence whatever is reading, release the engine, and forget it — the app is going away. */
+    fun shutdown() {
+        instance.getAndSet(null)?.let { engine ->
+            // stop() first so the "this message is speaking" marker clears with the audio.
+            runCatching { MessageTts.stop(engine) }
+            runCatching { engine.shutdown() }
+        }
+    }
+
+    /** Tests only: forget the instance so each case starts from a known state. */
+    internal fun resetForTest() {
+        instance.set(null)
     }
 }
 

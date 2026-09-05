@@ -14,10 +14,13 @@ import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.platform.SavedFile
 import dev.supermux.ui.platform.TtsEngine
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 import javax.sound.sampled.AudioSystem
@@ -61,15 +64,21 @@ internal class DesktopClipboardAccess : ClipboardAccess {
  */
 internal class DesktopFileAccess : FileAccess {
 
-    override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): Boolean {
-        if (GraphicsEnvironment.isHeadless()) return false
+    override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
+        if (GraphicsEnvironment.isHeadless()) return null
         // The dialog is modal on the EDT by AWT contract; the write is not, so it goes to IO.
         val target = withContext(Dispatchers.Swing) {
             runCatching { awtSaveFile(safeFileName(name)) }.getOrNull()
-        } ?: return false
-        return withContext(Dispatchers.IO) {
+        } ?: return null
+        val written = withContext(Dispatchers.IO) {
             runCatching { target.writeBytes(bytes) }.isSuccess
         }
+        return if (written) SavedFile(target.name, target.absolutePath) else null
+    }
+
+    /** Opens the file the user actually chose — no second temp copy. */
+    override suspend fun openSaved(saved: SavedFile): Boolean = withContext(Dispatchers.IO) {
+        openLocalFile(File(saved.location))
     }
 
     override suspend fun openExternally(name: String, mime: String, bytes: ByteArray): Boolean =
@@ -78,16 +87,30 @@ internal class DesktopFileAccess : FileAccess {
             openLocalFile(file)
         }
 
-    override fun probeMime(name: String): String =
-        mimeForFileName(name) ?: dev.supermux.desktop.platform.probeMime(File(safeFileName(name)))
+    /**
+     * The OS table first, the shared `:shared` table as fallback — the same order as Android's, so
+     * both hosts answer identically for anything the OS knows and identically-by-table for the rest.
+     * `probeContentType` works off the name here (the path need not exist).
+     */
+    override fun probeMime(name: String): String {
+        val safe = safeFileName(name)
+        val fromOs = runCatching { Files.probeContentType(Paths.get(safe)) }.getOrNull()
+        return fromOs ?: mimeForFileName(safe) ?: "application/octet-stream"
+    }
 }
 
 /** Strip any directory part and refuse an empty name — the attachment name is broker-supplied. */
 internal fun safeFileName(name: String): String =
     name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
 
-/** Stage [bytes] under the JVM temp dir so the OS handler has a real path to open. */
-private fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching {
+/**
+ * Stage [bytes] under the JVM temp dir so the OS handler has a real path to open.
+ *
+ * `internal` (aliased as `stageAttachmentForTest`) because it is the only half of
+ * [DesktopFileAccess.openExternally] a test can exercise — actually opening would fork a real
+ * viewer on the developer's desktop.
+ */
+internal fun writeToTempDir(name: String, bytes: ByteArray): File? = runCatching {
     val dir = File(System.getProperty("java.io.tmpdir"), "supermux-attachments").apply { mkdirs() }
     File(dir, name).also { it.writeBytes(bytes) }
 }.getOrNull()
@@ -202,6 +225,15 @@ internal class DesktopTtsEngine : TtsEngine {
     }
 }
 
+/**
+ * THE desktop read-aloud engine, process-wide.
+ *
+ * Deliberately NOT one per [DesktopPlatform]: a platform is built per window root, and a
+ * per-window engine would mean `stop()` in one window cannot kill the `say`/`ffplay` child another
+ * window started — read-aloud would become unstoppable the moment a pane is detached.
+ */
+internal val SharedDesktopTts: DesktopTtsEngine by lazy { DesktopTtsEngine() }
+
 /** OS speech command for [plain], or null when this machine has no synthesiser we know of. */
 internal fun speechCommand(plain: String): List<String>? {
     val os = System.getProperty("os.name").orEmpty().lowercase()
@@ -257,3 +289,7 @@ class DesktopNotices : NoticeChannel {
         if (text.isNotBlank()) _messages.tryEmit(text)
     }
 }
+
+/** [writeToTempDir] under the name the tests use, so its role there is obvious at the call site. */
+internal fun stageAttachmentForTest(name: String, bytes: ByteArray): File? =
+    writeToTempDir(safeFileName(name), bytes)
