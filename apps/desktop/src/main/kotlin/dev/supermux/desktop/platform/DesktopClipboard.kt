@@ -1,5 +1,5 @@
 // Desktop clipboard-image paste + its app-owned paste cache — the guts of
-// `DesktopPlatform.clipboard` (cluster D1). Moved here verbatim from `chat/DesktopComposer.kt`:
+// `DesktopPlatform.clipboard` (cluster D1). Moved here verbatim from the old `chat/DesktopComposer.kt`:
 // the shared composer reads `Platform.clipboard`, so the AWT `Transferable` handling, the
 // dimension/byte caps and the paste-cache pruner all belong on the desktop side of the seam. The
 // composer keeps calling them directly until it moves into `:ui` (cluster D3).

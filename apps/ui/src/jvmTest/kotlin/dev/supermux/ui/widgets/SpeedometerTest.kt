@@ -1,4 +1,4 @@
-package dev.supermux.desktop.ui
+package dev.supermux.ui.widgets
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

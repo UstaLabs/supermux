@@ -47,7 +47,7 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
-import dev.supermux.desktop.chat.MessageTts
+import dev.supermux.ui.chat.MessageTts
 import dev.supermux.desktop.chat.decodeImageBytes
 import dev.supermux.ui.chat.AssistantMessage
 import dev.supermux.ui.chat.fetchImageBytesWithPolicy
@@ -956,7 +956,7 @@ fun main() {
                     // Headless chat-attach-verification hook (M4d): SM_CHAT_ATTACH=
                     // "<session-name>|<file-path>|<text>" resolves the named session after the first
                     // snapshot, SELECTS it, and hands (filePath, text) to the matching ChatPanel via
-                    // ShellUiState.externalAttach — DesktopComposer's LaunchedEffect(externalAttach)
+                    // ShellUiState.externalAttach — the shared Composer's LaunchedEffect(externalAttach)
                     // then stages the file through the SAME stageFiles() funnel the Attach dialog and
                     // drag-drop use (so the chip uploads through the real uploadResumable seam), polls
                     // until that chip reaches a terminal state, and — on Done — sends through the SAME
@@ -989,7 +989,21 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.externalAttach = t.id to dev.supermux.desktop.chat.ComposerExternalAttach(filePath, text)
+                            // Resolve the path HERE: `:ui`'s composer takes an upload-ready
+                            // PickedFile (no java.io.File in commonMain), and a path that is not a
+                            // file becomes a null request the composer consumes without staging.
+                            val attachFile = java.io.File(filePath).takeIf { it.isFile }
+                            ui.externalAttach = t.id to dev.supermux.ui.chat.ComposerExternalAttach(
+                                file = attachFile?.let {
+                                    dev.supermux.ui.platform.PickedFile(
+                                        name = it.name,
+                                        mime = dev.supermux.desktop.platform.probeMime(it),
+                                        source = dev.supermux.desktop.upload.FileChunkSource(it),
+                                    )
+                                },
+                                text = text,
+                            )
+                            if (attachFile == null) println("[chatattach] path is not a file: $filePath")
                             println("[chatattach] requested attach '$filePath' + send for ${t.name} (${t.id})")
                         }
                     }
@@ -997,7 +1011,7 @@ fun main() {
                     // Headless dictation-verification hook (M5-1): SM_DICTATE=
                     // "<session-name>|<wav-path>" resolves the named session after the first
                     // snapshot, SELECTS it, and hands <wav-path> to the matching ChatPanel via
-                    // ShellUiState.externalDictate — DesktopComposer's LaunchedEffect(externalDictate)
+                    // ShellUiState.externalDictate — the shared Composer's LaunchedEffect(externalDictate)
                     // reads the WAV bytes off disk and feeds them through the SAME onTranscribeAudio
                     // seam the mic button uses (app.transcribeAudio(session.id, bytes, filename) -> a
                     // REAL POST to the broker's whisper endpoint), then appends the cleaned text to
@@ -1027,7 +1041,13 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.externalDictate = t.id to dev.supermux.desktop.chat.ComposerExternalDictate(wavPath)
+                            // Read the WAV here — `:ui` has no file system.
+                            val wavFile = java.io.File(wavPath).takeIf { it.isFile }
+                            ui.externalDictate = t.id to dev.supermux.ui.chat.ComposerExternalDictate(
+                                bytes = wavFile?.readBytes(),
+                                filename = wavFile?.name ?: "dictation.wav",
+                            )
+                            if (wavFile == null) println("[dictate] path is not a file: $wavPath")
                             println("[dictate] requested transcribe '$wavPath' for ${t.name} (${t.id})")
                         }
                     }

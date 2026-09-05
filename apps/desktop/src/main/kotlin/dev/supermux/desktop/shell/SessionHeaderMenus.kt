@@ -35,6 +35,8 @@
 package dev.supermux.desktop.shell
 
 import dev.supermux.state.ContinueHandoff
+import dev.supermux.chat.gitOpResultLabel
+import dev.supermux.chat.shouldPublish
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -82,7 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.session.AgentLogo
-import dev.supermux.desktop.session.DEFAULT_MODEL_ID
+import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -114,23 +116,10 @@ fun headerGitBadgeLabel(badge: GitBadge): String =
         "${badge.compareRef} ${badge.text}"
     else badge.text
 
-/** Whether the git menu's third row is Publish (no upstream yet) rather than Push. Mirrors Android's
- *  `session.git?.unpublished == true` gate. Pure so the decision is unit-testable off the DTO. */
-fun shouldPublish(git: GitLiteStatusDto?): Boolean = git?.unpublished == true
-
 /** The exposed proxies belonging to [session] — the broker returns ALL proxies, so the links menu
  *  filters by session name client-side (Android threads a pre-filtered list; desktop filters here). */
 fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto> =
     proxies.filter { it.sessionName == session.name }
-
-/** Compact result label for a completed git op — the message when the broker gave one, else its
- *  status, else a generic done; `null` result (any failure, getOrNull-degraded upstream) → "<Op>
- *  failed". Shown inline next to the badge since desktop has no snackbar host yet. */
-fun gitOpResultLabel(op: String, result: GitOpResult?): String {
-    if (result == null) return "$op failed"
-    result.message?.takeIf { it.isNotBlank() }?.let { return it }
-    return result.status.ifBlank { "$op done" }
-}
 
 /**
  * The restricted force-op set the headless `SM_GIT_MENU` hook (Main.kt) may drive against

@@ -63,6 +63,9 @@ kotlin {
             // rather than `java.net`, so it compiles for iOS too. The engine comes from :shared's
             // runtime classpath.
             api(libs.ktor.client.core)
+            // MessageTts's generation counter — a plain Int would be a data race between the
+            // Compose frame that toggles and the coroutine that streams audio chunks.
+            implementation(libs.atomicfu)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))

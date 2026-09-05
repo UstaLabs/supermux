@@ -51,7 +51,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.android.chat.PickerSheet
+import dev.supermux.ui.chat.PickerSheet
 import kotlinx.coroutines.launch
 
 // ─── Voice settings (STT engine + cleanup engine + model + glossary link) ───────

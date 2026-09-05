@@ -4,8 +4,6 @@
 package dev.supermux.desktop.platform
 
 import dev.supermux.chat.mimeForFileName
-import dev.supermux.desktop.chat.DICTATION_FORMAT
-import dev.supermux.desktop.chat.MicRecorder
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.ClipboardAccess
@@ -158,7 +156,7 @@ internal fun openLocalFile(file: File): Boolean {
 
 /**
  * The desktop mic: `javax.sound.sampled` capture at [DICTATION_FORMAT], encoded as WAV by
- * [dev.supermux.desktop.chat.WavEncoder] (the broker's whisper pipeline takes that directly).
+ * [WavEncoder] (the broker's whisper pipeline takes that directly).
  *
  * No permission model — the OS grants mic access to the process, so [requestPermission] is
  * immediately true; a mic that cannot actually be opened surfaces as `start() == false`, which the
@@ -166,7 +164,7 @@ internal fun openLocalFile(file: File): Boolean {
  * [liveTranscript] is null and the UI records-then-POSTs without live text.
  */
 internal class DesktopMicCapture(
-    private val recorder: dev.supermux.desktop.chat.MicCapture = MicRecorder(),
+    private val recorder: RawMicCapture = MicRecorder(),
 ) : MicCapture {
 
     override fun start(): Boolean = recorder.start()

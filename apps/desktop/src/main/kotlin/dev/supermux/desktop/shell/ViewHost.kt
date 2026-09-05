@@ -26,8 +26,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import dev.supermux.desktop.chat.ChatPanel
-import dev.supermux.desktop.chat.ComposerExternalAttach
-import dev.supermux.desktop.chat.ComposerExternalDictate
+import dev.supermux.ui.chat.ComposerExternalAttach
+import dev.supermux.ui.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform

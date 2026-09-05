@@ -158,9 +158,9 @@ fun Modifier.timelineReadingWidth(): Modifier =
 /**
  * The read-aloud control the message meta row drives.
  *
- * `MessageTts` is still per-app until cluster D3 moves it into `:ui`, so each host installs a thin
- * adapter over [LocalReadAloud]. The default is "this host cannot speak", which hides the button
- * rather than showing a dead one.
+ * Kept as an interface after D3 folded `MessageTts` into `:ui` (the production implementation is
+ * [PlatformReadAloud], built from `LocalPlatform`) so a test can render a transcript with a silent,
+ * recording stand-in instead of touching the process-wide speech state.
  */
 @Stable
 interface ReadAloud {
@@ -174,14 +174,12 @@ interface ReadAloud {
     val available: Boolean
 }
 
-/** "No voice here" — the default, and what every UI test that ignores TTS gets. */
+/** "No voice here" — what a test that wants no read-aloud affordance at all provides. */
 object NoReadAloud : ReadAloud {
     override fun isSpeaking(text: String): Boolean = false
     override fun toggle(text: String) = Unit
     override val available: Boolean get() = false
 }
-
-val LocalReadAloud = androidx.compose.runtime.staticCompositionLocalOf<ReadAloud> { NoReadAloud }
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -220,7 +218,8 @@ fun AssistantMessage(
 private fun MessageMetaRow(text: String, ts: String?) {
     val cs = MaterialTheme.colorScheme
     val clipboard = LocalClipboardManager.current
-    val readAloud = LocalReadAloud.current
+    val platform = LocalPlatform.current
+    val readAloud = remember(platform) { PlatformReadAloud(platform) }
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val speaking = readAloud.isSpeaking(text)

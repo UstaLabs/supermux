@@ -18,11 +18,13 @@ import kotlinx.coroutines.flow.asSharedFlow
  * for the platform needs one; `caps` and [qrResult] are constructor knobs so a test can say "this
  * machine has a camera and the user scanned X" in one line.
  */
-internal class FakePlatform(
+internal open class FakePlatform(
     override val caps: Caps = NO_CAPS,
     override val haptics: Haptics = NoHaptics,
     /** What [scanQr] hands back; null = the user cancelled (or there is no camera). */
     var qrResult: String? = null,
+    /** What [pickFiles] hands back; the default is one small text file. */
+    var pickResult: List<PickedFile>? = null,
     /** The editor seam. Defaults to "this machine has no browser", which is what every screen test
      *  that never opens an editor wants; an editor test passes its own recording factory. */
     override val editorEngine: EditorEngineFactory = UnavailableEditorEngineFactory("no engine under test"),
@@ -41,7 +43,7 @@ internal class FakePlatform(
     override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> {
         pickedKind = kind
         pickedRequester = requester
-        return listOf(PickedFile("a.txt", "text/plain", ByteArrayChunkSource(byteArrayOf(1, 2))))
+        return pickResult ?: listOf(PickedFile("a.txt", "text/plain", ByteArrayChunkSource(byteArrayOf(1, 2))))
     }
     override suspend fun scanQr(): String? {
         scans++
@@ -65,7 +67,7 @@ internal class FakePlatform(
 
     override val clipboard: FakeClipboard = FakeClipboard()
     override val files: FakeFiles = FakeFiles()
-    override val mic: FakeMic = FakeMic()
+    override var mic: MicCapture = FakeMic()
     override val tts: FakeTts = FakeTts()
     override val notices: FakeNotices = FakeNotices()
 }
@@ -77,8 +79,12 @@ internal class FakeClipboard(
     var reads = 0
     var probes = 0
 
+    /** Runs before [readImages] returns — a gate for "pending chip while the decode is slow". */
+    var beforeRead: (() -> Unit)? = null
+
     override suspend fun readImages(): List<PickedFile> {
         reads++
+        beforeRead?.invoke()
         return images
     }
 

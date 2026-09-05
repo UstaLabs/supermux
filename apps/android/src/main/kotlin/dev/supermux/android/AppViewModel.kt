@@ -5,7 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import dev.supermux.android.chat.MessageTts
+import dev.supermux.ui.chat.MessageTts
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.settings.AndroidSettingsStore
 import dev.supermux.host.HostSnapshotStore

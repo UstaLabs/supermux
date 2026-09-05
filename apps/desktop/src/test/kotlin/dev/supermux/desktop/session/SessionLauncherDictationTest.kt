@@ -7,7 +7,9 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.chat.MicCapture
+import dev.supermux.ui.platform.CapturedAudio
+import dev.supermux.ui.platform.LiveTranscript
+import dev.supermux.ui.platform.MicCapture
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import dev.supermux.ui.theme.AppearanceMode
@@ -16,16 +18,19 @@ import kotlin.test.Test
 
 private class ScriptedMicCapture(private val startsOk: Boolean, private val wav: ByteArray?) : MicCapture {
     override fun start() = startsOk
-    override fun stop() = wav
+    override fun stop(): CapturedAudio? = wav?.let { CapturedAudio(it, "d.wav", "audio/wav") }
     override fun cancel() {}
+    override suspend fun requestPermission() = true
+    override val available: Boolean get() = true
+    override val liveTranscript: LiveTranscript? get() = null
 }
 
 /**
  * M5-1 Task 5: [SessionLauncherScreen]'s mic wiring — the pre-spawn composer, so `transcribeAudio`
  * always routes id-less (mirrors [dev.supermux.state.HostStore.transcribeAudio]'s
  * `sessionId = null` path). Uses the SAME
- * [dev.supermux.desktop.chat.MicButton]/[dev.supermux.desktop.chat.DesktopDictationController]
- * Task 3/4 already proved — only the host composable + append target (the launcher's
+ * [dev.supermux.ui.chat.MicButton]/[dev.supermux.ui.chat.DictationController]
+ * the composer tests already prove — only the host composable + append target (the launcher's
  * `TextFieldValue` message) differ.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -34,7 +39,7 @@ class SessionLauncherDictationTest {
     @Composable
     private fun Harness(
         transcribeAudio: suspend (ByteArray, String) -> String? = { _, _ -> null },
-        micRecorderFactory: () -> MicCapture = { ScriptedMicCapture(startsOk = true, wav = byteArrayOf(1)) },
+        micCapture: MicCapture = ScriptedMicCapture(startsOk = true, wav = byteArrayOf(1)),
     ) {
         DesktopTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -53,7 +58,7 @@ class SessionLauncherDictationTest {
                 onClearDraft = {},
                 onSubmit = { _, _, _, _, _, _, _, _, _ -> },
                 transcribeAudio = transcribeAudio,
-                micRecorderFactory = micRecorderFactory,
+                micCapture = micCapture,
             )
         }
     }
@@ -77,7 +82,7 @@ class SessionLauncherDictationTest {
     }
 
     @Test fun mic_unavailable_disables_the_button() = runComposeUiTest {
-        setContent { Harness(micRecorderFactory = { ScriptedMicCapture(startsOk = false, wav = null) }) }
+        setContent { Harness(micCapture = ScriptedMicCapture(startsOk = false, wav = null)) }
         waitForIdle()
         onNodeWithTag("launcher_mic").performClick()
         waitForIdle()

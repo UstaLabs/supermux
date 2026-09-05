@@ -1,6 +1,6 @@
 // The desktop chat panel: header (session name + a thin live status line / dead banner), the keyed
 // timeline, and the composer. Structure mirrors Android's ChatPanel (header / status / keyed list /
-// autoscroll) but the composer is the lean desktop one (see DesktopComposer.kt) — no upload/
+// autoscroll) but the composer is the lean desktop one (see Composer.kt in `:ui`) — no upload/
 // dictation surface in M1. Drafts are hoisted (per-session) by AppShell so switching sessions
 // keeps each draft; broker-side draft sync is M4.
 package dev.supermux.desktop.chat
@@ -51,6 +51,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
+import dev.supermux.ui.chat.ComposerExternalAttach
+import dev.supermux.ui.chat.ComposerExternalDictate
+import dev.supermux.ui.chat.Composer
+import dev.supermux.ui.chat.ComposerFooter
+import dev.supermux.ui.chat.rememberComposerActions
 import dev.supermux.ui.chat.TimelineItemRow
 import dev.supermux.ui.chat.timelineReadingWidth
 import dev.supermux.ui.editor.WalkthroughState
@@ -129,16 +134,16 @@ fun ChatPanel(
     // standalone/preview uses of ChatPanel keep compiling.
     onOpenFile: (FilePathRef) -> Unit = {},
     // Off-by-default headless hook (SM_CHAT_ATTACH, Main.kt) delivery: a one-shot "stage this file
-    // then send" request routed straight through to [DesktopComposer]'s `externalAttach` — see its
+    // then send" request routed straight through to [dev.supermux.ui.chat.Composer]'s `externalAttach` — see its
     // KDoc for the funnel. Null in normal operation.
     externalAttach: ComposerExternalAttach? = null,
     onExternalAttachConsumed: () -> Unit = {},
     // Off-by-default headless hook (SM_DICTATE, Main.kt) delivery: a one-shot "transcribe this WAV
-    // file then append" request routed straight through to [DesktopComposer]'s `externalDictate` —
+    // file then append" request routed straight through to [dev.supermux.ui.chat.Composer]'s `externalDictate` —
     // see its KDoc for the funnel. Null in normal operation.
     externalDictate: ComposerExternalDictate? = null,
     onExternalDictateConsumed: () -> Unit = {},
-    // Edit ▸ Paste image (MenuBar) → DesktopComposer.pasteImageRequestNonce.
+    // Edit ▸ Paste image (MenuBar) → Composer.pasteImageRequestNonce.
     pasteImageRequestNonce: Long = 0L,
     onPasteImageRequestConsumed: () -> Unit = {},
     /** After "Continue in new conversation" — parent selects the new session (ViewHost path). */
@@ -192,6 +197,12 @@ fun ChatPanel(
     // model-dependent). remember(session.id) resets on session switch so a stale catalog never
     // flashes; the LaunchedEffects then refill it.
     val scope = rememberCoroutineScope()
+    // The composer's non-hot seams (slash-command cleanup pass, glossary, pending-first, git ops).
+    val composerActions = rememberComposerActions(app, session.id)
+    // The session's `/command` catalog — desktop gains the slash menu with the shared composer.
+    val commandsMap by app.commands.collectAsState()
+    val commandsResolvedMap by app.commandsResolved.collectAsState()
+    val commands = commandsMap[session.id] ?: emptyList()
     var modelsData by remember(session.id) { mutableStateOf<ModelsResponse?>(null) }
     var reasoningData by remember(session.id) { mutableStateOf<ReasoningResponse?>(null) }
     LaunchedEffect(session.id) { modelsData = app.sessionModels(session.id) }
@@ -496,7 +507,7 @@ fun ChatPanel(
                   .widthIn(max = CONTENT_MAX_WIDTH)
                   .padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
           ) {
-            DesktopComposer(
+            Composer(
                 draft = draft,
                 onDraftChange = onDraftChange,
                 sending = sending,
@@ -516,6 +527,11 @@ fun ChatPanel(
                     app.uploadResumable(session.id, source, name, mime, kind, onProgress)
                 },
                 onTranscribeAudio = { bytes, name -> app.transcribeAudio(session.id, bytes, name)?.text },
+                // Slash commands, the draft-cleanup pass, the glossary and the footer's git ops —
+                // everything the shared composer needs beyond the four hot callbacks.
+                actions = composerActions,
+                commands = commands,
+                commandsResolved = commandsResolvedMap[session.id] ?: false,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
@@ -550,11 +566,11 @@ fun ChatPanel(
             // Detail + git context, directly under the card (see ComposerFooter).
             ComposerFooter(
                 session = session,
-                onFetch = { app.gitFetch(session.id) },
-                onPull = { app.gitPull(session.id) },
-                onPush = { app.gitPush(session.id) },
-                onPublish = { app.gitPublish(session.id) },
                 modifier = Modifier.padding(top = 3.dp),
+                onFetch = composerActions.gitFetch,
+                onPull = composerActions.gitPull,
+                onPush = composerActions.gitPush,
+                onPublish = composerActions.gitPublish,
             )
           }
         }

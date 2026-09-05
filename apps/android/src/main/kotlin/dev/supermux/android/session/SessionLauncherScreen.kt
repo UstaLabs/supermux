@@ -54,23 +54,24 @@ import dev.supermux.android.platform.pickedFileFromUri
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
-import dev.supermux.android.chat.MicButton
-import dev.supermux.android.chat.MicDeniedDialog
-import dev.supermux.android.chat.EffortPill
-import dev.supermux.android.chat.ModelPill
-import dev.supermux.android.chat.isComposerEnterKey
+import dev.supermux.ui.chat.MicButton
+import dev.supermux.ui.chat.MicDeniedDialog
+import dev.supermux.ui.chat.EffortPill
+import dev.supermux.ui.chat.ModelPill
+import dev.supermux.ui.chat.isComposerEnterKey
 import dev.supermux.android.chat.isComposerSendEnter
-import dev.supermux.android.chat.PickerSheet
-import dev.supermux.android.chat.RecordingBar
-import dev.supermux.android.chat.TranscribingIndicator
-import dev.supermux.android.chat.SlashMenu
-import dev.supermux.android.chat.activeSlashQuery
+import dev.supermux.chat.DEFAULT_MODEL_ID
+import dev.supermux.ui.chat.PickerSheet
+import dev.supermux.ui.chat.RecordingBar
+import dev.supermux.ui.chat.TranscribingIndicator
+import dev.supermux.ui.chat.SlashMenu
+import dev.supermux.ui.chat.activeSlashQuery
 import dev.supermux.android.chat.createImageUri
 import dev.supermux.android.chat.createVideoUri
-import dev.supermux.android.chat.rememberDictation
-import dev.supermux.android.chat.replaceSlashToken
-import dev.supermux.android.chat.slashCommandMatches
-import dev.supermux.android.chat.slashInsertText
+import dev.supermux.ui.chat.rememberDictation
+import dev.supermux.ui.chat.replaceSlashToken
+import dev.supermux.ui.chat.slashCommandMatches
+import dev.supermux.ui.chat.slashInsertText
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
@@ -105,7 +106,7 @@ import dev.supermux.ui.session.AgentLogo
 private const val PICK_REQUESTER = "session-launcher"
 
 /** Sentinel id for the "Default" (null-model) row in the model picker — maps back to a null model. */
-private const val DEFAULT_MODEL_ID = "__default__"
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -702,7 +703,7 @@ fun SessionLauncherScreen(
                     // Dictating: the RecordingBar takes over the card body (parity with chat).
                     RecordingBar(
                         seconds = voice.recordingSeconds,
-                        liveTranscript = voice.liveTranscript,
+                        liveTranscript = voice.liveTranscript.orEmpty(),
                         onStop = { voice.stopMic() },
                         onCancel = { voice.cancelMic() },
                     )
@@ -899,8 +900,10 @@ fun SessionLauncherScreen(
 
                         // Mic — dictate the first message (RecordingBar takes over while active).
                         MicButton(
+                            recording = voice.recording,
+                            transcribing = voice.transcribing,
+                            micUnavailable = voice.micUnavailable,
                             onClick = { voice.onMicClick() },
-                            enabled = !voice.transcribing && !voice.active,
                             modifier = Modifier.testTag("launcher_mic"),
                         )
 

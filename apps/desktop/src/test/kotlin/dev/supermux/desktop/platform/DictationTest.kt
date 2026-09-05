@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.desktop.platform
 
 import javax.sound.sampled.AudioFormat
 import kotlin.test.Test

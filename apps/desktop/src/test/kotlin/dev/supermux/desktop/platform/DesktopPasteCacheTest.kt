@@ -1,36 +1,5 @@
-package dev.supermux.desktop.chat
+package dev.supermux.desktop.platform
 
-import androidx.compose.runtime.getValue
-import dev.supermux.desktop.platform.PASTE_CACHE_DIR_NAME
-import dev.supermux.desktop.platform.PASTE_CACHE_TTL
-import dev.supermux.desktop.platform.PASTE_IMAGE_ENCODE_MAX_EDGE
-import dev.supermux.desktop.platform.PASTE_IMAGE_MAX_EDGE
-import dev.supermux.desktop.platform.PASTE_IMAGE_MAX_PIXELS
-import dev.supermux.desktop.platform.clipboardImageToTempFile
-import dev.supermux.desktop.platform.clipboardImageWithinCaps
-import dev.supermux.desktop.platform.composerFilesFromClipboardTransferable
-import dev.supermux.desktop.platform.desktopConfigDirOverride
-import dev.supermux.desktop.platform.ensurePasteCacheDir
-import dev.supermux.desktop.platform.isComposerImageFile
-import dev.supermux.desktop.platform.isComposerPasteCacheEntryName
-import dev.supermux.desktop.platform.pasteCacheDir
-import dev.supermux.desktop.platform.prunePasteCache
-import dev.supermux.desktop.platform.transferableLikelyHasImage
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.onAllNodesWithTag
-import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.pressKey
-import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.test.withKeyDown
 import java.awt.Image
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
@@ -54,14 +23,14 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Paste-image contract for [DesktopComposer]: pure key/MIME helpers, clipboard Transferable
- * extraction, paste-cache layout + age pruner, real Ctrl/Meta key injection, and the menu-nonce
- * path that drives the SAME [stageFiles] funnel (via [launchPasteImages] / the `pasteImageFiles`
- * seam). Never touches the real system clipboard for image paste — tests inject
- * [DesktopComposer]'s `pasteImageFiles` / `clipboardLikelyHasImage` seams.
+ * Desktop's clipboard-image half of `Platform.clipboard`: file/MIME classification, `Transferable`
+ * extraction, the dimension/byte caps, and the app-owned paste cache with its age-only pruner.
+ *
+ * The COMPOSER half of paste (the key chords, the pending chip, the menu nonce) moved to `:ui` with
+ * the composer — see `ComposerPasteTest` there. What is left here is everything that only makes
+ * sense against a real AWT clipboard and a real file system.
  */
-@OptIn(ExperimentalTestApi::class)
-class DesktopComposerPasteTest {
+class DesktopPasteCacheTest {
 
     private lateinit var testConfigDir: Path
 
@@ -82,162 +51,10 @@ class DesktopComposerPasteTest {
         }
     }
 
-    // ── pure key predicate — Ctrl and Meta are DISTINCT flags ───────────────────
-    @Test fun pasteKey_ctrlV_down_isPaste() {
-        assertTrue(
-            isComposerPasteKey(
-                Key.V, KeyEventType.KeyDown,
-                ctrlPressed = true, metaPressed = false, shiftPressed = false,
-            ),
-        )
-    }
-
-    @Test fun pasteKey_metaV_down_isPaste() {
-        // macOS Cmd — separate from Ctrl, not the same helper call with ctrlOrMeta=true.
-        assertTrue(
-            isComposerPasteKey(
-                Key.V, KeyEventType.KeyDown,
-                ctrlPressed = false, metaPressed = true, shiftPressed = false,
-            ),
-        )
-    }
-
-    @Test fun pasteKey_v_without_modifier_isNotPaste() {
-        assertFalse(
-            isComposerPasteKey(
-                Key.V, KeyEventType.KeyDown,
-                ctrlPressed = false, metaPressed = false,
-            ),
-        )
-    }
-
-    @Test fun pasteKey_shift_v_isNotPaste_fallsThroughForPlainText() {
-        // Ctrl/Cmd+Shift+V = paste as plain text / match style — must NOT be consumed.
-        assertFalse(
-            isComposerPasteKey(
-                Key.V, KeyEventType.KeyDown,
-                ctrlPressed = true, metaPressed = false, shiftPressed = true,
-            ),
-        )
-        assertFalse(
-            isComposerPasteKey(
-                Key.V, KeyEventType.KeyDown,
-                ctrlPressed = false, metaPressed = true, shiftPressed = true,
-            ),
-        )
-    }
-
-    @Test fun pasteKey_otherKeys_areNotPaste() {
-        assertFalse(
-            isComposerPasteKey(Key.V, KeyEventType.KeyUp, ctrlPressed = true, metaPressed = false),
-        )
-        assertFalse(
-            isComposerPasteKey(Key.C, KeyEventType.KeyDown, ctrlPressed = true, metaPressed = false),
-        )
-        assertFalse(
-            isComposerPasteKey(Key.Enter, KeyEventType.KeyDown, ctrlPressed = true, metaPressed = false),
-        )
-    }
-
-    @Test fun handleComposerPasteKey_ctrl_invokesOnPasteImage() {
-        var invoked = false
-        val consumed = handleComposerPasteKey(
-            key = Key.V,
-            type = KeyEventType.KeyDown,
-            ctrlPressed = true,
-            metaPressed = false,
-            shiftPressed = false,
-            uploadBound = true,
-            likelyHasImage = { true },
-            onPasteImage = { invoked = true },
-        )
-        assertTrue(consumed)
-        assertTrue(invoked)
-    }
-
-    @Test fun handleComposerPasteKey_meta_invokesOnPasteImage() {
-        var invoked = false
-        val consumed = handleComposerPasteKey(
-            key = Key.V,
-            type = KeyEventType.KeyDown,
-            ctrlPressed = false,
-            metaPressed = true,
-            shiftPressed = false,
-            uploadBound = true,
-            likelyHasImage = { true },
-            onPasteImage = { invoked = true },
-        )
-        assertTrue(consumed)
-        assertTrue(invoked)
-    }
-
-    @Test fun handleComposerPasteKey_textOnly_doesNotConsume_andDoesNotStage() {
-        var invoked = false
-        var probeCalls = 0
-        val consumed = handleComposerPasteKey(
-            key = Key.V,
-            type = KeyEventType.KeyDown,
-            ctrlPressed = true,
-            metaPressed = false,
-            shiftPressed = false,
-            uploadBound = true,
-            likelyHasImage = { probeCalls++; false }, // text-only clipboard
-            onPasteImage = { invoked = true },
-        )
-        assertFalse(consumed, "text-only paste must fall through to the field")
-        assertFalse(invoked)
-        assertEquals(1, probeCalls, "clipboard probe runs only after paste key matches")
-    }
-
-    @Test fun handleComposerPasteKey_nonPasteKey_doesNotProbeClipboard() {
-        var probeCalls = 0
-        val consumed = handleComposerPasteKey(
-            key = Key.A,
-            type = KeyEventType.KeyDown,
-            ctrlPressed = false,
-            metaPressed = false,
-            shiftPressed = false,
-            uploadBound = true,
-            likelyHasImage = { probeCalls++; true },
-            onPasteImage = {},
-        )
-        assertFalse(consumed)
-        assertEquals(0, probeCalls, "clipboard must not be probed on non-paste keys")
-    }
-
     /**
      * Ctrl+Shift+V is paste-as-plain-text — must fall through on a real key event (not only the
      * pure predicate). Injected key event with image probe true must NOT stage or consume.
      */
-    @Test fun ctrlShiftV_keyEvent_fallsThrough_doesNotStage() = runComposeUiTest {
-        var pasteInvocations = 0
-        var probeCalls = 0
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { pasteInvocations++; emptyList() },
-                clipboardLikelyHasImage = { probeCalls++; true },
-            )
-        }
-        onNodeWithTag("composer-input").performClick()
-        onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.CtrlLeft) {
-                withKeyDown(Key.ShiftLeft) { pressKey(Key.V) }
-            }
-        }
-        waitForIdle()
-        assertEquals(0, pasteInvocations, "Ctrl+Shift+V must not call pasteImageFiles")
-        assertEquals(0, probeCalls, "clipboard must not be probed for Shift+V paste chord")
-        assertTrue(onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty())
-        assertTrue(onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isEmpty())
-    }
 
     // ── image-file classification ───────────────────────────────────────────────
     @Test fun isComposerImageFile_accepts_png_extension() {
@@ -585,279 +402,26 @@ class DesktopComposerPasteTest {
         Files.deleteIfExists(outside)
     }
 
-    /**
-     * Chip remove does not delete paste-cache files: prove the chip **disappears** (action
-     * completed) while the on-disk file **still exists** (reclaim is age-pruner only).
-     */
-    @Test fun pasteTemp_leftForPrunerAfterChipRemoved() = runComposeUiTest {
-        val img = BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB)
-        val temp = clipboardImageToTempFile(img)!!
-        assertTrue(temp.exists())
-        val pathBefore = temp.absolutePath
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(temp) },
-                pasteImageRequestNonce = 1L,
-            )
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip-remove").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertTrue(File(pathBefore).exists(), "file present while chip is shown")
-        onNodeWithTag("composer-chip-remove").performClick()
-        waitForIdle()
-        // Meaningful: chip gone (state change) AND file still on disk.
-        assertTrue(
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty(),
-            "chip must be removed from the UI",
-        )
-        assertTrue(
-            File(pathBefore).exists(),
-            "chip remove must not delete paste-cache entries by path",
-        )
-    }
-
-    // ── stage-or-fallthrough decision (drives the Ctrl/Cmd+V handler) ───────────
-    @Test fun shouldStageClipboardPaste_requiresUploadAndFiles() {
-        val png = tempNamed("a.png") { writeBytes(tinyPng()) }
-        assertTrue(shouldStageClipboardPaste(uploadBound = true, files = listOf(png)))
-        assertFalse(shouldStageClipboardPaste(uploadBound = false, files = listOf(png)))
-        assertFalse(shouldStageClipboardPaste(uploadBound = true, files = emptyList()))
-        assertFalse(shouldStageClipboardPaste(uploadBound = false, files = emptyList()))
-    }
-
     @Test fun textOnlyPaste_doesNotStage_fallsThroughToField() {
-        // Production wiring: empty pasteImageFiles → shouldStage false → key handler returns false
-        // so the OutlinedTextField keeps Ctrl/Cmd+V for text. Prove the pure decision + seam.
+        // A text-only clip yields no image files, so the composer's Ctrl/Cmd+V falls through and
+        // the field keeps the chord for text (the composer half of that rule is in `:ui`).
         val files = composerFilesFromClipboardTransferable(FakeTextTransferable("hello world"))
         assertTrue(files.isEmpty())
-        assertFalse(shouldStageClipboardPaste(uploadBound = true, files = files))
     }
 
     /**
-     * Real Ctrl+V key event on the focused field with the image-paste probe true and a faked file
-     * list — proves the production onPreviewKeyEvent path stages via the paste seam. Uses
-     * [Key.CtrlLeft] distinctly from Meta.
+     * A large raster is downscaled before PNG encode: 3072² is above [PASTE_IMAGE_ENCODE_MAX_EDGE]
+     * (2048), so the written file must come back at or under that edge — otherwise a screenshot
+     * paste writes a multi-MiB PNG and stalls the read the composer awaits.
      */
-    @Test fun ctrlV_keyEvent_stagesPasteImage() = runComposeUiTest {
-        val png = tempNamed("from-ctrl-v.png") { writeBytes(tinyPng()) }
-        val uploaded = mutableListOf<String>()
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, name, _, _, _ -> uploaded.add(name); "file-$name" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(png) },
-                clipboardLikelyHasImage = { true },
-            )
-        }
-        // Focus the field first (same as Enter-send tests) so key injection hits onPreviewKeyEvent.
-        onNodeWithTag("composer-input").performClick()
-        onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.V) }
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertEquals(listOf("from-ctrl-v.png"), uploaded)
-    }
-
-    /**
-     * Real Meta+V (macOS Cmd) key event — distinct modifier from Ctrl, same stage path.
-     */
-    @Test fun metaV_keyEvent_stagesPasteImage() = runComposeUiTest {
-        val png = tempNamed("from-meta-v.png") { writeBytes(tinyPng()) }
-        val uploaded = mutableListOf<String>()
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, name, _, _, _ -> uploaded.add(name); "file-$name" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(png) },
-                clipboardLikelyHasImage = { true },
-            )
-        }
-        onNodeWithTag("composer-input").performClick()
-        onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.MetaLeft) { pressKey(Key.V) }
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertEquals(listOf("from-meta-v.png"), uploaded)
-    }
-
-    /**
-     * Text-only Ctrl+V: image probe false → paste key falls through (not consumed) and does not
-     * stage a chip. Compose's Skiko harness does not reliably deliver platform clipboard paste into
-     * the field, so text arrival is proven separately via [performTextInput] (typing → onValueChange),
-     * not as a simulated OS paste. Name reflects both parts.
-     */
-    @Test fun textOnlyCtrlV_doesNotStage_andFieldAcceptsTypedText() = runComposeUiTest {
-        var draft by mutableStateOf("")
-        var pasteInvocations = 0
-        setContent {
-            DesktopComposer(
-                draft = draft,
-                onDraftChange = { draft = it },
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = {
-                    pasteInvocations++
-                    emptyList()
-                },
-                clipboardLikelyHasImage = { false },
-            )
-        }
-        onNodeWithTag("composer-input").performClick()
-        // Ctrl+V with text-only probe — must NOT launch paste-image (no chip, no seam call).
-        onNodeWithTag("composer-input").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.V) }
-        }
-        waitForIdle()
-        assertEquals(0, pasteInvocations, "text-only Ctrl+V must not call pasteImageFiles")
-        assertTrue(onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isEmpty())
-
-        // Field accepts text via the draft (onValueChange) — same binding unconsumed paste uses.
-        onNodeWithTag("composer-input").performTextInput("hello-from-text-paste")
-        assertTrue(
-            draft.contains("hello-from-text-paste"),
-            "text must reach the field via the draft, got draft='$draft'",
-        )
-    }
-
-    /** Pending chip appears while pasteImageFiles is still running (encode feedback). */
-    @Test fun pasteImage_showsPendingChipDuringEncode() = runComposeUiTest {
-        val gate = java.util.concurrent.CountDownLatch(1)
-        val png = tempNamed("slow.png") { writeBytes(tinyPng()) }
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = {
-                    gate.await(5, java.util.concurrent.TimeUnit.SECONDS)
-                    listOf(png)
-                },
-                pasteImageRequestNonce = 1L,
-            )
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isNotEmpty()
-        }
-        gate.countDown()
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        waitForIdle()
-        assertTrue(
-            onAllNodesWithTag("composer-paste-pending").fetchSemanticsNodes().isEmpty(),
-            "pending chip must clear once encode finishes",
-        )
-    }
-
-    /**
-     * Production wiring: [pasteImageRequestNonce] (Edit ▸ Paste image) → [launchPasteImages] →
-     * `pasteImageFiles` seam → [stageFiles].
-     */
-    @Test fun pasteImage_viaMenuNonce_uploadsAndEnablesSend() = runComposeUiTest {
-        val png = tempNamed("pasted.png") { writeBytes(tinyPng()) }
-        val uploaded = mutableListOf<String>()
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, name, _, _, _ -> uploaded.add(name); "file-$name" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = { listOf(png) },
-                pasteImageRequestNonce = 1L,
-            )
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        waitUntil(timeoutMillis = 5_000L) {
-            onAllNodesWithText("pasted.png").fetchSemanticsNodes().isNotEmpty()
-        }
-        assertEquals(listOf("pasted.png"), uploaded)
-        onNodeWithTag("composer-send").assertIsEnabled()
-    }
-
-    /**
-     * Production paste encode path: drive the real [DesktopComposer] entry point
-     * ([pasteImageRequestNonce] → [launchPasteImages] → `withContext(IO)` → `pasteImageFiles`),
-     * not a hand-rolled `withContext(IO) { clipboardImageToTempFile(...) }` that bypasses the
-     * entry point. Uses 3072² so [PASTE_IMAGE_ENCODE_MAX_EDGE] (2048) downscale is exercised
-     * through the seam.
-     */
-    @Test fun largeRasterEncode_viaLaunchPasteImages_completes() = runComposeUiTest {
-        // Above the 2048 downscale threshold so scaleBufferedImageToMaxEdge runs in production.
+    @Test fun largeRasterEncode_downscalesBeforeWriting() {
         val edge = 3072
         val img = BufferedImage(edge, edge, BufferedImage.TYPE_INT_RGB)
         assertTrue(clipboardImageWithinCaps(edge, edge))
-        val encodeThread = java.util.concurrent.atomic.AtomicReference<String?>(null)
-        val encoded = java.util.concurrent.atomic.AtomicReference<File?>(null)
-        val startNs = java.util.concurrent.atomic.AtomicLong(0L)
-        setContent {
-            DesktopComposer(
-                draft = "",
-                onDraftChange = {},
-                sending = false,
-                agentWorking = false,
-                onSend = { _, _ -> },
-                onInterrupt = {},
-                onUpload = { _, _, _, _, _ -> "file-1" },
-                pickFiles = { emptyList() },
-                pasteImageFiles = {
-                    // Invoked by launchPasteImages on Dispatchers.IO — record that + encode.
-                    encodeThread.set(Thread.currentThread().name)
-                    startNs.compareAndSet(0L, System.nanoTime())
-                    val file = clipboardImageToTempFile(img)
-                    encoded.set(file)
-                    listOfNotNull(file)
-                },
-                pasteImageRequestNonce = 1L,
-            )
-        }
-        waitUntil(timeoutMillis = 15_000L) {
-            onAllNodesWithTag("composer-chip").fetchSemanticsNodes().isNotEmpty()
-        }
-        val file = encoded.get()
-        assertNotNull(file, "launchPasteImages → pasteImageFiles must encode the raster")
+        val file = clipboardImageToTempFile(img)
+        assertNotNull(file)
         assertTrue(file!!.isFile && file.length() > 0)
         assertTrue(isTestPasteCacheFile(file), "encode must land in app paste-cache")
-        // Downscale to max edge 2048 → PNG should be well under an unscaled 3072² encode.
         assertTrue(
             file.length() < 2L * 1024L * 1024L,
             "downscaled paste PNG should be <2MiB, got ${file.length()}",
@@ -867,22 +431,8 @@ class DesktopComposerPasteTest {
         assertTrue(
             decoded!!.width <= PASTE_IMAGE_ENCODE_MAX_EDGE &&
                 decoded.height <= PASTE_IMAGE_ENCODE_MAX_EDGE,
-            "encoded image must be downscaled to ≤$PASTE_IMAGE_ENCODE_MAX_EDGE, got ${decoded.width}x${decoded.height}",
+            "encoded image must be downscaled to <=$PASTE_IMAGE_ENCODE_MAX_EDGE, got ${decoded.width}x${decoded.height}",
         )
-        val thread = encodeThread.get()
-        assertNotNull(thread, "pasteImageFiles must run on a worker thread")
-        assertTrue(
-            thread!!.contains("DefaultDispatcher") || thread.contains("IO") || thread.contains("worker"),
-            "launchPasteImages must hop to IO; pasteImageFiles ran on: $thread",
-        )
-        assertTrue(
-            !thread.contains("AWT-EventQueue"),
-            "encode must not run on the AWT UI thread, got: $thread",
-        )
-        // Real cost is ~1s for 3072²→2048²; 15s would hide multi-second main-thread regressions.
-        // Bound at 5s so a UI-thread / no-downscale regression fails reliably on CI.
-        val elapsedMs = (System.nanoTime() - startNs.get()) / 1_000_000
-        assertTrue(elapsedMs < 5_000, "encode via launchPasteImages took ${elapsedMs}ms (bound 5s)")
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────────

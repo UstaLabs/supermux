@@ -1,6 +1,6 @@
-// Generic multi-step speedometer (desktop chrome). Effort/reasoning maps into
+// Generic multi-step speedometer (shared chrome). Effort/reasoning maps into
 // [levels] + [value] via [dev.supermux.net.effortSpeedometerParams].
-package dev.supermux.desktop.ui
+package dev.supermux.ui.widgets
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -98,7 +99,7 @@ fun Speedometer(
             )
         }
         val needleAngleDeg = startAngle + fullSweep * animated
-        val needleAngleRad = Math.toRadians(needleAngleDeg.toDouble())
+        val needleAngleRad = needleAngleDeg.toDouble() * PI / 180.0
         val needleLen = radius * 0.78f
         val tip = Offset(
             center.x + (cos(needleAngleRad) * needleLen).toFloat(),

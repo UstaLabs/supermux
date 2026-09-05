@@ -105,12 +105,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.ui.widgets.Dialog
-import dev.supermux.desktop.ui.Speedometer
-import dev.supermux.desktop.chat.MicButton
-import dev.supermux.desktop.chat.MicCapture
-import dev.supermux.desktop.chat.MicRecorder
-import dev.supermux.desktop.chat.isComposerSendKey
-import dev.supermux.desktop.chat.rememberDesktopDictation
+import dev.supermux.ui.widgets.Speedometer
+import dev.supermux.ui.chat.MicButton
+import dev.supermux.ui.chat.isComposerEnterKey
+import dev.supermux.ui.chat.rememberDictation
+import dev.supermux.ui.chat.shouldComposerSendOnEnter
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.host.HostDot
 import dev.supermux.host.HostView
 import dev.supermux.ui.theme.Radii
@@ -270,7 +271,8 @@ fun SessionLauncherScreen(
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
     transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
-    micRecorderFactory: () -> MicCapture = { MicRecorder() },
+    /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
+    micCapture: MicCapture? = null,
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
     hosts: List<HostView> = emptyList(),
     selectedHost: String? = null,
@@ -516,7 +518,7 @@ fun SessionLauncherScreen(
         )
     }
 
-    // ── Composer focus/send affordances (DesktopComposer chrome parity) ─────────────────────────
+    // ── Composer focus/send affordances (shared Composer chrome parity) ─────────────────────────
     val composerInteraction = remember { MutableInteractionSource() }
     val composerFocused by composerInteraction.collectIsFocusedAsState()
     // Capsule card like chat, but solid fill — launcher sits on surfaceContainerHigh, so a
@@ -553,15 +555,16 @@ fun SessionLauncherScreen(
     // always routes through the id-less `/transcribe` path (bound by the caller —
     // AppShell binds this to `app.transcribeAudio(null, bytes, name)`). resetKey = Unit since
     // there's only ever one launcher instance (no per-session scoping needed here).
-    val dictation = rememberDesktopDictation(
+    val platformMic = LocalPlatform.current.mic
+    val dictation = rememberDictation(
         resetKey = Unit,
+        mic = micCapture ?: platformMic,
         transcribeAudio = transcribeAudio,
         onAppend = { cleaned ->
             val sep = if (message.text.isBlank()) "" else " "
             val newText = message.text + sep + cleaned
             message = TextFieldValue(newText, TextRange(newText.length))
         },
-        recorderFactory = micRecorderFactory,
     )
 
     // Spawn → (upload staged files) → send first message. onSubmit does the broker work; success
@@ -680,7 +683,7 @@ fun SessionLauncherScreen(
             }
         }
 
-        // ── Composer card — same soft capsule + bottom toolbar as chat DesktopComposer ──
+        // ── Composer card — same soft capsule + bottom toolbar as the shared Composer ──
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -731,7 +734,15 @@ fun SessionLauncherScreen(
                     .heightIn(min = 120.dp, max = 280.dp)
                     .testTag("launcher_message")
                     .onPreviewKeyEvent { e ->
-                        if (isComposerSendKey(e.key, e.type, e.isShiftPressed)) {
+                        if (
+                            shouldComposerSendOnEnter(
+                                isEnterKey = e.isComposerEnterKey(),
+                                shiftPressed = e.isShiftPressed,
+                                // Desktop is always a physical keyboard; the shared predicate is
+                                // the union rule (a phone's soft Return inserts a newline).
+                                fromPhysicalKeyboard = true,
+                            )
+                        ) {
                             if (canSend && !submitting) {
                                 doSubmit()
                                 true
@@ -767,7 +778,7 @@ fun SessionLauncherScreen(
             )
 
             // Bottom toolbar: + · agent · model · effort | mic · save draft · send
-            // (DesktopComposer layout: controls left, send-cluster right.)
+            // (shared Composer layout: controls left, send-cluster right.)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -953,9 +964,7 @@ fun SessionLauncherScreen(
                         recording = dictation.recording,
                         transcribing = dictation.transcribing,
                         micUnavailable = dictation.micUnavailable,
-                        onClick = {
-                            if (dictation.recording) dictation.stopMic() else dictation.startMic()
-                        },
+                        onClick = { dictation.onMicClick() },
                         modifier = Modifier.testTag("launcher_mic"),
                     )
                     TextButton(
@@ -1110,7 +1119,7 @@ private fun AgentPill(agent: String, enabled: Boolean, onClick: () -> Unit, modi
     }
 }
 
-/** Borderless model/effort pill matching chat DesktopComposer pills (optional leading icon). */
+/** Borderless model/effort pill matching the shared Composer pills (optional leading icon). */
 @Composable
 private fun LauncherPill(
     label: String,

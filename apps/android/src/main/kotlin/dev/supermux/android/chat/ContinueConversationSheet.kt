@@ -1,5 +1,10 @@
 package dev.supermux.android.chat
 
+import dev.supermux.chat.DEFAULT_MODEL_ID
+import dev.supermux.ui.chat.EffortPill
+import dev.supermux.ui.chat.ModelPill
+import dev.supermux.ui.chat.PickerSheet
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,7 +44,7 @@ import kotlinx.coroutines.launch
 import dev.supermux.state.ContinueHandoff
 import dev.supermux.state.spawnFailureMessage
 
-private const val DEFAULT_MODEL_ID = "__default__"
+
 private val CONTINUE_AGENT_FALLBACK = listOf("claude", "codex", "cursor", "opencode", "grok")
 
 @Composable

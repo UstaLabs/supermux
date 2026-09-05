@@ -1,4 +1,4 @@
-package dev.supermux.android.chat
+package dev.supermux.ui.chat
 
 import dev.supermux.proto.SlashCommand
 

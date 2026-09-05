@@ -21,7 +21,7 @@ import androidx.core.content.FileProvider
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.DictationEngine
 import dev.supermux.android.chat.DictationStart
-import dev.supermux.android.chat.MessageTts
+import dev.supermux.ui.chat.MessageTts
 import dev.supermux.chat.mimeForFileName
 import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.ClipboardAccess

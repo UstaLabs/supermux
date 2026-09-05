@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,7 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.DEFAULT_MODEL_ID
+import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningLevel
@@ -25,7 +25,7 @@ import kotlin.test.assertEquals
  * reasoning pill is gated on `visible && levels > 1`.
  */
 @OptIn(ExperimentalTestApi::class)
-class DesktopComposerPillsTest {
+class ComposerPillsTest {
 
     private val models = ModelsResponse(
         agent = "claude",
@@ -57,9 +57,9 @@ class DesktopComposerPillsTest {
     // ── model pill UX ───────────────────────────────────────────────────────────
     @Test fun model_pill_shows_current_opens_menu_and_a_pick_fires_and_updates() = runComposeUiTest {
         var picked: String? = null
-        setContent {
+        setPlatformContent {
             var data by remember { mutableStateOf<ModelsResponse?>(models) }
-            DesktopComposer(
+            Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 models = data,
@@ -79,8 +79,8 @@ class DesktopComposerPillsTest {
 
     @Test fun model_pill_default_row_picks_the_empty_string() = runComposeUiTest {
         var picked: String? = "unset"
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 models = models,
@@ -93,8 +93,8 @@ class DesktopComposerPillsTest {
     }
 
     @Test fun model_pill_falls_back_to_session_model_before_catalog_loads() = runComposeUiTest {
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 models = null,
@@ -108,8 +108,8 @@ class DesktopComposerPillsTest {
 
     // ── reasoning pill gating ─────────────────────────────────────────────────────
     @Test fun reasoning_pill_hidden_when_not_visible() = runComposeUiTest {
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 models = models,
@@ -124,8 +124,8 @@ class DesktopComposerPillsTest {
     }
 
     @Test fun reasoning_pill_hidden_when_a_single_level() = runComposeUiTest {
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 models = models,
@@ -141,8 +141,8 @@ class DesktopComposerPillsTest {
 
     @Test fun reasoning_pill_shown_and_functional_when_visible_and_multi_level() = runComposeUiTest {
         var picked: String? = null
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
                 models = models,

@@ -20,8 +20,6 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.widthClassFor
 import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.android.chat.AndroidReadAloud
-import dev.supermux.ui.chat.LocalReadAloud
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.InMemorySettingsStore
 import dev.supermux.ui.prefs.LocalUiPrefs
@@ -96,9 +94,6 @@ fun AndroidTheme(
         // Bluetooth keyboard is still a thumb device. See ui/adaptive/InputMode.kt.
         LocalPointerAvailable provides rememberPointerAvailable(),
         LocalUiPrefs provides prefs,
-        // Read-aloud for the shared chat timeline (cluster D2); the adapter goes away when
-        // MessageTts itself moves to :ui in D3.
-        LocalReadAloud provides remember(platform) { AndroidReadAloud(platform) },
     ) {
         SupermuxTheme(
             appearance = appearance,

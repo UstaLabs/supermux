@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -10,6 +10,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import dev.supermux.ui.platform.CapturedAudio
+import dev.supermux.ui.platform.LiveTranscript
+import dev.supermux.ui.platform.MicCapture
 import kotlin.test.assertTrue
 
 private class FakeMicCapture(
@@ -18,21 +21,27 @@ private class FakeMicCapture(
 ) : MicCapture {
     var startCalls = 0; var stopCalls = 0; var cancelCalls = 0
     override fun start(): Boolean { startCalls++; return startsOk }
-    override fun stop(): ByteArray? { stopCalls++; return wavOnStop }
+    override fun stop(): CapturedAudio? {
+        stopCalls++
+        return wavOnStop?.let { CapturedAudio(it, "dictation.wav", "audio/wav") }
+    }
     override fun cancel() { cancelCalls++ }
+    override suspend fun requestPermission(): Boolean = true
+    override val available: Boolean get() = true
+    override val liveTranscript: LiveTranscript? get() = null
 }
 
 /**
- * M5-1 Task 3: [DesktopDictationController] — record -> transcribe -> append, driven entirely
- * through the [MicCapture]/transcribeAudio/onAppend seams. No real mic, no real broker: the
+ * [DictationController] — record -> transcribe -> append, driven entirely through the
+ * `Platform.mic`/transcribeAudio/onAppend seams. No real mic, no real broker: the
  * controller's own [CoroutineScope] is a [TestScope] backed by [UnconfinedTestDispatcher] so the
- * `scope.launch {}` inside [DesktopDictationController.stopMic] runs to completion synchronously
+ * `scope.launch {}` inside [DictationController.stopMic] runs to completion synchronously
  * within the test body (same idiom [HostStore] tests use for its `stateScope`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class DesktopDictationControllerTest {
+class DictationControllerTest {
 
-    private fun controller(fake: MicCapture) = DesktopDictationController(fake, TestScope(UnconfinedTestDispatcher()))
+    private fun controller(fake: MicCapture) = DictationController(fake, TestScope(UnconfinedTestDispatcher()))
 
     @Test fun start_mic_flips_recording_true_when_the_line_opens() {
         val fake = FakeMicCapture(startsOk = true)
@@ -131,8 +140,8 @@ class DesktopDictationControllerTest {
     /**
      * REGRESSION (cross-session dictation leak): a transcription still in flight when the composer
      * switches sessions must NOT resolve into the new session's draft. On a session switch,
-     * `rememberDesktopDictation`'s `DisposableEffect(resetKey)` disposes the OUTGOING controller by
-     * calling [DesktopDictationController.cancelMic] — which must cancel the pending whisper POST,
+     * `rememberDictation`'s `DisposableEffect(resetKey)` disposes the OUTGOING controller by
+     * calling [DictationController.cancelMic] — which must cancel the pending whisper POST,
      * not just guard `recording`. Otherwise session A's ~20-30s POST resolves after the composer has
      * rebound `onAppend` to session B and appends A's text into B (the M4d attachment-leak class).
      *
@@ -143,7 +152,7 @@ class DesktopDictationControllerTest {
      */
     @Test fun cancel_mic_cancels_an_in_flight_transcription_so_it_never_appends_after_a_session_switch() = runTest {
         val scope = TestScope(StandardTestDispatcher(testScheduler))
-        val ctrl = DesktopDictationController(FakeMicCapture(wavOnStop = byteArrayOf(1, 2, 3)), scope)
+        val ctrl = DictationController(FakeMicCapture(wavOnStop = byteArrayOf(1, 2, 3)), scope)
 
         val gate = CompletableDeferred<Unit>()
         var pastAwait = false

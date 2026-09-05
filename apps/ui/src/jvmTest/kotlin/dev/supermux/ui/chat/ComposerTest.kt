@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,38 +17,73 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import dev.supermux.ui.adaptive.InputMode
 import kotlin.test.assertTrue
 
 /**
- * UI + logic contract for [DesktopComposer]. Written to verify the composer WITHOUT xdotool: the
- * desktop Compose test harness ([runComposeUiTest]) drives typing, clicks, and key injection in
- * process. The Enter/Shift+Enter decision is ALSO covered as a pure function ([isComposerSendKey])
- * so the send-on-Enter contract holds even if the harness's key routing ever regresses.
+ * UI + logic contract for [Composer] under a POINTER host (the desktop shape — `setPlatformContent`
+ * defaults to a pointer + Expanded window, so `LocalInputMode == Pointer` and hardware Enter sends).
+ * Written to verify the composer WITHOUT xdotool: the Compose test harness ([runComposeUiTest])
+ * drives typing, clicks, and key injection in process. The Enter/Shift+Enter decision is ALSO
+ * covered as a pure function ([shouldComposerSendOnEnter]) so the send-on-Enter contract holds even
+ * if the harness's key routing ever regresses.
  */
 @OptIn(ExperimentalTestApi::class)
-class DesktopComposerTest {
+class ComposerTest {
 
     // ── (b') pure Enter-key contract — harness-independent ──────────────────────
+    // `isComposerSendKey` (desktop's old predicate) is the `fromPhysicalKeyboard = true` case of
+    // the shared rule; the key-CLASS half is `isComposerEnterKey`, exercised through real events.
+    private fun sendsOnEnter(key: Key, type: KeyEventType, shift: Boolean): Boolean =
+        shouldComposerSendOnEnter(
+            isEnterKey = type == KeyEventType.KeyDown && (key == Key.Enter || key == Key.NumPadEnter),
+            shiftPressed = shift,
+            fromPhysicalKeyboard = true,
+        )
+
     @Test fun sendKeyPredicate_enterDownNoShift_sends() {
-        assertTrue(isComposerSendKey(Key.Enter, KeyEventType.KeyDown, shiftPressed = false))
-        assertTrue(isComposerSendKey(Key.NumPadEnter, KeyEventType.KeyDown, shiftPressed = false))
+        assertTrue(sendsOnEnter(Key.Enter, KeyEventType.KeyDown, shift = false))
+        assertTrue(sendsOnEnter(Key.NumPadEnter, KeyEventType.KeyDown, shift = false))
     }
 
     @Test fun sendKeyPredicate_shiftEnter_isNewlineNotSend() {
-        assertTrue(!isComposerSendKey(Key.Enter, KeyEventType.KeyDown, shiftPressed = true))
+        assertTrue(!sendsOnEnter(Key.Enter, KeyEventType.KeyDown, shift = true))
     }
 
     @Test fun sendKeyPredicate_keyUpAndOtherKeys_dontSend() {
-        assertTrue(!isComposerSendKey(Key.Enter, KeyEventType.KeyUp, shiftPressed = false))
-        assertTrue(!isComposerSendKey(Key.A, KeyEventType.KeyDown, shiftPressed = false))
+        assertTrue(!sendsOnEnter(Key.Enter, KeyEventType.KeyUp, shift = false))
+        assertTrue(!sendsOnEnter(Key.A, KeyEventType.KeyDown, shift = false))
+    }
+
+    // ── Touch host: a soft Return inserts a newline, never sends (Android's rule) ──
+    @Test fun softKeyboardEnter_underTouch_doesNotSend() = runComposeUiTest {
+        var draft by mutableStateOf("")
+        var sendCount = 0
+        setPlatformContent(pointer = false, inputMode = InputMode.Touch) {
+            Composer(
+                draft = draft,
+                onDraftChange = { draft = it },
+                sending = false,
+                agentWorking = false,
+                onSend = { _, _ -> sendCount++; draft = "" },
+                onInterrupt = {},
+            )
+        }
+        onNodeWithTag("composer-input").performTextInput("keep")
+        onNodeWithTag("composer-input").performKeyInput { pressKey(Key.Enter) }
+        waitForIdle()
+        assertEquals(0, sendCount)
+        // The tap-to-send path still works on a touch host.
+        onNodeWithTag("composer-send").performClick()
+        assertEquals(1, sendCount)
     }
 
     // ── (a) typing + click Send fires trimmed text and clears via callback ──────
     @Test fun typingThenClickSend_firesTrimmed_andClears() = runComposeUiTest {
         var draft by mutableStateOf("")
         var sent: String? = null
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = draft,
                 onDraftChange = { draft = it },
                 sending = false,
@@ -67,8 +102,8 @@ class DesktopComposerTest {
     @Test fun enterKey_sends_shiftEnter_doesNot() = runComposeUiTest {
         var draft by mutableStateOf("")
         var sendCount = 0
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = draft,
                 onDraftChange = { draft = it },
                 sending = false,
@@ -91,8 +126,8 @@ class DesktopComposerTest {
 
     // ── (c) Send disabled when blank or while sending ───────────────────────────
     @Test fun sendDisabled_whenBlank() = runComposeUiTest {
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -105,8 +140,8 @@ class DesktopComposerTest {
     }
 
     @Test fun sendDisabled_whileSending_evenWithText() = runComposeUiTest {
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "ready",
                 onDraftChange = {},
                 sending = true,
@@ -119,8 +154,8 @@ class DesktopComposerTest {
     }
 
     @Test fun sendEnabled_whenNonBlankAndNotSending() = runComposeUiTest {
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "ready",
                 onDraftChange = {},
                 sending = false,
@@ -135,8 +170,8 @@ class DesktopComposerTest {
     // ── (d) Stop shown while agentWorking + fires onInterrupt ───────────────────
     @Test fun stopShown_whileAgentWorking_firesInterrupt() = runComposeUiTest {
         var interrupted = false
-        setContent {
-            DesktopComposer(
+        setPlatformContent {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,

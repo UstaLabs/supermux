@@ -7,50 +7,12 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Pure-JVM tests for the composer Enter policy: soft IME → newline only; physical keyboard
- * Enter → send. Mirrors iOS ComposerKeyboardTests.
+ * Android's physical-vs-soft keyboard heuristic (the device/flag/source matrix). The pure Enter
+ * policy it feeds now lives in `:ui` — see `ComposerKeyboardTest` there.
  */
-class ComposerKeyboardTest {
+class HardwareKeyboardTest {
 
-    @Test fun softKeyboardEnterDoesNotSend() {
-        assertFalse(
-            shouldComposerSendOnEnter(
-                isEnterKey = true,
-                shiftPressed = false,
-                fromPhysicalKeyboard = false,
-            ),
-        )
-    }
 
-    @Test fun physicalEnterSends() {
-        assertTrue(
-            shouldComposerSendOnEnter(
-                isEnterKey = true,
-                shiftPressed = false,
-                fromPhysicalKeyboard = true,
-            ),
-        )
-    }
-
-    @Test fun physicalShiftEnterDoesNotSend() {
-        assertFalse(
-            shouldComposerSendOnEnter(
-                isEnterKey = true,
-                shiftPressed = true,
-                fromPhysicalKeyboard = true,
-            ),
-        )
-    }
-
-    @Test fun nonEnterNeverSends() {
-        assertFalse(
-            shouldComposerSendOnEnter(
-                isEnterKey = false,
-                shiftPressed = false,
-                fromPhysicalKeyboard = true,
-            ),
-        )
-    }
 
     @Test fun softImeFlagsAreNotPhysical() {
         assertFalse(

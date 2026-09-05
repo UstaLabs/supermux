@@ -407,28 +407,28 @@ class ShellUiState {
 
     /**
      * One-shot "stage this file into the chat composer, upload it, then send" request (session id +
-     * [dev.supermux.desktop.chat.ComposerExternalAttach]), consumed by the matching [SessionDetail] →
-     * [dev.supermux.desktop.chat.ChatPanel] → `DesktopComposer`'s `externalAttach` — the SAME
+     * [dev.supermux.ui.chat.ComposerExternalAttach]), consumed by the matching [SessionDetail] →
+     * [dev.supermux.desktop.chat.ChatPanel] → `Composer`'s `externalAttach` — the SAME
      * `stageFiles`/`sendWith` funnel the Attach dialog and Send button use (see
      * `ComposerExternalAttach`'s KDoc). Set by the off-by-default `SM_CHAT_ATTACH` headless hook in
      * Main.kt; null in normal operation. Cleared once the matching composer consumes it (after the
      * chip reaches a terminal state and — on success — the send fires).
      */
-    var externalAttach by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalAttach>?>(null)
+    var externalAttach by mutableStateOf<Pair<String, dev.supermux.ui.chat.ComposerExternalAttach>?>(null)
 
     /**
      * One-shot "transcribe this WAV file into the chat composer's draft" request (session id +
-     * [dev.supermux.desktop.chat.ComposerExternalDictate]), consumed by the matching
-     * [SessionDetail] -> [dev.supermux.desktop.chat.ChatPanel] -> `DesktopComposer`'s
+     * [dev.supermux.ui.chat.ComposerExternalDictate]), consumed by the matching
+     * [SessionDetail] -> [dev.supermux.desktop.chat.ChatPanel] -> `Composer`'s
      * `externalDictate` — the SAME `onTranscribeAudio` seam the mic button uses (see
      * `ComposerExternalDictate`'s KDoc). Set by the off-by-default `SM_DICTATE` headless hook in
      * Main.kt; null in normal operation. Cleared once the matching composer consumes it.
      */
-    var externalDictate by mutableStateOf<Pair<String, dev.supermux.desktop.chat.ComposerExternalDictate>?>(null)
+    var externalDictate by mutableStateOf<Pair<String, dev.supermux.ui.chat.ComposerExternalDictate>?>(null)
 
     /**
      * One-shot "paste image from clipboard into the selected session's composer" request. Bumped by
-     * Edit ▸ Paste image in the native MenuBar; the selected session's [DesktopComposer] runs the
+     * Edit ▸ Paste image in the native MenuBar; the selected session's [dev.supermux.ui.chat.Composer] runs the
      * same [launchPasteImages] path as Ctrl/Cmd+V / right-click Paste image, then clears the nonce.
      * Zero in normal operation.
      */

@@ -2,31 +2,22 @@ package dev.supermux.android.chat
 
 import android.view.InputDevice
 import android.view.KeyEvent as AndroidKeyEvent
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
+import dev.supermux.ui.chat.isComposerEnterKey
+import dev.supermux.ui.chat.shouldComposerSendOnEnter
 
 /**
- * Chat / launcher composer Enter policy (iOS [ComposerKeyboard] / web `enterSends` parity):
- * - Soft (virtual) keyboard Return → insert newline only (never send).
- * - Physical keyboard Enter → send; Shift+Enter → newline.
+ * "This KeyEvent came from a real keyboard, not the soft IME" — Android's native heuristic behind
+ * the shared Enter policy ([shouldComposerSendOnEnter], in `:ui`).
  *
- * Pure predicates below are unit-testable without Compose or a real InputDevice.
+ * The shared chat composer does NOT use this: it asks `LocalInputMode` instead, which is the same
+ * question answered once per window by `InputModeDetector` rather than per key event. This copy
+ * stays for the Android-only surfaces that still inspect `nativeKeyEvent` directly (the new-session
+ * launcher), and for the device-level tests that pin the flag/source matrix.
  */
 
-/** Whether an Enter-class key-down without Shift should submit (send) rather than insert a newline. */
-fun shouldComposerSendOnEnter(
-    isEnterKey: Boolean,
-    shiftPressed: Boolean,
-    fromPhysicalKeyboard: Boolean,
-): Boolean = isEnterKey && !shiftPressed && fromPhysicalKeyboard
-
 /**
- * Heuristic for "this KeyEvent came from a real keyboard", not the soft IME.
- *
  * Soft keyboards commonly use deviceId 0/-1 and/or FLAG_SOFT_KEYBOARD; physical USB/BT/DeX
  * keyboards use a non-virtual InputDevice with SOURCE_KEYBOARD.
  */
@@ -58,10 +49,6 @@ fun KeyEvent.isFromPhysicalKeyboard(): Boolean {
         sources = device?.sources,
     )
 }
-
-/** Key-down Enter / NumPadEnter (Shift state ignored — use [shouldComposerSendOnEnter]). */
-fun KeyEvent.isComposerEnterKey(): Boolean =
-    type == KeyEventType.KeyDown && (key == Key.Enter || key == Key.NumPadEnter)
 
 /**
  * True when this event should submit the composer (hardware Enter, no Shift).

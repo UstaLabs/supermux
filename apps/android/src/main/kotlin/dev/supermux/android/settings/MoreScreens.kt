@@ -69,9 +69,9 @@ import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
-import dev.supermux.android.chat.EffortPill
-import dev.supermux.android.chat.ModelPill
-import dev.supermux.android.chat.PickerSheet
+import dev.supermux.ui.chat.EffortPill
+import dev.supermux.ui.chat.ModelPill
+import dev.supermux.ui.chat.PickerSheet
 import dev.supermux.android.session.deriveArchivedWorkspaceRow
 import dev.supermux.android.session.relTime
 import dev.supermux.proto.WorkspaceDto

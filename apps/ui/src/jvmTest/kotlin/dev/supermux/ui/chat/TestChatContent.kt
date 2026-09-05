@@ -6,6 +6,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -28,12 +30,15 @@ internal fun ComposeUiTest.setPlatformContent(
     platform: FakePlatform = FakePlatform(),
     pointer: Boolean = true,
     widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+    /** Drives the composer's Enter policy: Pointer == "there is a real keyboard", so Enter sends. */
+    inputMode: InputMode = InputMode.Pointer,
     content: @Composable () -> Unit,
 ) = setContent {
     CompositionLocalProvider(
         LocalPlatform provides platform,
         LocalPointerAvailable provides pointer,
         LocalWindowWidthClass provides widthClass,
+        LocalInputMode provides inputMode,
     ) {
         content()
     }

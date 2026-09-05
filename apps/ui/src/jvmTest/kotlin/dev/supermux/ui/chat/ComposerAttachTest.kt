@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,7 +13,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.upload.FileChunkSource
+import dev.supermux.net.ByteArrayChunkSource
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.PickedFile
 import kotlinx.coroutines.CompletableDeferred
 import java.io.File
 import java.nio.file.Files
@@ -22,23 +24,22 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import dev.supermux.desktop.platform.composerMime
 
 /**
- * Attachment contract for [DesktopComposer] (M4d): the pure send-gating matrix + mime/kind helpers,
+ * Attachment contract for [Composer]: the pure send-gating matrix + mime/kind helpers,
  * and the staged-chip lifecycle (Uploading → Done | Failed, retry, remove, send-gather) driven
- * through [runComposeUiTest] with a FAKED upload seam + a faked file picker so the tests never touch
- * the network or an AWT dialog. The load-bearing rule: send is blocked while any chip is Uploading
+ * through [runComposeUiTest] with a FAKED upload seam + a [FakePlatform] picker so the tests never
+ * touch the network or a real file dialog. The load-bearing rule: send is blocked while any chip is Uploading
  * OR Failed (never send a message minus its attachment).
  */
 @OptIn(ExperimentalTestApi::class)
-class DesktopComposerAttachTest {
+class ComposerAttachTest {
 
     private fun att(state: UploadState, id: String = "1") = ComposerAttachment(
         id = id,
         name = "f",
         mime = "text/plain",
-        source = FileChunkSource(File("/nonexistent")),
+        source = ByteArrayChunkSource(byteArrayOf(1)),
         state = state,
     )
 
@@ -90,44 +91,12 @@ class DesktopComposerAttachTest {
         assertNull(composerKind("text/plain"))
     }
 
-    @Test fun composerMime_unknownPath_fallsBackToOctetStream() {
-        // A path that can't be probed (nonexistent, no meaningful extension) → octet-stream fallback.
-        val p = File("/nonexistent/no-extension-here").toPath()
-        assertEquals("application/octet-stream", composerMime(p))
-    }
-
-    // ── drag-drop pure helpers (M4d-T2) ─────────────────────────────────────────
-    @Test fun filterExistingFiles_dropsNonexistentEntries() {
-        val real = tempFile("keep.txt")
-        val missing = File(real.parentFile, "does-not-exist.txt")
-        assertEquals(listOf(real), filterExistingFiles(listOf(real, missing)))
-    }
-
-    @Test fun filterExistingFiles_dropsDirectories() {
-        // A dropped directory (isFile == false) is filtered too — stage() only handles single files.
-        val dir = Files.createTempDirectory("composer-attach-dir").toFile().apply { deleteOnExit() }
-        val real = tempFile("keep.txt")
-        assertEquals(listOf(real), filterExistingFiles(listOf(dir, real)))
-    }
-
-    @Test fun composerFilesFromDragData_parsesFileUris() {
-        val real = tempFile("dropped.txt")
-        val uri = real.toURI().toString()
-        assertEquals(listOf(real.absoluteFile), composerFilesFromDragData(listOf(uri)).map { it.absoluteFile })
-    }
-
-    @Test fun composerFilesFromDragData_dropsMalformedEntries() {
-        val real = tempFile("dropped.txt")
-        val uris = listOf(real.toURI().toString(), "not a uri at all")
-        assertEquals(1, composerFilesFromDragData(uris).size)
-    }
-
     // ── staged chip: Uploading(pct) → Done, send gated then enabled ─────────────
     @Test fun stageFile_showsUploadingProgress_thenDone_gatesSend() = runComposeUiTest {
         val gate = CompletableDeferred<Unit>()
         val tmp = tempFile("note.txt")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -135,7 +104,6 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, onProgress -> onProgress(30, 100); gate.await(); "file-xyz" },
-                pickFiles = { listOf(tmp) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -155,8 +123,8 @@ class DesktopComposerAttachTest {
     @Test fun failedUpload_showsRetry_blocksSend_retryReRunsToDone() = runComposeUiTest {
         var calls = 0
         val tmp = tempFile("note.txt")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -164,7 +132,6 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, _ -> calls++; if (calls == 1) null else "file-ok" },
-                pickFiles = { listOf(tmp) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -180,8 +147,8 @@ class DesktopComposerAttachTest {
     // ── remove chip → chip gone, send disabled again (blank text, no attachments) ─
     @Test fun removeChip_dropsIt_andDisablesSend() = runComposeUiTest {
         val tmp = tempFile("note.txt")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -189,7 +156,6 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, _ -> "file-ok" },
-                pickFiles = { listOf(tmp) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -206,8 +172,8 @@ class DesktopComposerAttachTest {
         var sentText: String? = null
         var sentIds: List<String>? = null
         val tmp = tempFile("note.txt")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -215,7 +181,6 @@ class DesktopComposerAttachTest {
                 onSend = { t, ids -> sentText = t; sentIds = ids },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, _ -> "file-77" },
-                pickFiles = { listOf(tmp) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -229,19 +194,18 @@ class DesktopComposerAttachTest {
         onNodeWithTag("composer-send").assertIsNotEnabled()
     }
 
-    // ── stageFiles: a BATCH (as an external drop or a multi-select dialog pick funnels in) stages one
-    // chip per file, uploads each, and silently drops a nonexistent entry (a stale drop, a file
-    // deleted mid-drag) instead of crashing. The actual AWT drag/drop gesture can't be driven under
-    // runComposeUiTest (documented — T3 covers it live/manually); this exercises the SAME funnel
-    // (stageFiles) the drop handler's onDrop calls, via the existing pickFiles() seam, so both entry
-    // points (Attach dialog, external drop) are proven identical without needing a fake OS drag.
+    // ── stageFiles: a BATCH (as an external drop or a multi-select dialog pick funnels in) stages
+    // one chip per file and uploads each. The actual OS drag/drop gesture can't be driven under
+    // runComposeUiTest (documented); this exercises the SAME funnel the drop target's onFiles calls,
+    // via the platform picker, so both entry points are proven identical without a fake OS drag.
+    // Dropping entries that vanished mid-drag is the JVM drop actual's job now — see
+    // `FileDropTest.filterExistingFiles_*`, which owns that rule with its own `java.io.File` cases.
     @Test fun stageFiles_batchStagesAllValidFiles_andUploadsEach_filteringMissingOnes() = runComposeUiTest {
         val tmp1 = tempFile("first.txt")
         val tmp2 = tempFile("second.txt")
-        val missing = File(tmp1.parentFile, "vanished.txt") // never created — must be filtered
         val uploadedNames = mutableListOf<String>()
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp1, tmp2).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -249,7 +213,6 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> },
                 onInterrupt = {},
                 onUpload = { _, name, _, _, _ -> uploadedNames.add(name); "file-$name" },
-                pickFiles = { listOf(tmp1, missing, tmp2) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -267,8 +230,8 @@ class DesktopComposerAttachTest {
         val tmp1 = tempFile("a.txt")
         val tmp2 = tempFile("b.txt")
         var key by mutableStateOf("A")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp1, tmp2).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -277,7 +240,6 @@ class DesktopComposerAttachTest {
                 onInterrupt = {},
                 sessionKey = key,
                 onUpload = { _, _, _, _, _ -> "file-ok" },
-                pickFiles = { listOf(tmp1, tmp2) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -294,8 +256,8 @@ class DesktopComposerAttachTest {
     @Test fun sessionSwitch_clearsChips() = runComposeUiTest {
         val tmp = tempFile("note.txt")
         var key by mutableStateOf("A")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -304,7 +266,6 @@ class DesktopComposerAttachTest {
                 onInterrupt = {},
                 sessionKey = key,
                 onUpload = { _, _, _, _, _ -> "file-ok" },
-                pickFiles = { listOf(tmp) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -322,8 +283,8 @@ class DesktopComposerAttachTest {
     @Test fun lateProgressAfterDone_doesNotResurrectUploading() = runComposeUiTest {
         var captured: ((Long, Long) -> Unit)? = null
         val tmp = tempFile("note.txt")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform(pickResult = listOf(tmp).map(::picked))) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -331,7 +292,6 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, onProgress -> captured = onProgress; "file-ok" },
-                pickFiles = { listOf(tmp) },
             )
         }
         onNodeWithTag("composer-attach").performClick()
@@ -358,10 +318,10 @@ class DesktopComposerAttachTest {
         var consumedCount = 0
         val tmp = tempFile("report.txt")
         var request by mutableStateOf<ComposerExternalAttach?>(
-            ComposerExternalAttach(tmp.absolutePath, "check this file"),
+            ComposerExternalAttach(picked(tmp), "check this file"),
         )
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform()) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -387,8 +347,8 @@ class DesktopComposerAttachTest {
         var sendCalls = 0
         var consumed = false
         val tmp = tempFile("report.txt")
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform()) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -396,7 +356,7 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> sendCalls++ },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, _ -> null }, // upload gives up → Failed
-                externalAttach = ComposerExternalAttach(tmp.absolutePath, "hi"),
+                externalAttach = ComposerExternalAttach(picked(tmp), "hi"),
                 onExternalAttachConsumed = { consumed = true },
             )
         }
@@ -411,8 +371,8 @@ class DesktopComposerAttachTest {
     @Test fun externalAttach_missingFile_dropsWithoutStaging() = runComposeUiTest {
         var uploadCalls = 0
         var consumed = false
-        setContent {
-            DesktopComposer(
+        setPlatformContent(FakePlatform()) {
+            Composer(
                 draft = "",
                 onDraftChange = {},
                 sending = false,
@@ -420,7 +380,7 @@ class DesktopComposerAttachTest {
                 onSend = { _, _ -> },
                 onInterrupt = {},
                 onUpload = { _, _, _, _, _ -> uploadCalls++; "file-x" },
-                externalAttach = ComposerExternalAttach("/nonexistent/path/nope.txt", "hi"),
+                externalAttach = ComposerExternalAttach(null, "hi"),
                 onExternalAttachConsumed = { consumed = true },
             )
         }
@@ -428,6 +388,10 @@ class DesktopComposerAttachTest {
         assertEquals(0, uploadCalls)
         onAllNodesWithTag("composer-chip").assertCountEquals(0)
     }
+
+    /** The upload-ready shape `Platform.pickFiles` hands back for a real file. */
+    private fun picked(file: File) =
+        PickedFile(file.name, "text/plain", ByteArrayChunkSource(file.readBytes()))
 
     private fun tempFile(name: String): File {
         val dir = Files.createTempDirectory("composer-attach").toFile().apply { deleteOnExit() }

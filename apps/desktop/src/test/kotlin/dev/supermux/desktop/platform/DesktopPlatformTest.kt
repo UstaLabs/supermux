@@ -228,7 +228,7 @@ class DesktopPlatformTest {
     fun `stop returns wav CapturedAudio when the recorder produced bytes`() {
         val pcm = ByteArray(64) { it.toByte() }
         val mic = DesktopMicCapture(
-            object : dev.supermux.desktop.chat.MicCapture {
+            object : RawMicCapture {
                 override fun start() = true
                 override fun stop(): ByteArray = pcm
                 override fun cancel() = Unit
@@ -243,7 +243,7 @@ class DesktopPlatformTest {
     @Test
     fun `stop returns null when the recorder captured nothing`() {
         val mic = DesktopMicCapture(
-            object : dev.supermux.desktop.chat.MicCapture {
+            object : RawMicCapture {
                 override fun start() = false
                 override fun stop(): ByteArray? = null
                 override fun cancel() = Unit

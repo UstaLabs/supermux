@@ -1,3 +1,7 @@
+// The thin status strip UNDER the composer card. Shared by both hosts since D3; on Android it
+// renders only under a non-Compact window (the phone composer stays footer-less).
+//
+// Original desktop note follows.
 // The thin status strip UNDER the composer card: transcript detail on the left, the session's
 // git context on the right.
 //
@@ -9,7 +13,7 @@
 // The git side is the ONLY place these ops live now: the workspace header's duplicate strip is
 // gone (AppShell), so a work tree's Fetch/Pull/Push is offered exactly once — from the chat whose
 // next message is going to change that tree.
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,14 +44,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.desktop.shell.gitOpResultLabel
-import dev.supermux.desktop.shell.shouldPublish
+import dev.supermux.chat.gitOpResultLabel
+import dev.supermux.chat.shouldPublish
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.SessionInfo
@@ -63,12 +65,15 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 @Composable
 fun ComposerFooter(
     session: SessionInfo,
-    onFetch: suspend () -> GitOpResult?,
-    onPull: suspend () -> GitOpResult?,
-    onPush: suspend () -> GitOpResult?,
-    onPublish: suspend () -> GitOpResult?,
     modifier: Modifier = Modifier,
+    onFetch: (suspend () -> GitOpResult?)? = null,
+    onPull: (suspend () -> GitOpResult?)? = null,
+    onPush: (suspend () -> GitOpResult?)? = null,
+    onPublish: (suspend () -> GitOpResult?)? = null,
 ) {
+    // A host with no git ops wired (Android, which reaches git through its own badge) still gets
+    // the branch label — it just is not a menu, so the strip never offers a dead Fetch/Pull/Push.
+    val gitOps = onFetch != null && onPull != null && onPush != null && onPublish != null
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val uiPrefs = LocalUiPrefs.current
@@ -162,26 +167,26 @@ fun ComposerFooter(
                             )
                         },
                         label = if (badge == null) branch else "$branch  $badge",
-                        trailingChevron = true,
+                        trailingChevron = gitOps,
                         tag = "footer_branch",
-                        onClick = {
+                        onClick = if (!gitOps) null else ({
                             // A fresh open clears the last op's label and bumps the token, so an
                             // op still in flight from a prior open can't write over this clear.
                             gitResult = null
                             seq++
                             gitOpen = true
-                        },
+                        }),
                     )
                     DropdownMenu(expanded = gitOpen, onDismissRequest = { gitOpen = false }) {
                         DropdownMenuItem(
                             text = { Text("Fetch") },
                             modifier = Modifier.testTag("footer_git_fetch"),
-                            onClick = { run("Fetch", onFetch) },
+                            onClick = { onFetch?.let { run("Fetch", it) } },
                         )
                         DropdownMenuItem(
                             text = { Text("Pull") },
                             modifier = Modifier.testTag("footer_git_pull"),
-                            onClick = { run("Pull", onPull) },
+                            onClick = { onPull?.let { run("Pull", it) } },
                         )
                         // Publish (no upstream yet) and Push are the same slot — you can only ever
                         // need one of them, and offering both invites picking the wrong one.
@@ -189,13 +194,13 @@ fun ComposerFooter(
                             DropdownMenuItem(
                                 text = { Text("Publish") },
                                 modifier = Modifier.testTag("footer_git_publish"),
-                                onClick = { run("Publish", onPublish) },
+                                onClick = { onPublish?.let { run("Publish", it) } },
                             )
                         } else {
                             DropdownMenuItem(
                                 text = { Text("Push") },
                                 modifier = Modifier.testTag("footer_git_push"),
-                                onClick = { run("Push", onPush) },
+                                onClick = { onPush?.let { run("Push", it) } },
                             )
                         }
                     }
@@ -220,8 +225,7 @@ private fun FooterChip(
         Modifier
             .clip(RoundedCornerShape(6.dp))
             .then(
-                if (onClick == null) Modifier
-                else Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(onClick = onClick),
+                if (onClick == null) Modifier else Modifier.clickable(onClick = onClick),
             )
             .padding(horizontal = 6.dp, vertical = 3.dp)
             .testTag(tag),

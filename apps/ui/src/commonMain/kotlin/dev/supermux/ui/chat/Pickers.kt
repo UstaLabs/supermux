@@ -1,4 +1,4 @@
-package dev.supermux.android.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -20,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -34,11 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.android.R
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.rememberHaptics
 
@@ -81,7 +82,7 @@ private fun PillChip(
             maxLines = 1,
         )
         Icon(
-            painter = painterResource(R.drawable.ic_chevron_down),
+            imageVector = Icons.Filled.KeyboardArrowDown,
             contentDescription = null,
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(14.dp),
@@ -89,7 +90,13 @@ private fun PillChip(
     }
 }
 
-/** Small rounded chip showing the current model name. Always visible. */
+/**
+ * Small rounded chip showing the current model name. Always visible.
+ *
+ * The TOUCH half of the composer's model control (the pointer half is `ComposerPill` +
+ * `DropdownMenu` in `Composer.kt`); also used on its own by the launcher, the continue-conversation
+ * flow and the archived-chat header.
+ */
 @Composable
 fun ModelPill(current: String?, onClick: () -> Unit) {
     PillChip(label = current?.take(20) ?: "model", onClick = onClick)
@@ -171,7 +178,7 @@ fun PickerSheet(
                         if (isSelected) {
                             Spacer(Modifier.width(8.dp))
                             Icon(
-                                painter = painterResource(R.drawable.ic_check),
+                                imageVector = Icons.Filled.Check,
                                 contentDescription = null,
                                 tint = cs.primary,
                                 modifier = Modifier.size(16.dp),
