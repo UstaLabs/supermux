@@ -30,6 +30,7 @@ import dev.supermux.desktop.chat.ComposerExternalAttach
 import dev.supermux.desktop.chat.ComposerExternalDictate
 import dev.supermux.desktop.display.DisplayPanel
 import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.ExplorerPane
 import dev.supermux.ui.editor.FilePane
@@ -490,8 +491,10 @@ private fun DiffPaneForWorkspace(
     // Per-diff-pane state, seeded from the view's own `diffBase` so a saved row reopens on the
     // base it was looking at.
     val diff = remember(workspaceId, base) { DiffState().apply { base?.let { diffBase = it } } }
-    val walkthrough = walkthroughSession?.let { walkthroughApp.walkthroughState<WalkthroughState>(it.id) }
-    val reviewWalkthrough = reviewSession?.let { app.walkthroughState<WalkthroughState>(it.id) }
+    // Gate the holder READ on the capability (a host without a WalkthroughSeam throws here).
+    val walkthroughCap = LocalPlatform.current.caps.walkthrough
+    val walkthrough = walkthroughSession?.takeIf { walkthroughCap }?.let { walkthroughApp.walkthroughState<WalkthroughState>(it.id) }
+    val reviewWalkthrough = reviewSession?.takeIf { walkthroughCap }?.let { app.walkthroughState<WalkthroughState>(it.id) }
     DiffPane(
         diff = diff,
         walkthrough = walkthrough,

@@ -32,6 +32,7 @@ import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.ExplorerPane
 import dev.supermux.ui.editor.FilePane
 import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.ui.theme.Space
@@ -340,7 +341,10 @@ private fun DiffViewPane(
     val app = primary?.let { vm.fleet.appFor(it) }
     val sessions by vm.fleet.sessions.collectAsState()
     val reviewSession = primary?.let { id -> sessions.firstOrNull { it.id == id } }
-    val walkthrough = if (app != null && reviewSession != null) {
+    // Gate the holder READ on the capability too (not only the toggle in DiffPane): a host built
+    // without a WalkthroughSeam throws from walkthroughState(), so the cap must protect this site.
+    val walkthroughCap = LocalPlatform.current.caps.walkthrough
+    val walkthrough = if (walkthroughCap && app != null && reviewSession != null) {
         app.walkthroughState<WalkthroughState>(reviewSession.id)
     } else {
         null
