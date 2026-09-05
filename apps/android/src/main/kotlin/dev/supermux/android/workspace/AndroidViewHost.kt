@@ -163,8 +163,8 @@ private fun ChatViewPane(
             ),
             loadModels = { vm.fleet.sessionModels(sessionId) },
             loadReasoning = { vm.fleet.sessionReasoning(sessionId) },
-            pickModel = { vm.fleet.switchModel(sessionId, it); true },
-            pickReasoning = { vm.fleet.switchReasoning(sessionId, it); true },
+            pickModel = { vm.fleet.switchModel(sessionId, it) },
+            pickReasoning = { vm.fleet.switchReasoning(sessionId, it) },
         )
     }
     val chatBody: @Composable (Modifier) -> Unit = { paneMod ->

@@ -3,6 +3,7 @@ package dev.supermux.desktop.shell
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -12,6 +13,9 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
@@ -496,6 +500,14 @@ class SessionHeaderMenusTest {
     fun overflowContinuePassesAgentModelAndReasoning() = runComposeUiTest {
         var received: ContinueHandoff? = null
         setContent {
+            // Pin the two locals the shared ContinueConversationFlow branches on rather than
+            // leaning on DesktopTheme's defaults: an Expanded window + a pointer is the DIALOG
+            // shape with the per-option dropdown rows this case drives (a Compact/touch host gets
+            // the bottom sheet and PickerSheets instead).
+            CompositionLocalProvider(
+                LocalWindowWidthClass provides WindowWidthClass.Expanded,
+                LocalPointerAvailable provides true,
+            ) {
             DesktopTheme(appearance = AppearanceMode.DARK) {
                 OverflowMenu(
                     session = baseSession.copy(agent = "claude", model = "sonnet", reasoningLevel = "high"),
@@ -519,6 +531,7 @@ class SessionHeaderMenusTest {
                         )
                     },
                 )
+            }
             }
         }
         onNodeWithTag("shell_overflow").performClick()

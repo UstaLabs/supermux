@@ -755,9 +755,18 @@ class FleetStore(
 
     suspend fun sessionModels(id: String): ModelsResponse? = appFor(id)?.sessionModels(id)
     suspend fun sessionReasoning(id: String): ReasoningResponse? = appFor(id)?.sessionReasoning(id)
-    /** Fire-and-forget: the broker's session_state broadcast confirms (or rolls back) the pill. */
-    fun switchModel(id: String, model: String) { fleetScope.launch { appFor(id)?.switchModel(id, model) } }
-    fun switchReasoning(id: String, level: String) { fleetScope.launch { appFor(id)?.switchReasoning(id, level) } }
+    /**
+     * Switch the session's model / thinking level and report whether the broker ACCEPTED it.
+     *
+     * Suspending with a real Boolean (rather than the old fire-and-forget launch) so a caller can
+     * tell an accepted switch from a rejected one: the shared chat panel optimistically rewrites
+     * the shown catalog `current` on true, and must not on false. The broker's session_state
+     * broadcast still confirms (or rolls back) the pill either way.
+     */
+    suspend fun switchModel(id: String, model: String): Boolean =
+        appFor(id)?.switchModel(id, model) == true
+    suspend fun switchReasoning(id: String, level: String): Boolean =
+        appFor(id)?.switchReasoning(id, level) == true
 
     /** Fire-and-forget resume-from-archive, then re-pull that host's archived list so the row
      *  leaves the Archived screen (the resume produces no session_removed frame). */

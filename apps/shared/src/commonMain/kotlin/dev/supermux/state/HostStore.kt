@@ -849,6 +849,25 @@ class HostStore(
             api.finish(id, action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen)
         }.isSuccess
 
+    /**
+     * Fire-and-forget finish kickoff on the STORE's own scope, reporting acceptance through
+     * [onKickoff]. The shared Finish flow calls this rather than awaiting [finish] on the panel's
+     * `rememberCoroutineScope`, which a view/session switch mid-kickoff would cancel. Mirrors
+     * [FleetStore.finish].
+     */
+    fun kickoffFinish(
+        id: String,
+        action: String,
+        skipVerify: Boolean? = null,
+        commitFirst: Boolean? = null,
+        commitMessage: String? = null,
+        onKickoff: (Boolean) -> Unit = {},
+    ) {
+        stateScope.launch {
+            onKickoff(finish(id, action, skipVerify, commitFirst, commitMessage))
+        }
+    }
+
     /** Preflight snapshot for the finish menu (branch sync / diff / conflict / dirty). Null on failure. */
     suspend fun finishReadiness(id: String): FinishReadiness? =
         runApi("finishReadiness") { api.finishReadiness(id) }

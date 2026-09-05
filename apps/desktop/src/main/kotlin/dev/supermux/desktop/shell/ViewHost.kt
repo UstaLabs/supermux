@@ -277,7 +277,6 @@ private fun ChatPanelForSession(
     onPasteImageRequestConsumed: () -> Unit,
     modifier: Modifier,
 ) {
-    val scope = rememberCoroutineScope()
     val sessions by app.sessions.collectAsState()
     val finishJobs by app.finishJobs.collectAsState()
     val session = sessions.firstOrNull { it.id == sessionId }
@@ -301,11 +300,10 @@ private fun ChatPanelForSession(
         finish = FinishBindings(
             job = finishJobs[sessionId],
             readiness = { app.finishReadiness(sessionId) },
+            // On the STORE's scope, not this panel's: switching views mid-kickoff must not
+            // cancel the request (Android routes through FleetStore.finish for the same reason).
             finish = { action, skipVerify, commitFirst, commitMessage, onKickoff ->
-                scope.launch {
-                    onKickoff(app.finish(sessionId, action, skipVerify, commitFirst, commitMessage))
-                }
-                Unit
+                app.kickoffFinish(sessionId, action, skipVerify, commitFirst, commitMessage, onKickoff)
             },
             clearJob = { app.clearFinishJob(sessionId) },
             verifySuggest = { app.verifySuggest(sessionId) },

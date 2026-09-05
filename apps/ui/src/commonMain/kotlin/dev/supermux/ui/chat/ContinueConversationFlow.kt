@@ -72,7 +72,17 @@ import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import kotlinx.coroutines.launch
 
-/** Test tags for the continue flow — the two apps already agreed on these strings. */
+/**
+ * Test tags for the continue flow — the two apps already agreed on these strings.
+ *
+ * **Not all of them exist on both branches.** [CONTINUE], [CONTINUE_PICKERS], [CONTINUE_FIELD],
+ * [CONTINUE_CONFIRM], [CONTINUE_CANCEL] and [CONTINUE_ERROR] are on the sheet AND the dialog. The
+ * three picker tags — [CONTINUE_AGENT], [CONTINUE_MODEL], [CONTINUE_REASONING] — and their
+ * per-option `<tag>_$id` dropdown rows exist ONLY under a pointer, where the pickers are
+ * [ContinuePickerPill] + `DropdownMenu`; the touch branch renders `ModelPill`/`EffortPill` opening
+ * a `PickerSheet`, which carries none of them. A test that drives a picker must therefore pin
+ * `LocalPointerAvailable` rather than rely on a theme default.
+ */
 object ContinueTestIds {
     const val CONTINUE = "overflow_continue"
     const val CONTINUE_FIELD = "overflow_continue_field"
