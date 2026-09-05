@@ -1380,6 +1380,37 @@ class AgentSettingsScreenTest {
         assertEquals(1, backs)
     }
 
+    /**
+     * The touch bump is real, not just a token swap: the same row is TALLER without a pointer.
+     *
+     * Keyed on `LocalPointerAvailable`, never `LocalInputMode` — a phone with a Bluetooth keyboard
+     * is still a thumb. (Folded in from the E2 review, which noted the padding had no assertion.)
+     */
+    @Test fun touch_agent_rows_are_taller_than_pointer_rows() {
+        fun headerHeight(pointer: Boolean): Int {
+            var height = 0
+            runComposeUiTest {
+                agentContent(pointer = pointer, widthClass = WindowWidthClass.Compact) {
+                    SupermuxTheme(appearance = AppearanceMode.DARK) { screen(topBarShown = true)() }
+                }
+                waitForIdle()
+                waitUntil(timeoutMillis = 5_000) {
+                    try {
+                        onNodeWithTag("agent_row_header_claude").assertExists()
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                height = onNodeWithTag("agent_row_header_claude").fetchSemanticsNode().size.height
+            }
+            return height
+        }
+        val touch = headerHeight(pointer = false)
+        val mouse = headerHeight(pointer = true)
+        assertTrue(touch > mouse, "touch row $touch should exceed pointer row $mouse")
+    }
+
     @Test fun compact_leaves_the_chrome_alone_when_the_hub_painted_it() = runComposeUiTest {
         agentContent(pointer = false, widthClass = WindowWidthClass.Compact) {
             SupermuxTheme(appearance = AppearanceMode.DARK) { screen(topBarShown = true)() }

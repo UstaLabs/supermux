@@ -1,15 +1,16 @@
-// Ported from apps/android/.../settings/SystemSettingsScreen.kt.
-// Desktop adaptations:
-//   - Scaffold/TopAppBar → hub detail chrome (no nested Back; hub owns navigation)
-//   - LocalContext openUrl → LocalPlatform.openUrl
-//   - painterResource icons → Material Icons
-//   - sp/dp hardcodes → theme Space / MaterialTheme.typography
-//   - checkUpdate() wired as UPDATES "Recheck" (BrokerApi force-poll; Android AppViewModel has it)
-//   - Restart dialog text states plainly that this kills the desktop↔broker connection
-//   - Distinct from update/AppUpdate.kt (File ▸ "Check for Updates…") — this updates the *broker*
-//   - testTags for compose UI tests + SM_SYSTEM headless verification
-//   - restartBroker is suspend→Boolean so 5xx/unreachable surface instead of a blind spinner
-package dev.supermux.desktop.settings
+// The one broker System/maintenance settings screen for both apps (cluster E3).
+//
+// Base = desktop's `settings/SystemSettingsScreen.kt`: the UPDATES "Recheck" (force-poll through
+// `checkUpdate`), the load-error/Retry and action-error states, the bounded update poll loop with
+// its honest timeout messages, the single progress row, a restart that reports failure, and every
+// test tag. Android's page was the same screen minus Recheck, minus the error states, with a
+// fire-and-forget restart on a blind four-second spinner and `R.drawable` icons — it contributes
+// the Compact branch (its own `TopAppBar` when the hub did not paint one, and the chevron on the
+// release-notes link a thumb needs to see the row is tappable).
+//
+// This is the ACTIVE HOST'S BROKER, never the app itself: desktop's own updater is File ▸ "Check
+// for Updates…" (`AppUpdate`, cluster G).
+package dev.supermux.ui.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,20 +27,27 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
-import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,40 +58,131 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.theme.Space
-import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import dev.supermux.ui.widgets.SettingsSectionHeader
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
+import dev.supermux.ui.widgets.SettingsSectionHeader
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.time.Clock
+
+/**
+ * Every broker call the System screen makes, in one holder.
+ *
+ * `restartBroker` is suspend→Boolean (desktop's shape): a 5xx or an unreachable broker surfaces as
+ * an error instead of a spinner that ends on a timer. Android's `FleetStore` wrapper was
+ * fire-and-forget and is retyped in `:shared` rather than dumbing this down.
+ */
+@Immutable
+class SystemSettingsActions(
+    /** Cached broker update status; `null` = transport/decode failure. */
+    val updateStatus: suspend () -> UpdateStatus? = { null },
+    /** Force a fresh upstream check (the UPDATES "Recheck" button). */
+    val checkUpdate: suspend () -> UpdateStatus? = { null },
+    /** Start the broker's self-updater. */
+    val runUpdate: suspend () -> RunUpdateResult? = { null },
+    /** True when the restart POST was accepted. */
+    val restartBroker: suspend () -> Boolean = { false },
+)
+
+/** [SystemSettingsActions] against one paired host — desktop's wiring. */
+@Composable
+fun rememberSystemSettingsActions(app: HostStore): SystemSettingsActions = remember(app) {
+    SystemSettingsActions(
+        updateStatus = { app.updateStatus() },
+        checkUpdate = { app.checkUpdate() },
+        runUpdate = { app.runUpdate() },
+        restartBroker = { app.restartBroker() },
+    )
+}
+
+/** [SystemSettingsActions] against the fleet's ACTIVE host — Android's wiring. */
+@Composable
+fun rememberSystemSettingsActions(fleet: FleetStore): SystemSettingsActions = remember(fleet) {
+    SystemSettingsActions(
+        updateStatus = { fleet.updateStatus() },
+        checkUpdate = { fleet.checkUpdate() },
+        runUpdate = { fleet.runUpdate() },
+        restartBroker = { fleet.restartBroker() },
+    )
+}
 
 /**
  * Broker system / maintenance: update status + self-update + restart.
  *
- * This is **not** the desktop app's own self-update ([dev.supermux.desktop.update.AppUpdateScreen]);
- * that lives under File ▸ "Check for Updates…". Everything here targets the **active host's broker**.
- *
- * [restartBroker] returns true when the POST is accepted; false on 5xx / transport failure so the
- * UI can surface an error instead of pretending a restart began.
+ * @param onBack leave the screen; only reachable from the Compact top bar this screen paints for
+ *   itself (pass the hub's `SettingsSlotScope.onClose`).
+ * @param topBarShown the hub already painted a `TopAppBar` for this detail.
+ * @param updatePollAttempts max status polls after runUpdate starts (production: 120 × 1.5s ≈ 3
+ *   min). Tests shorten it.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SystemSettingsScreen(
-    updateStatus: suspend () -> UpdateStatus?,
-    checkUpdate: suspend () -> UpdateStatus?,
-    runUpdate: suspend () -> RunUpdateResult?,
-    restartBroker: suspend () -> Boolean,
+    actions: SystemSettingsActions,
     modifier: Modifier = Modifier,
-    /** Max status polls after runUpdate starts (production: 120 × 1.5s ≈ 3 min). Tests shorten. */
+    onBack: () -> Unit = {},
+    topBarShown: Boolean = false,
+    updatePollAttempts: Int = 120,
+    updatePollDelayMs: Long = 1500L,
+) {
+    val cs = MaterialTheme.colorScheme
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    if (compact && !topBarShown) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("System", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.testTag("system_settings_back"),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = cs.surfaceContainerHigh,
+                    ),
+                )
+            },
+            containerColor = cs.background,
+        ) { padding ->
+            SystemSettingsBody(
+                actions, modifier.padding(padding), updatePollAttempts, updatePollDelayMs,
+            )
+        }
+    } else {
+        SystemSettingsBody(actions, modifier, updatePollAttempts, updatePollDelayMs)
+    }
+}
+
+@Composable
+private fun SystemSettingsBody(
+    actions: SystemSettingsActions,
+    modifier: Modifier = Modifier,
     updatePollAttempts: Int = 120,
     updatePollDelayMs: Long = 1500L,
 ) {
     val platform = LocalPlatform.current
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    // Touch hosts get the chevron Android's row had — a pointer keeps desktop's bare text link.
+    val pointer = LocalPointerAvailable.current
 
     var status by remember { mutableStateOf<UpdateStatus?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -98,7 +197,7 @@ fun SystemSettingsScreen(
     var updating by remember { mutableStateOf(false) }
 
     suspend fun loadStatus(forceCheck: Boolean = false) {
-        val s = if (forceCheck) checkUpdate() else updateStatus()
+        val s = if (forceCheck) actions.checkUpdate() else actions.updateStatus()
         if (s != null) {
             status = s
             loadError = null
@@ -257,14 +356,27 @@ fun SystemSettingsScreen(
                     }
 
                     s.notesUrl?.let { notes ->
-                        Text(
-                            "Release notes",
-                            color = cs.primary,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier
+                        Row(
+                            Modifier
                                 .clickable { platform.openUrl(notes) }
                                 .testTag("system_release_notes"),
-                        )
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                        ) {
+                            Text(
+                                "Release notes",
+                                color = cs.primary,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (!pointer) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = cs.primary,
+                                    modifier = Modifier.size(Space.md + Space.xs),
+                                )
+                            }
+                        }
                     }
 
                     // Update broker — binary self-updater only. Source/docker can't
@@ -281,7 +393,7 @@ fun SystemSettingsScreen(
                                     runError = null
                                     actionError = null
                                     updating = true
-                                    val result = runUpdate()
+                                    val result = actions.runUpdate()
                                     when {
                                         result == null -> {
                                             runError = "Couldn't reach the broker."
@@ -292,7 +404,7 @@ fun SystemSettingsScreen(
                                             var sawRunning = false
                                             for (i in 0 until updatePollAttempts) {
                                                 delay(updatePollDelayMs)
-                                                val fresh = updateStatus() ?: continue
+                                                val fresh = actions.updateStatus() ?: continue
                                                 status = fresh
                                                 if (isRunningState(fresh.state)) {
                                                     sawRunning = true
@@ -413,7 +525,7 @@ fun SystemSettingsScreen(
                         restarting = true
                         restartError = null
                         scope.launch {
-                            val ok = restartBroker()
+                            val ok = actions.restartBroker()
                             if (!ok) {
                                 restartError = "Couldn't restart the broker."
                             }
@@ -545,7 +657,10 @@ internal fun stateLabel(state: String): String = when (state) {
 }
 
 /** Epoch-millis (Double) → "Checked Xm/Xh/Xd ago", or null when unset. */
-internal fun lastCheckedText(raw: Double?, nowMs: Long = System.currentTimeMillis()): String? {
+internal fun lastCheckedText(
+    raw: Double?,
+    nowMs: Long = Clock.System.now().toEpochMilliseconds(),
+): String? {
     val ms = raw ?: return null
     if (ms <= 0) return null
     val diff = (nowMs - ms.toLong()).coerceAtLeast(0)

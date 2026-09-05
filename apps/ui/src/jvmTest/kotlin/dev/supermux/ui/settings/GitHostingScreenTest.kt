@@ -1,7 +1,7 @@
-package dev.supermux.desktop.settings
+package dev.supermux.ui.settings
 
-import dev.supermux.desktop.testDeps
-
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -10,54 +10,99 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.net.BrokerApi
 import dev.supermux.net.ForgeAccount
 import dev.supermux.net.ForgeCliPresence
 import dev.supermux.net.ForgeCliStatus
 import dev.supermux.net.ForgeConnection
 import dev.supermux.net.ForgeConnectionsResponse
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.respond
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpMethod
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.headersOf
-import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
-import java.nio.file.Path
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 /**
- * Desktop-parity Task 4: [GitHostingScreen] accounts UI + Settings hub wiring.
+ * The shared [GitHostingScreen] (cluster E3) — desktop's suite, moved by name.
  *
- * Covers empty/list/error load, add dialog (PAT connect failure + success), disconnect confirm,
- * CLI import, pure helpers, and MockEngine-backed HostStore forge wrappers.
+ * Covers empty/list/error load, the add form (PAT connect failure + success, CLI import failure),
+ * the self-hosted URL validation, the disconnect confirm that keeps the row when the broker
+ * rejects it, and the pure helpers — plus the Compact branch Android contributed (its own top bar
+ * with the "+" action, and the add form as a bottom sheet). Desktop's `AppShell` hub wiring stays
+ * in `:desktop` (`GitHostingHubTest`).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class GitHostingScreenTest {
 
-    // ── pure helpers ────────────────────────────────────────────────────────────────────────────
+    /**
+     * `setContent` with a [FakePlatform] and an explicit width class. Defaults are the DESKTOP
+     * shape, so the moved suite asserts exactly what it always asserted.
+     */
+    private fun ComposeUiTest.gitContent(
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
+        content()
+    }
+
+    /**
+     * The screen under its pre-E3 argument shape.
+     *
+     * The four suspend lambdas now travel as one [GitHostingActions]; keeping the old names here
+     * means every moved test reads exactly as it did on desktop.
+     */
+    @Composable
+    private fun GitHostingScreenUnderTest(
+        forgesLoad: suspend () -> ForgeConnectionsResponse?,
+        forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
+        forgeImport: suspend (kind: String, transport: String) -> Boolean,
+        forgeRemove: suspend (id: String) -> Boolean,
+        /** The Compact suite flips this to false to prove the screen brings Android's own bar. */
+        topBarShown: Boolean = true,
+        onBack: () -> Unit = {},
+    ) = GitHostingScreen(
+        actions = GitHostingActions(
+            forgesLoad = forgesLoad,
+            forgeAdd = forgeAdd,
+            forgeImport = forgeImport,
+            forgeRemove = forgeRemove,
+        ),
+        onBack = onBack,
+        topBarShown = topBarShown,
+    )
+
+    private fun conn(
+        id: String = "c1",
+        kind: String = "github",
+        login: String = "alice",
+        status: String = "ok",
+        host: String = "github.com",
+        source: String = "pat",
+        transport: String = "https",
+    ) = ForgeConnection(
+        id = id,
+        kind = kind,
+        host = host,
+        account = ForgeAccount(login = login),
+        status = status,
+        source = source,
+        transport = transport,
+    )
+
+    private fun response(
+        connections: List<ForgeConnection> = emptyList(),
+        cli: ForgeCliStatus? = null,
+    ) = ForgeConnectionsResponse(connections = connections, cli = cli)
 
     @Test fun scopes_hint_github_public_vs_enterprise() {
         assertEquals("Contents + Administration (read & write)", scopesHint("github", ""))
@@ -106,35 +151,10 @@ class GitHostingScreenTest {
         assertEquals("glab", cliName("gitlab"))
     }
 
-    // ── screen harness ──────────────────────────────────────────────────────────────────────────
-
-    private fun conn(
-        id: String = "c1",
-        kind: String = "github",
-        login: String = "alice",
-        status: String = "ok",
-        host: String = "github.com",
-        source: String = "pat",
-        transport: String = "https",
-    ) = ForgeConnection(
-        id = id,
-        kind = kind,
-        host = host,
-        account = ForgeAccount(login = login),
-        status = status,
-        source = source,
-        transport = transport,
-    )
-
-    private fun response(
-        connections: List<ForgeConnection> = emptyList(),
-        cli: ForgeCliStatus? = null,
-    ) = ForgeConnectionsResponse(connections = connections, cli = cli)
-
     @Test fun empty_state_shows_connect_a_git_host_strings() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
@@ -158,9 +178,9 @@ class GitHostingScreenTest {
     }
 
     @Test fun connection_list_renders_login_and_disconnect() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = {
                         response(
                             listOf(
@@ -192,9 +212,9 @@ class GitHostingScreenTest {
 
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = {
                         loads.incrementAndGet()
                         null
@@ -222,9 +242,9 @@ class GitHostingScreenTest {
     }
 
     @Test fun manual_github_opens_add_dialog() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
@@ -250,9 +270,9 @@ class GitHostingScreenTest {
     }
 
     @Test fun connect_failure_surfaces_error_in_dialog() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
@@ -287,9 +307,9 @@ class GitHostingScreenTest {
 
     @Test fun connect_success_closes_dialog_and_reloads_list() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = {
                         val n = loads.incrementAndGet()
                         if (n == 1) response()
@@ -331,9 +351,9 @@ class GitHostingScreenTest {
 
     @Test fun disconnect_confirm_calls_remove() = runComposeUiTest {
         val removed = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = { response(listOf(conn(id = "c-rm", login = "gone"))) },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
@@ -371,9 +391,9 @@ class GitHostingScreenTest {
 
     @Test fun disconnect_failure_keeps_row_and_surfaces_error() = runComposeUiTest {
         val removed = AtomicReference<String?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = { response(listOf(conn(id = "c-keep", login = "sticky"))) },
                     forgeAdd = { _, _, _, _ -> false },
                     forgeImport = { _, _ -> false },
@@ -414,9 +434,9 @@ class GitHostingScreenTest {
 
     @Test fun cli_import_button_shown_when_cli_available() = runComposeUiTest {
         val imported = AtomicBoolean(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = {
                         response(
                             cli = ForgeCliStatus(
@@ -452,9 +472,9 @@ class GitHostingScreenTest {
     @Test fun cli_import_failure_keeps_dialog_open_with_error() = runComposeUiTest {
         // Opens the add dialog (which has the CLI import path) and forces import to fail —
         // the old bug closed the dialog with no error on a 500.
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = {
                         response(
                             cli = ForgeCliStatus(
@@ -499,9 +519,9 @@ class GitHostingScreenTest {
     }
 
     @Test fun invalid_self_host_url_blocks_connect_and_shows_feedback() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = { response() },
                     forgeAdd = { _, _, _, _ -> true },
                     forgeImport = { _, _ -> false },
@@ -533,9 +553,9 @@ class GitHostingScreenTest {
     }
 
     @Test fun needs_reconnect_shows_badge_and_reconnect() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                GitHostingScreen(
+        gitContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
                     forgesLoad = {
                         response(listOf(conn(id = "stale", login = "stale", status = "needs_reconnect")))
                     },
@@ -561,100 +581,59 @@ class GitHostingScreenTest {
         onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
     }
 
-    // ── hub + MockEngine wiring ─────────────────────────────────────────────────────────────────
+    // ── Compact branch (Android's phone shape) ──────────────────────────────────────────────────
 
-    private val tempFiles = mutableListOf<Path>()
-
-    @AfterTest fun cleanup() {
-        tempFiles.forEach { Files.deleteIfExists(it) }
-        tempFiles.clear()
-    }
-
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("git_hosting_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
-
-    private fun appWithForges(body: String): HostStore {
-        val engine = MockEngine { req ->
-            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-            when {
-                req.url.encodedPath == "/forge/connections" && req.method == HttpMethod.Get ->
-                    respond(ByteReadChannel(body), HttpStatusCode.OK, jsonHeaders)
-                req.url.encodedPath == "/agents/status" ->
-                    respond("[]", HttpStatusCode.OK, jsonHeaders)
-                else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
-            }
-        }
-        return HostStore(
-            baseUrl = "ws://test:9898",
-            token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
-            connectOnInit = false,
-            sendFrameOverride = { },
-            apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
-        )
-    }
-
-    @Test fun settings_hub_git_hosting_section_loads_real_broker_payload() = runComposeUiTest {
-        val body = """
-            {"connections":[{"id":"live1","kind":"github","host":"github.com","account":{"login":"liveuser"},"source":"pat","transport":"https","status":"ok"}],"cli":null}
-        """.trimIndent()
-        val ui = ShellUiState().apply { openSettings(SettingsSection.GitHosting) }
-        val app = appWithForges(body)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
+    /**
+     * On a phone the hub pushes the detail without a bar, so the screen brings Android's: a title,
+     * a working Back and the "+" action that opens the add form — as a bottom sheet, not a dialog.
+     */
+    @Test fun compact_screen_paints_its_own_top_bar_and_add_action() = runComposeUiTest {
+        var backs = 0
+        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
+                    forgesLoad = { response() },
+                    forgeAdd = { _, _, _, _ -> false },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                    topBarShown = false,
+                    onBack = { backs++ },
                 )
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_hub").assertIsDisplayed()
-        onNodeWithTag("settings_section_githosting").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("git_hosting_screen").assertIsDisplayed()
-                onNodeWithTag("forge_row_live1").assertIsDisplayed()
+                onNodeWithTag("git_hosting_empty_title").assertIsDisplayed()
                 true
             } catch (_: Throwable) {
                 false
             }
         }
-        onNodeWithText("@liveuser").assertIsDisplayed()
-        assertEquals(SettingsSection.GitHosting, ui.settingsSection)
+        onNodeWithText("Git hosting").assertIsDisplayed()
+        onNodeWithTag("git_hosting_back").assertIsDisplayed()
+        onNodeWithTag("git_hosting_add_action").performClick()
+        waitForIdle()
+        // Same form, same tags — only the container differs (ModalBottomSheet on a phone).
+        onNodeWithTag("git_hosting_add_dialog").assertIsDisplayed()
+        onNodeWithTag("git_hosting_token").assertIsDisplayed()
     }
 
-    @Test fun rail_can_switch_to_git_hosting_from_agents() = runComposeUiTest {
-        val body = """{"connections":[],"cli":null}"""
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val app = appWithForges(body)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state-rail")),
-                    LauncherStore(tempPath("launcher-rail")),
+    /** A tablet's rail already painted the title — the screen must not add a second one. */
+    @Test fun compact_top_bar_suppressed_when_the_hub_painted_one() = runComposeUiTest {
+        gitContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GitHostingScreenUnderTest(
+                    forgesLoad = { response() },
+                    forgeAdd = { _, _, _, _ -> false },
+                    forgeImport = { _, _ -> false },
+                    forgeRemove = { true },
+                    topBarShown = true,
                 )
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_section_githosting").performClick()
-        waitForIdle()
-        assertEquals(SettingsSection.GitHosting, ui.settingsSection)
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("git_hosting_screen").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("Connect a Git host").assertIsDisplayed()
+        onNodeWithTag("git_hosting_back").assertDoesNotExist()
+        onNodeWithTag("git_hosting_screen").assertIsDisplayed()
     }
 }

@@ -1,9 +1,7 @@
-// Desktop-parity Task 5: Assistant identity (PA name + soul) + curator.
-package dev.supermux.desktop.settings
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
@@ -11,19 +9,16 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.net.BrokerApi
-import dev.supermux.net.CuratorConfig
-import dev.supermux.net.CuratorSettingsResponse
-import dev.supermux.net.ModelInfo
-import dev.supermux.net.ReasoningResponse
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.FakeSettingsStore
+import dev.supermux.ui.chat.FixedClock
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -32,11 +27,8 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -47,60 +39,60 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 
+/**
+ * The shared [AssistantSettingsScreen] (cluster E3) — desktop's suite, moved by name.
+ *
+ * Covers the Loading/Ready/Error load model (a failed soul fetch is never an editable blank), the
+ * overwrite confirm, the typed save error, and the real `HostStore` + mocked `BrokerApi` paths —
+ * plus the Compact branch Android contributed. Curator is its own hub section and keeps its tests
+ * in `:desktop` (`CuratorSettingsScreenTest`) until cluster E4 moves that screen; the `AppShell`
+ * hub wiring stays there too (`AssistantSettingsHubTest`).
+ */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class AssistantSettingsScreenTest {
 
-    private val tempFiles = mutableListOf<Path>()
-
-    @AfterTest
-    fun cleanup() {
-        tempFiles.forEach { p -> runCatching { Files.deleteIfExists(p) } }
-        tempFiles.clear()
+    private fun ComposeUiTest.assistantContent(
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
+        content()
     }
 
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("assistant_settings_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
+    /**
+     * The screen under its pre-E3 argument shape — the two suspend lambdas now travel as one
+     * [AssistantSettingsActions], so every moved test reads as it did on desktop.
+     */
+    @Composable
+    private fun AssistantSettingsScreenUnderTest(
+        assistantLoad: suspend () -> Pair<String, String>?,
+        assistantSave: suspend (paName: String, soul: String) -> String?,
+        onDirtyChange: (Boolean) -> Unit = {},
+        /** The Compact suite flips this to false to prove the screen brings Android's own bar. */
+        topBarShown: Boolean = true,
+        onBack: () -> Unit = {},
+    ) = AssistantSettingsScreen(
+        actions = AssistantSettingsActions(
+            assistantLoad = assistantLoad,
+            assistantSave = assistantSave,
+        ),
+        onDirtyChange = onDirtyChange,
+        onBack = onBack,
+        topBarShown = topBarShown,
+    )
 
     private fun screen(
         assistantLoad: suspend () -> Pair<String, String>? = { "Mux" to "Be helpful." },
         assistantSave: suspend (String, String) -> String? = { _, _ -> null },
     ) = @Composable {
-        AssistantSettingsScreen(
+        AssistantSettingsScreenUnderTest(
             assistantLoad = assistantLoad,
             assistantSave = assistantSave,
         )
     }
 
-    private fun curatorScreen(
-        curatorLoad: suspend () -> CuratorSettingsResponse? = {
-            CuratorSettingsResponse(
-                config = CuratorConfig(enabled = true, hour = 2, minute = 30, agent = "claude"),
-                nextRun = "2026-08-05T02:30:00Z",
-            )
-        },
-        curatorSave: suspend (Boolean, Int, Int, String, String?, String?) -> CuratorSettingsResponse? = {
-                e, h, m, a, model, r ->
-            CuratorSettingsResponse(config = CuratorConfig(e, h, m, a, model, r), nextRun = "2026-08-06T02:30:00Z")
-        },
-        curatorRunNow: suspend () -> Boolean = { true },
-        loadModels: suspend (String) -> List<ModelInfo> = { emptyList() },
-        loadReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
-    ) = @Composable {
-        CuratorSettingsScreen(
-            curatorLoad = curatorLoad,
-            curatorSave = curatorSave,
-            curatorRunNow = curatorRunNow,
-            loadModels = loadModels,
-            loadReasoning = loadReasoning,
-        )
-    }
-
     @Test fun assistant_renders_pa_name_and_soul() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { screen()() } }
+        assistantContent { SupermuxTheme(appearance = AppearanceMode.DARK) { screen()() } }
         waitForIdle()
         waitUntil(timeoutMillis = 5_000) {
             try {
@@ -119,24 +111,9 @@ class AssistantSettingsScreenTest {
         onNodeWithTag("assistant_curator_enabled").assertDoesNotExist()
     }
 
-    @Test fun curator_section_renders_controls() = runComposeUiTest {
-        setContent { DesktopTheme(appearance = AppearanceMode.DARK) { curatorScreen()() } }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_enabled").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("curator_settings_screen").assertIsDisplayed()
-        onNodeWithTag("assistant_curator_run_now").assertIsDisplayed()
-    }
-
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(assistantLoad = { null })()
             }
         }
@@ -149,8 +126,8 @@ class AssistantSettingsScreenTest {
     }
 
     @Test fun empty_soul_is_ready_not_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(assistantLoad = { "" to "" })()
             }
         }
@@ -169,8 +146,8 @@ class AssistantSettingsScreenTest {
 
     @Test fun save_soul_success_shows_saved_badge() = runComposeUiTest {
         val saved = AtomicReference<Pair<String, String>?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     assistantLoad = { "" to "" },
                     assistantSave = { name, soul ->
@@ -206,8 +183,8 @@ class AssistantSettingsScreenTest {
     }
 
     @Test fun save_soul_failure_shows_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     assistantLoad = { "x" to "y" },
                     assistantSave = { _, _ -> "Couldn't save soul.md — check connection and try again" },
@@ -237,132 +214,6 @@ class AssistantSettingsScreenTest {
         onNodeWithText("Couldn't save soul.md — check connection and try again").assertIsDisplayed()
     }
 
-    @Test fun curator_run_now_fires() = runComposeUiTest {
-        val ran = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                curatorScreen(curatorRunNow = {
-                    ran.set(true)
-                    true
-                })()
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_run_now").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("assistant_curator_run_now").performClick()
-        waitUntil(timeoutMillis = 5_000) { ran.get() }
-        assertTrue(ran.get())
-    }
-
-    @Test fun curator_run_now_failure_shows_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                curatorScreen(curatorRunNow = { false })()
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_run_now").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("assistant_curator_run_now").performClick()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_run_error").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-    }
-
-    @Test fun curator_save_updates_next_run() = runComposeUiTest {
-        val saved = AtomicReference(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                curatorScreen(
-                    curatorSave = { e, h, m, a, model, r ->
-                        saved.set(true)
-                        CuratorSettingsResponse(
-                            config = CuratorConfig(e, h, m, a, model, r),
-                            nextRun = "2099-01-01T00:00:00Z",
-                        )
-                    },
-                )()
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_save").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("assistant_curator_save").performClick()
-        waitUntil(timeoutMillis = 5_000) { saved.get() }
-        assertTrue(saved.get())
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_next_run").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        val expected = curatorNextRunLabel(true, "2099-01-01T00:00:00Z")
-        onNodeWithText(expected).assertIsDisplayed()
-    }
-
-    @Test fun curator_save_failure_shows_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                curatorScreen(curatorSave = { _, _, _, _, _, _ -> null })()
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_save").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("assistant_curator_save").performClick()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("assistant_curator_save_error").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-    }
-
-    @Test fun curator_next_run_label_disabled_when_off() {
-        assertEquals("Disabled", curatorNextRunLabel(false, "2026-08-05T02:30:00Z"))
-        assertEquals("—", curatorNextRunLabel(true, null))
-        // Valid ISO → formatted local datetime (not the raw string, not blank).
-        val formatted = curatorNextRunLabel(true, "2026-08-05T02:30:00Z")
-        assertTrue(formatted.isNotBlank())
-        assertFalse(formatted == "2026-08-05T02:30:00Z", "valid ISO should be formatted, not raw")
-        // Unparseable falls back to raw.
-        assertEquals("not-a-date", curatorNextRunLabel(true, "not-a-date"))
-    }
-
     // ── HostStore + BrokerApi ─────────────────────────────────────────────────────────────
 
     private fun appForAssistant(
@@ -370,8 +221,6 @@ class AssistantSettingsScreenTest {
         soulBody: String? = "Be helpful.",
         soulPutOk: Boolean = true,
         configPutOk: Boolean = true,
-        curatorJson: String? = """{"config":{"enabled":true,"hour":1,"minute":0,"agent":"claude"},"nextRun":null}""",
-        curatorRunStatus: HttpStatusCode = HttpStatusCode.OK,
     ): Pair<HostStore, CopyOnWriteArrayList<Pair<HttpMethod, String>>> {
         val methods = CopyOnWriteArrayList<Pair<HttpMethod, String>>()
         val engine = MockEngine { req ->
@@ -406,21 +255,6 @@ class AssistantSettingsScreenTest {
                         if (soulPutOk) HttpStatusCode.OK else HttpStatusCode.InternalServerError,
                         textHeaders,
                     )
-                path == "/settings/curator" && req.method == HttpMethod.Get -> {
-                    if (curatorJson == null) {
-                        respond("{}", HttpStatusCode.InternalServerError, jsonHeaders)
-                    } else {
-                        respond(curatorJson, HttpStatusCode.OK, jsonHeaders)
-                    }
-                }
-                path == "/settings/curator" && req.method == HttpMethod.Put ->
-                    respond(curatorJson ?: "{}", HttpStatusCode.OK, jsonHeaders)
-                path == "/settings/curator/run-now" && req.method == HttpMethod.Post ->
-                    respond("{}", curatorRunStatus, jsonHeaders)
-                path.startsWith("/models") ->
-                    respond("""{"models":[]}""", HttpStatusCode.OK, jsonHeaders)
-                path.startsWith("/reasoning-levels") ->
-                    respond("""{"agent":"claude","levels":[],"visible":false}""", HttpStatusCode.OK, jsonHeaders)
                 else ->
                     respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
             }
@@ -430,7 +264,11 @@ class AssistantSettingsScreenTest {
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
+            deps = HostStoreDeps(
+                httpFactory = { HttpClient(engine) },
+                settings = FakeSettingsStore(),
+                clock = FixedClock(),
+            ),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", client),
@@ -441,9 +279,9 @@ class AssistantSettingsScreenTest {
     @Test fun desktop_app_state_assistant_load_and_save() = runComposeUiTest {
         val (app, methods) = appForAssistant()
         var loaded: Pair<String, String>? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AssistantSettingsScreen(
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AssistantSettingsScreenUnderTest(
                     assistantLoad = {
                         loaded = app.assistantLoad()
                         loaded
@@ -475,9 +313,9 @@ class AssistantSettingsScreenTest {
     @Test fun desktop_app_state_soul_fetch_failure_shows_error_not_empty() = runComposeUiTest {
         val (app, _) = appForAssistant(soulBody = null)
         var loaded: Pair<String, String>? = Pair("x", "y") // non-null until proven
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AssistantSettingsScreen(
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AssistantSettingsScreenUnderTest(
                     assistantLoad = {
                         loaded = app.assistantLoad()
                         loaded
@@ -504,9 +342,9 @@ class AssistantSettingsScreenTest {
     @Test fun desktop_app_state_config_put_failure_reports_error() = runComposeUiTest {
         val (app, methods) = appForAssistant(configPutOk = false, soulPutOk = true)
         var saveErr: String? = "unset"
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AssistantSettingsScreen(
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AssistantSettingsScreenUnderTest(
                     assistantLoad = { app.assistantLoad() },
                     assistantSave = { n, s ->
                         saveErr = app.assistantSave(n, s)
@@ -537,55 +375,73 @@ class AssistantSettingsScreenTest {
         onNodeWithTag("assistant_save_error").assertIsDisplayed()
     }
 
-    /** B4: runCuratorNow HTTP 500 → false (ensureMutationSuccess). */
-    @Test fun desktop_app_state_run_curator_false_on_http_500() = runComposeUiTest {
-        val (app, methods) = appForAssistant(curatorRunStatus = HttpStatusCode.InternalServerError)
-        var ok = true
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                CuratorSettingsScreen(
-                    curatorLoad = { app.curatorSettings() },
-                    curatorSave = { e, h, m, a, model, r -> app.saveCurator(e, h, m, a, model, r) },
-                    curatorRunNow = {
-                        ok = app.runCuratorNow()
-                        ok
-                    },
-                    loadModels = { emptyList() },
-                    loadReasoning = { _, _ -> null },
-                )
-            }
-        }
-        waitForIdle()
-        onNodeWithTag("assistant_curator_run_now").performClick()
-        waitUntil(timeoutMillis = 5_000) {
-            methods.any { it.second == "/settings/curator/run-now" } && !ok
-        }
-        assertFalse(ok)
-        onNodeWithTag("assistant_curator_run_error").assertIsDisplayed()
-    }
+    // ── Compact branch (Android's phone shape) ──────────────────────────────────────────────────
 
-    @Test fun settings_hub_opens_assistant_section() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Assistant) }
-        val (app, _) = appForAssistant()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
+    /**
+     * On a phone the hub pushes the detail without a bar, so the screen brings Android's — and the
+     * save still goes behind the overwrite confirm Android never had.
+     */
+    @Test fun compact_screen_paints_its_own_top_bar_and_back() = runComposeUiTest {
+        var backs = 0
+        assistantContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AssistantSettingsScreenUnderTest(
+                    assistantLoad = { "Mux" to "Be helpful." },
+                    assistantSave = { _, _ -> null },
+                    topBarShown = false,
+                    onBack = { backs++ },
                 )
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_section_assistant").assertIsDisplayed()
         waitUntil(timeoutMillis = 5_000) {
             try {
-                onNodeWithTag("assistant_settings_screen").assertIsDisplayed()
+                onNodeWithTag("assistant_settings_content").assertIsDisplayed()
                 true
             } catch (_: Throwable) {
                 false
             }
         }
+        onNodeWithText("Assistant").assertIsDisplayed()
+        onNodeWithTag("assistant_settings_back").assertIsDisplayed()
+        onNodeWithTag("assistant_save").performClick()
+        waitForIdle()
+        onNodeWithTag("assistant_save_dialog").assertIsDisplayed()
+        onNodeWithTag("assistant_save_cancel").performClick()
+        waitForIdle()
+        onNodeWithTag("assistant_settings_back").performClick()
+        waitForIdle()
+        assertEquals(1, backs)
+    }
+
+    /** The hub's dirty guard: editing reports dirty, saving clears it. */
+    @Test fun dirty_flag_tracks_unsaved_edits() = runComposeUiTest {
+        val dirty = AtomicReference(false)
+        assistantContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AssistantSettingsScreenUnderTest(
+                    assistantLoad = { "" to "" },
+                    assistantSave = { _, _ -> null },
+                    onDirtyChange = { dirty.set(it) },
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("assistant_pa_name").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertFalse(dirty.get())
+        onNodeWithTag("assistant_pa_name").performTextInput("Edited")
+        waitUntil(timeoutMillis = 5_000) { dirty.get() }
+        onNodeWithTag("assistant_save").performClick()
+        waitForIdle()
+        onNodeWithTag("assistant_save_confirm").performClick()
+        waitUntil(timeoutMillis = 5_000) { !dirty.get() }
+        assertFalse(dirty.get())
     }
 }

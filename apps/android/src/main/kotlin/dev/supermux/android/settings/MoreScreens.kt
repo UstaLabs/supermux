@@ -53,7 +53,6 @@ import dev.supermux.net.ArchivedDto
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CuratorSettingsResponse
 import dev.supermux.net.DeviceDto
-import dev.supermux.net.ForgeConnectionsResponse
 import dev.supermux.net.LspInstallResult
 import dev.supermux.net.LspMutationResult
 import dev.supermux.net.LspServer
@@ -61,8 +60,6 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.PADto
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
-import dev.supermux.net.RunUpdateResult
-import dev.supermux.net.UpdateStatus
 import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.ui.chat.EffortPill
@@ -95,6 +92,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.supermux.ui.settings.LspSettingsScreen
 import dev.supermux.ui.settings.AgentSettingsActions
 import dev.supermux.ui.settings.AgentSettingsScreen
+import dev.supermux.ui.settings.AssistantSettingsActions
+import dev.supermux.ui.settings.AssistantSettingsScreen
+import dev.supermux.ui.settings.GitHostingActions
+import dev.supermux.ui.settings.GitHostingScreen
+import dev.supermux.ui.settings.SystemSettingsActions
+import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.nav.SettingsSection
@@ -111,9 +114,10 @@ import dev.supermux.net.AddCustomLspArgs
 // Since cluster E1 the index + push router IS the shared `dev.supermux.ui.settings.SettingsHub`
 // (rail + detail on a tablet, Android's index list on a phone). What is left here is the SLOT
 // WIRING: which page each `SettingsSection` is on Android, and how it crosses the VM boundary as
-// suspend lambdas / plain callbacks (the established style). The pages below still carry their own
-// Scaffold/TopAppBar/BackHandler, so the hub is asked NOT to paint the detail chrome
-// (`compactTopBar = false`); each E2–E6 task that moves a page into `:ui` drops its branch here.
+// suspend lambdas / plain callbacks (the established style), plus one actions holder per screen that
+// is already shared. The pages still defined below carry their own Scaffold/TopAppBar, so the hub
+// is asked NOT to paint the detail chrome (`compactTopBar = false`); each E4–E7 task that moves a
+// page into `:ui` drops its branch here.
 //
 // The signature is the union of this Settings suite + the Voice track (canonical order
 // in the 2026-06-21-android-settings-changelist §3a). Both must match MainActivity's call.
@@ -125,9 +129,8 @@ fun SettingsScreen(
     paLoad: suspend () -> List<PADto>,
     paCreate: suspend (name: String, agent: String, focus: String?) -> Boolean,
     paKill: suspend (id: String) -> Unit,
-    // Assistant
-    assistantLoad: suspend () -> Pair<String, String>?,
-    assistantSave: suspend (paName: String, soul: String) -> Boolean,
+    /** Assistant identity: one holder since E3 — `ui/settings/AssistantSettingsScreen.kt`. */
+    assistantActions: AssistantSettingsActions,
     /** Agents: one holder since E2 — the screen itself is `ui/settings/AgentSettingsScreen.kt`. */
     agentActions: AgentSettingsActions,
     // Curator
@@ -159,15 +162,10 @@ fun SettingsScreen(
     lspInstallDone: StateFlow<Map<String, ServerFrame.LspInstallDone>>,
     lspAddCustom: suspend (AddCustomLspArgs) -> LspMutationResult?,
     lspRemoveCustom: suspend (id: String) -> LspMutationResult?,
-    // Git hosting
-    forgesLoad: suspend () -> ForgeConnectionsResponse?,
-    forgeAdd: suspend (kind: String, token: String, host: String?, transport: String) -> Boolean,
-    forgeImport: suspend (kind: String, transport: String) -> Boolean,
-    forgeRemove: (id: String) -> Unit,
-    // System
-    updateStatus: suspend () -> UpdateStatus?,
-    runUpdate: suspend () -> RunUpdateResult?,
-    restartBroker: () -> Unit,
+    /** Git hosting: one holder since E3 — `ui/settings/GitHostingScreen.kt`. */
+    gitHostingActions: GitHostingActions,
+    /** Broker system/maintenance: one holder since E3 — `ui/settings/SystemSettingsScreen.kt`. */
+    systemActions: SystemSettingsActions,
     // Devices + Proxies: standalone routes too (Route.Devices / Route.Proxies), and hub sections
     // since E1 — the same screens, reached either way.
     devicesLoad: suspend () -> List<DeviceDto>,
@@ -191,7 +189,10 @@ fun SettingsScreen(
         // MainActivity already wraps this route in `key(activeHost)`, so the hub's own host scoping
         // has nothing left to reset; passing null keeps one owner of that behaviour.
         hostKey = null,
-        // Every page below still brings its own Scaffold + TopAppBar + BackHandler.
+        // The pages still on this file bring their own Scaffold + TopAppBar (and, for the ones
+        // that push a sub-page of their own, their own BackHandler). The screens already shared
+        // — Agents, Assistant, Git hosting, System — read `scope.topBarShown` instead and let the
+        // hub own compact Back; each remaining E4–E7 task drops one more branch here.
         compactTopBar = false,
         extraContent = { extra, scope ->
             when (extra) {
@@ -207,10 +208,13 @@ fun SettingsScreen(
                 create = paCreate,
                 kill = paKill,
             )
-            SettingsSection.Assistant -> AssistantSettingsPage(
+            // Shared since E3 — Android gained the dirty guard, the overwrite confirm and the
+            // typed save error with it.
+            SettingsSection.Assistant -> AssistantSettingsScreen(
+                actions = assistantActions,
+                onDirtyChange = scope.onDirtyChange,
                 onBack = scope.onClose,
-                load = assistantLoad,
-                save = assistantSave,
+                topBarShown = scope.topBarShown,
             )
             // Shared since E2 — Android gained the install section with it. The page paints its
             // own compact TopAppBar because this hub still passes `compactTopBar = false`.
@@ -258,18 +262,18 @@ fun SettingsScreen(
                 lspAddCustom = lspAddCustom,
                 lspRemoveCustom = lspRemoveCustom,
             )
-            SettingsSection.GitHosting -> GitHostingPage(
+            // Shared since E3 — Android gained the host-URL validation and the disconnect that
+            // keeps the row when the broker rejects it.
+            SettingsSection.GitHosting -> GitHostingScreen(
+                actions = gitHostingActions,
                 onBack = scope.onClose,
-                forgesLoad = forgesLoad,
-                forgeAdd = forgeAdd,
-                forgeImport = forgeImport,
-                forgeRemove = forgeRemove,
+                topBarShown = scope.topBarShown,
             )
-            SettingsSection.System -> SystemSettingsPage(
+            // Shared since E3 — Android gained the UPDATES Recheck and the error/load states.
+            SettingsSection.System -> SystemSettingsScreen(
+                actions = systemActions,
                 onBack = scope.onClose,
-                updateStatus = updateStatus,
-                runUpdate = runUpdate,
-                restartBroker = restartBroker,
+                topBarShown = scope.topBarShown,
             )
             SettingsSection.Devices -> DevicesScreen(
                 onBack = scope.onClose,

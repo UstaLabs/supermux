@@ -903,7 +903,14 @@ class FleetStore(
     }
     fun saveName(n: String) { activeApp()?.saveName(n) }
     fun revoke(n: String) { activeApp()?.revoke(n) }
-    fun restartBroker() { fleetScope.launch { activeApp()?.restartBroker() } }
+    /**
+     * Restart the active host's broker; true when the POST was accepted (cluster E3).
+     *
+     * Was a fire-and-forget launch into [fleetScope]: a 5xx or an unreachable broker looked exactly
+     * like a successful restart, so Android spun for four seconds and claimed success. The shared
+     * `SystemSettingsScreen` surfaces the failure off this Boolean.
+     */
+    suspend fun restartBroker(): Boolean = activeApp()?.restartBroker() == true
     fun bindMessageTts() { activeApp()?.bindMessageTts() }
     fun saveVoiceStt(engine: String?) { fleetScope.launch { activeApp()?.saveVoiceStt(engine) } }
     fun saveVoiceTts(engine: String?) { fleetScope.launch { activeApp()?.saveVoiceTts(engine) } }
@@ -922,7 +929,13 @@ class FleetStore(
         activeApp()?.setOpenCodeKey(providerId, key) == true
     suspend fun openCodeFinishOAuth(providerId: String, method: Int, code: String): Boolean =
         activeApp()?.finishOpenCodeOAuth(providerId, method, code) == true
-    fun forgeRemove(id: String) { fleetScope.launch { activeApp()?.forgeRemove(id) } }
+    /**
+     * Disconnect a forge account; true when the broker accepted the delete (cluster E3).
+     *
+     * Was fire-and-forget, so Android dropped the row optimistically and a rejected delete left the
+     * UI lying until the next reload. The shared `GitHostingScreen` keeps the row on false.
+     */
+    suspend fun forgeRemove(id: String): Boolean = activeApp()?.forgeRemove(id) == true
     fun createProxy(sessionName: String, port: Int, domain: String? = null) {
         fleetScope.launch { activeApp()?.createProxy(sessionName, port, domain) }
     }

@@ -10,8 +10,14 @@ import androidx.compose.runtime.Composable
 import dev.supermux.state.HostStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentSettingsScreen
+import dev.supermux.ui.settings.AssistantSettingsScreen
+import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.settings.LspSettingsScreen
+import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.rememberAgentSettingsActions
+import dev.supermux.ui.settings.rememberAssistantSettingsActions
+import dev.supermux.ui.settings.rememberGitHostingActions
+import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.ui.settings.SettingsSlotScope
 
 /** Renders [section]'s desktop screen against [host]. Called from the hub's `content` slot. */
@@ -33,10 +39,9 @@ fun DesktopSettingsSection(
             deviceRevoke = { name -> host.revokeDevice(name) },
         )
         SettingsSection.System -> SystemSettingsScreen(
-            updateStatus = { host.updateStatus() },
-            checkUpdate = { host.checkUpdate() },
-            runUpdate = { host.runUpdate() },
-            restartBroker = { host.restartBroker() },
+            actions = rememberSystemSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.Proxies -> ProxiesSettingsScreen(
             proxiesLoad = { host.proxiesForSettings() },
@@ -46,9 +51,10 @@ fun DesktopSettingsSection(
             proxyRemove = { domain -> host.removeProxy(domain) },
         )
         SettingsSection.Assistant -> AssistantSettingsScreen(
-            assistantLoad = { host.assistantLoad() },
-            assistantSave = { paName, soul -> host.assistantSave(paName, soul) },
+            actions = rememberAssistantSettingsActions(host),
             onDirtyChange = scope.onDirtyChange,
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.Curator -> CuratorSettingsScreen(
             curatorLoad = { host.curatorSettings() },
@@ -92,10 +98,9 @@ fun DesktopSettingsSection(
             showTopBar = false,
         )
         SettingsSection.GitHosting -> GitHostingScreen(
-            forgesLoad = { host.forgesLoad() },
-            forgeAdd = { kind, token, host2, transport -> host.forgeAdd(kind, token, host2, transport) },
-            forgeImport = { kind, transport -> host.forgeImport(kind, transport) },
-            forgeRemove = { id -> host.forgeRemove(id) },
+            actions = rememberGitHostingActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
         )
     }
 }

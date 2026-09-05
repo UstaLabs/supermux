@@ -1,9 +1,7 @@
-// Desktop-parity Task 3: System / maintenance — broker update status + restart.
-package dev.supermux.desktop.settings
-
-import dev.supermux.desktop.testDeps
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -11,94 +9,70 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.state.FleetStore
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
-import dev.supermux.state.HostStoreDeps
-import dev.supermux.state.cioHttpFactory
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.host.HostPersistence
-import dev.supermux.host.PairedHost
-import dev.supermux.host.PairedHostStore
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.UpdateStatus
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.FakeSettingsStore
+import dev.supermux.ui.chat.FixedClock
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
-import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
-import io.ktor.server.application.install
-import io.ktor.server.cio.CIO as ServerCIO
-import io.ktor.server.engine.embeddedServer
-import io.ktor.server.request.receiveText
-import io.ktor.server.response.respondText
-import io.ktor.server.routing.get
-import io.ktor.server.routing.post
-import io.ktor.server.routing.routing
-import io.ktor.server.websocket.WebSockets as ServerWebSockets
-import io.ktor.server.websocket.webSocket
 import io.ktor.utils.io.ByteReadChannel
-import io.ktor.websocket.CloseReason
-import io.ktor.websocket.DefaultWebSocketSession
-import io.ktor.websocket.Frame
-import io.ktor.websocket.close
-import io.ktor.websocket.readText
-import java.net.ServerSocket
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlin.time.Clock
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Desktop-parity Task 3: [SystemSettingsScreen] load / recheck / update / restart + hub wiring.
+ * The shared [SystemSettingsScreen] (cluster E3) — desktop's suite, moved by name.
  *
- * Seeds [BrokerApi] via libs.ktor.client.mock; covers status display, last-checked text,
- * recheck via checkUpdate, update-broker path, restart confirm (kills connection), multi-host
- * isolation, and HostStore GET/POST paths. Distinct from app self-update (AppUpdate).
+ * Covers status display, the relative last-checked text, Recheck going through `checkUpdate`, the
+ * update-broker path with its bounded poll loop and honest timeouts, the restart confirm that
+ * states it kills the connection, and the real `HostStore` + mocked `BrokerApi` paths — plus the
+ * Compact branch Android contributed (its own top bar). Desktop's `AppShell` overlay wiring (the
+ * hub, the rail, multi-host keying, the live disconnect/reconnect stub) stays in `:desktop`
+ * (`SystemSettingsHubTest`).
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class SystemSettingsScreenTest {
 
-    private val tempFiles = mutableListOf<Path>()
-
-    @AfterTest
-    fun cleanup() {
-        tempFiles.forEach { p -> runCatching { Files.deleteIfExists(p) } }
-        tempFiles.clear()
+    /**
+     * `setContent` with a [FakePlatform] (the release-notes link calls `openUrl`) and an explicit
+     * width class. Defaults are the DESKTOP shape, so the moved suite asserts what it always did.
+     */
+    private fun ComposeUiTest.systemContent(
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(platform = FakePlatform(), pointer = pointer, widthClass = widthClass) {
+        content()
     }
 
-    private fun tempPath(name: String): Path {
-        val f = Files.createTempFile("system_settings_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
+    private fun uiTestDeps(engine: HttpClientEngine) = HostStoreDeps(
+        httpFactory = { HttpClient(engine) },
+        settings = FakeSettingsStore(),
+        clock = FixedClock(),
+    )
 
     private fun sampleStatus(
         current: String = "1.2.3",
@@ -108,7 +82,7 @@ class SystemSettingsScreenTest {
         notesUrl: String? = "https://github.com/supermux/supermux/releases",
         mode: String = "binary",
         state: String = "idle",
-        lastChecked: Double? = System.currentTimeMillis() - 5 * 60_000.0,
+        lastChecked: Double? = Clock.System.now().toEpochMilliseconds() - 5 * 60_000.0,
         lastError: String? = null,
         disabled: Boolean = false,
     ) = UpdateStatus(
@@ -129,16 +103,21 @@ class SystemSettingsScreenTest {
         checkUpdate: suspend () -> UpdateStatus? = { sampleStatus() },
         runUpdate: suspend () -> RunUpdateResult? = { null },
         restartBroker: suspend () -> Boolean = { true },
+        /** The Compact suite flips this to false to prove the screen brings Android's own bar. */
+        topBarShown: Boolean = true,
+        onBack: () -> Unit = {},
     ) = @Composable {
         SystemSettingsScreen(
-            updateStatus = updateStatus,
-            checkUpdate = checkUpdate,
-            runUpdate = runUpdate,
-            restartBroker = restartBroker,
+            actions = SystemSettingsActions(
+                updateStatus = updateStatus,
+                checkUpdate = checkUpdate,
+                runUpdate = runUpdate,
+                restartBroker = restartBroker,
+            ),
+            onBack = onBack,
+            topBarShown = topBarShown,
         )
     }
-
-    // ── pure helpers ────────────────────────────────────────────────────────────────────────────
 
     @Test fun last_checked_text_formats_relative() {
         val now = 1_000_000_000_000L
@@ -168,11 +147,9 @@ class SystemSettingsScreenTest {
         assertFalse(isRunningState("restart-required"))
     }
 
-    // ── screen load states ──────────────────────────────────────────────────────────────────────
-
     @Test fun renders_broker_version_commit_and_last_checked() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(current = "2.0.1", commit = "deadbeefcafe")
                 })()
@@ -199,8 +176,8 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun update_available_shows_update_broker_for_binary() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(
                         updateAvailable = true,
@@ -225,8 +202,8 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun source_mode_hides_update_broker_button() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(updateAvailable = true, latest = "9.9.9", mode = "source")
                 })()
@@ -246,8 +223,8 @@ class SystemSettingsScreenTest {
 
     @Test fun load_failure_shows_error_with_retry() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     loads.incrementAndGet()
                     null
@@ -270,8 +247,8 @@ class SystemSettingsScreenTest {
 
     @Test fun retry_after_load_failure_recovers() = runComposeUiTest {
         val loads = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     val n = loads.incrementAndGet()
                     if (n == 1) null else sampleStatus(current = "3.0.0")
@@ -302,8 +279,8 @@ class SystemSettingsScreenTest {
     @Test fun recheck_calls_check_update_not_status() = runComposeUiTest {
         val statusCalls = AtomicInteger(0)
         val checkCalls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         statusCalls.incrementAndGet()
@@ -343,8 +320,8 @@ class SystemSettingsScreenTest {
     /** Failed Recheck after a successful initial load must surface an error and keep prior status. */
     @Test fun recheck_failure_after_load_surfaces_error_keeps_status() = runComposeUiTest {
         val checkCalls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = { sampleStatus(current = "1.0.0") },
                     checkUpdate = {
@@ -381,8 +358,8 @@ class SystemSettingsScreenTest {
     @Test fun run_update_started_polls_status_until_settled() = runComposeUiTest {
         val runCalls = AtomicInteger(0)
         val polls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         val n = polls.incrementAndGet()
@@ -440,8 +417,8 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun run_update_instruction_surfaces_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
@@ -480,8 +457,8 @@ class SystemSettingsScreenTest {
     /** Empty 500 body must not silently look like "nothing happened". */
     @Test fun run_update_empty_failure_surfaces_fallback_error() = runComposeUiTest {
         val runCalls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
@@ -517,8 +494,8 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun run_update_null_result_surfaces_unreachable() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(
                     updateStatus = {
                         sampleStatus(updateAvailable = true, latest = "2.0.0", mode = "binary")
@@ -549,8 +526,8 @@ class SystemSettingsScreenTest {
 
     /** Mid-flight failed status shows Failed + broker lastError + Retry update. */
     @Test fun midflight_failed_shows_failed_row_and_retry() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(
                         updateAvailable = true,
@@ -580,8 +557,8 @@ class SystemSettingsScreenTest {
 
     /** restart-required must not use an indefinite spinner. */
     @Test fun restart_required_shows_icon_not_spinner() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(state = "restart-required", updateAvailable = false)
                 })()
@@ -602,8 +579,8 @@ class SystemSettingsScreenTest {
 
     /** While downloading, only one StateRow (no duplicate progress from the updating flag). */
     @Test fun downloading_shows_single_progress_row() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(updateStatus = {
                     sampleStatus(state = "downloading", updateAvailable = true, latest = "2.0.0")
                 })()
@@ -629,20 +606,22 @@ class SystemSettingsScreenTest {
      */
     @Test fun run_update_polling_timeout_surfaces_error() = runComposeUiTest {
         val polls = AtomicInteger(0)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SystemSettingsScreen(
-                    updateStatus = {
-                        val n = polls.incrementAndGet()
-                        if (n == 1) {
-                            sampleStatus(updateAvailable = true, latest = "2.0.0")
-                        } else {
-                            sampleStatus(state = "downloading", updateAvailable = true, latest = "2.0.0")
-                        }
-                    },
-                    checkUpdate = { sampleStatus() },
-                    runUpdate = { RunUpdateResult(started = true) },
-                    restartBroker = { true },
+                    actions = SystemSettingsActions(
+                        updateStatus = {
+                            val n = polls.incrementAndGet()
+                            if (n == 1) {
+                                sampleStatus(updateAvailable = true, latest = "2.0.0")
+                            } else {
+                                sampleStatus(state = "downloading", updateAvailable = true, latest = "2.0.0")
+                            }
+                        },
+                        checkUpdate = { sampleStatus() },
+                        runUpdate = { RunUpdateResult(started = true) },
+                        restartBroker = { true },
+                    ),
                     updatePollAttempts = 2,
                     updatePollDelayMs = 20L,
                 )
@@ -669,12 +648,10 @@ class SystemSettingsScreenTest {
         assertTrue(polls.get() >= 3) // initial load + at least 2 polls
     }
 
-    // ── restart confirm ─────────────────────────────────────────────────────────────────────────
-
     @Test fun restart_requires_confirm_and_states_connection_kill() = runComposeUiTest {
         val restarted = AtomicBoolean(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(restartBroker = {
                     restarted.set(true)
                     true
@@ -712,8 +689,8 @@ class SystemSettingsScreenTest {
     }
 
     @Test fun restart_failure_surfaces_error() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 screen(restartBroker = { false })()
             }
         }
@@ -789,7 +766,7 @@ class SystemSettingsScreenTest {
             baseUrl = "ws://test:9898",
             token = "t",
             scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
+            deps = uiTestDeps(engine),
             connectOnInit = false,
             sendFrameOverride = { },
             apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
@@ -799,16 +776,18 @@ class SystemSettingsScreenTest {
     @Test fun desktop_app_state_update_status_decodes_mock_broker() = runComposeUiTest {
         val app = appForSystem()
         var loaded: UpdateStatus? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SystemSettingsScreen(
-                    updateStatus = {
-                        loaded = app.updateStatus()
-                        loaded
-                    },
-                    checkUpdate = { app.checkUpdate() },
-                    runUpdate = { app.runUpdate() },
-                    restartBroker = { app.restartBroker() },
+                    actions = SystemSettingsActions(
+                        updateStatus = {
+                            loaded = app.updateStatus()
+                            loaded
+                        },
+                        checkUpdate = { app.checkUpdate() },
+                        runUpdate = { app.runUpdate() },
+                        restartBroker = { app.restartBroker() },
+                    ),
                 )
             }
         }
@@ -825,17 +804,19 @@ class SystemSettingsScreenTest {
         val app = appForSystem(statusJson = null)
         var result: UpdateStatus? = UpdateStatus(current = "sentinel")
         var called = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        systemContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 SystemSettingsScreen(
-                    updateStatus = {
-                        result = app.updateStatus()
-                        called = true
-                        result
-                    },
-                    checkUpdate = { null },
-                    runUpdate = { null },
-                    restartBroker = { true },
+                    actions = SystemSettingsActions(
+                        updateStatus = {
+                            result = app.updateStatus()
+                            called = true
+                            result
+                        },
+                        checkUpdate = { null },
+                        runUpdate = { null },
+                        restartBroker = { true },
+                    ),
                 )
             }
         }
@@ -896,295 +877,45 @@ class SystemSettingsScreenTest {
         assertEquals(1, restarts.get())
     }
 
+    // ── Compact branch (Android's phone shape) ──────────────────────────────────────────────────
+
     /**
-     * Real disconnect → reconnect: local stub broker accepts WS, serves restart POST by closing
-     * all sockets, then accepts a second connection with a fresh snapshot. This is the path the
-     * fake Boolean-flip test missed (`connectOnInit=false` never opened a socket).
+     * On a phone the hub pushes the detail without painting a bar, so the screen brings Android's:
+     * a title, a working Back, and the same body below it.
      */
-    @Test fun restart_broker_disconnects_and_reconnects_against_stub() = runBlocking {
-        val port = ServerSocket(0).use { it.localPort }
-        val wsOpens = AtomicInteger(0)
-        val restartPosts = AtomicInteger(0)
-        val liveSessions =
-            java.util.Collections.synchronizedList(mutableListOf<DefaultWebSocketSession>())
-
-        val server = embeddedServer(ServerCIO, port = port, host = "127.0.0.1") {
-            install(ServerWebSockets)
-            routing {
-                get("/api/update/status") {
-                    call.respondText(
-                        """{"current":"stub-1","commit":"deadbeef","mode":"binary","state":"idle","updateAvailable":false}""",
-                        contentType = io.ktor.http.ContentType.Application.Json,
-                    )
-                }
-                post("/system/restart") {
-                    restartPosts.incrementAndGet()
-                    // Close after responding so the client observes a clean disconnect.
-                    call.respondText("{}", contentType = io.ktor.http.ContentType.Application.Json)
-                    for (session in liveSessions.toList()) {
-                        try {
-                            session.close(CloseReason(CloseReason.Codes.SERVICE_RESTART, "stub restart"))
-                        } catch (_: Throwable) {
-                        }
-                    }
-                    liveSessions.clear()
-                }
-                webSocket("/ws") {
-                    wsOpens.incrementAndGet()
-                    liveSessions.add(this)
-                    try {
-                        for (frame in incoming) {
-                            if (frame is Frame.Text && frame.readText().contains("subscribe")) {
-                                send(
-                                    Frame.Text(
-                                        """{"type":"snapshot","sessions":[],"logs":{},"activity":{},"bgTasks":{},"agentState":{},"commands":{},"commandsResolved":{},"reads":{}}""",
-                                    ),
-                                )
-                            }
-                        }
-                    } finally {
-                        liveSessions.remove(this)
-                    }
-                }
-            }
-        }
-        server.start(wait = false)
-
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val app = HostStore(
-            baseUrl = "ws://127.0.0.1:$port",
-            token = "stub-token",
-            scope = scope,
-            deps = testDeps().let { d ->
-                HostStoreDeps(httpFactory = cioHttpFactory(), settings = d.settings, clock = d.clock)
-            },
-            connectOnInit = true,
-        )
-        try {
-            // Wait for first snapshot (connected).
-            val first = withTimeoutOrNull(10_000) {
-                while (!app.connected) delay(50)
-                true
-            }
-            assertTrue(first == true, "never received first snapshot (opens=${wsOpens.get()})")
-            assertEquals(1, wsOpens.get())
-
-            assertTrue(app.restartBroker())
-            assertEquals(1, restartPosts.get())
-
-            // Drop then re-sync: connection count must go 1→2 with a fresh snapshot.
-            val reconnected = withTimeoutOrNull(15_000) {
-                while (wsOpens.get() < 2 || !app.connected) delay(50)
-                true
-            }
-            assertTrue(
-                reconnected == true,
-                "did not reconnect after restart (opens=${wsOpens.get()}, connected=${app.connected})",
-            )
-            assertEquals(2, wsOpens.get())
-            assertTrue(app.connected)
-        } finally {
-            app.close()
-            scope.cancel()
-            server.stop(100, 500)
-        }
-    }
-
-    // ── Settings hub overlay wiring ─────────────────────────────────────────────────────────────
-
-    @Test fun settings_hub_opens_system_section_and_loads() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
-        val app = appForSystem()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+    @Test fun compact_screen_paints_its_own_top_bar_and_back() = runComposeUiTest {
+        var backs = 0
+        systemContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                screen(topBarShown = false, onBack = { backs++ })()
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_overlay").assertIsDisplayed()
-        onNodeWithTag("settings_hub").assertIsDisplayed()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("system_broker_version").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithText("System").assertIsDisplayed()
+        onNodeWithTag("system_settings_back").assertIsDisplayed()
+        // Android gained UPDATES Recheck and the MAINTENANCE section with this move.
+        onNodeWithTag("system_recheck").assertIsDisplayed()
+        onNodeWithText("MAINTENANCE").assertIsDisplayed()
+        onNodeWithTag("system_settings_back").performClick()
+        waitForIdle()
+        assertEquals(1, backs)
+    }
+
+    /** A tablet's rail already painted the title — the screen must not add a second one. */
+    @Test fun compact_top_bar_suppressed_when_the_hub_painted_one() = runComposeUiTest {
+        systemContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { screen(topBarShown = true)() }
+        }
+        waitForIdle()
+        onNodeWithTag("system_settings_back").assertDoesNotExist()
         onNodeWithTag("system_settings_screen").assertIsDisplayed()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithText("supermux 1.2.3").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("settings_section_system").assertIsDisplayed()
-    }
-
-    @Test fun rail_switches_from_agents_to_system() = runComposeUiTest {
-        val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
-        val engine = MockEngine { req ->
-            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-            when (req.url.encodedPath) {
-                "/agents/status" ->
-                    respond(
-                        """[{"kind":"claude","installed":true,"authed":true}]""",
-                        HttpStatusCode.OK, jsonHeaders,
-                    )
-                "/api/update/status" ->
-                    respond(
-                        """{"current":"4.5.6","commit":"cafebabe","mode":"binary","state":"idle","updateAvailable":false}""",
-                        HttpStatusCode.OK, jsonHeaders,
-                    )
-                else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
-            }
-        }
-        val app = HostStore(
-            baseUrl = "ws://test:9898",
-            token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
-            connectOnInit = false,
-            sendFrameOverride = { },
-            apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
-        )
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("rail-state")),
-                    LauncherStore(tempPath("rail-launcher")),
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithTag("agent_row_claude").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("settings_section_system").performClick()
-        waitForIdle()
-        assertEquals(SettingsSection.System, ui.settingsSection)
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithText("supermux 4.5.6").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithTag("settings_hub_back").assertIsDisplayed()
-    }
-
-    @Test fun multi_host_keying_reloads_system_per_active_host() = runComposeUiTest {
-        val statusA = """{"current":"host-a-1.0","commit":"aaaaaaaa","mode":"binary","state":"idle","updateAvailable":false}"""
-        val statusB = """{"current":"host-b-2.0","commit":"bbbbbbbb","mode":"docker","state":"idle","updateAvailable":false}"""
-        val scope = TestScope(UnconfinedTestDispatcher())
-        val store = PairedHostStore(
-            object : HostPersistence {
-                var hosts = mutableListOf(
-                    PairedHost(
-                        recordId = "h1",
-                        hostId = "host-a",
-                        displayName = "Host A",
-                        token = "t",
-                        relayUrl = "https://a.relay.supermux.dev",
-                    ),
-                    PairedHost(
-                        recordId = "h2",
-                        hostId = "host-b",
-                        displayName = "Host B",
-                        token = "t",
-                        relayUrl = "https://b.relay.supermux.dev",
-                    ),
-                )
-                override fun loadAll() = hosts.toList()
-                override fun saveAll(hosts: List<PairedHost>) {
-                    this.hosts = hosts.toMutableList()
-                }
-            },
-        ) { "rec-unused" }
-        val fleet = FleetStore(
-            store = store,
-            scope = scope,
-            deps = testDeps(),
-            appFactory = { url, token, onConn ->
-                val statusJson = when {
-                    url.contains("a.relay") -> statusA
-                    else -> statusB
-                }
-                val engine = MockEngine { req ->
-                    val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-                    when {
-                        req.url.encodedPath == "/api/update/status" ->
-                            respond(statusJson, HttpStatusCode.OK, jsonHeaders)
-                        else -> respond("{}", HttpStatusCode.OK, jsonHeaders)
-                    }
-                }
-                HostStore(
-                    baseUrl = url,
-                    token = token,
-                    scope = scope,
-                    deps = testDeps(),
-                    connectOnInit = false,
-                    sendFrameOverride = { },
-                    apiOverride = BrokerApi(url, token, HttpClient(engine)),
-                    onConnectionChange = onConn,
-                )
-            },
-        )
-        val ui = ShellUiState().apply { openSettings(SettingsSection.System) }
-        val primary = fleet.appForRecord("h1")!!
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    primary, ui,
-                    ShellStateStore(tempPath("mh-state")),
-                    LauncherStore(tempPath("mh-launcher")),
-                    fleet = fleet,
-                )
-            }
-        }
-        waitForIdle()
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithText("supermux host-a-1.0").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        fleet.setActiveHost("h2")
-        waitUntil(timeoutMillis = 5_000) {
-            try {
-                onNodeWithText("supermux host-b-2.0").assertIsDisplayed()
-                true
-            } catch (_: Throwable) {
-                false
-            }
-        }
-        onNodeWithText("supermux host-a-1.0").assertDoesNotExist()
-        fleet.close()
-    }
-
-    @Test fun open_settings_system_selects_section() {
-        val ui = ShellUiState()
-        ui.openSettings(SettingsSection.System)
-        assertTrue(ui.settingsOpen)
-        assertEquals(SettingsSection.System, ui.settingsSection)
-        assertTrue(ui.overlayOpen)
-        assertFalse(ui.launcherOpen)
-        assertFalse(ui.appUpdateOpen)
-    }
-
-    @Test fun open_settings_system_closes_app_update_overlay() {
-        val ui = ShellUiState()
-        ui.openAppUpdate()
-        assertTrue(ui.appUpdateOpen)
-        ui.openSettings(SettingsSection.System)
-        assertTrue(ui.settingsOpen)
-        assertFalse(ui.appUpdateOpen)
     }
 }

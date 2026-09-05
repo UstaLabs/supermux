@@ -66,6 +66,9 @@ import kotlinx.coroutines.launch
 import dev.supermux.ui.host.AddHostScreen
 import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.ui.settings.rememberAgentSettingsActions
+import dev.supermux.ui.settings.rememberAssistantSettingsActions
+import dev.supermux.ui.settings.rememberGitHostingActions
+import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.host.HostView
 import dev.supermux.host.ViewingSurface
 import dev.supermux.host.WorkspaceViewingSnapshot
@@ -818,8 +821,7 @@ class MainActivity : ComponentActivity() {
                             paCreate = { name, agent, focus -> vm.fleet.createPersonalAssistant(name, agent, focus) },
                             paKill = { vm.fleet.killPersonalAssistant(it) },
                             // Assistant
-                            assistantLoad = { vm.fleet.assistantLoad() },
-                            assistantSave = { paName, soul -> vm.fleet.assistantSave(paName, soul) == null },
+                            assistantActions = rememberAssistantSettingsActions(vm.fleet),
                             // Agents
                             agentActions = rememberAgentSettingsActions(vm.fleet),
                             // Curator
@@ -847,14 +849,9 @@ class MainActivity : ComponentActivity() {
                             lspAddCustom = { vm.fleet.lspAddCustom(it.id, it.label, it.command, it.extensions, it.args, it.languageId, it.installCmd) },
                             lspRemoveCustom = { vm.fleet.lspRemoveCustom(it) },
                             // Git hosting
-                            forgesLoad = { vm.fleet.forgesLoad() },
-                            forgeAdd = { kind, token, host, transport -> vm.fleet.forgeAdd(kind, token, host, transport) },
-                            forgeImport = { kind, transport -> vm.fleet.forgeImport(kind, transport) },
-                            forgeRemove = { vm.fleet.forgeRemove(it) },
+                            gitHostingActions = rememberGitHostingActions(vm.fleet),
                             // System
-                            updateStatus = { vm.fleet.updateStatus() },
-                            runUpdate = { vm.fleet.runUpdate() },
-                            restartBroker = { vm.fleet.restartBroker() },
+                            systemActions = rememberSystemSettingsActions(vm.fleet),
                             // Devices + Proxies are hub sections too (same screens as their routes).
                             devicesLoad = { vm.fleet.devices() },
                             deviceAdd = { vm.fleet.addDevice(it) },
