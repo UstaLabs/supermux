@@ -863,6 +863,35 @@ class MainActivity : ComponentActivity() {
                             updateStatus = { vm.fleet.updateStatus() },
                             runUpdate = { vm.fleet.runUpdate() },
                             restartBroker = { vm.fleet.restartBroker() },
+                            // Devices + Proxies are hub sections too (same screens as their routes).
+                            devicesLoad = { vm.fleet.devices() },
+                            deviceAdd = { vm.fleet.addDevice(it) },
+                            deviceRevoke = { vm.fleet.revoke(it) },
+                            proxiesLoad = { vm.fleet.proxies() },
+                            proxySessions = activeHostSessions,
+                            proxyCreate = { s, p, d -> vm.fleet.createProxy(s, p, d) },
+                            proxySetPublic = { d, pub -> vm.fleet.setProxyPublic(d, pub) },
+                            proxyRemove = { vm.fleet.removeProxy(it) },
+                            appearanceContent = { back ->
+                                AppearanceSettingsPage(
+                                    appearance = appearance,
+                                    dynamicColor = dynamicColor,
+                                    textScale = textScale,
+                                    onAppearanceChange = {
+                                        appearance = it
+                                        prefs.edit().putString("appearance", it.name).apply()
+                                    },
+                                    onDynamicChange = {
+                                        dynamicColor = it
+                                        prefs.edit().putBoolean("dynamicColor", it).apply()
+                                    },
+                                    onTextScaleChange = {
+                                        textScale = it
+                                        prefs.edit().putFloat("textScale", it).apply()
+                                    },
+                                    onBack = back,
+                                )
+                            },
                         ) } }
                     }
                     composable<Route.Usage> {

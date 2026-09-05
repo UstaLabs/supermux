@@ -133,6 +133,10 @@ const val DEFAULT_REQUESTER: String = "default"
  * @property clipboardImages the system clipboard can hand back pasted images.
  * @property saveAs the user can be asked where to write a file ("Save as…"). False on a host with
  *   no save dialog at all (a headless desktop), where [FileAccess.saveAs] returns false.
+ * @property appearanceControls the app owns its own look — theme mode, Material You, text scale —
+ *   so the Settings hub offers the Appearance row (Android today; desktop in cluster E7).
+ * @property appUpdate the app can update ITSELF (not the broker), so the hub offers the
+ *   "Check for updates" row routing to the host's updater screen (cluster G owns that screen).
  * @property walkthrough the app builds its `HostStore` with a `WalkthroughSeam`, so the diff pane
  *   can offer the walkthrough slideshow. False on a host that never installs the seam — reading a
  *   walkthrough holder there would throw.
@@ -149,6 +153,8 @@ data class Caps(
     val clipboardImages: Boolean = false,
     val saveAs: Boolean = false,
     val walkthrough: Boolean = false,
+    val appearanceControls: Boolean = false,
+    val appUpdate: Boolean = false,
 )
 
 /**

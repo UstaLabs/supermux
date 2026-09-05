@@ -97,6 +97,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.supermux.ui.settings.LspSettingsScreen
+import dev.supermux.ui.settings.SettingsExtra
+import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.prefs.EDITOR_FONT_DEFAULT
 import dev.supermux.ui.prefs.EDITOR_FONT_MAX
 import dev.supermux.ui.prefs.EDITOR_FONT_MIN
@@ -107,11 +110,12 @@ import dev.supermux.net.AddCustomLspArgs
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 //
-// The full iOS-parity hub: an INDEX of 7 rows that navigate to sub-pages. Internal
-// nav via `opened` (null = index); each sub-page is self-contained with its own
-// Scaffold/TopAppBar/BackHandler and crosses the VM boundary as suspend lambdas /
-// plain callbacks (the established style). Curator + Voice are server-backed; Editor
-// hosts local prefs (SharedPreferences) + the broker-backed Language-servers section.
+// Since cluster E1 the index + push router IS the shared `dev.supermux.ui.settings.SettingsHub`
+// (rail + detail on a tablet, Android's index list on a phone). What is left here is the SLOT
+// WIRING: which page each `SettingsSection` is on Android, and how it crosses the VM boundary as
+// suspend lambdas / plain callbacks (the established style). The pages below still carry their own
+// Scaffold/TopAppBar/BackHandler, so the hub is asked NOT to paint the detail chrome
+// (`compactTopBar = false`); each E2–E6 task that moves a page into `:ui` drops its branch here.
 //
 // The signature is the union of this Settings suite + the Voice track (canonical order
 // in the 2026-06-21-android-settings-changelist §3a). Both must match MainActivity's call.
@@ -175,86 +179,130 @@ fun SettingsScreen(
     updateStatus: suspend () -> UpdateStatus?,
     runUpdate: suspend () -> RunUpdateResult?,
     restartBroker: () -> Unit,
+    // Devices + Proxies: standalone routes too (Route.Devices / Route.Proxies), and hub sections
+    // since E1 — the same screens, reached either way.
+    devicesLoad: suspend () -> List<DeviceDto>,
+    deviceAdd: suspend (String) -> AddDeviceResponse?,
+    deviceRevoke: (String) -> Unit,
+    proxiesLoad: suspend () -> List<ProxyDto>,
+    proxySessions: List<SessionInfo>,
+    proxyCreate: (sessionName: String, port: Int, domain: String?) -> Unit,
+    proxySetPublic: (domain: String, isPublic: Boolean) -> Unit,
+    proxyRemove: (domain: String) -> Unit,
+    /** The Appearance extra row (`Caps.appearanceControls`): theme / Material You / text scale
+     *  live in MainActivity's prefs, so the page arrives as a slot. Shared in E7. */
+    appearanceContent: @Composable (onBack: () -> Unit) -> Unit,
 ) {
-    var opened by remember { mutableStateOf<String?>(null) }
+    var section by remember { mutableStateOf(SettingsSection.PersonalAssistants) }
 
-    when (opened) {
-        "personal-assistants" -> PersonalAssistantsSettingsPage(
-            onBack = { opened = null },
-            load = paLoad,
-            create = paCreate,
-            kill = paKill,
-        )
-        "assistant" -> AssistantSettingsPage(
-            onBack = { opened = null },
-            load = assistantLoad,
-            save = assistantSave,
-        )
-        "agents" -> AgentSettingsPage(
-            onBack = { opened = null },
-            agentStatuses = agentStatuses,
-            agentStartLogin = agentStartLogin,
-            agentPollLogin = agentPollLogin,
-            agentSendCode = agentSendCode,
-            agentCancelLogin = agentCancelLogin,
-            agentSaveSecret = agentSaveSecret,
-            openCodeProviders = openCodeProviders,
-            openCodeSetKey = openCodeSetKey,
-            openCodeStartOAuth = openCodeStartOAuth,
-            openCodeFinishOAuth = openCodeFinishOAuth,
-        )
-        "curator" -> CuratorSettingsPage(
-            onBack = { opened = null },
-            curatorLoad = curatorLoad,
-            curatorSave = curatorSave,
-            curatorRunNow = curatorRunNow,
-            loadModels = curatorLoadModels,
-            loadReasoning = curatorLoadReasoning,
-        )
-        "voice" -> VoiceSettingsPage(
-            onBack = { opened = null },
-            loadModels = voiceLoadModels,
-            loadConfig = voiceLoadConfig,
-            saveVoiceStt = voiceSaveVoiceStt,
-            saveVoiceTts = voiceSaveVoiceTts,
-            saveVoiceCleanup = voiceSaveVoiceCleanup,
-            onOpenGlossary = { opened = "glossary" },
-        )
-        "glossary" -> VoiceGlossaryPage(
-            onBack = { opened = "voice" },
-            load = glossaryLoad,
-            save = glossarySave,
-        )
-        "editor" -> EditorSettingsPage(
-            onBack = { opened = null },
-            lspLoad = lspLoad,
-            lspToggle = lspToggle,
-            lspInstall = lspInstall,
-            lspInstallLog = lspInstallLog,
-            lspInstallDone = lspInstallDone,
-            lspAddCustom = lspAddCustom,
-            lspRemoveCustom = lspRemoveCustom,
-        )
-        "git" -> GitHostingPage(
-            onBack = { opened = null },
-            forgesLoad = forgesLoad,
-            forgeAdd = forgeAdd,
-            forgeImport = forgeImport,
-            forgeRemove = forgeRemove,
-        )
-        "system" -> SystemSettingsPage(
-            onBack = { opened = null },
-            updateStatus = updateStatus,
-            runUpdate = runUpdate,
-            restartBroker = restartBroker,
-        )
-        "app-update" -> AppUpdatePage(
-            onBack = { opened = null },
-        )
-        else -> SettingsIndexPage(
-            onBack = onBack,
-            onOpen = { opened = it },
-        )
+    SettingsHub(
+        section = section,
+        onSectionChange = { section = it },
+        onBack = onBack,
+        // MainActivity already wraps this route in `key(activeHost)`, so the hub's own host scoping
+        // has nothing left to reset; passing null keeps one owner of that behaviour.
+        hostKey = null,
+        // Every page below still brings its own Scaffold + TopAppBar + BackHandler.
+        compactTopBar = false,
+        extraContent = { extra, scope ->
+            when (extra) {
+                SettingsExtra.Appearance -> appearanceContent(scope.onClose)
+                SettingsExtra.AppUpdate -> AppUpdatePage(onBack = scope.onClose)
+            }
+        },
+    ) { s, scope ->
+        when (s) {
+            SettingsSection.PersonalAssistants -> PersonalAssistantsSettingsPage(
+                onBack = scope.onClose,
+                load = paLoad,
+                create = paCreate,
+                kill = paKill,
+            )
+            SettingsSection.Assistant -> AssistantSettingsPage(
+                onBack = scope.onClose,
+                load = assistantLoad,
+                save = assistantSave,
+            )
+            SettingsSection.Agents -> AgentSettingsPage(
+                onBack = scope.onClose,
+                agentStatuses = agentStatuses,
+                agentStartLogin = agentStartLogin,
+                agentPollLogin = agentPollLogin,
+                agentSendCode = agentSendCode,
+                agentCancelLogin = agentCancelLogin,
+                agentSaveSecret = agentSaveSecret,
+                openCodeProviders = openCodeProviders,
+                openCodeSetKey = openCodeSetKey,
+                openCodeStartOAuth = openCodeStartOAuth,
+                openCodeFinishOAuth = openCodeFinishOAuth,
+            )
+            SettingsSection.Curator -> CuratorSettingsPage(
+                onBack = scope.onClose,
+                curatorLoad = curatorLoad,
+                curatorSave = curatorSave,
+                curatorRunNow = curatorRunNow,
+                loadModels = curatorLoadModels,
+                loadReasoning = curatorLoadReasoning,
+            )
+            // Voice pushes the glossary as its own sub-page — a Voice-local stack, not a hub row.
+            SettingsSection.Voice -> {
+                var glossary by remember { mutableStateOf(false) }
+                if (glossary) {
+                    VoiceGlossaryPage(
+                        onBack = { glossary = false },
+                        load = glossaryLoad,
+                        save = glossarySave,
+                    )
+                } else {
+                    VoiceSettingsPage(
+                        onBack = scope.onClose,
+                        loadModels = voiceLoadModels,
+                        loadConfig = voiceLoadConfig,
+                        saveVoiceStt = voiceSaveVoiceStt,
+                        saveVoiceTts = voiceSaveVoiceTts,
+                        saveVoiceCleanup = voiceSaveVoiceCleanup,
+                        onOpenGlossary = { glossary = true },
+                    )
+                }
+            }
+            SettingsSection.EditorLsp -> EditorSettingsPage(
+                onBack = scope.onClose,
+                lspLoad = lspLoad,
+                lspToggle = lspToggle,
+                lspInstall = lspInstall,
+                lspInstallLog = lspInstallLog,
+                lspInstallDone = lspInstallDone,
+                lspAddCustom = lspAddCustom,
+                lspRemoveCustom = lspRemoveCustom,
+            )
+            SettingsSection.GitHosting -> GitHostingPage(
+                onBack = scope.onClose,
+                forgesLoad = forgesLoad,
+                forgeAdd = forgeAdd,
+                forgeImport = forgeImport,
+                forgeRemove = forgeRemove,
+            )
+            SettingsSection.System -> SystemSettingsPage(
+                onBack = scope.onClose,
+                updateStatus = updateStatus,
+                runUpdate = runUpdate,
+                restartBroker = restartBroker,
+            )
+            SettingsSection.Devices -> DevicesScreen(
+                onBack = scope.onClose,
+                onLoad = devicesLoad,
+                onAdd = deviceAdd,
+                onRevoke = deviceRevoke,
+            )
+            SettingsSection.Proxies -> ProxyScreen(
+                onLoad = proxiesLoad,
+                sessions = proxySessions,
+                onCreate = proxyCreate,
+                onTogglePublic = proxySetPublic,
+                onRemove = proxyRemove,
+                onBack = scope.onClose,
+            )
+        }
     }
 }
 
@@ -435,56 +483,7 @@ private fun PersonalAssistantCreateDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SettingsIndexPage(
-    onBack: () -> Unit,
-    onOpen: (String) -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    BackHandler { onBack() }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = cs.onSurface,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = cs.surfaceContainerHigh,
-                ),
-            )
-        },
-        containerColor = cs.background,
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            SettingsNavRow(R.drawable.ic_smartphone, "Personal assistants", "Optional persistent orchestrators") { onOpen("personal-assistants") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_smartphone, "PA identity", "Shared soul.md for personal assistants") { onOpen("assistant") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_settings, "Agents", "CLI authorization and API-key fallback") { onOpen("agents") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_sparkle, "Curator", "Nightly knowledge curation schedule") { onOpen("curator") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_mic, "Voice", "Speech engine, cleanup model & glossary") { onOpen("voice") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_file, "Editor", "Font, wrap, and language servers") { onOpen("editor") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_network, "Git hosting", "GitHub & GitLab connections") { onOpen("git") }
-            HorizontalDivider(color = cs.outlineVariant)
-            SettingsNavRow(R.drawable.ic_monitor, "System", "Broker restart and status") { onOpen("system") }
-            SettingsNavRow(R.drawable.ic_download, "Check for updates", "App version and one-tap install") { onOpen("app-update") }
-        }
-    }
-}
-
-/** A 36dp rounded icon box used by index rows and Curator rows. */
+/** A 36dp rounded icon box used by the Curator rows. */
 @Composable
 private fun SettingsIconBox(iconRes: Int) {
     val cs = MaterialTheme.colorScheme
@@ -498,37 +497,6 @@ private fun SettingsIconBox(iconRes: Int) {
     ) {
         Icon(
             painterResource(iconRes),
-            contentDescription = null,
-            tint = cs.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
-        )
-    }
-}
-
-/** Tappable index row: icon box + label/desc + trailing chevron. */
-@Composable
-private fun SettingsNavRow(
-    iconRes: Int,
-    label: String,
-    desc: String,
-    onClick: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        SettingsIconBox(iconRes)
-        Column(Modifier.weight(1f)) {
-            Text(label, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-            Text(desc, color = cs.onSurfaceVariant, fontSize = 11.sp)
-        }
-        Icon(
-            painterResource(R.drawable.ic_chevron_right),
             contentDescription = null,
             tint = cs.onSurfaceVariant,
             modifier = Modifier.size(18.dp),

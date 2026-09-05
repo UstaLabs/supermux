@@ -232,6 +232,9 @@ val ANDROID_CAPS = Caps(
     saveAs = true,
     // The walkthrough seam is installed in AppViewModel's HostStore factory (AndroidWalkthroughSeam).
     walkthrough = true,
+    // Theme / Material You / text scale live in the app, and the APK updates itself.
+    appearanceControls = true,
+    appUpdate = true,
 )
 
 /** A pick that completed with nobody awaiting it, tagged with what asked for it. */

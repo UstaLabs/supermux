@@ -102,7 +102,8 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.proto.stateString
 import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.desktop.settings.SettingsHub
+import dev.supermux.desktop.settings.DesktopSettingsSection
+import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.state.HostStore
@@ -1333,73 +1334,10 @@ fun AppShell(
                                             onSectionChange = { ui.settingsSection = it },
                                             onBack = { ui.goBack() },
                                             onRegisterCloseHandler = { settingsTryClose = it },
-                                            agentStatuses = { hostApp.agentStatuses() },
-                                            agentStartLogin = { hostApp.startAgentLogin(it) },
-                                            agentPollLogin = { hostApp.agentLoginState(it) },
-                                            agentSendCode = { kind, code -> hostApp.sendAgentLoginCode(kind, code) },
-                                            agentCancelLogin = { hostApp.cancelAgentLogin(it) },
-                                            agentSaveSecret = { kind, value -> hostApp.saveAgentSecret(kind, value) },
-                                            agentStartInstall = { hostApp.startAgentInstall(it) },
-                                            agentPollInstall = { hostApp.agentInstallState(it) },
-                                            openCodeProviders = { hostApp.openCodeProviders() },
-                                            openCodeSetKey = { id, k -> hostApp.setOpenCodeKey(id, k) },
-                                            openCodeStartOAuth = { id, method -> hostApp.startOpenCodeOAuth(id, method) },
-                                            openCodeFinishOAuth = { id, method, code -> hostApp.finishOpenCodeOAuth(id, method, code) },
-                                            devicesLoad = { hostApp.devices() },
-                                            deviceAdd = { name -> hostApp.addDevice(name) },
-                                            deviceRevoke = { name -> hostApp.revokeDevice(name) },
-                                            updateStatus = { hostApp.updateStatus() },
-                                            checkUpdate = { hostApp.checkUpdate() },
-                                            runUpdate = { hostApp.runUpdate() },
-                                            restartBroker = { hostApp.restartBroker() },
-                                            proxiesLoad = { hostApp.proxiesForSettings() },
-                                            proxySessionNames = { hostApp.sessions.value.map { it.name } },
-                                            proxyCreate = { session, port, domain ->
-                                                hostApp.createProxy(session, port, domain)
-                                            },
-                                            proxySetPublic = { domain, isPublic ->
-                                                hostApp.setProxyPublic(domain, isPublic)
-                                            },
-                                            proxyRemove = { domain -> hostApp.removeProxy(domain) },
-                                            assistantLoad = { hostApp.assistantLoad() },
-                                            assistantSave = { paName, soul -> hostApp.assistantSave(paName, soul) },
-                                            curatorLoad = { hostApp.curatorSettings() },
-                                            curatorSave = { enabled, hour, minute, agent, model, reasoning ->
-                                                hostApp.saveCurator(enabled, hour, minute, agent, model, reasoning)
-                                            },
-                                            curatorRunNow = { hostApp.runCuratorNow() },
-                                            curatorLoadModels = { agent -> hostApp.launcherModels(agent) },
-                                            curatorLoadReasoning = { agent, model ->
-                                                hostApp.launcherReasoning(agent, model)
-                                            },
-                                            voiceLoadConfig = { hostApp.appConfig() },
-                                            voiceLoadModels = { family -> hostApp.launcherModels(family) },
-                                            voiceSaveStt = { engine -> hostApp.saveVoiceStt(engine) },
-                                            voiceSaveTts = { engine -> hostApp.saveVoiceTts(engine) },
-                                            voiceSaveCleanup = { engine, model ->
-                                                hostApp.saveVoiceCleanup(engine, model)
-                                            },
-                                            glossaryLoad = { hostApp.fetchGlossary() },
-                                            glossarySave = { terms -> hostApp.updateGlossary(terms) },
-                                            lspLoad = { hostApp.lspLoad() },
-                                            lspToggle = { id, enabled -> hostApp.lspToggle(id, enabled) },
-                                            lspInstall = { id -> hostApp.lspInstall(id) },
-                                            lspInstallLog = hostApp.lspInstallLog,
-                                            lspInstallDone = hostApp.lspInstallDone,
-                                            lspAddCustom = { args ->
-                                                hostApp.lspAddCustom(args.id, args.label, args.command, args.extensions, args.args, args.languageId, args.installCmd)
-                                            },
-                                            lspRemoveCustom = { id -> hostApp.lspRemoveCustom(id) },
-                                            paLoad = { hostApp.personalAssistants() },
-                                            paCreate = { name, agent, focus -> hostApp.createPersonalAssistant(name, agent, focus) },
-                                            paKill = { hostApp.killPersonalAssistant(it) },
-                                            forgesLoad = { hostApp.forgesLoad() },
-                                            forgeAdd = { kind, token, host, transport ->
-                                                hostApp.forgeAdd(kind, token, host, transport)
-                                            },
-                                            forgeImport = { kind, transport -> hostApp.forgeImport(kind, transport) },
-                                            forgeRemove = { id -> hostApp.forgeRemove(id) },
-                                        )
+                                            hostKey = activeHostId,
+                                        ) { section, scope ->
+                                            DesktopSettingsSection(section, scope, hostApp)
+                                        }
                                     }
                                 }
                             }

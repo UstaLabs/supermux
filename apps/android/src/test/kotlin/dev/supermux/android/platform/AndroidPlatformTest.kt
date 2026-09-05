@@ -35,6 +35,8 @@ class AndroidPlatformTest {
                 clipboardImages = true,
                 saveAs = true,
                 walkthrough = true,
+                appearanceControls = true,
+                appUpdate = true,
             ),
             ANDROID_CAPS,
         )
