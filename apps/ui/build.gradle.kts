@@ -55,10 +55,14 @@ kotlin {
             // shared composables' own signatures (the loadImage test seams take them).
             api(libs.coil.compose)
             api(libs.coil.network.ktor3)
-            // Inline video in the shared chat timeline (D2). Moved here from :desktop — Android's
-            // media3/ExoPlayer player is replaced by this one in D2, and :desktop had no other
+            // Inline video in the shared chat timeline (D2). Moved here from :desktop; Android's
+            // media3/ExoPlayer player is gone (D2 removed the dependency) and :desktop had no other
             // player at all. Renders frames into a Compose Canvas, so nothing AWT-heavyweight.
             api(libs.compose.media.player)
+            // The inline-image fetch policy (https gate, byte cap, bounded redirects) is Ktor here
+            // rather than `java.net`, so it compiles for iOS too. The engine comes from :shared's
+            // runtime classpath.
+            api(libs.ktor.client.core)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))

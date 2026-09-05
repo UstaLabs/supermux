@@ -116,6 +116,18 @@ internal class FakeFiles(
 
     override fun probeMime(name: String): String =
         if (name.endsWith(".png")) "image/png" else "application/octet-stream"
+
+    /** Names handed to [stageTemp], and the URI each got back. */
+    val stagedNames = mutableListOf<String>()
+    val stagedBytes = mutableListOf<Int>()
+    /** Set to make staging fail, as a full disk or a locked cache dir would. */
+    var stageFails: Boolean = false
+
+    override suspend fun stageTemp(name: String, bytes: ByteArray): String? {
+        stagedNames.add(name)
+        stagedBytes.add(bytes.size)
+        return if (stageFails) null else "file:///fake/$name"
+    }
 }
 
 /** Recording [MicCapture]: drive it through [startResult]/[audio] and assert [events]. */

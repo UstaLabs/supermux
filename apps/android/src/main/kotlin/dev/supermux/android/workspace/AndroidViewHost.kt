@@ -27,7 +27,6 @@ import dev.supermux.android.AppViewModel
 import dev.supermux.android.chat.ChatPanel
 import dev.supermux.android.chat.SessionPanel
 import dev.supermux.android.display.DisplayPanel
-import dev.supermux.android.chat.MarkdownBody
 import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.ExplorerPane
 import dev.supermux.ui.editor.FilePane
@@ -321,7 +320,6 @@ private fun FileViewPane(
         fontSize = fontSize,
         onFontSize = { px -> scope.launch { editorPrefs.putEditorFontSize(px) } },
         previewMode = session.previewModes[path] == true,
-        previewSlot = { text, onOpen -> MarkdownBody(text, onOpenFile = onOpen) },
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )
 }
@@ -370,7 +368,6 @@ private fun DiffViewPane(
         onReviewAddComment = { body -> if (primary != null) vm.fleet.reviewAddComment(primary, body) else null },
         onReviewResolve = { id -> if (primary != null) vm.fleet.reviewResolve(primary, id) else false },
         onReviewSubmit = { if (primary != null) vm.fleet.reviewSubmit(primary) else null },
-        markdownSlot = { text, m -> MarkdownBody(text, modifier = m) },
         onClose = {},
         modifier = modifier.fillMaxSize().testTag("editor-${workspace.workdir}"),
     )

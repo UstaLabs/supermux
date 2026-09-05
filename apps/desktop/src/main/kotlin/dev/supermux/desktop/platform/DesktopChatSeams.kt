@@ -97,6 +97,18 @@ internal class DesktopFileAccess : FileAccess {
         val fromOs = runCatching { Files.probeContentType(Paths.get(safe)) }.getOrNull()
         return fromOs ?: mimeForFileName(safe) ?: "application/octet-stream"
     }
+
+    /**
+     * `file:///`-authority URI, deliberately: [java.io.File.toURI] yields `file:/path` (no
+     * authority) and Compose Media Player's own local-file check looks for `"://"`, finds none,
+     * treats the whole string as a bare path and rejects the clip as "File not found".
+     * [java.nio.file.Path.toUri] yields `file:///path`, which it parses, and percent-encodes
+     * spaces for free.
+     */
+    override suspend fun stageTemp(name: String, bytes: ByteArray): String? =
+        withContext(Dispatchers.IO) {
+            writeToTempDir(safeFileName(name), bytes)?.toPath()?.toUri()?.toString()
+        }
 }
 
 /** Strip any directory part and refuse an empty name — the attachment name is broker-supplied. */

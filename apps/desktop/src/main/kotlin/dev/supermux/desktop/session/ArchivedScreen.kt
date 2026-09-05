@@ -65,8 +65,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.testTag
-import dev.supermux.desktop.chat.TimelineItemRow
-import dev.supermux.desktop.chat.mergeTimeline
+import dev.supermux.chat.mergeTimeline
+import dev.supermux.ui.chat.TimelineItemRow
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.ArchivedDto

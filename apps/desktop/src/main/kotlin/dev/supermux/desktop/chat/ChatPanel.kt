@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.TimelineItem
 import dev.supermux.chat.mergeTimeline
+import dev.supermux.ui.chat.TimelineItemRow
+import dev.supermux.ui.chat.timelineReadingWidth
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.shell.AgentViewToggle
 import dev.supermux.desktop.shell.OverflowMenu
@@ -432,7 +434,7 @@ fun ChatPanel(
                 // widthIn BEFORE fillMaxHeight: cap the reading width first, then fill the height.
                 // (fillMaxSize would fix the width to the parent's max and defeat the cap.)
                 modifier = Modifier
-                    .widthIn(max = CONTENT_MAX_WIDTH)
+                    .timelineReadingWidth()
                     .fillMaxHeight()
                     .padding(horizontal = Space.lg),
                 // Vertical inset as CONTENT padding, not a Modifier pad: a Modifier pad clips the

@@ -1,8 +1,8 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.material3.Text
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -10,8 +10,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.proto.Attachment
-import java.io.File
+import dev.supermux.ui.platform.FakePlatform
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -19,11 +20,11 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 
 /**
- * Inline video in the desktop chat stream. The real player mounts Compose Media Player's native
- * backend, so every test here injects the `renderPlayer` seam — a headless Gradle worker must
- * never load AVFoundation/GStreamer. What is asserted is the state machine around it: nothing is
- * downloaded until the user clicks, a failed download or a backend error falls back to the
- * download chip, and the temp file the backend opens is named so its demuxer can be picked.
+ * Inline video in the shared chat stream. The real player mounts Compose Media Player's native
+ * backend, so every test here injects the `renderPlayer` seam — a headless Gradle worker must never
+ * load AVFoundation/GStreamer. What is asserted is the state machine around it: nothing is
+ * downloaded until the user clicks, a failed download or a backend error falls back to the download
+ * chip, and the staged file is named so its demuxer can be picked.
  */
 @OptIn(ExperimentalTestApi::class)
 class AttachmentVideoTest {
@@ -60,13 +61,14 @@ class AttachmentVideoTest {
     }
 
     @Test fun clicking_the_poster_downloads_then_mounts_the_player() = runComposeUiTest {
-        val mounted = java.util.concurrent.atomic.AtomicReference<File?>(null)
-        setPlatformContent {
+        val platform = FakePlatform()
+        val mounted = AtomicReference<String?>(null)
+        setPlatformContent(platform) {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { ByteArray(16) },
-                renderPlayer = { file, _ ->
-                    mounted.set(file)
+                renderPlayer = { uri, _, _ ->
+                    mounted.set(uri)
                     Text("player", modifier = Modifier.testTag("stub_player"))
                 },
             )
@@ -75,11 +77,10 @@ class AttachmentVideoTest {
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty()
         }
-        val file = assertNotNull(mounted.get(), "player must be handed the cached file")
-        assertTrue(file.exists(), "the backend opens a real file by URI")
-        assertEquals("mp4", file.extension, "keep the container hint the demuxer needs")
-        assertTrue(file.length() == 16L, "bytes must round-trip to disk")
-        file.delete()
+        val uri = assertNotNull(mounted.get(), "player must be handed the staged URI")
+        assertTrue(uri.startsWith("file://"), "the backend opens the clip by URI — got $uri")
+        assertEquals(listOf("video_v1.mp4"), platform.files.stagedNames, "keep the container hint the demuxer needs")
+        assertEquals(listOf(16), platform.files.stagedBytes, "bytes must reach the staging seam")
     }
 
     @Test fun a_slow_download_shows_the_spinner_not_the_chip() = runComposeUiTest {
@@ -88,7 +89,7 @@ class AttachmentVideoTest {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { gate.await() },
-                renderPlayer = { _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
+                renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
             )
         }
         onNodeWithTag("attachment_video_poster").performClick()
@@ -104,7 +105,7 @@ class AttachmentVideoTest {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { null },
-                renderPlayer = { _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
+                renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
             )
         }
         onNodeWithTag("attachment_video_poster").performClick()
@@ -112,6 +113,25 @@ class AttachmentVideoTest {
             onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().isNotEmpty()
         }
         onNodeWithTag("attachment_chip").assertIsDisplayed()
+    }
+
+    @Test fun a_failed_staging_falls_back_to_the_chip() = runComposeUiTest {
+        // The host could not write the temp file (a full disk, a locked cache dir).
+        val platform = FakePlatform()
+        platform.files.stageFails = true
+        setPlatformContent(platform) {
+            InlineVideo(
+                att = videoAtt(),
+                loadBytes = { ByteArray(8) },
+                renderPlayer = { _, _, _ -> Text("player", modifier = Modifier.testTag("stub_player")) },
+            )
+        }
+        onNodeWithTag("attachment_video_poster").performClick()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("attachment_chip").fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithTag("attachment_chip").assertIsDisplayed()
+        assertEquals(0, onAllNodesWithTag("stub_player").fetchSemanticsNodes().size)
     }
 
     @Test fun a_backend_error_falls_back_to_the_chip() = runComposeUiTest {
@@ -121,7 +141,7 @@ class AttachmentVideoTest {
             InlineVideo(
                 att = videoAtt(),
                 loadBytes = { ByteArray(8) },
-                renderPlayer = { _, onError -> onError() },
+                renderPlayer = { _, _, onError -> onError() },
             )
         }
         onNodeWithTag("attachment_video_poster").performClick()
@@ -131,51 +151,44 @@ class AttachmentVideoTest {
         onNodeWithTag("attachment_chip").assertIsDisplayed()
     }
 
-    /**
-     * Regression: the first build froze the whole app the moment a clip was clicked. Two causes,
-     * both covered here and by the `Dispatchers.IO` hop in InlineVideoPlayer:
-     * 1. `File.toURI()` produces `file:/path` (no authority). The backend's own local-file check
-     *    looks for "://", finds none, treats the string as a bare path, and fails "File not found".
-     * 2. Reporting that failure runs `runBlocking { withContext(Main) }` on the calling thread —
-     *    the EDT — parking it against itself.
-     */
-    @Test fun media_uri_has_a_file_authority_and_round_trips_to_the_same_file() {
-        val f = assertNotNull(writeAttachmentTempFile(ByteArray(2), "video_uri", "clip.mp4", "mp4"))
-        val uri = mediaUriFor(f)
-        assertTrue(uri.startsWith("file:///"), "backends parse a file:// authority, not file:/ — got $uri")
+    @Test fun the_external_button_hands_the_downloaded_bytes_to_the_host() = runComposeUiTest {
+        val platform = FakePlatform()
+        val external = AtomicReference<(() -> Unit)?>(null)
+        setPlatformContent(platform) {
+            InlineVideo(
+                att = videoAtt(),
+                loadBytes = { ByteArray(9) },
+                renderPlayer = { _, onExternal, _ ->
+                    external.set(onExternal)
+                    Text("player", modifier = Modifier.testTag("stub_player"))
+                },
+            )
+        }
+        onNodeWithTag("attachment_video_poster").performClick()
+        waitUntil(timeoutMillis = 5_000L) {
+            onAllNodesWithTag("stub_player").fetchSemanticsNodes().isNotEmpty()
+        }
+        external.get()!!.invoke()
+        waitUntil(timeoutMillis = 5_000L) { platform.files.opened.isNotEmpty() }
+        assertEquals(listOf("clip.mp4|video/mp4|9"), platform.files.opened)
+    }
+
+    @Test fun temp_name_keeps_the_extension_and_falls_back_to_a_default() {
+        assertEquals("video_v1.MOV", attachmentTempName("video_v1", "holiday.MOV", "mp4"))
+        assertEquals("video_v2.mp4", attachmentTempName("video_v2", null, "mp4"))
+        assertEquals("video_v3.mp4", attachmentTempName("video_v3", "noextension", "mp4"))
+    }
+
+    @Test fun two_clips_do_not_collide_in_the_staging_dir() {
+        // Names are keyed by file_id, so two clips called clip.mp4 stay separate files.
         assertTrue(
-            File(uri.removePrefix("file://")).exists(),
-            "the backend strips exactly this prefix to stat the file; it must resolve",
+            attachmentTempName("video_aaa", "clip.mp4", "mp4") !=
+                attachmentTempName("video_bbb", "clip.mp4", "mp4"),
         )
-        assertEquals(f.absolutePath, File(java.net.URI(uri)).absolutePath)
-        f.delete()
     }
 
-    @Test fun media_uri_percent_encodes_a_space() {
-        val f = assertNotNull(writeAttachmentTempFile(ByteArray(1), "holiday clip", "a.mp4", "mp4"))
-        val uri = mediaUriFor(f)
-        assertTrue(" " !in uri, "a raw space breaks URI parsing in the backends — got $uri")
-        assertEquals(f.absolutePath, File(java.net.URI(uri)).absolutePath)
-        f.delete()
-    }
-
-    @Test fun temp_file_keeps_the_name_extension_and_falls_back_to_a_default() {
-        val mp4 = assertNotNull(writeAttachmentTempFile(ByteArray(3), "video_v1", "holiday.MOV", "mp4"))
-        assertEquals("video_v1.MOV", mp4.name, "the attachment's own container wins")
-        mp4.delete()
-
-        val noExt = assertNotNull(writeAttachmentTempFile(ByteArray(3), "video_v2", null, "mp4"))
-        assertEquals("video_v2.mp4", noExt.name, "fall back to the default container hint")
-        noExt.delete()
-    }
-
-    @Test fun two_clips_do_not_collide_in_the_temp_dir() {
-        val a = assertNotNull(writeAttachmentTempFile(byteArrayOf(1), "video_aaa", "clip.mp4", "mp4"))
-        val b = assertNotNull(writeAttachmentTempFile(byteArrayOf(2, 2), "video_bbb", "clip.mp4", "mp4"))
-        assertTrue(a.absolutePath != b.absolutePath, "file_id-keyed names must not collide")
-        assertEquals(1, a.length().toInt())
-        assertEquals(2, b.length().toInt())
-        a.delete()
-        b.delete()
+    @Test fun temp_name_strips_directories_and_never_goes_blank() {
+        assertEquals("shot.png", attachmentTempName("reports/2026/shot.png", "shot.png", "bin"))
+        assertEquals("file.bin", attachmentTempName("", null, "bin"))
     }
 }

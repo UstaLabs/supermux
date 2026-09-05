@@ -169,6 +169,21 @@ internal class AndroidFileAccess(
         }.getOrNull()
         return fromOs ?: mimeForFileName(name) ?: "application/octet-stream"
     }
+
+    /**
+     * Stage into `cacheDir/attachments` — the same directory [openExternally] uses — and hand back
+     * a `file://` URI. The inline video player opens it in-process, so no provider grant is needed
+     * (and `Uri.fromFile` keeps the extension the backend demuxes from).
+     */
+    override suspend fun stageTemp(name: String, bytes: ByteArray): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val dir = File(context.cacheDir, "attachments").apply { mkdirs() }
+                val file = File(dir, safeFileName(name))
+                file.writeBytes(bytes)
+                Uri.fromFile(file).toString()
+            }.getOrNull()
+        }
 }
 
 /** Strip any directory part and refuse an empty name — attachment names are broker-supplied. */

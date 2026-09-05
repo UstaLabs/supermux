@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -113,6 +114,9 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.chat.TimelineItem
+import dev.supermux.chat.mergeTimeline
+import dev.supermux.ui.chat.TimelineItemRow
+import dev.supermux.ui.chat.timelineReadingWidth
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelsResponse
 import dev.supermux.net.ReasoningResponse
@@ -507,8 +511,10 @@ fun ChatPanel(
         } else {
             LazyColumn(
                 state = listState,
+                // Full-bleed on a phone, reading-width capped on a tablet — the shared rule.
                 modifier = Modifier
-                    .fillMaxSize()
+                    .timelineReadingWidth()
+                    .fillMaxHeight()
                     .padding(horizontal = Space.md, vertical = Space.md),
                 contentPadding = PaddingValues(bottom = with(density) { composerHeightPx.toDp() } + Space.md),
                 verticalArrangement = Arrangement.spacedBy(0.dp),

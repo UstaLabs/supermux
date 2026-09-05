@@ -15,8 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import dev.supermux.android.chat.TimelineItemRow
-import dev.supermux.android.chat.mergeTimeline
+import dev.supermux.chat.mergeTimeline
+import dev.supermux.ui.chat.TimelineItemRow
 import dev.supermux.ui.theme.Space
 import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.chat.TimelineItem

@@ -41,8 +41,8 @@ import androidx.compose.ui.platform.LocalContext
 import dev.supermux.android.R
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.android.update.AppUpdatePage
-import dev.supermux.android.chat.TimelineItemRow
-import dev.supermux.android.chat.mergeTimeline
+import dev.supermux.chat.mergeTimeline
+import dev.supermux.ui.chat.TimelineItemRow
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.TEXT_SCALE_MAX

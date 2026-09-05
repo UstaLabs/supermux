@@ -48,9 +48,9 @@ import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.desktop.chat.MessageTts
-import dev.supermux.desktop.chat.AssistantMessage
 import dev.supermux.desktop.chat.decodeImageBytes
-import dev.supermux.desktop.chat.loadMarkdownImageBitmap
+import dev.supermux.ui.chat.AssistantMessage
+import dev.supermux.ui.chat.fetchImageBytesWithPolicy
 import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
@@ -1562,7 +1562,7 @@ private fun MdImageVerifyOverlay(source: String) {
     val md = "![md-image-verify]($displayUrl)"
     val loadImage: suspend (String) -> ImageBitmap? = when {
         localBytes != null -> ({ decodeImageBytes(localBytes) })
-        isHttps -> ({ loadMarkdownImageBitmap(it) })
+        isHttps -> ({ url -> fetchImageBytesWithPolicy(url)?.let { decodeImageBytes(it) } })
         else -> ({ null })
     }
     LaunchedEffect(source) {

@@ -17,6 +17,8 @@ import dev.supermux.desktop.platform.DesktopPlatform
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.ModalPresenceHost
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
+import dev.supermux.desktop.chat.DesktopReadAloud
+import dev.supermux.ui.chat.LocalReadAloud
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
@@ -69,6 +71,9 @@ fun DesktopTheme(
         LocalModalHost provides ModalPresenceHost,
         LocalHeavyweightShield provides HeavyweightShieldHost,
         LocalUiPrefs provides prefs,
+        // Read-aloud for the shared chat timeline (cluster D2); the adapter goes away when
+        // MessageTts itself moves to :ui in D3.
+        LocalReadAloud provides remember(platform) { DesktopReadAloud(platform.tts) },
     ) {
         SupermuxTheme(
             appearance = appearance,

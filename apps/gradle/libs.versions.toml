@@ -19,7 +19,6 @@ zxingCore = "3.4.1"
 datastore = "1.1.1"
 firebaseBom = "33.7.0"
 googleServices = "4.4.2"
-media3 = "1.7.1"
 composeMultiplatform = "1.11.1"
 # Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
 # 1.11.1 / 2.3.21), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
@@ -84,8 +83,6 @@ zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }
 coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 jediterm-core = { module = "org.jetbrains.jediterm:jediterm-core", version.ref = "jediterm" }
 jediterm-ui = { module = "org.jetbrains.jediterm:jediterm-ui", version.ref = "jediterm" }

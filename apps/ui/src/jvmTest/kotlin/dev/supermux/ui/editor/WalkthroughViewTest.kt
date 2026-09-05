@@ -59,7 +59,6 @@ class WalkthroughViewTest {
                     onResolve = { false },
                     onOpenFile = { _, _, _ -> },
                     onClose = {},
-                    markdownSlot = { text, m -> Text(text, modifier = m) },
                     modifier = Modifier,
                 )
             }

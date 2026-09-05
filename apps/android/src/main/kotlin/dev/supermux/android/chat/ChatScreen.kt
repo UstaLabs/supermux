@@ -705,8 +705,6 @@ fun ChatScreen(
                     onConsumesBackChange = onEditorConsumesBackChange,
                     pendingOpen = pendingEditorOpen,
                     onPendingOpenConsumed = { pendingEditorOpen = null },
-                    // Android's own markdown renderer until the shared MarkdownBody lands (cluster D).
-                    previewSlot = { text, onOpen -> MarkdownBody(text, onOpenFile = onOpen) },
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }

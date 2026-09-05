@@ -9,8 +9,8 @@
 // verbatim — the fs-watch lifecycle, the `onConsumesBackChange` contract, the haptics, the reveal
 // on a chat-initiated open — with three substitutions that make it multiplatform: drawable ids
 // become Material icons, `androidx.activity.compose.BackHandler` becomes Compose Multiplatform's
-// own (inert where the platform has no back gesture), and the markdown preview renders through
-// [previewSlot] until the shared `MarkdownBody` lands in cluster D.
+// own (inert where the platform has no back gesture), and the markdown preview renders through the
+// shared [MarkdownBody] (cluster D2).
 package dev.supermux.ui.editor
 
 import androidx.compose.animation.fadeIn
@@ -76,6 +76,7 @@ import dev.supermux.net.ReviewComment
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.proto.ServerFrame
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.editor.engine.EditorScrollReader
@@ -151,8 +152,6 @@ fun EditorPanel(
     onConsumesBackChange: (Boolean) -> Unit = {},
     pendingOpen: PendingEditorOpen? = null,
     onPendingOpenConsumed: () -> Unit = {},
-    /** Markdown preview renderer — each app's own `MarkdownBody` until cluster D shares one. */
-    previewSlot: @Composable (text: String, onOpenFile: (FilePathRef) -> Unit) -> Unit = { text, _ -> Text(text) },
     /** Where a file link inside the markdown preview lands. Defaults to opening it in this panel. */
     onOpenFile: ((FilePathRef) -> Unit)? = null,
 ) {
@@ -539,10 +538,15 @@ fun EditorPanel(
                                         .padding(Space.lg)
                                         .testTag("editor_preview"),
                                 ) {
-                                    previewSlot(activeTab.content) { ref ->
-                                        val open = onOpenFile
-                                        if (open != null) open(ref) else revealFile(ref.path, ref.line, ref.endLine)
-                                    }
+                                    MarkdownBody(
+                                        text = activeTab.content,
+                                        linkify = true,
+                                        onOpenFile = { ref ->
+                                            val open = onOpenFile
+                                            if (open != null) open(ref)
+                                            else revealFile(ref.path, ref.line, ref.endLine)
+                                        },
+                                    )
                                 }
                             }
 

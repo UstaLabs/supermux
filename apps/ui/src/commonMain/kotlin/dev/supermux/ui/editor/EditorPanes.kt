@@ -69,6 +69,7 @@ import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.chat.MarkdownBody
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
@@ -207,10 +208,6 @@ fun FilePane(
      * row; that row is gone (the tab carries the per-file controls now), so the caller holds it.
      */
     previewMode: Boolean = false,
-    /** Markdown renderer for the preview swap — each app's own `MarkdownBody` (the shared one
-     *  arrives in cluster D). [onOpenFile] is how a link inside the rendered document asks for
-     *  another file. */
-    previewSlot: @Composable (text: String, onOpenFile: (FilePathRef) -> Unit) -> Unit = { text, _ -> Text(text) },
     /** Where a file link inside the preview lands. */
     onOpenFile: (FilePathRef) -> Unit = {},
 ) {
@@ -320,7 +317,7 @@ fun FilePane(
                         .padding(Space.lg)
                         .testTag("editor_preview"),
                 ) {
-                    previewSlot(doc?.content ?: "", onOpenFile)
+                    MarkdownBody(doc?.content ?: "", linkify = true, onOpenFile = onOpenFile)
                 }
             } else {
                 EditorSurface(
@@ -401,8 +398,6 @@ fun DiffPane(
     onWalkthroughClosed: () -> Unit = {},
     onReviewSubmit: suspend () -> ReviewSubmitResult? = { null },
     onClose: () -> Unit = {},
-    /** Markdown renderer for the walkthrough's step bodies — each app's own `MarkdownBody`. */
-    markdownSlot: @Composable (text: String, modifier: Modifier) -> Unit = { text, m -> Text(text, modifier = m) },
 ) {
     val scope = rememberCoroutineScope()
     val reviewState = reviewWalkthrough ?: walkthrough
@@ -469,7 +464,6 @@ fun DiffPane(
                     walkthrough.close()
                     onWalkthroughClosed()
                 },
-                markdownSlot = markdownSlot,
                 modifier = Modifier.weight(1f),
             )
         } else {

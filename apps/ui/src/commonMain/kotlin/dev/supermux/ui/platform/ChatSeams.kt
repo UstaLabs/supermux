@@ -78,6 +78,17 @@ interface FileAccess {
     /** Best-effort content type for a file NAME (no I/O required); `application/octet-stream`
      *  when the host cannot tell. The pure part of the guess lives in `:shared`'s `MediaMime`. */
     fun probeMime(name: String): String
+
+    /**
+     * Stage [bytes] under [name] somewhere the host's media player can open, and return a URI (or
+     * path) string for it — desktop a `file:///` URI under the JVM temp dir, Android a `file://`
+     * URI in `cacheDir/attachments`. Null when the write failed.
+     *
+     * This exists because the inline video player takes a URI, not a byte array: the native
+     * backends demux from a file. [name] must already carry the container extension (they pick
+     * their decoder from the suffix) — `attachmentTempName` in `:ui`'s timeline builds it.
+     */
+    suspend fun stageTemp(name: String, bytes: ByteArray): String?
 }
 
 /**

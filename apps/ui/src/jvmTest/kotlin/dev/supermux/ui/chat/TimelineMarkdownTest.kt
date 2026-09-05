@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,14 +19,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import dev.supermux.ui.theme.Media
-import dev.supermux.ui.theme.Sizes
+import com.sun.net.httpserver.HttpServer
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.MdBlock
-import com.sun.net.httpserver.HttpServer
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.Media
+import dev.supermux.ui.theme.Sizes
 import java.io.OutputStream
 import java.net.InetSocketAddress
-import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -34,15 +34,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 
 /**
- * Desktop renderer coverage for the GFM block/span types the shared parser gained (tables,
- * task lists, strikethrough, `[label](url)` links and standalone images). The parser itself is
- * shared + tested elsewhere; these host the pure-Compose [MarkdownBody]/[AssistantMessage] under
- * [runComposeUiTest] and assert the DESKTOP rendering (glyphs, testTags, link annotations).
+ * Renderer coverage for the GFM block/span types the shared parser produces (tables, task lists,
+ * strikethrough, `[label](url)` links and standalone images), plus the inline-image fetch policy.
+ * The parser itself is shared + tested elsewhere; these host the pure-Compose [MarkdownBody] under
+ * [runComposeUiTest] and assert the rendering (glyphs, testTags, link annotations).
+ *
+ * Ported from `:desktop` in cluster D2. Two shapes changed with the port: image bytes are fetched
+ * with Ktor instead of `HttpURLConnection` (so the policy tests drive [fetchImageBytesWithPolicy]),
+ * and decoding is Coil's, so the old Skiko `decodeImageBytes` tests became the `testDecodePng`
+ * fixture helper the `loadImage` seam is fed with.
  */
 @OptIn(ExperimentalTestApi::class)
 class TimelineMarkdownTest {
@@ -63,7 +66,7 @@ class TimelineMarkdownTest {
             | :--- | ---: |
             | Ada  | Dev  |
         """.trimIndent()
-        setContent { MarkdownBody(text = md) }
+        setPlatformContent { MarkdownBody(text = md) }
 
         onNodeWithTag("md_table").assertIsDisplayed()
         onNodeWithText("Name").assertIsDisplayed()
@@ -80,7 +83,7 @@ class TimelineMarkdownTest {
             - [ ] todo
             - plain
         """.trimIndent()
-        setContent { MarkdownBody(text = md) }
+        setPlatformContent { MarkdownBody(text = md) }
 
         onNodeWithText("☑").assertIsDisplayed() // checked task
         onNodeWithText("☐").assertIsDisplayed() // unchecked task
@@ -90,7 +93,7 @@ class TimelineMarkdownTest {
     // ── Strikethrough ─────────────────────────────────────────────────────────────────
 
     @Test fun strikethrough_span_carries_line_through_decoration() = runComposeUiTest {
-        setContent { MarkdownBody(text = "this is ~~gone~~ now") }
+        setPlatformContent { MarkdownBody(text = "this is ~~gone~~ now") }
 
         val node = onNodeWithText("this is gone now", substring = true).fetchSemanticsNode()
         val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()
@@ -102,7 +105,7 @@ class TimelineMarkdownTest {
     // ── `[label](url)` web links ────────────────────────────────────────────────────────
 
     @Test fun labeled_link_renders_label_with_url_link_annotation() = runComposeUiTest {
-        setContent { MarkdownBody(text = "see [the docs](https://example.com/docs) here") }
+        setPlatformContent { MarkdownBody(text = "see [the docs](https://example.com/docs) here") }
 
         val node = onNodeWithText("the docs", substring = true).fetchSemanticsNode()
         val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()
@@ -115,10 +118,9 @@ class TimelineMarkdownTest {
     // ── Standalone images: https loads inline; non-https stays a tappable link line ──────
 
     @Test fun non_https_image_renders_link_line_opening_the_url() = runComposeUiTest {
-        // http (not https) must never fetch — tracking/IP-leak guard matches Android's Coil path.
-        // onOpenUrl seam is threaded through MarkdownBody so a click never launches a real browser.
+        // http (not https) must never fetch — tracking/IP-leak guard.
         val opened = AtomicReference<String?>(null)
-        setContent {
+        setPlatformContent {
             MarkdownBody(
                 text = "![a diagram](http://example.com/pic.png)",
                 onOpenUrl = { opened.set(it) },
@@ -133,7 +135,6 @@ class TimelineMarkdownTest {
         val urls = annotated.getLinkAnnotations(0, annotated.length)
             .mapNotNull { (it.item as? LinkAnnotation.Url)?.url }
         assertTrue("http://example.com/pic.png" in urls, "expected the image url as a Url link annotation, got $urls")
-        // Click through the annotation / node — seam must receive the URL (not the OS browser).
         onNodeWithTag("md_image").performClick()
         assertEquals(
             "http://example.com/pic.png",
@@ -142,12 +143,20 @@ class TimelineMarkdownTest {
         )
     }
 
+    /** With no `onOpenUrl` seam the click goes through `Platform.openUrl` — never a real browser. */
+    @Test fun image_click_without_a_seam_goes_through_the_platform() = runComposeUiTest {
+        val platform = FakePlatform()
+        setPlatformContent(platform) {
+            MarkdownBody(text = "![a diagram](http://example.com/pic.png)")
+        }
+        onNodeWithTag("md_image").performClick()
+        assertEquals(listOf("http://example.com/pic.png"), platform.openedUrls)
+    }
+
     @Test fun https_image_renders_inline_bitmap_when_loader_succeeds() = runComposeUiTest {
-        // Tiny 2×2 PNG — decode via the same Skiko path production uses, injected as the load seam
-        // so this never hits the network.
-        val png = decodeImageBytes(TINY_PNG_BYTES)
+        val png = testDecodePng(TINY_PNG_BYTES)
         assertTrue(png != null, "fixture PNG must decode")
-        setContent {
+        setPlatformContent {
             MarkdownImage(
                 image = MdBlock.Image(url = "https://example.com/pic.png", alt = "a diagram"),
                 loadImage = { png },
@@ -164,7 +173,7 @@ class TimelineMarkdownTest {
     }
 
     @Test fun https_image_falls_back_to_link_line_when_loader_fails() = runComposeUiTest {
-        setContent {
+        setPlatformContent {
             MarkdownImage(
                 image = MdBlock.Image(url = "https://example.com/missing.png", alt = "broken"),
                 loadImage = { null },
@@ -176,7 +185,6 @@ class TimelineMarkdownTest {
         val node = onNodeWithTag("md_image").fetchSemanticsNode()
         val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()
         assertTrue(annotated != null, "failed load must fall back to the link line")
-        // Failure fallback must say it FAILED — not look like a deliberate non-https link.
         assertTrue(
             annotated.text.contains("Couldn't load image"),
             "expected an explicit failure label, got: ${annotated.text}",
@@ -185,7 +193,7 @@ class TimelineMarkdownTest {
     }
 
     @Test fun non_https_fallback_doesNotSayCouldntLoad() = runComposeUiTest {
-        setContent { MarkdownBody(text = "![a diagram](http://example.com/pic.png)") }
+        setPlatformContent { MarkdownBody(text = "![a diagram](http://example.com/pic.png)") }
         val node = onNodeWithTag("md_image").fetchSemanticsNode()
         val annotated = node.config.getOrNull(SemanticsProperties.Text)?.firstOrNull()
         assertTrue(annotated != null)
@@ -196,15 +204,11 @@ class TimelineMarkdownTest {
         assertTrue(annotated.text.contains("a diagram"))
     }
 
-    /**
-     * Click opens via the injected [onOpenUrl] seam — never the real browser (Chrome would hang
-     * the Gradle test worker by inheriting the worker's output pipe).
-     */
     @Test fun https_image_click_invokesOnOpenUrlSeam() = runComposeUiTest {
-        val png = decodeImageBytes(TINY_PNG_BYTES)
+        val png = testDecodePng(TINY_PNG_BYTES)
         assertTrue(png != null)
         val opened = AtomicReference<String?>(null)
-        setContent {
+        setPlatformContent {
             MarkdownImage(
                 image = MdBlock.Image(url = "https://example.com/pic.png", alt = "diagram"),
                 loadImage = { png },
@@ -223,7 +227,7 @@ class TimelineMarkdownTest {
         )
     }
 
-    // ── Pure helpers (https gate, size cap, forced Skiko decode, redirects) ───────────
+    // ── Pure helpers (https gate, size cap, redirects) ────────────────────────────────
 
     @Test fun isHttpsImageUrl_accepts_https_only() {
         assertTrue(isHttpsImageUrl("https://example.com/a.png"))
@@ -253,62 +257,27 @@ class TimelineMarkdownTest {
         )
     }
 
-    @Test fun readBytesCapped_returns_bytes_under_cap() {
+    @Test fun resolveImageRedirectUrl_protocolRelativeAndQuery() {
+        assertEquals(
+            "https://cdn.example.com/b.png",
+            resolveImageRedirectUrl("https://example.com/a.png", "//cdn.example.com/b.png"),
+        )
+        // A query string on the CURRENT url is not part of the directory the relative hop resolves in.
+        assertEquals(
+            "https://example.com/img/b.png",
+            resolveImageRedirectUrl("https://example.com/img/a.png?v=2", "b.png"),
+        )
+    }
+
+    @Test fun readBytesCapped_returns_bytes_under_cap() = runBlocking {
         val data = ByteArray(100) { it.toByte() }
-        val got = readBytesCapped(data.inputStream(), maxBytes = 200)
+        val got = readBytesCapped(streamReader(data.inputStream()), maxBytes = 200)
         assertTrue(got != null && got.contentEquals(data))
     }
 
-    @Test fun readBytesCapped_returns_null_when_stream_exceeds_cap() {
+    @Test fun readBytesCapped_returns_null_when_stream_exceeds_cap() = runBlocking {
         val data = ByteArray(50) { 1 }
-        assertTrue(readBytesCapped(data.inputStream(), maxBytes = 10) == null)
-    }
-
-    @Test fun decodeImageBytes_decodes_png() {
-        val bmp = decodeImageBytes(TINY_PNG_BYTES)
-        assertTrue(bmp != null, "expected Skiko to force-decode a valid PNG")
-        assertEquals(2, bmp!!.width)
-        assertEquals(2, bmp.height)
-        // Raster is fully materialised — prepareToDraw must not throw (lazy-encoded would risk that).
-        bmp.prepareToDraw()
-    }
-
-    @Test fun decodeImageBytes_rejects_garbage() {
-        assertNull(decodeImageBytes(byteArrayOf(1, 2, 3, 4, 5)))
-    }
-
-    @Test fun decodeImageBytes_rejects_truncatedPng() {
-        // Valid PNG signature + IHDR length, but body truncated mid-stream — must fail inside
-        // decodeImageBytes (Codec.readPixels), not later at Compose draw time.
-        val truncated = TINY_PNG_BYTES.copyOf(24)
-        assertNull(decodeImageBytes(truncated), "truncated PNG must return null from forced decode")
-    }
-
-    /**
-     * Exercise the **production** [loadMarkdownImageBitmap] path (not a reimplemented
-     * `withContext(IO)`), with a faked fetch so there is no network. Asserts decode runs on an
-     * IO/worker thread.
-     */
-    @Test fun loadMarkdownImageBitmap_productionPath_decodeRunsOnIoDispatcher() = runBlocking {
-        val threadName = AtomicReference<String?>(null)
-        val bmp = loadMarkdownImageBitmap(
-            url = "https://example.com/pic.png",
-            fetchBytes = { _, _ ->
-                threadName.set(Thread.currentThread().name)
-                TINY_PNG_BYTES
-            },
-        )
-        assertTrue(bmp != null, "production load path must decode the fetched PNG")
-        val name = threadName.get()
-        assertTrue(name != null, "expected a worker thread name")
-        assertTrue(
-            name!!.contains("DefaultDispatcher") || name.contains("IO") || name.contains("worker"),
-            "fetch+decode should run on IO/worker thread, got: $name",
-        )
-        assertTrue(
-            !name.contains("AWT-EventQueue"),
-            "decode must not run on the AWT UI thread, got: $name",
-        )
+        assertNull(readBytesCapped(streamReader(data.inputStream()), maxBytes = 10))
     }
 
     @Test fun mdImageDimens_loadingHeightEqualsMax_avoidsUpwardReflow() {
@@ -321,15 +290,10 @@ class TimelineMarkdownTest {
         assertEquals(Sizes.hairline, MdImageDimens.SpinnerStroke)
     }
 
-    /**
-     * Assert actual layout bounds: loading placeholder height in px **equals** MaxHeight under the
-     * composition density (proves the reserved slot is the max image height, not a tiny spinner).
-     */
     @Test fun mdImage_loadingPlaceholder_layoutHeightMatchesMaxHeight() = runComposeUiTest {
         var density: Density? = null
-        setContent {
+        setPlatformContent {
             density = LocalDensity.current
-            // Constrain width so fillMaxWidth has a concrete measure.
             Box(Modifier.width(320.dp)) {
                 MarkdownImage(
                     image = MdBlock.Image(url = "https://example.com/slow.png", alt = "x"),
@@ -349,7 +313,6 @@ class TimelineMarkdownTest {
         val d = density!!
         val expectedPx = with(d) { MdImageDimens.LoadingHeight.roundToPx() }
         val maxPx = with(d) { MdImageDimens.MaxHeight.roundToPx() }
-        // Placeholder reserves exactly MaxHeight — the relationship that prevents upward reflow.
         assertEquals(
             expectedPx,
             heightPx,
@@ -359,16 +322,11 @@ class TimelineMarkdownTest {
         assertEquals(maxPx, heightPx, "LoadingHeight and MaxHeight must measure to the same px")
     }
 
-    /**
-     * After load, a short (2×2) image paints at **natural size** (no upscale). At the real chat
-     * column width (860.dp) a regression that fillMaxWidth-upscales would paint ~280×280; we assert
-     * the node stays near intrinsic px (2×2 at density), far below MaxHeight.
-     */
     @Test fun mdImage_loaded_hasPositiveLayoutBounds() = runComposeUiTest {
-        val png = decodeImageBytes(TINY_PNG_BYTES)
+        val png = testDecodePng(TINY_PNG_BYTES)
         assertTrue(png != null)
         var density: Density? = null
-        setContent {
+        setPlatformContent {
             density = LocalDensity.current
             // Real chat reading width — upscale bugs only show when the column is wide.
             Box(Modifier.width(860.dp).fillMaxWidth()) {
@@ -390,7 +348,6 @@ class TimelineMarkdownTest {
             node.layoutInfo.height <= maxPx,
             "loaded image height ${node.layoutInfo.height} px exceeds MaxHeight=$maxPx px",
         )
-        // 2×2 PNG at natural size: both edges must be far below MaxHeight (no fillMaxWidth upscale).
         val naturalCapPx = with(d) { 16.dp.roundToPx() } // generous for density rounding
         assertTrue(
             node.layoutInfo.width <= naturalCapPx && node.layoutInfo.height <= naturalCapPx,
@@ -411,9 +368,9 @@ class TimelineMarkdownTest {
         assertEquals(280.dp, h2)
     }
 
-    @Test fun fetchHttpsImageBytes_rejects_non_https() {
-        assertTrue(fetchHttpsImageBytes("http://example.com/x.png") == null)
-        assertTrue(fetchHttpsImageBytes("file:///tmp/x.png") == null)
+    @Test fun fetch_rejects_non_https() = runBlocking {
+        assertNull(fetchImageBytesWithPolicy("http://example.com/x.png"))
+        assertNull(fetchImageBytesWithPolicy("file:///tmp/x.png"))
     }
 
     // ── Production network matrix (local HttpServer + policy seam) ────────────────────
@@ -432,10 +389,9 @@ class TimelineMarkdownTest {
             ex.sendResponseHeaders(200, TINY_PNG_BYTES.size.toLong())
             ex.responseBody.use { it.write(TINY_PNG_BYTES) }
         }
-        val bytes = fetchImageBytesWithPolicy(
-            url = "$base/start",
-            isAllowedUrl = { it.startsWith(base) },
-        )
+        val bytes = runBlocking {
+            fetchImageBytesWithPolicy(url = "$base/start", isAllowedUrl = { it.startsWith(base) })
+        }
         assertTrue(bytes != null && bytes.contentEquals(TINY_PNG_BYTES), "relative redirect must yield body")
         assertEquals(2, hops.get())
     }
@@ -447,12 +403,12 @@ class TimelineMarkdownTest {
             ex.sendResponseHeaders(302, -1)
             ex.close()
         }
-        // Start URL is allowed only because we use a localhost policy for the first hop; the
-        // downgraded Location must still be rejected by isHttpsImageUrl.
-        val bytes = fetchImageBytesWithPolicy(
-            url = "$base/secure-ish",
-            isAllowedUrl = { u -> u.startsWith(base) || isHttpsImageUrl(u) },
-        )
+        val bytes = runBlocking {
+            fetchImageBytesWithPolicy(
+                url = "$base/secure-ish",
+                isAllowedUrl = { u -> u.startsWith(base) || isHttpsImageUrl(u) },
+            )
+        }
         assertNull(bytes, "http downgrade redirect must not be followed")
     }
 
@@ -464,11 +420,13 @@ class TimelineMarkdownTest {
             ex.sendResponseHeaders(302, -1)
             ex.close()
         }
-        val bytes = fetchImageBytesWithPolicy(
-            url = "$base/loop",
-            maxRedirects = 5,
-            isAllowedUrl = { it.startsWith(base) },
-        )
+        val bytes = runBlocking {
+            fetchImageBytesWithPolicy(
+                url = "$base/loop",
+                maxRedirects = 5,
+                isAllowedUrl = { it.startsWith(base) },
+            )
+        }
         assertNull(bytes, "redirect loop must exhaust hop budget and return null")
         assertEquals(5, hits.get(), "must stop after maxRedirects hops, got ${hits.get()}")
     }
@@ -480,18 +438,15 @@ class TimelineMarkdownTest {
             ex.sendResponseHeaders(200, 0) // 0 = chunked
             ex.responseBody.use { out: OutputStream -> out.write(payload) }
         }
-        val bytes = fetchImageBytesWithPolicy(
-            url = "$base/big",
-            maxBytes = 16,
-            isAllowedUrl = { it.startsWith(base) },
-        )
+        val bytes = runBlocking {
+            fetchImageBytesWithPolicy(url = "$base/big", maxBytes = 16, isAllowedUrl = { it.startsWith(base) })
+        }
         assertNull(bytes, "chunked body over maxBytes must be rejected")
     }
 
-    @Test fun fetch_unreachableHost_returnsNull() {
+    @Test fun fetch_unreachableHost_returnsNull() = runBlocking {
         // Closed port on loopback — connection refused. Production https gate.
-        val bytes = fetchHttpsImageBytes("https://127.0.0.1:1/nope.png", maxBytes = 1024)
-        assertNull(bytes)
+        assertNull(fetchImageBytesWithPolicy("https://127.0.0.1:1/nope.png", maxBytes = 1024))
     }
 
     @Test fun fetch_404_returnsNull() = withLocalServer { base ->
@@ -500,10 +455,9 @@ class TimelineMarkdownTest {
             ex.sendResponseHeaders(404, msg.size.toLong())
             ex.responseBody.use { it.write(msg) }
         }
-        val bytes = fetchImageBytesWithPolicy(
-            url = "$base/missing.png",
-            isAllowedUrl = { it.startsWith(base) },
-        )
+        val bytes = runBlocking {
+            fetchImageBytesWithPolicy(url = "$base/missing.png", isAllowedUrl = { it.startsWith(base) })
+        }
         assertNull(bytes, "404 must return null")
     }
 
@@ -514,22 +468,22 @@ class TimelineMarkdownTest {
             ex.sendResponseHeaders(200, 100_000)
             ex.responseBody.use { it.write(ByteArray(100_000)) }
         }
-        val bytes = fetchImageBytesWithPolicy(
-            url = "$base/huge-declared",
-            maxBytes = 1024,
-            isAllowedUrl = { it.startsWith(base) },
-        )
+        val bytes = runBlocking {
+            fetchImageBytesWithPolicy(
+                url = "$base/huge-declared",
+                maxBytes = 1024,
+                isAllowedUrl = { it.startsWith(base) },
+            )
+        }
         assertNull(bytes)
     }
 
     // ── local HTTP test harness ───────────────────────────────────────────────────────
 
     /**
-     * Spin a loopback [HttpServer], run [block] with `http://127.0.0.1:<port>` as [base], then stop.
-     * Contexts are registered via the receiver's [serverCreateContext] (set for the duration of
-     * the block). Uses plain HTTP; tests pass [isAllowedUrl] that permits the loopback base so we
-     * can exercise redirect/body/status logic without a self-signed HTTPS stack. Production still
-     * uses [isHttpsImageUrl] exclusively via [fetchHttpsImageBytes].
+     * Spin a loopback [HttpServer], run [block] with `http://127.0.0.1:<port>` as `base`, then stop.
+     * Tests pass an `isAllowedUrl` that permits the loopback base so redirect/body/status logic is
+     * exercised without a self-signed HTTPS stack; production still uses [isHttpsImageUrl].
      */
     private fun withLocalServer(block: LocalServerScope.(base: String) -> Unit) {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -537,35 +491,15 @@ class TimelineMarkdownTest {
         server.start()
         try {
             val port = server.address.port
-            val base = "http://127.0.0.1:$port"
-            val scope = LocalServerScope(server)
-            scope.block(base)
+            LocalServerScope(server).block("http://127.0.0.1:$port")
         } finally {
             server.stop(0)
         }
     }
 
     private class LocalServerScope(private val server: HttpServer) {
-        fun serverCreateContext(
-            path: String,
-            handler: com.sun.net.httpserver.HttpHandler,
-        ) {
+        fun serverCreateContext(path: String, handler: com.sun.net.httpserver.HttpHandler) {
             server.createContext(path, handler)
-        }
-    }
-
-    companion object {
-        // 2×2 RGB PNG (73 bytes) — enough for Skiko/ImageIO to produce a real ImageBitmap.
-        private val TINY_PNG_BYTES = hex(
-            "89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a73" +
-                "0000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082",
-        )
-
-        private fun hex(s: String): ByteArray {
-            val clean = s.replace(" ", "")
-            return ByteArray(clean.length / 2) { i ->
-                clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-            }
         }
     }
 }

@@ -1,4 +1,4 @@
-package dev.supermux.desktop.chat
+package dev.supermux.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -54,7 +54,7 @@ class VideoControlsTest {
     }
 
     @Test fun controls_and_center_play_are_shown_while_paused() = runComposeUiTest {
-        setContent { frame(FakeTransport(playing = false))() }
+        setPlatformContent { frame(FakeTransport(playing = false))() }
         onNodeWithTag("attachment_video_controls", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("attachment_video_center_play", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("attachment_video_position", useUnmergedTree = true).assertIsDisplayed()
@@ -63,7 +63,7 @@ class VideoControlsTest {
 
     @Test fun controls_hide_during_playback() = runComposeUiTest {
         // Not hovered, not scrubbing, playing → the picture is unobstructed.
-        setContent { frame(FakeTransport(playing = true))() }
+        setPlatformContent { frame(FakeTransport(playing = true))() }
         waitUntil(timeoutMillis = 5_000L) {
             onAllNodesWithTag("attachment_video_controls", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
         }
@@ -75,7 +75,7 @@ class VideoControlsTest {
     }
 
     @Test fun buffering_replaces_the_center_play_glyph() = runComposeUiTest {
-        setContent { frame(FakeTransport(playing = false, loading = true))() }
+        setPlatformContent { frame(FakeTransport(playing = false, loading = true))() }
         onNodeWithTag("attachment_video_buffering", useUnmergedTree = true).assertIsDisplayed()
         assertEquals(
             0,
@@ -86,14 +86,14 @@ class VideoControlsTest {
 
     @Test fun clicking_the_surface_toggles_playback() = runComposeUiTest {
         val t = FakeTransport(playing = false)
-        setContent { frame(t)() }
+        setPlatformContent { frame(t)() }
         onNodeWithTag("attachment_video_player").performClick()
         assertTrue(t.isPlaying, "the whole surface is the play target")
     }
 
     @Test fun playpause_button_toggles_and_relabels() = runComposeUiTest {
         val t = FakeTransport(playing = false)
-        setContent { frame(t)() }
+        setPlatformContent { frame(t)() }
         assertTrue(hasLabel("Play"), "a paused clip offers Play")
         onNodeWithTag("attachment_video_playpause", useUnmergedTree = true).performClick()
         assertTrue(t.isPlaying)
@@ -106,7 +106,7 @@ class VideoControlsTest {
 
     @Test fun mute_button_toggles_and_relabels() = runComposeUiTest {
         val t = FakeTransport()
-        setContent { frame(t)() }
+        setPlatformContent { frame(t)() }
         assertTrue(hasLabel("Mute"))
         onNodeWithTag("attachment_video_mute", useUnmergedTree = true).performClick()
         assertTrue(t.muted)
@@ -116,7 +116,7 @@ class VideoControlsTest {
 
     @Test fun external_button_hands_the_clip_to_the_os_player() = runComposeUiTest {
         val t = FakeTransport()
-        setContent { frame(t)() }
+        setPlatformContent { frame(t)() }
         onNodeWithTag("attachment_video_external", useUnmergedTree = true).performClick()
         assertEquals(1, t.externalOpens)
     }
