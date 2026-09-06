@@ -102,6 +102,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import java.io.File
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.ChatDetailLevel
@@ -117,7 +118,6 @@ import dev.supermux.ui.editor.PendingEditorOpen
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
-import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.android.terminal.ScratchTerminalPanel
 import dev.supermux.ui.session.SessionAvatar
 import dev.supermux.ui.theme.HapticKind
@@ -672,7 +672,8 @@ fun ChatScreen(
                 val cat = connectAgentTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Native)) {
                     if (cat != null) {
-                        TerminalPanel(
+                        // Cluster G1: through `Platform.terminalView()`, not termlib by name.
+                        LocalPlatform.current.terminalView().TerminalView(
                             connect = cat,
                             modifier = Modifier.fillMaxSize(),
                             active = activePanel == SessionPanel.Native,

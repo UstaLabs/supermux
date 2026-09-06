@@ -285,6 +285,8 @@ fun SessionLauncherScreen(
     var knownProjects by remember { mutableStateOf(emptyList<String>()) }
     var submitting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Dictation's own failure line, hoisted out of the composer so it renders under [error].
+    var micError by remember { mutableStateOf<String?>(null) }
     var agents by remember { mutableStateOf(listOf("claude", "codex", "cursor", "opencode", "grok")) }
 
     // See the file header + the pure helpers for why launcherRestoring gates the agent/workdir
@@ -530,7 +532,6 @@ fun SessionLauncherScreen(
                 mic = "launcher_mic",
                 send = "launcher_submit",
                 banner = "launcher_banner",
-                micError = "launcher_mic_error",
                 slashItemPrefix = "launcher_slash_item_",
                 stagedChipPrefix = "launcher_staged_",
             ),
@@ -551,6 +552,9 @@ fun SessionLauncherScreen(
             recordingTakeover = ComposerRecordingTakeover.FieldOnTouch,
             largeTouchSend = true,
             sendContentDescription = "Start session",
+            // A trailing space typed before the mic must not double up, and dictating into a
+            // whitespace-only draft yields just the cleaned text (the launcher's rule since F6).
+            dictationTrimsDraft = true,
         )
     }
     val composerActions = remember(actions) {
@@ -956,6 +960,9 @@ fun SessionLauncherScreen(
                         ),
                         pickRequester = LAUNCHER_PICK_REQUESTER,
                         micCapture = micCapture,
+                        // The launcher paints this line itself, in its own column BELOW
+                        // `launcher_error` — where it has always been.
+                        onMicError = { micError = it },
                         sendEnabled = canSend && !submitting,
                         sendProgress = submitting,
                         toolbar = { composer ->
@@ -1014,6 +1021,9 @@ fun SessionLauncherScreen(
 
                     error?.let {
                         Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_error"))
+                    }
+                    micError?.let {
+                        Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_mic_error"))
                     }
 
                     // Folder caption — a calm restatement of the resolved workdir.

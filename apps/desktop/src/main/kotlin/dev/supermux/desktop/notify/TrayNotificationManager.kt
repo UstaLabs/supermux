@@ -6,6 +6,7 @@
 package dev.supermux.desktop.notify
 
 import androidx.compose.ui.window.Notification
+import dev.supermux.ui.platform.NotificationManager
 import androidx.compose.ui.window.TrayState
 
 class TrayNotificationManager(private val trayState: TrayState) : NotificationManager {

@@ -45,6 +45,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -94,7 +95,8 @@ import dev.supermux.state.FleetStore
 import dev.supermux.host.HostView
 import dev.supermux.ui.host.HostDot
 import dev.supermux.ui.host.HostScopePicker
-import dev.supermux.desktop.notify.NoopNotificationManager
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
@@ -664,7 +666,12 @@ fun AppShell(
     // (which flips ui.launcherOpen directly, since ShellUiState is shared with Main) all reach
     // the SAME overlay via ui.launcherOpen.
     val onNewSession: () -> Unit = { ui.openLauncher() }
-    val onTearOutTab: (String) -> Unit = tearOut@{ viewId ->
+    // Cluster G1: detaching a pane into a real OS window is `Platform.windows` now. The registry
+    // and the "which window is calling" resolution stay here (only this composition holds the live
+    // `ShellUiState`), so the shell BINDS itself into the seam for as long as it is composed and
+    // every call site goes back through it — a shared shell (G8) then needs nothing else.
+    val windowHostController = LocalPlatform.current.windows
+    val tearOutTabHere: (String) -> Unit = tearOut@{ viewId ->
         val bind = ui.panesBind ?: return@tearOut
         val ws = bind.ws
         tearOutTabLive(ui.windowHosts, ws.layoutSync.tree, viewId, bind.current.id) { next ->
@@ -672,10 +679,22 @@ fun AppShell(
             ws.layoutSync.tree
         }
     }
-    val onTearOutWorkspace: () -> Unit = canvas@{
+    val tearOutCanvasHere: () -> Unit = canvas@{
         val bind = ui.panesBind ?: return@canvas
         tearOutCanvasLive(ui.windowHosts, bind.current.id)
     }
+    val currentTearOutTab by rememberUpdatedState(tearOutTabHere)
+    val currentTearOutCanvas by rememberUpdatedState(tearOutCanvasHere)
+    DisposableEffect(ui) {
+        DesktopWindowHostController.bind(
+            tearOutTab = { currentTearOutTab(it) },
+            tearOutCanvas = { currentTearOutCanvas() },
+            release = { hostId -> ui.windowHosts.unclaim(hostId) },
+        )
+        onDispose { DesktopWindowHostController.unbind() }
+    }
+    val onTearOutTab: (String) -> Unit = { viewId -> windowHostController?.tearOutTab(viewId) }
+    val onTearOutWorkspace: () -> Unit = { windowHostController?.tearOutCanvas() }
     val onMoveToNewWindow: () -> Unit = move@{
         val bind = ui.panesBind ?: return@move
         val viewId = collectActiveViewIds(bind.ws.layoutSync.tree).firstOrNull() ?: return@move

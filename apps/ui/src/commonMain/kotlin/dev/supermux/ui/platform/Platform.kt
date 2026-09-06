@@ -3,7 +3,9 @@ package dev.supermux.ui.platform
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.net.ChunkSource
 import kotlinx.coroutines.flow.Flow
+import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.editor.engine.EditorEngineFactory
+import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 
 /**
@@ -15,13 +17,11 @@ import dev.supermux.ui.theme.Haptics
  * Each app implements this once (`AndroidPlatform` / `DesktopPlatform`) and provides it at its
  * entry point.
  *
- * **This is deliberately the cluster-A subset.** The spec's full `Platform` (see
- * `docs/superpowers/specs/2026-09-04-screens-into-ui-design.md` §Foundations 3) grows these
- * further seams as the screens that need them move into `:ui` — do NOT invent parallel
- * abstractions for them, add them here:
- *  - `fun terminalView(): TerminalViewFactory` — termlib / jediterm (cluster C).
- *  - `fun videoDecoder(): VideoSurfaceFactory?` — MediaCodec / null (cluster D, displays).
- *  - `val updates: AppUpdater` — APK install / DMG-MSI download (cluster G).
+ * Cluster G1 completed the set (the spec's full `Platform`, see
+ * `docs/superpowers/specs/2026-09-04-screens-into-ui-design.md` §Foundations 3): the terminal
+ * engine, the H.264 decoder, self-update, OS notifications, extra OS windows and push all reach a
+ * shared screen through the members below. Do NOT invent a parallel abstraction for a new one —
+ * add it here.
  */
 interface Platform {
     /** What this machine can do. Screens branch on capabilities, never on "is this Android". */
@@ -107,6 +107,36 @@ interface Platform {
     val notices: NoticeChannel
 
     /**
+     * The host's terminal engine — jediterm inside a `SwingPanel` on desktop, ConnectBot termlib
+     * inside an `AndroidView` on Android. Gated by [Caps.terminal]; a host with no engine installs
+     * [dev.supermux.ui.terminal.UnavailableTerminalViewFactory], which draws a hint instead of a
+     * grid. A function rather than a `val` because the factory may be built lazily per call site
+     * (both hosts return the same instance today).
+     */
+    fun terminalView(): TerminalViewFactory
+
+    /**
+     * The host's hardware H.264 decoder for scrcpy displays, or null where there is none (desktop).
+     * Gated by [Caps.scrcpy]: a display panel renders VNC whenever this is null or the cap is off.
+     */
+    fun videoDecoder(): VideoSurfaceFactory?
+
+    /** The app updating ITSELF. Gated by [Caps.appUpdate]; a build that must not self-update
+     *  installs [NoAppUpdater]. */
+    val updates: AppUpdater
+
+    /** OS notifications for agent replies. [NoopNotificationManager] where the host shows none
+     *  itself (Android, whose replies arrive as pushes). Gated by [Caps.tray] on desktop. */
+    val notifications: NotificationManager
+
+    /** Detaching panes into real OS windows, or null where there is only one window
+     *  ([Caps.multiWindow]). */
+    val windows: WindowHostController?
+
+    /** Native push registration, or null where the platform has no push ([Caps.push]). */
+    val push: PushRegistrar?
+
+    /**
      * Builds the browser that hosts CodeMirror — a `WebView` on Android, a direct-JCEF browser on
      * desktop. The shared editor surface reads this and never names either. A machine with no
      * browser at all installs `UnavailableEditorEngineFactory`, and every editor pane degrades to
@@ -121,13 +151,19 @@ const val DEFAULT_REQUESTER: String = "default"
 /**
  * Platform capabilities, as plain booleans decided once per app at construction time.
  *
- * @property push native push notifications are delivered (Android FCM; desktop has none).
+ * @property push native push notifications are delivered (Android FCM; desktop has none), and
+ *   [Platform.push] is therefore non-null.
+ * @property terminal a real terminal engine is bound, so terminal views/tabs can be offered at all.
+ * @property scrcpy an H.264 display transport can be decoded here ([Platform.videoDecoder] is
+ *   non-null); false means every display falls back to its VNC framebuffer.
  * @property camera an in-app capture affordance can be offered.
- * @property tray the app lives in a system tray / menu-bar item.
+ * @property tray the app lives in a system tray / menu-bar item, so [Platform.notifications] can
+ *   actually raise one.
  * @property externalDisplay the remote-display (scrcpy) surface can be shown.
  * @property hardwareVideoDecode a hardware H.264 decoder is available (Android MediaCodec).
  * @property localBroker the app can run and supervise a broker process itself.
- * @property multiWindow panes can be detached into real OS windows.
+ * @property multiWindow panes can be detached into real OS windows ([Platform.windows] is
+ *   non-null).
  * @property fileSystem the app can read and write arbitrary local paths (desktop only; Android is
  *   confined to SAF-granted URIs, which is NOT a general file system).
  * @property clipboardImages the system clipboard can hand back pasted images.
@@ -160,6 +196,8 @@ data class Caps(
     val appearanceControls: Boolean = false,
     val dynamicColor: Boolean = false,
     val appUpdate: Boolean = false,
+    val terminal: Boolean = false,
+    val scrcpy: Boolean = false,
 )
 
 /**

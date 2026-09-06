@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,14 +22,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
-import dev.supermux.update.ClientUpdateStatus
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.coroutines.launch
 
 /**
@@ -40,25 +38,23 @@ fun AppUpdateBanner(
     onOpenPage: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val http = remember { HttpClient(CIO) }
-    var status by remember { mutableStateOf<ClientUpdateStatus?>(null) }
+    // Cluster G1: one updater seam for the banner and the page, so a check done by either shows up
+    // on both (and a dismissal persists through the same store it always did).
+    val updater = LocalPlatform.current.updates
+    val update by updater.status.collectAsState()
     var dismissed by remember { mutableStateOf(false) }
-    var installing by remember { mutableStateOf(false) }
-    var downloadLabel by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(Unit) {
-        val s = AppUpdate.check(http, context)
-        if (s.updateAvailable && s.latestVersion != null &&
-            !AppUpdate.isDismissed(context, s.latestVersion!!)
-        ) {
-            status = s
-        }
+    val installing = update.busy
+    val downloadLabel = if (installing) {
+        AppUpdateNotifier.formatDownloadProgress(update.bytesReceived, update.contentLength)
+    } else {
+        null
     }
 
-    val s = status
-    if (s == null || dismissed || !s.updateAvailable) return
+    LaunchedEffect(Unit) { updater.check() }
+
+    val s = update.release
+    if (s == null || dismissed || update.dismissed || !s.updateAvailable) return
 
     val cs = MaterialTheme.colorScheme
     Row(
@@ -86,21 +82,11 @@ fun AppUpdateBanner(
             TextButton(
                 onClick = {
                     scope.launch {
-                        installing = true
-                        downloadLabel = "…"
-                        val err = AppUpdate.downloadAndInstall(
-                            http,
-                            context,
-                            s.downloadUrl!!,
-                        ) { received, total ->
-                            downloadLabel =
-                                AppUpdateNotifier.formatDownloadProgress(received, total)
-                        }
-                        installing = false
-                        downloadLabel = null
-                        when (err) {
-                            null -> {}
-                            "need-permission" -> AppUpdate.openInstallPermissionSettings(context)
+                        val installer = updater.download { _, _ -> }
+                        val refused = updater.status.value
+                        when {
+                            installer != null -> updater.install(installer)
+                            refused.needsInstallPermission -> updater.openInstallPermissionSettings()
                             // Error is also posted to the status bar; open the page for detail.
                             else -> onOpenPage()
                         }
@@ -116,7 +102,7 @@ fun AppUpdateBanner(
         }
         IconButton(
             onClick = {
-                s.latestVersion?.let { AppUpdate.dismiss(context, it) }
+                updater.dismiss()
                 dismissed = true
             },
             modifier = Modifier.size(32.dp),

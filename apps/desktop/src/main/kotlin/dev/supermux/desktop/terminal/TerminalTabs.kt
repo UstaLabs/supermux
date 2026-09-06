@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.state.HostStore
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -87,9 +88,11 @@ private fun genTerminalId(): String {
  * ties each remembered client to its tab identity, so switching tabs (or reusing a slot) always
  * yields the right client.
  *
- * @param panelContent injectable panel slot — defaults to the real [DesktopTerminalPanel]. Its
- *   SwingPanel cannot be hosted under `runComposeUiTest` (no real AWT window), so UI tests inject a
- *   lightweight pure-Compose fake to exercise the strip's add/close/select + key isolation.
+ * @param panelContent injectable panel slot — defaults to the host's own terminal engine, reached
+ *   through `Platform.terminalView()` (cluster G1) rather than by naming [DesktopTerminalPanel]
+ *   here, so cluster G3 can move this strip into `:ui` unchanged. Its SwingPanel cannot be hosted
+ *   under `runComposeUiTest` (no real AWT window), so UI tests inject a lightweight pure-Compose
+ *   fake to exercise the strip's add/close/select + key isolation.
  */
 @Composable
 fun TerminalTabs(
@@ -98,8 +101,13 @@ fun TerminalTabs(
     modifier: Modifier = Modifier,
     active: Boolean = true,
     panelContent: @Composable (tabId: String, connect: () -> TerminalClient, active: Boolean) -> Unit = {
-        tabId, connect, act ->
-        DesktopTerminalPanel(connect = connect, active = act, modifier = Modifier.fillMaxSize())
+        _, connect, act ->
+        LocalPlatform.current.terminalView().TerminalView(
+            connect = connect,
+            modifier = Modifier.fillMaxSize(),
+            active = act,
+            onExit = null,
+        )
     },
 ) {
     val c = LocalPanes.current

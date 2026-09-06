@@ -305,7 +305,7 @@ class AppShellTest {
     // conditions that hold true REGARDLESS of the test harness's focus reporting: an unviewed
     // session's reply notifies, and mute suppresses unconditionally.
 
-    private class RecordingNotificationManager : dev.supermux.desktop.notify.NotificationManager {
+    private class RecordingNotificationManager : dev.supermux.ui.platform.NotificationManager {
         val calls = mutableListOf<Triple<String, String, String>>()
         override fun notify(sessionId: String, title: String, message: String) {
             calls.add(Triple(sessionId, title, message))

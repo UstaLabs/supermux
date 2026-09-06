@@ -66,7 +66,9 @@ import dev.supermux.desktop.host.HostWizard
 import dev.supermux.desktop.intro.FirstRunIntroOverlay
 import dev.supermux.desktop.intro.IntroStateStore
 import dev.supermux.desktop.notify.NotificationController
+import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.notify.TrayNotificationManager
+import dev.supermux.desktop.shell.DesktopWindowHostController
 import dev.supermux.desktop.pairing.OnboardingScreen
 import dev.supermux.desktop.pairing.PairingState
 import dev.supermux.state.HostStore
@@ -90,7 +92,6 @@ import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.desktop.shell.ShellUiState
 import dev.supermux.desktop.shell.WindowBounds
-import dev.supermux.desktop.shell.tearOutCanvasLive
 import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
@@ -373,8 +374,11 @@ fun main() {
         }
         val appTextScale by desktopUiPrefs.textScale.collectAsState(seededTextScale)
         val themeScope = rememberCoroutineScope()
+        // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
+        // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
-            NotificationController(TrayNotificationManager(trayState))
+            DesktopNotifications.install(TrayNotificationManager(trayState))
+            NotificationController(DesktopNotifications)
         }
 
         if (isTraySupported) {
@@ -462,10 +466,8 @@ fun main() {
                             ui.openLauncher()
                         }
                         Item("Move workspace to New Window") {
-                            val bind = ui.panesBind
-                            if (bind != null) {
-                                tearOutCanvasLive(ui.windowHosts, bind.current.id)
-                            }
+                            // Through the seam (cluster G1); AppShell binds the live registry into it.
+                            DesktopWindowHostController.tearOutCanvas()
                         }
                         Item("Move group to New Window") {
                             val bind = ui.panesBind
@@ -1550,7 +1552,7 @@ fun main() {
                     }
                 }
                 Window(
-                    onCloseRequest = { ui.windowHosts.unclaim(host.id) },
+                    onCloseRequest = { DesktopWindowHostController.release(host.id) },
                     title = extraBind?.let {
                         extraWindowTitle(
                             it.current.name,

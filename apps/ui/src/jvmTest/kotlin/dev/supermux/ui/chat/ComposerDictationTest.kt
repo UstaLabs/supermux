@@ -186,4 +186,23 @@ class ComposerDictationTest {
         assertEquals("", draft)
         assertTrue(consumed)
     }
+
+    // ── the two append formulas (cluster G1 restores the launcher's) ─────────────────────────────
+
+    @Test fun chat_appends_dictated_text_to_the_draft_exactly_as_typed() {
+        assertEquals("hello there", appendDictated("hello", "there", trimDraft = false))
+        assertEquals("there", appendDictated("", "there", trimDraft = false))
+        // Chat keeps whitespace the user typed: a blank-but-not-empty draft is not "nothing".
+        assertEquals("  there", appendDictated("  ", "there", trimDraft = false))
+        assertEquals("hello  there", appendDictated("hello ", "there", trimDraft = false))
+    }
+
+    @Test fun the_launcher_trims_the_draft_before_appending() {
+        assertEquals("hello there", appendDictated("hello", "there", trimDraft = true))
+        assertEquals("there", appendDictated("", "there", trimDraft = true))
+        // A whitespace-only draft is nothing at all, and a trailing space never doubles up.
+        assertEquals("there", appendDictated("  ", "there", trimDraft = true))
+        assertEquals("hello there", appendDictated("hello ", "there", trimDraft = true))
+        assertEquals("hello there", appendDictated("hello\n\t", "there", trimDraft = true))
+    }
 }

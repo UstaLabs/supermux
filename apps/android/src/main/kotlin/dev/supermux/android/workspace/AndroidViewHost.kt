@@ -31,7 +31,6 @@ import dev.supermux.ui.editor.FilePane
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.widgets.keepAlivePanel
-import dev.supermux.android.terminal.TerminalPanel
 import dev.supermux.ui.theme.Space
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -87,9 +86,13 @@ fun AndroidViewHost(
                 else AgentTerminalPane(vm, sessionId, terminalId, modifier)
             } else {
                 key(workspace.id, terminalId) {
-                    TerminalPanel(
+                    // Cluster G1: mounted through `Platform.terminalView()` rather than naming
+                    // termlib here, so cluster G7 can move this host into `:ui` unchanged.
+                    LocalPlatform.current.terminalView().TerminalView(
                         connect = { vm.fleet.connectWorkspaceTerminal(workspace.id, terminalId) },
                         modifier = modifier.fillMaxSize().testTag("terminal-${workspace.id}-$terminalId"),
+                        active = true,
+                        onExit = null,
                     )
                 }
             }
@@ -240,7 +243,7 @@ private fun ChatViewPane(
             Box(Modifier.keepAlivePanel(!nativeView)) { chatBody(Modifier) }
             if (session.agent == "claude") {
                 Box(Modifier.keepAlivePanel(nativeView)) {
-                    TerminalPanel(
+                    LocalPlatform.current.terminalView().TerminalView(
                         connect = { vm.fleet.connectAgentTerminal(sessionId) },
                         modifier = Modifier.fillMaxSize(),
                         active = nativeView,
@@ -259,8 +262,9 @@ private fun AgentTerminalPane(
     terminalId: String,
     modifier: Modifier,
 ) {
+    val terminals = LocalPlatform.current.terminalView()
     key(sessionId, terminalId) {
-        TerminalPanel(
+        terminals.TerminalView(
             connect = {
                 if (terminalId == "agent") vm.fleet.connectAgentTerminal(sessionId)
                 else vm.fleet.connectTerminal(sessionId, terminalId)
@@ -268,6 +272,8 @@ private fun AgentTerminalPane(
             modifier = modifier.fillMaxSize().testTag(
                 if (terminalId == "agent") "view_terminal_agent" else "view_terminal",
             ),
+            active = true,
+            onExit = null,
         )
     }
 }

@@ -27,14 +27,11 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,10 +39,9 @@ import dev.supermux.android.R
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.widgets.SettingsCaption
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.widgets.SettingsSectionHeader
-import dev.supermux.update.ClientUpdateStatus
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.launch
 
 /**
@@ -64,29 +60,27 @@ import kotlinx.coroutines.launch
 @Composable
 fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
     val cs = MaterialTheme.colorScheme
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val http = remember { HttpClient(CIO) }
+    // Cluster G1: the check/download/install machine is `Platform.updates` now — this page holds no
+    // HttpClient, no Context and no status of its own, and the banner reads the very same seam.
+    val updater = LocalPlatform.current.updates
+    val update by updater.status.collectAsState()
 
-    var status by remember { mutableStateOf<ClientUpdateStatus?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var installing by remember { mutableStateOf(false) }
-    var actionError by remember { mutableStateOf<String?>(null) }
-    var downloadLabel by remember { mutableStateOf<String?>(null) }
+    val status = update.release
+    val loading = update.phase == UpdatePhase.Checking || update.phase == UpdatePhase.Idle
+    val installing = update.busy
+    val actionError = update.error
+    val downloadLabel = if (installing) {
+        AppUpdateNotifier.formatDownloadProgress(update.bytesReceived, update.contentLength)
+    } else {
+        null
+    }
 
     fun refresh() {
-        scope.launch {
-            loading = true
-            actionError = null
-            status = AppUpdate.check(http, context)
-            loading = false
-        }
+        scope.launch { updater.check() }
     }
 
-    LaunchedEffect(Unit) {
-        status = AppUpdate.check(http, context)
-        loading = false
-    }
+    LaunchedEffect(Unit) { updater.check() }
 
     // Same chrome rule as the shared settings screens (`(standalone || compact) && !topBarShown`,
     // with no standalone route on this one).
@@ -137,8 +131,8 @@ fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
                 }
                 SettingsSectionHeader("APP")
                 val s = status
-                val current = s?.currentVersion ?: AppUpdate.currentVersionName(context)
-                val code = s?.currentVersionCode ?: AppUpdate.currentVersionCode(context)
+                val current = s?.currentVersion ?: updater.currentVersion
+                val code = s?.currentVersionCode ?: updater.currentVersionCode
                 Column {
                     Text("supermux $current", color = cs.onSurface, fontSize = 14.sp)
                     Text("versionCode $code", color = cs.onSurfaceVariant, fontSize = 12.sp)
@@ -165,9 +159,9 @@ fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
                                 fontSize = 14.sp,
                             )
                         }
-                        s.notesUrl?.let { notes ->
+                        s.notesUrl?.let {
                             Row(
-                                Modifier.clickable { AppUpdate.openNotes(context, notes) },
+                                Modifier.clickable { updater.openReleaseNotes() },
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
@@ -184,27 +178,15 @@ fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
                             Button(
                                 onClick = {
                                     scope.launch {
-                                        installing = true
-                                        actionError = null
-                                        downloadLabel = "Starting download…"
-                                        val err = AppUpdate.downloadAndInstall(
-                                            http,
-                                            context,
-                                            s.downloadUrl!!,
-                                        ) { received, total ->
-                                            downloadLabel =
-                                                AppUpdateNotifier.formatDownloadProgress(received, total)
-                                        }
-                                        installing = false
-                                        downloadLabel = null
-                                        when (err) {
-                                            null -> {}
-                                            "need-permission" -> {
-                                                actionError =
-                                                    "Allow installing apps from this source, then try again."
-                                                AppUpdate.openInstallPermissionSettings(context)
-                                            }
-                                            else -> actionError = err
+                                        // The seam publishes progress + the failure text on its
+                                        // status; a refused install (unknown sources off) also
+                                        // raises needsInstallPermission, which jumps to Settings
+                                        // exactly as the "need-permission" return used to.
+                                        val installer = updater.download { _, _ -> }
+                                        if (installer != null) {
+                                            updater.install(installer)
+                                        } else if (updater.status.value.needsInstallPermission) {
+                                            updater.openInstallPermissionSettings()
                                         }
                                     }
                                 },

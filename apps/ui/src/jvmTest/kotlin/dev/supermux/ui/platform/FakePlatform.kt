@@ -1,8 +1,22 @@
 package dev.supermux.ui.platform
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import dev.supermux.net.ByteArrayChunkSource
+import dev.supermux.net.CursorPos
+import dev.supermux.net.DisplayOp
+import dev.supermux.net.ScrcpyClient
+import dev.supermux.net.TerminalClient
+import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
+import dev.supermux.ui.terminal.PredictionSink
+import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import kotlinx.coroutines.flow.Flow
@@ -70,6 +84,107 @@ internal open class FakePlatform(
     override var mic: MicCapture = FakeMic()
     override val tts: FakeTts = FakeTts()
     override val notices: FakeNotices = FakeNotices()
+
+    // ── cluster G1 seams ──────────────────────────────────────────────────────────────────────
+    /** The terminal engine under test. Swap it for a [FakeTerminalViewFactory] of your own to
+     *  assert what a screen mounted; the default records every mount and draws a tagged stub. */
+    var terminals: TerminalViewFactory = FakeTerminalViewFactory()
+    override fun terminalView(): TerminalViewFactory = terminals
+
+    /** Null by default — a fake machine has no hardware decoder, so a display panel falls back to
+     *  VNC exactly as desktop does. Set a [FakeVideoSurfaceFactory] to take the scrcpy branch. */
+    var video: VideoSurfaceFactory? = null
+    override fun videoDecoder(): VideoSurfaceFactory? = video
+
+    override var updates: AppUpdater = FakeAppUpdater()
+    override var notifications: NotificationManager = FakeNotifications()
+    override var windows: WindowHostController? = null
+    override var push: PushRegistrar? = null
+}
+
+/** Records every terminal mount and draws a tagged stub — no engine, so it hosts under a UI test. */
+internal class FakeTerminalViewFactory(
+    override val available: Boolean = true,
+) : TerminalViewFactory {
+    /** One entry per LIVE surface, added on mount and removed on dispose. */
+    val mounted = mutableListOf<String>()
+    /** Every mount ever, in order (a disposed surface stays here). */
+    val mounts = mutableListOf<String>()
+    var lastActive: Boolean? = null
+    val predictions = FakePredictionSink()
+
+    @Composable
+    override fun TerminalView(
+        connect: () -> TerminalClient,
+        modifier: Modifier,
+        active: Boolean,
+        onExit: (() -> Unit)?,
+    ) {
+        lastActive = active
+        DisposableEffect(Unit) {
+            mounted.add("terminal")
+            mounts.add("terminal")
+            onDispose { mounted.remove("terminal") }
+        }
+        Box(modifier.fillMaxSize().testTag("fake_terminal")) { Text("terminal") }
+    }
+}
+
+/** Records the ops a prediction pipeline renders, and the cursor it was told to read. */
+internal class FakePredictionSink(
+    override val available: Boolean = true,
+    var cursor: CursorPos = CursorPos(0, 0),
+) : PredictionSink {
+    val rendered = mutableListOf<DisplayOp>()
+    var cursorReads = 0
+
+    override fun cursor(): CursorPos {
+        cursorReads++
+        return cursor
+    }
+
+    override fun render(ops: List<DisplayOp>) {
+        rendered += ops
+    }
+}
+
+/** A hardware decoder that draws a tagged stub — enough to prove the transport switch took it. */
+internal class FakeVideoSurfaceFactory : VideoSurfaceFactory {
+    val streams = mutableListOf<String>()
+
+    @Composable
+    override fun VideoSurface(streamId: String, connect: (String) -> ScrcpyClient, modifier: Modifier) {
+        DisposableEffect(streamId) {
+            streams.add(streamId)
+            onDispose { }
+        }
+        Box(modifier.fillMaxSize().testTag("fake_video_surface")) { Text("video") }
+    }
+}
+
+/** Recording [NotificationManager]: assert [shown] as `sessionId|title|message`. */
+internal class FakeNotifications : NotificationManager {
+    val shown = mutableListOf<String>()
+    override fun notify(sessionId: String, title: String, message: String) {
+        shown.add("$sessionId|$title|$message")
+    }
+}
+
+/** Recording [WindowHostController]: assert [calls] as `tab:<id>` / `canvas` / `release:<id>`. */
+internal class FakeWindows : WindowHostController {
+    val calls = mutableListOf<String>()
+    override fun tearOutTab(viewId: String) { calls.add("tab:$viewId") }
+    override fun tearOutCanvas() { calls.add("canvas") }
+    override fun release(hostId: String) { calls.add("release:$hostId") }
+}
+
+/** Recording [PushRegistrar]: assert [calls] as `channel` / `permission` / `register` / `cancel:<id>`. */
+internal class FakePush : PushRegistrar {
+    val calls = mutableListOf<String>()
+    override fun ensureChannel() { calls.add("channel") }
+    override fun requestPermission() { calls.add("permission") }
+    override fun registerIfPaired() { calls.add("register") }
+    override fun cancelForSession(sessionId: String) { calls.add("cancel:$sessionId") }
 }
 
 /** Recording [ClipboardAccess]: set [images], assert [reads]. */

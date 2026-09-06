@@ -41,6 +41,9 @@ class AndroidPlatformTest {
                 // Material You row is off; on a real Android 12+ device the same gate reads true.
                 dynamicColor = false,
                 appUpdate = true,
+                // G1: termlib is bound, and MediaCodec decodes an h264 display transport.
+                terminal = true,
+                scrcpy = true,
             ),
             ANDROID_CAPS,
         )

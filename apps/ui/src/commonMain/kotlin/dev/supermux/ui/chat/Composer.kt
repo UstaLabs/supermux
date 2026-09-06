@@ -331,6 +331,12 @@ data class ComposerChrome(
     val recordingTakeover: ComposerRecordingTakeover = ComposerRecordingTakeover.WholeCard,
     /** Under touch, the send disc grows to Android's 40dp press-scaled button. */
     val largeTouchSend: Boolean = false,
+    /**
+     * Trim the draft's trailing whitespace before appending dictated text, and treat a
+     * whitespace-only draft as empty (the launcher's rule: dictating into "  " yields the cleaned
+     * text, not "  text"). Chat appends to the draft as typed, spaces and all.
+     */
+    val dictationTrimsDraft: Boolean = false,
     val sendContentDescription: String = "Send",
 )
 
@@ -595,6 +601,13 @@ fun Composer(
      * attach / mic / send controls, which stay the composer's (behaviour, tags, input-mode shape).
      */
     toolbar: (@Composable ColumnScope.(ComposerToolbarScope) -> Unit)? = null,
+    /**
+     * Hoists the dictation error out of the card. Non-null means the composer draws NO error line
+     * of its own and reports the current message (null when it clears) here instead, so the screen
+     * can place it in its own column — the launcher's `launcher_mic_error` sits BELOW its
+     * `launcher_error`, which is where it has always been. Null keeps chat's inline line.
+     */
+    onMicError: ((String?) -> Unit)? = null,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
@@ -791,7 +804,7 @@ fun Composer(
         loadGlossary = actions.loadGlossary,
         transcribeDraft = actions.transcribeDraft,
         transcribeAudio = { bytes, name -> onTranscribeAudio?.invoke(bytes, name) },
-        onAppend = { cleaned -> setText(text + (if (text.isBlank()) "" else " ") + cleaned) },
+        onAppend = { cleaned -> setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft)) },
         mic = micCapture ?: platform.mic,
     )
 
@@ -803,7 +816,7 @@ fun Composer(
         if (onTranscribeAudio != null && bytes != null) {
             val cleaned = onTranscribeAudio.invoke(bytes, request.filename)?.trim()
             if (!cleaned.isNullOrEmpty()) {
-                setText(text + (if (text.isBlank()) "" else " ") + cleaned)
+                setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft))
             }
         }
         onExternalDictateConsumed()
@@ -1390,7 +1403,7 @@ fun Composer(
                 content = card,
             )
         }
-        if (pointer) dictation.errorMessage?.let { msg ->
+        if (pointer && onMicError == null) dictation.errorMessage?.let { msg ->
             Text(
                 msg,
                 color = MaterialTheme.colorScheme.error,
@@ -1400,7 +1413,27 @@ fun Composer(
         }
     }
     if (dictation.micDenied) MicDeniedDialog(onDismiss = { dictation.micDenied = false })
+    // A screen that places the error itself is told about every change, clears included.
+    if (onMicError != null) {
+        LaunchedEffect(dictation.errorMessage, pointer) {
+            onMicError(dictation.errorMessage?.takeIf { pointer })
+        }
+    }
 }
+
+/**
+ * Draft + dictated text, joined the way this screen joins them.
+ *
+ * [trimDraft] is the launcher's rule (a trailing space typed before hitting the mic must not become
+ * a double space, and a whitespace-only draft is nothing at all); chat appends to the draft exactly
+ * as typed. Pure so both formulas are pinned without a composition.
+ */
+internal fun appendDictated(draft: String, cleaned: String, trimDraft: Boolean): String =
+    if (trimDraft) {
+        if (draft.isBlank()) cleaned else draft.trimEnd() + " " + cleaned
+    } else {
+        draft + (if (draft.isBlank()) "" else " ") + cleaned
+    }
 
 /**
  * The `+` affordance.

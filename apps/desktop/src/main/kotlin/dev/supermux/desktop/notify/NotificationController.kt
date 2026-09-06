@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.platform.NotificationManager
 
 /**
  * Plain (non-`@Composable`) class exactly like [dev.supermux.desktop.shell.ShellUiState] —

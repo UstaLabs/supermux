@@ -11,10 +11,11 @@ import dev.supermux.net.MoveCaret
 import dev.supermux.net.Passthrough
 import dev.supermux.net.RestoreCell
 import dev.supermux.net.ShowCaret
+import dev.supermux.ui.terminal.PredictionSink
 
 /**
  * Renders the shared `PredictionEngine`'s Step-2 [DisplayOp]s against a JediTerm terminal — the
- * desktop twin of Android's `terminal/PredictionAdapter.kt` and the web `xterm-adapter.ts`. The
+ * desktop twin of Android's `terminal/JediTermPredictionAdapter.kt` and the web `xterm-adapter.ts`. The
  * engine (shared Kotlin, imported directly) owns ALL reconcile/cursor math; this adapter is the
  * thin, mechanical translator.
  *
@@ -38,10 +39,10 @@ import dev.supermux.net.ShowCaret
  * ### CursorPos convention (matched to the Android adapter — consistency matters, base doesn't)
  * The shared engine only ever COMPARES cursor positions and does relative `col ± 1` math, so any
  * self-consistent base works — but this adapter matches the Android adapter's semantics exactly so
- * the three platforms stay identical. Android's `cursor()` (PredictionAdapter.kt:99-108) returns
- * termlib's snapshot `cursorRow`/`cursorCol` as-is and its `cup()` (PredictionAdapter.kt:175-176)
+ * the three platforms stay identical. Android's `cursor()` (JediTermPredictionAdapter.kt:99-108) returns
+ * termlib's snapshot `cursorRow`/`cursorCol` as-is and its `cup()` (JediTermPredictionAdapter.kt:175-176)
  * adds 1 to reach the 1-based CUP escape — i.e. Android treats [CursorPos] as **0-based in both
- * axes**, and `readCell(row, col)` (PredictionAdapter.kt:149-157) indexes the snapshot 0-based.
+ * axes**, and `readCell(row, col)` (JediTermPredictionAdapter.kt:149-157) indexes the snapshot 0-based.
  * This adapter uses the SAME 0-based [CursorPos]; the JediTerm↔CursorPos conversions are the ONLY
  * platform difference (JediTerm's public cursor getters are 1-based, its `getCharAt` is 0-based):
  *  - [cursor]:  JediTerm `cursorX/cursorY` are 1-based → subtract 1 → 0-based [CursorPos].
@@ -64,11 +65,11 @@ import dev.supermux.net.ShowCaret
  * Android's restore semantics. The trade-off is deliberate: ordered rendering (no interleaving
  * race) in exchange for reads that may momentarily precede a just-queued write.
  */
-open class PredictionAdapter(
+open class JediTermPredictionAdapter(
     private val terminal: Terminal,
     private val buffer: TerminalTextBuffer,
     private val connector: MuxTtyConnector,
-) {
+) : PredictionSink {
     /** prediction id -> the character that occupied the cell before the dim glyph. */
     private val snapshots = HashMap<Int, String>()
 
@@ -82,10 +83,10 @@ open class PredictionAdapter(
      *  termlib's internal snapshot is unreachable; on desktop that branch is dead but the pipeline
      *  keeps the same `if (!adapter.available) …` shape. `open` for the pipeline's throwing-adapter
      *  test seam. */
-    open val available: Boolean = true
+    override val available: Boolean = true
 
     /** Current caret, screen-relative, as a 0-based [CursorPos] (see the class KDoc convention). */
-    open fun cursor(): CursorPos {
+    override fun cursor(): CursorPos {
         buffer.lock()
         try {
             return CursorPos(row = terminal.cursorY - 1, col = terminal.cursorX - 1)
@@ -95,7 +96,7 @@ open class PredictionAdapter(
     }
 
     /** Render a batch of engine ops by injecting escapes/bytes into the connector's ordered FIFO. */
-    open fun render(ops: List<DisplayOp>) {
+    override fun render(ops: List<DisplayOp>) {
         for (op in ops) {
             // Assign the `when` to a Unit val so it is an EXHAUSTIVE EXPRESSION: a future 7th
             // DisplayOp added to the shared sealed interface then fails to compile here instead of

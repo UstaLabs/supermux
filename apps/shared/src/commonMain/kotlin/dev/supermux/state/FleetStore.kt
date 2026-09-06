@@ -58,6 +58,7 @@ import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
 import dev.supermux.net.ReviewComment
+import dev.supermux.net.Walkthrough
 import dev.supermux.net.ReviewSubmitResult
 import dev.supermux.net.RunUpdateResult
 import dev.supermux.net.ScrcpyClient
@@ -873,6 +874,27 @@ class FleetStore(
         withSession(sessionId) { app, s -> app.reviewResolve(s, commentId) } == true
     suspend fun reviewSubmit(sessionId: String): ReviewSubmitResult? =
         withSession(sessionId) { app, s -> app.reviewSubmit(s) }
+    suspend fun reviewComments(sessionId: String): List<ReviewComment> =
+        withSession(sessionId) { app, s -> app.reviewComments(s) }.orEmpty()
+    suspend fun getWalkthrough(sessionId: String): Walkthrough? =
+        withSession(sessionId) { app, s -> app.getWalkthrough(s) }
+
+    /**
+     * The owning host's walkthrough holder for [sessionId], or null when no host owns it.
+     * Cluster G1: the shared shell's [dev.supermux.ui.shell.ShellActions] needs the holder the same
+     * way the single-host wiring reaches [HostStore.walkthroughState] — the CAP check (a store
+     * built without a `WalkthroughSeam` throws) stays at the call site, as it already did.
+     */
+    fun <T : Any> walkthroughState(sessionId: String): T? = appFor(sessionId)?.walkthroughState<T>(sessionId)
+
+    /** Continue a conversation on the session's OWN host; null when the broker refused. */
+    suspend fun continueConversation(
+        source: SessionInfo,
+        message: String,
+        agent: String? = null,
+        model: String? = null,
+        reasoningLevel: String? = null,
+    ): String? = appFor(source.id)?.continueConversation(source, message, agent, model, reasoningLevel)
 
     fun editorOpen(sessionId: String) { withSessionSync(sessionId) { app, s -> app.editorOpen(s) } }
     fun editorClose(sessionId: String) { withSessionSync(sessionId) { app, s -> app.editorClose(s) } }

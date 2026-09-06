@@ -9,6 +9,7 @@ import dev.supermux.net.MoveCaret
 import dev.supermux.net.Passthrough
 import dev.supermux.net.RestoreCell
 import dev.supermux.net.ShowCaret
+import dev.supermux.ui.terminal.PredictionSink
 import java.lang.reflect.Method
 import kotlinx.coroutines.flow.StateFlow
 import org.connectbot.terminal.TerminalEmulator
@@ -18,7 +19,7 @@ import org.connectbot.terminal.TerminalEmulator
  * termlib emulator. The engine (shared Kotlin, imported DIRECTLY - no SKIE bridging)
  * owns ALL reconcile logic and cursor math; this adapter is the thin, mechanical
  * translator - the Android twin of the web `xterm-adapter.ts` and iOS
- * `PredictionAdapter.swift`.
+ * `TermlibPredictionAdapter.swift`.
  *
  * ## Rendering: escape-feed (SPIKE-verified)
  * termlib 0.0.35 wraps **libvterm** (the same C VT engine Neovim uses) via JNI, so
@@ -47,7 +48,7 @@ import org.connectbot.terminal.TerminalEmulator
  * bounded by eviction - [cap] is DERIVED from the engine's maxPending (+16 headroom) so a
  * live snapshot is never wrongly evicted.
  */
-class PredictionAdapter(private val emulator: TerminalEmulator) {
+class TermlibPredictionAdapter(private val emulator: TerminalEmulator) : PredictionSink {
     /** prediction id -> the character that occupied the cell before the dim glyph. */
     private val snapshots = HashMap<Int, String>()
 
@@ -84,7 +85,7 @@ class PredictionAdapter(private val emulator: TerminalEmulator) {
      *  — clean no-prediction, like every other reflection failure. A fresh 24x80 terminal's initial
      *  snapshot has populated lines AND cells, so the full chain is validated here at attach. When
      *  false the pipeline skips creating the engine, so the terminal runs unaffected. */
-    val available: Boolean = snapshotFlow?.value?.let { snap ->
+    override val available: Boolean = snapshotFlow?.value?.let { snap ->
         runCatching {
             method(snap, "getCursorRow").invoke(snap)
             method(snap, "getCursorCol").invoke(snap)
@@ -99,7 +100,7 @@ class PredictionAdapter(private val emulator: TerminalEmulator) {
     /** Current caret position, screen-relative (matches CUP coordinates). Reads `cursorRow`/
      *  `cursorCol` off the live snapshot; falls back to (0,0) only if a read unexpectedly fails
      *  (shouldn't happen once [available] is true - the pipeline gates on it). */
-    fun cursor(): CursorPos = runCatching {
+    override fun cursor(): CursorPos = runCatching {
         val snap = snapshotFlow?.value ?: return CursorPos(0, 0)
         CursorPos(
             row = method(snap, "getCursorRow").invoke(snap) as Int,
@@ -110,7 +111,7 @@ class PredictionAdapter(private val emulator: TerminalEmulator) {
     /** Render a batch of engine ops. Each op is fed to termlib separately; libvterm applies them
      *  in order and the engine brackets reconcile batches with Hide/ShowCaret, so a whole op
      *  batch lands with no intermediate caret flicker. */
-    fun render(ops: List<DisplayOp>) {
+    override fun render(ops: List<DisplayOp>) {
         for (op in ops) {
             // Assign the `when` to a Unit val so it is an EXHAUSTIVE EXPRESSION: a future 7th
             // DisplayOp added to the shared sealed interface then fails to compile here instead of

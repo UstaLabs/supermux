@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
@@ -18,6 +19,7 @@ import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import kotlin.test.Test
+import kotlin.test.assertTrue
 
 private class ScriptedMicCapture(private val startsOk: Boolean, private val wav: ByteArray?) : MicCapture {
     override fun start() = startsOk
@@ -46,6 +48,11 @@ class SessionLauncherDictationTest {
     private fun Harness(
         transcribeAudio: suspend (ByteArray, String) -> String? = { _, _ -> null },
         micCapture: MicCapture = ScriptedMicCapture(startsOk = true, wav = byteArrayOf(1)),
+        draft: LauncherDraft = LauncherDraft(),
+        onSubmit: suspend (
+            String, String, String?, String?, String, List<dev.supermux.state.StagedUpload>,
+            Boolean, String?, String?,
+        ) -> String? = { _, _, _, _, _, _, _, _, _ -> null },
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) {
             SessionLauncherScreen(
@@ -55,10 +62,10 @@ class SessionLauncherDictationTest {
                 actions = LauncherActions(transcribeAudio = transcribeAudio),
                 loadPrefs = { LauncherPrefs() },
                 onPrefsChange = {},
-                loadDraft = { LauncherDraft() },
+                loadDraft = { draft },
                 onDraftChange = {},
                 onClearDraft = {},
-                onSubmit = { _, _, _, _, _, _, _, _, _ -> null },
+                onSubmit = onSubmit,
                 micCapture = micCapture,
             )
         }
@@ -121,6 +128,45 @@ class SessionLauncherDictationTest {
         onNodeWithTag("voice_stop").performClick()
         waitForIdle()
         onNodeWithTag("launcher_message").assertIsDisplayed()
+    }
+
+    /**
+     * The dictation failure line is the LAUNCHER's own (cluster G1, restoring F6's placement): 12sp,
+     * in the launcher's column BELOW `launcher_error` — not the composer's 11sp line inside the
+     * card. Both errors are raised here so the ORDER is what is asserted, not merely the presence.
+     */
+    @Test fun the_mic_error_renders_below_the_launcher_error() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                // A transcribe that yields nothing → DictationController.fail("Transcription failed").
+                transcribeAudio = { _, _ -> null },
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                onSubmit = { _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("spawn refused") },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithTag("launcher_error").fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithTag("launcher_mic").performClick() // start
+        onNodeWithTag("launcher_mic").performClick() // stop -> transcribe -> fail
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithTag("launcher_mic_error").fetchSemanticsNodes().isNotEmpty()
+        }
+        val spawnError = onNodeWithTag("launcher_error").fetchSemanticsNode().positionInRoot.y
+        val micError = onNodeWithTag("launcher_mic_error").fetchSemanticsNode().positionInRoot.y
+        assertTrue(micError > spawnError, "launcher_mic_error must sit under launcher_error")
+    }
+
+    /** Touch has no inline error at all — the takeover banner is the one transient line there. */
+    @Test fun a_touch_host_shows_no_inline_mic_error() = runComposeUiTest {
+        touchContent { Harness(transcribeAudio = { _, _ -> null }) }
+        waitForIdle()
+        onNodeWithTag("launcher_mic").performClick()
+        onNodeWithTag("voice_stop").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_mic_error").assertDoesNotExist()
     }
 
     @Test fun a_pointer_host_keeps_the_field_while_recording() = runComposeUiTest {

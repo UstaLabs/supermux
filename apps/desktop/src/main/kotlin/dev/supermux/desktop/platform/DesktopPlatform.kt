@@ -1,8 +1,13 @@
 package dev.supermux.desktop.platform
 
 import dev.supermux.desktop.editor.DesktopEditorEngineFactory
+import dev.supermux.desktop.notify.DesktopNotifications
+import dev.supermux.desktop.shell.DesktopWindowHostController
+import dev.supermux.desktop.terminal.JediTermTerminalViewFactory
+import dev.supermux.desktop.update.DesktopAppUpdater
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.ui.editor.engine.EditorEngineFactory
+import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
@@ -10,7 +15,12 @@ import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.platform.NotificationManager
 import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.platform.PushRegistrar
+import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.display.VideoSurfaceFactory
+import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +67,29 @@ class DesktopPlatform : Platform {
         dynamicColor = false,
         // The app updates ITSELF here as well (Route.AppUpdate → `update/AppUpdateUi.kt`).
         appUpdate = true,
+        // JediTerm is bound (`terminalView()` never returns the unavailable factory here).
+        terminal = true,
+        // No hardware H.264 decoder: desktop displays are VNC, so `videoDecoder()` is null.
+        scrcpy = false,
     )
+
+    /** JediTerm in a `SwingPanel` — the engine every desktop terminal pane has always used. */
+    override fun terminalView(): TerminalViewFactory = JediTermTerminalViewFactory
+
+    /** No MediaCodec here; every display falls back to its VNC framebuffer. */
+    override fun videoDecoder(): VideoSurfaceFactory? = null
+
+    /** Process-wide so a theme remount does not orphan an in-flight download's status. */
+    override val updates: AppUpdater = DesktopAppUpdater.shared
+
+    /** The tray manager `Main.kt` installs once `Tray(...)` exists; a no-op before that. */
+    override val notifications: NotificationManager = DesktopNotifications
+
+    /** Detached workspace windows — the shell binds the live registry into this. */
+    override val windows: WindowHostController = DesktopWindowHostController
+
+    /** No FCM off Android; desktop's own tray notifications cover the live process. */
+    override val push: PushRegistrar? = null
 
     /** The direct-JCEF browser that hosts CodeMirror; one per app, wrapping the process-global
      *  [dev.supermux.desktop.editor.JcefRuntime]. */

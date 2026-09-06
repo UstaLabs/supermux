@@ -573,7 +573,7 @@ private fun singlePrintableChar(data: ByteArray): Char? {
 }
 
 /**
- * Bundles the predictive-echo engine + termlib [PredictionAdapter] + keystroke->echo RTT clock
+ * Bundles the predictive-echo engine + termlib [TermlibPredictionAdapter] + keystroke->echo RTT clock
  * for one terminal, so the emulator's `onKeyboardInput` closure (fixed at create time) can reach
  * an engine/adapter built AFTER the emulator. The Android twin of iOS `TerminalCoordinator`'s
  * engine/predAdapter/lastKeyAt + handleInput/handleOutput/teardownPrediction.
@@ -586,7 +586,7 @@ private fun singlePrintableChar(data: ByteArray): Char? {
  */
 private class PredictionPipeline {
     private var engine: PredictionEngine? = null
-    private var adapter: PredictionAdapter? = null
+    private var adapter: TermlibPredictionAdapter? = null
     // nowMs of the last keystroke still awaiting its echo (0 = none). Bootstraps the latency gate
     // from a real keystroke->echo RTT, INDEPENDENTLY of the prediction path — without it the gate
     // could never open (latency starts at 0, predictions need latency >= threshold).
@@ -596,7 +596,7 @@ private class PredictionPipeline {
      *  can't read termlib's cursor (its internal snapshot is unreachable), leave the engine null
      *  so prediction is disabled and the terminal runs unaffected. */
     fun attach(emulator: TerminalEmulator) {
-        val a = PredictionAdapter(emulator)
+        val a = TermlibPredictionAdapter(emulator)
         lastKeyAt = 0L
         if (!a.available) {
             adapter = null

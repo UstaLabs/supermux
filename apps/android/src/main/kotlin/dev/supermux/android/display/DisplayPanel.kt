@@ -59,6 +59,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.supermux.android.R
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
@@ -321,8 +322,13 @@ fun DisplayStreamSurface(
     connectScrcpy: (String) -> ScrcpyClient,
     connectVnc: (String) -> VncClient,
 ) {
-    if (stream.transport == "h264") {
-        ScrcpyView(stream.id, connectScrcpy)
+    // Cluster G1: the transport switch now asks the PLATFORM for a decoder instead of naming
+    // MediaCodec here. h264 needs both the cap and a real factory; anything else — and any host
+    // without one (desktop) — renders the VNC framebuffer, which is exactly what this switch did.
+    val platform = LocalPlatform.current
+    val decoder = platform.videoDecoder()
+    if (stream.transport == "h264" && decoder != null && platform.caps.scrcpy) {
+        decoder.VideoSurface(stream.id, connectScrcpy, Modifier)
     } else {
         VncView(stream.id, connectVnc, stream.provider)
     }
@@ -336,7 +342,11 @@ fun DisplayStreamSurface(
  * back into the remote screen's pixels, and forwards keyboard text/keys as scrcpy JSON.
  */
 @Composable
-private fun ScrcpyView(streamId: String, connect: (String) -> ScrcpyClient) {
+internal fun ScrcpyView(
+    streamId: String,
+    connect: (String) -> ScrcpyClient,
+    modifier: Modifier = Modifier,
+) {
     val client = remember(streamId) { connect(streamId) }
     val decoder = remember(streamId) { H264SurfaceDecoder() }
 
@@ -358,7 +368,7 @@ private fun ScrcpyView(streamId: String, connect: (String) -> ScrcpyClient) {
     val focusRequester = remember { FocusRequester() }
     var keyboardActive by remember { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize().testTag("scrcpy_surface"),
             factory = { ctx ->

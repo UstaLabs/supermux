@@ -29,9 +29,15 @@ import dev.supermux.android.chat.DictationEngine
 import dev.supermux.android.chat.VoiceRecorder
 import dev.supermux.android.chat.createImageUri
 import dev.supermux.android.chat.createVideoUri
+import dev.supermux.android.display.AndroidVideoSurfaceFactory
 import dev.supermux.android.editor.AndroidEditorEngineFactory
+import dev.supermux.android.push.AndroidPushRegistrar
+import dev.supermux.android.terminal.TermlibTerminalViewFactory
+import dev.supermux.android.update.AndroidAppUpdater
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.android.pairing.rememberQrScanLauncher
+import dev.supermux.ui.display.VideoSurfaceFactory
+import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.Caps
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
@@ -41,7 +47,12 @@ import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.platform.NoopNotificationManager
+import dev.supermux.ui.platform.NotificationManager
 import dev.supermux.ui.platform.Platform
+import dev.supermux.ui.platform.PushRegistrar
+import dev.supermux.ui.platform.WindowHostController
+import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -74,6 +85,28 @@ class AndroidPlatform(
 ) : Platform {
 
     override val caps: Caps get() = ANDROID_CAPS
+
+    /** ConnectBot termlib in an `AndroidView` — the engine every Android terminal pane has used. */
+    override fun terminalView(): TerminalViewFactory = TermlibTerminalViewFactory
+
+    /** MediaCodec H.264, so a scrcpy display decodes in hardware here (desktop returns null). */
+    override fun videoDecoder(): VideoSurfaceFactory = AndroidVideoSurfaceFactory
+
+    /** APK self-update. Built once per platform instance so an in-flight download keeps its state. */
+    override val updates: AppUpdater = AndroidAppUpdater(context)
+
+    /**
+     * Nothing local: an agent reply reaches this device as an FCM push already
+     * ([SupermuxMessagingService]), so posting a second notification from the app would double
+     * every message. The seam exists so a shared shell can call it unconditionally.
+     */
+    override val notifications: NotificationManager = NoopNotificationManager
+
+    /** One window per task; a pane cannot be torn out into another OS window here. */
+    override val windows: WindowHostController? = null
+
+    /** FCM channel + POST_NOTIFICATIONS + relay registration. */
+    override val push: PushRegistrar = AndroidPushRegistrar(context)
 
     /** The WebView that hosts CodeMirror. Built from the ACTIVITY context so the editor's CSS px
      *  match the display the window is actually on (DeX / external displays differ in density). */
@@ -238,6 +271,10 @@ val ANDROID_CAPS = Caps(
     // itself has been a colour no-op since the brand palette became the only palette.
     dynamicColor = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
     appUpdate = true,
+    // termlib is bound (`terminalView()` never returns the unavailable factory here).
+    terminal = true,
+    // MediaCodec decodes an h264 display transport; without this the panel falls back to VNC.
+    scrcpy = true,
 )
 
 /** A pick that completed with nobody awaiting it, tagged with what asked for it. */

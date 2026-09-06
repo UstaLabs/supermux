@@ -43,6 +43,9 @@ class DesktopPlatformTest {
                 appearanceControls = true,
                 dynamicColor = false,
                 appUpdate = true,
+                // G1: JediTerm is bound; no hardware H.264 decoder (displays are VNC here).
+                terminal = true,
+                scrcpy = false,
             ),
             DesktopPlatform().caps,
         )

@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,9 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.update.ClientUpdateStatus
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.UpdatePhase
 import kotlinx.coroutines.launch
 
 /** Full-pane "Check for updates" screen (File ▸ Check for Updates…). */
@@ -48,25 +48,20 @@ import kotlinx.coroutines.launch
 fun AppUpdateScreen(onBack: () -> Unit, topBarShown: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    val http = remember { HttpClient(CIO) }
-    var status by remember { mutableStateOf<ClientUpdateStatus?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var installing by remember { mutableStateOf(false) }
-    var actionError by remember { mutableStateOf<String?>(null) }
+    // Cluster G1: the check/download/install machine is `Platform.updates` now, so this page holds
+    // no HttpClient and no status of its own — the same seam the banner reads, hence one answer.
+    val updater = LocalPlatform.current.updates
+    val update by updater.status.collectAsState()
+    val status = update.release
+    val loading = update.phase == UpdatePhase.Checking || update.phase == UpdatePhase.Idle
+    val installing = update.busy
+    val actionError = update.error
 
     fun refresh() {
-        scope.launch {
-            loading = true
-            actionError = null
-            status = AppUpdate.check(http)
-            loading = false
-        }
+        scope.launch { updater.check() }
     }
 
-    LaunchedEffect(Unit) {
-        status = AppUpdate.check(http)
-        loading = false
-    }
+    LaunchedEffect(Unit) { updater.check() }
 
     Surface(Modifier.fillMaxSize().testTag("app_update_overlay"), color = cs.background) {
         Column(Modifier.fillMaxSize()) {
@@ -115,21 +110,19 @@ fun AppUpdateScreen(onBack: () -> Unit, topBarShown: Boolean = false) {
                             Text(s.lastError!!, color = cs.error, fontSize = 12.sp)
                         s.updateAvailable -> {
                             Text("Update available: ${s.latestVersion}", color = cs.onSurface)
-                            s.notesUrl?.let { url ->
+                            s.notesUrl?.let {
                                 Text(
                                     "Release notes",
                                     color = cs.primary,
-                                    modifier = Modifier.clickable { AppUpdate.openUrl(url) },
+                                    modifier = Modifier.clickable { updater.openReleaseNotes() },
                                 )
                             }
                             if (s.canInstall && s.downloadUrl != null) {
                                 Button(
                                     onClick = {
                                         scope.launch {
-                                            installing = true
-                                            actionError = null
-                                            actionError = AppUpdate.downloadAndOpen(http, s.downloadUrl!!)
-                                            installing = false
+                                            val installer = updater.download { _, _ -> }
+                                            if (installer != null) updater.install(installer)
                                         }
                                     },
                                     enabled = !installing,
@@ -167,20 +160,15 @@ fun AppUpdateBanner(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val http = remember { HttpClient(CIO) }
-    var status by remember { mutableStateOf<ClientUpdateStatus?>(null) }
+    val updater = LocalPlatform.current.updates
+    val update by updater.status.collectAsState()
     var dismissed by remember { mutableStateOf(false) }
-    var installing by remember { mutableStateOf(false) }
+    val installing = update.busy
 
-    LaunchedEffect(Unit) {
-        val s = AppUpdate.check(http)
-        if (s.updateAvailable && s.latestVersion != null && !AppUpdate.isDismissed(s.latestVersion!!)) {
-            status = s
-        }
-    }
+    LaunchedEffect(Unit) { updater.check() }
 
-    val s = status
-    if (s == null || dismissed || !s.updateAvailable) return
+    val s = update.release
+    if (s == null || dismissed || update.dismissed || !s.updateAvailable) return
 
     val cs = MaterialTheme.colorScheme
     Row(
@@ -204,9 +192,8 @@ fun AppUpdateBanner(
             TextButton(
                 onClick = {
                     scope.launch {
-                        installing = true
-                        AppUpdate.downloadAndOpen(http, s.downloadUrl!!)
-                        installing = false
+                        val installer = updater.download { _, _ -> }
+                        if (installer != null) updater.install(installer)
                     }
                 },
                 enabled = !installing,
@@ -215,7 +202,7 @@ fun AppUpdateBanner(
             }
         }
         IconButton(onClick = {
-            s.latestVersion?.let { AppUpdate.dismiss(it) }
+            updater.dismiss()
             dismissed = true
         }, modifier = Modifier.size(32.dp)) {
             Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = cs.onPrimaryContainer, modifier = Modifier.size(16.dp))

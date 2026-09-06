@@ -130,8 +130,9 @@ import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.android.DevConfig
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.OnboardingFlow
-import dev.supermux.android.push.PushPermission
+import dev.supermux.android.push.AndroidPushRegistrar
 import dev.supermux.android.push.SupermuxMessagingService
+import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.net.ArchivedDto
@@ -186,10 +187,14 @@ class MainActivity : ComponentActivity() {
         // Native push: ensure the notification channel exists and ask for POST_NOTIFICATIONS
         // (API 33+) so decrypted session pushes can be shown. Must run before the activity
         // is STARTED, hence here in onCreate before setContent.
-        SupermuxMessagingService.ensureChannel(this)
+        // Cluster G1: both go through the `PushRegistrar` seam (`Platform.push`). The activity is
+        // built before any composition, so it constructs the actual directly — the same instance
+        // shape `AndroidPlatform` hands every shared caller.
+        val push: PushRegistrar = AndroidPushRegistrar(this)
+        push.ensureChannel()
         // App self-update progress / failure alerts (status bar during APK download).
         AppUpdateNotifier.ensureChannels(this)
-        PushPermission.request(this)
+        push.requestPermission()
         intentState.value = intent
         enableEdgeToEdge()
 
@@ -250,10 +255,9 @@ class MainActivity : ComponentActivity() {
                 // paired. onNewToken alone is insufficient — FCM often issues the token *before*
                 // pairing, and the old path used a placeholder base URL. Parity with iOS
                 // PushManager.registerIfPaired (launch + post-pair).
-                LaunchedEffect(paired) {
-                    if (paired) {
-                        SupermuxMessagingService.registerIfPaired(applicationContext)
-                    }
+                val pushSeam = LocalPlatform.current.push
+                LaunchedEffect(paired, pushSeam) {
+                    if (paired) pushSeam?.registerIfPaired()
                 }
                 // Deep-link intake: parse supermux://pair (or a pasted https pair URL) from the
                 // current intent. Recomputed when onNewIntent swaps the intent in while foregrounded.
@@ -407,7 +411,7 @@ class MainActivity : ComponentActivity() {
                             emptyList()
                         }
                         for (id in notificationCancelSessionIds(visibleIds, it)) {
-                            SupermuxMessagingService.cancelForSession(applicationContext, id)
+                            pushSeam?.cancelForSession(id)
                         }
                     }
                 }
@@ -837,7 +841,7 @@ class MainActivity : ComponentActivity() {
                             onClaimByUrl = { url, name, allowInsecure -> vm.fleet.addHostByUrl(url, name, allowInsecure) },
                             onAdded = {
                                 // New host needs its own relay bootstrap → broker /push/device row.
-                                SupermuxMessagingService.registerIfPaired(applicationContext)
+                                pushSeam?.registerIfPaired()
                                 navController.popBackStack()
                             },
                             needsInsecureOptIn = { vm.fleet.urlNeedsInsecureOptIn(it) },

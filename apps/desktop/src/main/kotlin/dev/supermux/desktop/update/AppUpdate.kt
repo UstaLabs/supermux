@@ -63,14 +63,16 @@ object AppUpdate {
             return@withContext e.message ?: "Could not write installer"
         }
         try {
-            openFile(file)
+            openInstaller(file)
             null
         } catch (e: Throwable) {
             e.message ?: "Could not open installer"
         }
     }
 
-    private fun openFile(file: File) {
+    /** Hand a downloaded installer to the OS. Public since G1: [DesktopAppUpdater] splits the old
+     *  download-and-open into the two halves the shared `AppUpdater` seam exposes. */
+    fun openInstaller(file: File) {
         if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
             Desktop.getDesktop().open(file)
             return

@@ -42,7 +42,6 @@ import dev.supermux.ui.editor.DiffState
 import dev.supermux.ui.editor.DocumentStore
 import dev.supermux.ui.editor.ExplorerState
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.terminal.DesktopTerminalPanel
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.ProxyDto
@@ -73,11 +72,13 @@ import kotlinx.coroutines.launch
  * degrade to "this client does not draw that yet".
  *
  * Adapters wrap the same call shapes SessionDetail uses today — see ChatPanel,
- * DesktopEditorPanel, DesktopTerminalPanel / TerminalTabs, DisplayPanel.
+ * DesktopEditorPanel, the terminal seam / TerminalTabs, DisplayPanel.
  *
+ * Terminals are mounted through `Platform.terminalView()` (cluster G1) rather than
+ * by naming JediTerm here, so cluster G7 can move this host into `:ui` unchanged.
  * [workspaceTerminalContent] is a test seam: SwingPanel/JediTerm cannot be hosted
  * under runComposeUiTest, so UI tests inject a pure-Compose stand-in. Production
- * always uses the default real [DesktopTerminalPanel].
+ * always uses the default, which is the platform's own engine.
  *
  * The kind `editor` is not one pane but three (spec §7.2), chosen by its view
  * state's `mode`: `tree` draws the explorer, `file` draws ONE document, `diff`
@@ -121,15 +122,23 @@ fun ViewHost(
     /** After continue-in-new-conversation — select the new chat session. */
     onSelectSession: (String) -> Unit = {},
     workspaceTerminalContent: @Composable (connect: () -> TerminalClient, modifier: Modifier) -> Unit =
-        { connect, mod -> DesktopTerminalPanel(connect = connect, modifier = mod) },
+        { connect, mod ->
+            LocalPlatform.current.terminalView()
+                .TerminalView(connect = connect, modifier = mod, active = true, onExit = null)
+        },
     /**
      * The agent's raw PTY, drawn behind a chat view's Chat⇄Native pill. Same test-seam reason as
-     * [workspaceTerminalContent]: DesktopTerminalPanel is a SwingPanel and cannot be hosted under
+     * [workspaceTerminalContent]: the desktop engine is a SwingPanel and cannot be hosted under
      * runComposeUiTest, so tests inject a pure-Compose stand-in.
      */
     chatNativeContent: @Composable (connect: () -> TerminalClient, onExit: () -> Unit) -> Unit =
         { connect, onExit ->
-            DesktopTerminalPanel(connect = connect, modifier = Modifier.fillMaxSize(), onExit = onExit)
+            LocalPlatform.current.terminalView().TerminalView(
+                connect = connect,
+                modifier = Modifier.fillMaxSize(),
+                active = true,
+                onExit = onExit,
+            )
         },
     /**
      * Per-session proxy load for a chat view's links menu — the globe dropdown that moved off the
@@ -345,7 +354,7 @@ private fun ChatPanelForSession(
             )
         },
         // key(sessionId) so a view rebound to another session never reuses the previous session's
-        // agent PTY: DesktopTerminalPanel's `remember { connect() }` is deliberately unkeyed.
+        // agent PTY: a terminal surface's `remember { connect() }` is deliberately unkeyed.
         nativeContent = { onExit ->
             key(sessionId) { nativeContent({ app.connectAgentTerminal(sessionId) }, onExit) }
         },
@@ -381,7 +390,7 @@ internal fun workspaceOpenPath(ref: FilePathRef, workdir: String): String? =
  * - terminalId "agent" → agent PTY via [HostStore.connectAgentTerminal]
  * - any other id → scratch terminal via [HostStore.connectTerminal]
  *
- * key(sessionId, terminalId) so a view switch does not reuse the wrong JediTerm client.
+ * key(sessionId, terminalId) so a view switch does not reuse the wrong terminal client.
  */
 @Composable
 private fun AgentTerminalForSession(
@@ -390,16 +399,21 @@ private fun AgentTerminalForSession(
     terminalId: String,
     modifier: Modifier,
 ) {
+    val terminals = LocalPlatform.current.terminalView()
     key(sessionId, terminalId) {
         if (terminalId == "agent") {
-            DesktopTerminalPanel(
+            terminals.TerminalView(
                 connect = { app.connectAgentTerminal(sessionId) },
                 modifier = modifier.fillMaxSize().testTag("view_terminal_agent"),
+                active = true,
+                onExit = null,
             )
         } else {
-            DesktopTerminalPanel(
+            terminals.TerminalView(
                 connect = { app.connectTerminal(sessionId, terminalId) },
                 modifier = modifier.fillMaxSize().testTag("view_terminal"),
+                active = true,
+                onExit = null,
             )
         }
     }
