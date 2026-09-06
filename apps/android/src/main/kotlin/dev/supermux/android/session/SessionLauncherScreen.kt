@@ -588,27 +588,44 @@ fun SessionLauncherScreen(
                 Text("Let's build", color = cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(Space.xs))
                 // Project name IS the dropdown (iOS projectPicker / web heading-variant parity).
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(Space.sm))
-                        .clickable { showProjectSheet = true }
-                        .padding(horizontal = Space.sm, vertical = Space.xs)
-                        .testTag("launcher_project_field"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Space.xs),
-                ) {
-                    Text(
-                        formatWorkdir(workdir, home),
-                        color = cs.onSurfaceVariant,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                    )
-                    Icon(
-                        painter = painterResource(R.drawable.ic_chevron_down),
-                        contentDescription = "Select project",
-                        tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
+                // The Box is the ANCHOR: with a pointer attached (tablet + mouse, DeX, a docked
+                // foldable) the shared picker renders as a dropdown, which must hang off this
+                // heading exactly as it does on desktop — not off the screen root.
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(Space.sm))
+                            .clickable { showProjectSheet = true }
+                            .padding(horizontal = Space.sm, vertical = Space.xs)
+                            .testTag("launcher_project_field"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                    ) {
+                        Text(
+                            formatWorkdir(workdir, home),
+                            color = cs.onSurfaceVariant,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                        Icon(
+                            painter = painterResource(R.drawable.ic_chevron_down),
+                            contentDescription = "Select project",
+                            tint = cs.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    // ── Forge-aware project picker (known projects + typed path + clone/create) ──
+                    // A bottom sheet on a touch device (this is where Android's own
+                    // ProjectPickerSheet went), an anchored dropdown wherever a pointer drives.
+                    ProjectPicker(
+                        expanded = showProjectSheet,
+                        current = workdir,
+                        projects = projects,
+                        home = home,
+                        actions = actions,
+                        onPick = { workdir = it; workdirTouched = true; error = null },
+                        onDismiss = { showProjectSheet = false },
                     )
                 }
                 if (multiHost) {
@@ -1016,19 +1033,6 @@ fun SessionLauncherScreen(
             onDismiss = { showWorktreeSheet = false },
         )
     }
-
-    // ── Forge-aware project picker (known projects + typed path + clone/create) ──
-    // The shared picker: a ModalBottomSheet under Compact (this is where Android's own
-    // ProjectPickerSheet went), the desktop heading dropdown on a wide window.
-    ProjectPicker(
-        expanded = showProjectSheet,
-        current = workdir,
-        projects = projects,
-        home = home,
-        actions = actions,
-        onPick = { workdir = it; workdirTouched = true; error = null },
-        onDismiss = { showProjectSheet = false },
-    )
 
     if (voice.micDenied) MicDeniedDialog(onDismiss = { voice.micDenied = false })
 }

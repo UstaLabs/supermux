@@ -61,11 +61,13 @@ class ProjectPickerTest {
 
     private fun ComposeUiTest.pickerContent(
         widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        /** The container follows THIS, not the width: no pointer → the bottom sheet. */
+        pointer: Boolean = widthClass != WindowWidthClass.Compact,
         content: @Composable () -> Unit,
     ) = setPlatformContent(
-        pointer = widthClass != WindowWidthClass.Compact,
+        pointer = pointer,
         widthClass = widthClass,
-        inputMode = if (widthClass == WindowWidthClass.Compact) InputMode.Touch else InputMode.Pointer,
+        inputMode = if (pointer) InputMode.Pointer else InputMode.Touch,
     ) {
         SupermuxTheme(appearance = AppearanceMode.DARK) { content() }
     }
@@ -751,5 +753,103 @@ class ProjectPickerTest {
         onNodeWithTag("project_row_/home/u/alpha").assertDoesNotExist()
         waitFor { onNodeWithTag("forge_clone_alice/widget").assertIsDisplayed() }
         onNodeWithTag("forge_group_c1").assertIsDisplayed()
+    }
+
+    /**
+     * The container follows the INPUT DEVICE, not the width. An unfolded foldable or a tablet held
+     * in the hand is Expanded and still has no pointer: it must get the sheet (Android's shape),
+     * not a dropdown anchored to a heading it cannot comfortably drive.
+     */
+    @Test fun a_touch_host_gets_the_sheet_at_every_width() = runComposeUiTest {
+        var open by mutableStateOf(true)
+        var dismissals = 0
+        pickerContent(WindowWidthClass.Expanded, pointer = false) {
+            Picker(
+                expanded = open,
+                current = "/home/u/alpha",
+                projects = listOf("/home/u/alpha"),
+                onPick = {},
+                onDismiss = { open = false; dismissals++ },
+            )
+        }
+        waitForIdle()
+        waitFor { onNodeWithTag("launcher_omnibox_root").assertIsDisplayed() }
+        // The sheet-only heading Android's ProjectPickerSheet carried.
+        onNodeWithTag("project_picker_title").assertIsDisplayed()
+        // ...and the sheet's own gesture closes it, which a dropdown has no notion of.
+        onNodeWithTag("launcher_project_menu").performTouchInput { swipeDown() }
+        waitForIdle()
+        waitFor { onNodeWithTag("launcher_omnibox_root").assertDoesNotExist() }
+        assertEquals(1, dismissals)
+    }
+
+    /**
+     * The mirror: a pointer at a Compact width — a narrow desktop window, or a docked/DeX Android
+     * device — keeps the anchored dropdown and desktop's body. Before the container branched on
+     * pointer availability this window silently became a bottom sheet.
+     */
+    @Test fun a_pointer_host_keeps_the_anchored_menu_when_narrow() = runComposeUiTest {
+        var picked: String? = null
+        pickerContent(WindowWidthClass.Compact, pointer = true) {
+            Box {
+                Picker(
+                    current = "/home/u/alpha",
+                    projects = listOf("/home/u/alpha", "/home/u/beta"),
+                    onPick = { picked = it },
+                    onDismiss = {},
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_omnibox_root").assertIsDisplayed()
+        onNodeWithTag("project_picker_title").assertDoesNotExist()
+        onNodeWithTag("project_row_/home/u/beta").performClick()
+        waitForIdle()
+        assertEquals("/home/u/beta", picked)
+    }
+
+    /**
+     * The picker is composed whether or not it is open, so a clone that finishes AFTER the user
+     * closed it must not land: it would rewrite the launcher's workdir out from under them.
+     */
+    @Test fun a_clone_that_lands_after_a_dismiss_is_dropped() = runComposeUiTest {
+        val hold = CompletableDeferred<Unit>()
+        val finished = AtomicBoolean(false)
+        var open by mutableStateOf(true)
+        val picked = AtomicReference<String?>(null)
+        pickerContent {
+            Box {
+                Picker(
+                    expanded = open,
+                    current = "~",
+                    loadForges = { listOf(forgeConn()) },
+                    searchForge = { searchOk(remote(name = "slow")) },
+                    cloneForge = { _, _, _ ->
+                        hold.await()
+                        finished.set(true)
+                        "/home/u/slow"
+                    },
+                    onPick = { picked.set(it) },
+                    onDismiss = { open = false },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_search").performTextInput("slow")
+        waitForIdle()
+        waitFor { onNodeWithTag("forge_clone_alice/slow").assertIsDisplayed() }
+        onNodeWithTag("forge_clone_alice/slow").performClick()
+        waitForIdle()
+        waitFor { onNodeWithTag("launcher_forge_resolving").assertIsDisplayed() }
+
+        open = false
+        waitForIdle()
+        // The host keeps working (it is not abortable) and completes...
+        hold.complete(Unit)
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) { finished.get() }
+        waitForIdle()
+        // ...but nothing lands in the launcher.
+        assertNull(picked.get(), "a clone finishing after a dismiss must not rewrite the workdir")
     }
 }

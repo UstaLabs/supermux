@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -49,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,8 +75,7 @@ import dev.supermux.session.OmniOption
 import dev.supermux.session.ProjectOption
 import dev.supermux.session.buildOmniboxOptions
 import dev.supermux.session.formatWorkdir
-import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Size
 import dev.supermux.ui.theme.Space
@@ -129,15 +131,22 @@ private sealed class OmniNav {
  * Project picker with forge omnibox: **one** search field (filter locals / search a connected
  * forge / create, or type a free path → "Use this path"), not a separate path box.
  *
- * Container by width class: a `ModalBottomSheet` under [WindowWidthClass.Compact] (phones — what
- * Android's `ProjectPickerSheet` was), an anchored [DropdownMenu] otherwise (desktop's heading
- * dropdown). The body, and every test tag on it, is identical either way.
+ * Container by INPUT DEVICE, not by width: a `ModalBottomSheet` wherever no pointer is attached
+ * (a phone, and equally a tablet or unfolded foldable held in the hand — what Android's
+ * `ProjectPickerSheet` was), an anchored [DropdownMenu] wherever one is (desktop at any window
+ * width, a docked tablet, DeX). Width was the wrong question: a dropdown must hang off the project
+ * heading, and both hosts anchor it there, so a hand-held tablet would otherwise get a menu it
+ * cannot comfortably drive while a narrow desktop window would lose the dropdown it always had.
+ * The body, and every test tag on it, is identical either way.
  *
  * Clone/create is long-running and **not abortable** on the broker (`git clone` via
  * `execFileSync`). The progress overlay offers **Hide** (not Cancel): the host keeps working;
  * if the user hides, a notice stays visible and a successful finish surfaces a ready path to pick.
  * Search failures are distinct from empty results. Keyboard: autofocus search immediately on a
  * pointer host (never gated on forge loading), ↑/↓, Enter, Escape.
+ *
+ * The picker is composed whether or not it is [expanded], so a clone/create that lands AFTER a
+ * dismiss is dropped rather than silently rewriting the launcher's workdir.
  *
  * @param actions the launcher's broker seam — `validatePath`, `listForges`, `searchForge`,
  *   `cloneForge`, `createLocalRepo`, `createForge`.
@@ -160,8 +169,11 @@ fun ProjectPicker(
     useDropdownMenu: Boolean = true,
 ) {
     val cs = MaterialTheme.colorScheme
-    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    /** No mouse/touchpad → the sheet. Never the width class: see the container note above. */
+    val touch = !LocalPointerAvailable.current
     val scope = rememberCoroutineScope()
+    // Read inside the resolve coroutine, which outlives a dismiss (the picker stays composed).
+    val expandedNow by rememberUpdatedState(expanded)
     val searchFocus = remember { FocusRequester() }
     var search by remember(expanded) { mutableStateOf("") }
     var validating by remember(expanded) { mutableStateOf(false) }
@@ -193,9 +205,9 @@ fun ProjectPicker(
     // Autofocus immediately when the menu opens — never wait on broker forge loading.
     // searchAutofocused is set only from onFocusChanged (real focus), not after requestFocus(),
     // so tests that see the ready tag have proof the field is focused — not a side-effect flag.
-    // A phone does NOT autofocus (Android's sheet never did): it would raise the IME over the list.
-    LaunchedEffect(expanded, compact) {
-        if (expanded && !compact) {
+    // A touch host does NOT autofocus (Android's sheet never did): it would raise the IME over the list.
+    LaunchedEffect(expanded, touch) {
+        if (expanded && !touch) {
             runCatching { searchFocus.requestFocus() }
         }
     }
@@ -304,7 +316,12 @@ fun ProjectPicker(
             try {
                 val path = block()
                 if (!path.isNullOrBlank()) {
-                    if (resolveHid) {
+                    if (!expandedNow) {
+                        // The user closed the picker while the host worked. Landing the path now
+                        // would rewrite the launcher's workdir out from under them — Android's
+                        // sheet used to be unmounted here, and desktop (which kept the picker
+                        // composed exactly as this does) really did rewrite it. Drop it.
+                    } else if (resolveHid) {
                         // User already returned to the picker — surface the path for one-click use.
                         readyPath = path
                     } else {
@@ -399,16 +416,16 @@ fun ProjectPicker(
         // siblings of a Box stack at TopStart (the old layout drew the list under the fields).
         Box(
             Modifier
-                .then(if (compact) Modifier.fillMaxWidth() else Modifier.width(Size.omniboxWidth))
+                .then(if (touch) Modifier.fillMaxWidth() else Modifier.width(Size.omniboxWidth))
                 .focusable()
                 .onPreviewKeyEvent { onOmniboxKey(it) }
                 .testTag("launcher_omnibox_root"),
         ) {
-            Column(Modifier.padding(bottom = if (compact) Space.xl else Space.sm)) {
+            Column(Modifier.padding(bottom = if (touch) Space.xl else Space.sm)) {
             // ── Single search field ──
             Column(Modifier.padding(horizontal = Space.md, vertical = Space.xs)) {
                 // Android's sheet named itself; a dropdown anchored under the heading does not.
-                if (compact) {
+                if (touch) {
                     Text(
                         "Project",
                         color = cs.onSurface,
@@ -576,14 +593,13 @@ fun ProjectPicker(
             } else if (!nothing || showTypedPath || locals.isNotEmpty() || cloudGroups.isNotEmpty() ||
                 creates.isNotEmpty() || searching || hasMoreCloud
             ) {
-            Column(
-                Modifier
-                    .heightIn(max = if (compact) Size.omniboxSheetListMax else Size.omniboxListMax)
-                    .verticalScroll(rememberScrollState())
-                    .testTag("launcher_omnibox_list"),
-            ) {
+            // The rows, keyed. A touch host scrolls them in a LazyColumn (Android's sheet did,
+            // and a forge search can be hundreds of repos under a thumb); the desktop menu keeps
+            // its plain scrolling Column so `performScrollTo` and the dropdown sizing are unchanged.
+            val rows = buildList<Pair<String, @Composable () -> Unit>> {
                 // "Use this path" — first row when the query is a free path.
                 if (showTypedPath) {
+                    add("typed" to {
                     val hi = highlight == 0 && navTargets.firstOrNull() is OmniNav.TypedPath
                     DropdownMenuItem(
                         text = {
@@ -620,9 +636,11 @@ fun ProjectPicker(
                             ),
                         onClick = { confirmTypedPath() },
                     )
+                    })
                 }
 
                 if (locals.isNotEmpty()) {
+                    add("h_projects" to {
                     Text(
                         "Projects",
                         color = cs.onSurfaceVariant,
@@ -633,7 +651,9 @@ fun ProjectPicker(
                             vertical = Space.xs,
                         ),
                     )
+                    })
                     locals.forEach { o ->
+                        add("l_${o.path}" to {
                         val selected = o.path == current
                         val navIndex = navTargets.indexOfFirst {
                             it is OmniNav.Local && it.path == o.path
@@ -683,10 +703,12 @@ fun ProjectPicker(
                                 ),
                             onClick = { pick(o.path) },
                         )
+                        })
                     }
                 }
 
                 cloudGroups.forEach { (conn, repos) ->
+                    add("h_${conn.id}" to {
                     Text(
                         "${conn.host} · @${conn.account.login}",
                         color = cs.onSurfaceVariant,
@@ -696,7 +718,9 @@ fun ProjectPicker(
                             .padding(horizontal = Space.xl - Space.xs, vertical = Space.xs)
                             .testTag("forge_group_${conn.id}"),
                     )
+                    })
                     repos.forEach { repo ->
+                        add("c_${conn.id}_${repo.fullName}" to {
                         val navIndex = navTargets.indexOfFirst {
                             it is OmniNav.Clone && it.repo.fullName == repo.fullName &&
                                 it.repo.connectionId == repo.connectionId
@@ -759,10 +783,12 @@ fun ProjectPicker(
                                 }
                             },
                         )
+                        })
                     }
                 }
 
                 if (hasMoreCloud && !searching) {
+                    add("load_more" to {
                     TextButton(
                         onClick = {
                             cloudVisible += FORGE_OMNIBOX_PAGE_SIZE
@@ -778,9 +804,11 @@ fun ProjectPicker(
                             style = MaterialTheme.typography.labelLarge,
                         )
                     }
+                    })
                 }
 
                 if (searching && cloudGroups.isEmpty()) {
+                    add("searching" to {
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -800,9 +828,11 @@ fun ProjectPicker(
                             style = MaterialTheme.typography.labelLarge,
                         )
                     }
+                    })
                 }
 
                 if (creates.isNotEmpty()) {
+                    add("h_create" to {
                     Text(
                         "Create",
                         color = cs.onSurfaceVariant,
@@ -813,7 +843,9 @@ fun ProjectPicker(
                             vertical = Space.xs,
                         ),
                     )
+                    })
                     creates.forEach { c ->
+                        add("cr_${c.createTarget}" to {
                         val navIndex = navTargets.indexOfFirst {
                             it is OmniNav.Create && it.target == c.createTarget
                         }
@@ -849,9 +881,31 @@ fun ProjectPicker(
                                 }
                             },
                         )
+                        })
                     }
                 }
-            } // list Column
+            }
+
+            val listMax = if (touch) Size.omniboxSheetListMax else Size.omniboxListMax
+            if (touch) {
+                LazyColumn(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = listMax)
+                        .testTag("launcher_omnibox_list"),
+                ) {
+                    items(rows, key = { it.first }) { it.second() }
+                }
+            } else {
+                Column(
+                    Modifier
+                        .heightIn(max = listMax)
+                        .verticalScroll(rememberScrollState())
+                        .testTag("launcher_omnibox_list"),
+                ) {
+                    rows.forEach { it.second() }
+                }
+            } // list
             } // else: has rows to show
             } // content Column (fields + list); resolving overlay is a Box sibling
 
@@ -908,7 +962,7 @@ fun ProjectPicker(
         }
     }
 
-    if (compact) {
+    if (touch) {
         if (expanded) {
             val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
