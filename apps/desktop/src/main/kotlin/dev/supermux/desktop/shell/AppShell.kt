@@ -811,7 +811,14 @@ fun AppShell(
             val usagePopoverBody: @Composable () -> Unit = {
                 Column(Modifier.fillMaxWidth()) {
                     HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
-                    UsageScreen(actions = usageActions, onBack = { ui.closeUsage() })
+                    UsageScreen(
+                        actions = usageActions,
+                        onBack = { ui.closeUsage() },
+                        // The popover owns this surface's chrome (the ✕ + the HostScopePicker
+                        // above), so the screen must not paint Android's TopAppBar even when the
+                        // desktop window is narrowed into the Compact width class.
+                        topBarShown = true,
+                    )
                 }
             }
 
@@ -1344,6 +1351,10 @@ fun AppShell(
                                     loadLogs = { hostApp.archivedLogs(it) },
                                     forceOpenId = ui.forceArchivedOpenFor,
                                     onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
+                                    // Same as the usage popover: this overlay paints the
+                                    // HostScopePicker and closes with Esc / the shell's own back,
+                                    // so a narrow desktop window must not grow a phone top bar.
+                                    topBarShown = true,
                                 )
                             }
                         }

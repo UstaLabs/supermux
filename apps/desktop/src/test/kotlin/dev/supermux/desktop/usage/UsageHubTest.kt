@@ -64,11 +64,37 @@ class UsageHubTest {
         tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
     }
 
-    /** A [HostStore] whose HTTP serves GET /usage + POST /usage/codex/reset. */
+    /**
+     * A [HostStore] whose HTTP serves GET /usage + POST /usage/codex/reset.
+     *
+     * GET /usage is STATEFUL since cluster E6: the screen re-fetches after a successful redeem
+     * (`UsageActions.load`, restoring Android's post-redeem refresh for the providers the in-place
+     * Codex swap does not touch), so the second GET has to answer with the redeemed numbers the
+     * way a real broker would — otherwise the test would be asserting that a redeem is undone.
+     */
     private fun appForUsage(initialResetCredits: Int = 3, redeemedResetCredits: Int = 2): HostStore {
+        var redeemed = false
         val engine = MockEngine { req ->
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when {
+                req.method == HttpMethod.Get && req.url.encodedPath == "/usage" && redeemed -> respond(
+                    """
+                    {
+                      "claude": {"fiveHour": {"used": 12.0}, "sevenDay": {"used": 40.0}},
+                      "codex": {
+                        "plan": "pro",
+                        "windows": [
+                          {"used": 0.0, "label": "5-hour window", "windowSeconds": 18000.0},
+                          {"used": 1.0, "label": "7-day window", "windowSeconds": 604800.0}
+                        ],
+                        "limitReached": false,
+                        "resetCredits": $redeemedResetCredits
+                      },
+                      "cursor": {"totalPercentUsed": 20.0, "totalSpendCents": 500.0, "includedCents": 2000.0, "limitCents": 2500.0, "spendAvailable": true}
+                    }
+                    """.trimIndent(),
+                    HttpStatusCode.OK, jsonHeaders,
+                )
                 req.method == HttpMethod.Get && req.url.encodedPath == "/usage" -> respond(
                     """
                     {
@@ -87,7 +113,9 @@ class UsageHubTest {
                     """.trimIndent(),
                     HttpStatusCode.OK, jsonHeaders,
                 )
-                req.method == HttpMethod.Post && req.url.encodedPath == "/usage/codex/reset" -> respond(
+                req.method == HttpMethod.Post && req.url.encodedPath == "/usage/codex/reset" -> {
+                    redeemed = true
+                    respond(
                     """
                     {
                       "code": "reset",
@@ -103,8 +131,9 @@ class UsageHubTest {
                       }
                     }
                     """.trimIndent(),
-                    HttpStatusCode.OK, jsonHeaders,
-                )
+                        HttpStatusCode.OK, jsonHeaders,
+                    )
+                }
                 else -> respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
             }
         }
@@ -185,9 +214,9 @@ class UsageHubTest {
         waitForIdle()
         onNodeWithTag("codex_redeem_confirm").performClick()
         waitForIdle()
-        // After a code=="reset" redeem: AppShell swapped in the refreshed CodexUsage — the
-        // window resets to 0% used and the banked-reset count drops from 3 to 2, all WITHOUT a
-        // second GET /usage (the card updated "in place"). The inline note survives the swap too.
+        // After a code=="reset" redeem: `UsageActions.redeem` swapped in the refreshed CodexUsage
+        // — the window resets to 0% used and the banked-reset count drops from 3 to 2, in place
+        // and before the follow-up GET /usage lands. The inline note survives both.
         onNodeWithText("0% used").assertIsDisplayed()
         onNodeWithText("2").assertIsDisplayed()
         onNodeWithText("30% used").assertDoesNotExist()

@@ -399,6 +399,23 @@ class ArchivedScreenTest {
         onNodeWithTag("archived_filter").assertExists() // desktop's in-body header row instead
     }
 
+    @Test fun a_pointer_host_that_owns_its_chrome_gets_no_bar_even_when_compact() = runComposeUiTest {
+        // Desktop narrowed below 600dp: the archived overlay already paints the host picker and
+        // closes with Esc, so the screen must stay on its in-body header, not grow a phone bar.
+        archivedContent(pointer = true, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(
+                    fakeArchived, home, onBack = {}, onResume = {}, loadLogs = { emptyList() },
+                    topBarShown = true,
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("archived_back").assertDoesNotExist()
+        onNodeWithTag("archived_filter").assertExists()
+        onNodeWithTag("archived_search").assertExists()
+    }
+
     @Test fun touch_rows_carry_a_resume_button_pointers_do_not() = runComposeUiTest {
         var resumed: String? = null
         archivedContent(pointer = false) {

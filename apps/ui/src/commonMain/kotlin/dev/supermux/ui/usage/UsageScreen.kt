@@ -6,8 +6,9 @@
 // Android's `MoreScreens.kt` Usage section contributes the Compact branch — its `TopAppBar` with
 // Back + Refresh — and, with this task, LOSES its hand-written JSON parser: Android's `parseUsage`,
 // its nine private data classes and the `usageRaw()` wrapper that fed them are gone; the shared
-// typed DTOs already carry every field they had. Android's post-redeem re-fetch survives as [UsageActions.refresh] being
-// re-run by the stateful overload.
+// typed DTOs already carry every field they had. Android's post-redeem re-fetch survives too: the
+// stateful overload wires `onRedeemed` to [UsageActions.load], so the providers the in-place Codex
+// swap does not touch still pick up their post-redeem numbers.
 //
 // Time: `java.time` cannot come into `:ui` commonMain, so the formatters take epoch millis and the
 // only calendar step — "Jul 14" in the user's zone — is `:shared`'s [shortMonthDayLabel], which is
@@ -86,7 +87,7 @@ import dev.supermux.util.shortMonthDayLabel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.round
+import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.time.Clock
 
@@ -156,14 +157,17 @@ private fun formatResetFromEpochMillis(ms: Long, now: Long): String {
 private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
 
 /**
- * `"%.<decimals>f"` without `java.util.Formatter`: half-away-from-zero on the scaled magnitude,
- * which is what `String.format(Locale.US, "%.2f", …)` produced for every value these cards show.
+ * `"%.<decimals>f"` without `java.util.Formatter`.
+ *
+ * HALF_UP on the magnitude — an exact midpoint rounds AWAY from zero — because that is what
+ * `String.format(Locale.US, "%.2f", …)` did for every value these cards show. Note this is NOT
+ * `kotlin.math.round`, which is ties-to-even (`0.125` would come out `0.12`).
  */
 internal fun fixed(v: Double, decimals: Int): String {
     if (v.isNaN() || v.isInfinite()) return v.toString()
     var scale = 1L
     repeat(decimals) { scale *= 10L }
-    val scaled = round(abs(v) * scale).toLong()
+    val scaled = floor(abs(v) * scale + 0.5).toLong()
     val whole = scaled / scale
     val frac = scaled % scale
     val sign = if (v < 0 && scaled != 0L) "-" else ""
@@ -380,7 +384,7 @@ fun CodexUsageCard(
         } else {
             codex.windows.forEach { window ->
                 UsageWindowRow(
-                    window.label,
+                    window.label.ifBlank { "Usage window" },
                     window.used,
                     formatResetEpochSeconds(window.resetsAt, now),
                 )
@@ -622,6 +626,7 @@ fun UsageScreen(
     now: Long = nowMs(),
 ) {
     val usage by actions.snapshot.collectAsState()
+    val scope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(false) }
     LaunchedEffect(actions) {
         loading = actions.snapshot.value == null
@@ -633,6 +638,10 @@ fun UsageScreen(
         loading = loading,
         onBack = onBack,
         onRedeem = actions.redeem,
+        // Android re-fetched the WHOLE payload after a redeem; the holder's `redeem` only swaps
+        // the refreshed Codex block into the held snapshot, so the other providers would keep
+        // showing pre-redeem numbers without this.
+        onRedeemed = { scope.launch { actions.load() } },
         onRefresh = {
             loading = actions.snapshot.value == null
             actions.refresh()

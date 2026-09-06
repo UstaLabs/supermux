@@ -6,6 +6,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -472,6 +473,92 @@ class UsageScreenTest {
         // Falls back to the in-card header row (which still carries close + refresh tags).
         onNodeWithTag("usage_screen").assertExists()
         onNodeWithTag("usage_back").assertExists()
+    }
+
+    @Test fun a_pointer_host_that_owns_its_chrome_gets_no_bar_even_when_compact() = runComposeUiTest {
+        // Desktop narrowed below 600dp: the popover already paints the ✕ and the host picker, so
+        // the screen must stay on its in-card header instead of growing Android's TopAppBar.
+        usageContent(pointer = true, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null },
+                    onRefresh = {},
+                    topBarShown = true,
+                )
+            }
+        }
+        waitForIdle()
+        // The in-card header row is the one that carries a Close (not Back) description.
+        onNodeWithContentDescription("Close").assertExists()
+        onNodeWithContentDescription("Back").assertDoesNotExist()
+    }
+
+    @Test fun a_window_with_no_label_falls_back_to_usage_window() = runComposeUiTest {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(
+                        codexWindows = listOf(
+                            CodexWindow(id = "primary", used = 30.0, resetsAt = null, label = "", windowSeconds = null),
+                        ),
+                    ),
+                    loading = false, onBack = {}, onRedeem = { null },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Usage window").assertExists()
+    }
+
+    @Test fun the_actions_overload_re_fetches_after_a_redeem() = runComposeUiTest {
+        val snapshot = MutableStateFlow<UsageResponse?>(fixtureUsage())
+        var loads = 0
+        val actions = UsageActions(
+            snapshot = snapshot,
+            load = { loads++; snapshot.value },
+            refresh = { snapshot.value },
+            redeem = { CodexResetResult(code = "reset", windowsReset = 1) },
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(actions = actions, onBack = {})
+            }
+        }
+        waitForIdle()
+        assertEquals(1, loads) // the load-on-open
+        onNodeWithTag("codex_redeem_button").performClick()
+        waitForIdle()
+        onNodeWithTag("codex_redeem_confirm").performClick()
+        waitForIdle()
+        // The holder's redeem only swaps the Codex block in place; the other providers pick their
+        // post-redeem numbers up from this re-fetch (Android's behaviour).
+        assertEquals(2, loads)
+        onNodeWithTag("codex_redeem_note").assertIsDisplayed()
+    }
+
+    // ── (8) NEW: the pure 2-decimal formatter behind money()/dollars() ──────────────────────────
+
+    @Test fun fixed_matches_the_locale_us_percent_f_output_it_replaced() {
+        assertEquals("0.00", fixed(0.0, 2))
+        assertEquals("5.00", fixed(5.0, 2))
+        assertEquals("0.10", fixed(0.1, 2))
+        assertEquals("12.35", fixed(12.345678, 2))
+        assertEquals("-3.50", fixed(-3.5, 2))
+        assertEquals("1000000.00", fixed(1_000_000.0, 2))
+        // HALF_UP on the magnitude, the rule `String.format(Locale.US, "%.2f", …)` used: an exact
+        // binary midpoint rounds AWAY from zero, not to even.
+        assertEquals("0.13", fixed(0.125, 2))
+        assertEquals("-0.13", fixed(-0.125, 2))
+        // One decimal — the token abbreviations.
+        assertEquals("1.2", fixed(1.234, 1))
+        // The rule is HALF_UP applied to the value SCALED IN BINARY, which is not always what
+        // Java's `%.1f` (HALF_UP over the double's exact decimal expansion) says: 34.55 is really
+        // 34.549999999999997, but `* 10` rounds to exactly 345.5, so this goes up where
+        // `String.format` went down. One ulp on a token abbreviation; the alternative is decimal
+        // arithmetic in commonMain for no visible gain.
+        assertEquals("34.6", fixed(34.55, 1))
+        // A zero that rounds from a negative keeps no sign.
+        assertEquals("0.00", fixed(-0.001, 2))
     }
 
     @Test fun touch_header_actions_are_at_least_48dp() = runComposeUiTest {

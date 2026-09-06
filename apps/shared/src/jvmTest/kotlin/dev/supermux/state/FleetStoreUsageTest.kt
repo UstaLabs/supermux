@@ -134,6 +134,41 @@ class FleetStoreUsageTest {
         fleet.close()
     }
 
+    @Test fun forgetting_a_host_prunes_its_usage_snapshot() = runTest(UnconfinedTestDispatcher()) {
+        val fleet = fleetOf(this, hostA, hostB)
+        fleet.setActiveHost("h1")
+        fleet.usage()
+        advanceUntilIdle()
+        assertEquals(12.0, fleet.usageSnapshot.value?.claude?.fiveHour?.used)
+
+        fleet.forgetHost("h1")
+        advanceUntilIdle()
+        // h1's cached usage went with it; the snapshot now follows whatever host is left (h2),
+        // which has not fetched — NOT h1's stale numbers.
+        assertNull(fleet.usageSnapshot.value)
+        fleet.setActiveHost("h2")
+        fleet.usage()
+        advanceUntilIdle()
+        assertEquals(77.0, fleet.usageSnapshot.value?.claude?.fiveHour?.used)
+        fleet.close()
+    }
+
+    @Test fun a_snapshot_is_filed_against_the_host_the_fetch_started_on() =
+        runTest(UnconfinedTestDispatcher()) {
+            val fleet = fleetOf(this, hostA, hostB)
+            fleet.setActiveHost("h1")
+            fleet.usage()
+            advanceUntilIdle()
+            // Switch AFTER the fetch resolved: h1's numbers must not have been filed under h2.
+            fleet.setActiveHost("h2")
+            advanceUntilIdle()
+            assertNull(fleet.usageSnapshot.value)
+            fleet.setActiveHost("h1")
+            advanceUntilIdle()
+            assertEquals(12.0, fleet.usageSnapshot.value?.claude?.fiveHour?.used)
+            fleet.close()
+        }
+
     @Test fun usage_with_no_paired_host_is_null_not_a_crash() = runTest(UnconfinedTestDispatcher()) {
         val fleet = fleetOf(this)
         assertNull(fleet.usage())

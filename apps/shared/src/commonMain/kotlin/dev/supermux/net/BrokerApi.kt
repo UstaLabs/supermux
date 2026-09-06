@@ -421,7 +421,10 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
-    val errors: Map<String, String> = emptyMap(),
+    /** Per-provider failure text. Values are nullable: the broker records a null for a provider
+     *  it could not reach without a message, and a null map VALUE is not something
+     *  `coerceInputValues` can rescue (it only defaults properties). */
+    val errors: Map<String, String?> = emptyMap(),
     /** ISO timestamp of when each provider's data was last obtained. Absent on older brokers. */
     val fetchedAt: Map<String, String?> = emptyMap(),
     /** live | agent | local | cache — where each provider's current data came from. */
@@ -1150,7 +1153,18 @@ class BrokerApi(
 
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    //
+    // coerceInputValues=true (cluster E6): an explicit `null` on a non-nullable field falls back to
+    // that field's DEFAULT instead of throwing. Every DTO in this file declares defaults, so this
+    // only ever turns "one null field aborts the whole decode" into "that field reads as its
+    // default" — the per-field leniency Android's hand-written usage parser had, and which the
+    // typed decode has to keep now that it replaced it (a broker sending `"plan": null` must not
+    // blank the entire Usage screen). It does not loosen type mismatches.
+    private val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        coerceInputValues = true
+    }
     internal var spawnTimeoutMillis: Long = 50_000
 
     // ── helpers ──────────────────────────────────────────────────────────────
