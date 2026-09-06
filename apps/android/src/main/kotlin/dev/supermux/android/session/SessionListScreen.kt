@@ -55,6 +55,8 @@ import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.theme.softElevation
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.ui.session.SessionListActions
+import kotlinx.coroutines.launch
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.inferHomeDir
 import dev.supermux.session.groupSessions
@@ -96,23 +98,14 @@ fun relTime(ts: String?): String {
     }
 }
 
-// Collapsed project-group state, persisted across launches. Keyed by each group's
-// `workdir` (the PA group uses the "__pas__" sentinel), mirroring the iOS session
-// list's `cmux:collapsed-paths` UserDefaults set so the two platforms behave alike.
-private const val COLLAPSE_PREFS = "cmux-session-list"
-private const val COLLAPSE_KEY = "collapsed-paths"
-
-private fun loadCollapsedPaths(ctx: Context): Set<String> =
-    ctx.getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
-        .getStringSet(COLLAPSE_KEY, emptySet())
-        ?.toSet() ?: emptySet()
-
-private fun saveCollapsedPaths(ctx: Context, paths: Set<String>) {
-    ctx.getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putStringSet(COLLAPSE_KEY, paths)
-        .apply()
-}
+// Collapsed project-group state moved to the SHARED settings store in cluster F1
+// (`SettingsKeys.SESSION_LIST_COLLAPSED_PATHS` through `UiPrefs`) — the same key desktop's sidebar
+// writes. It arrives as [SessionListScreen]'s `initialCollapsedPaths` (read synchronously in
+// `MainActivity.onCreate`, so no frame paints a collapsed group expanded) and leaves through
+// `onCollapsedPathsChange`. `cmux-session-list` still holds the group-by-project toggle, and is
+// read once more by `SessionPrefsMigration` to drain the old collapsed set.
+internal const val COLLAPSE_PREFS = "cmux-session-list"
+internal const val COLLAPSE_KEY = "collapsed-paths"
 
 private fun groupedRowShape(first: Boolean, last: Boolean): Shape = RoundedCornerShape(
     topStart = if (first) Radii.lg else 0.dp,
@@ -434,30 +427,27 @@ fun SessionListScreen(
     lastRead: Map<String, String> = emptyMap(),
     agentState: Map<String, dev.supermux.proto.AgentStatus?> = emptyMap(),
     onNewSession: () -> Unit = {},
-    loadProjects: suspend () -> List<String> = { emptyList() },
-    validatePath: suspend (String) -> dev.supermux.net.PathValidation? = { null },
+    /** Every broker call this screen makes (cluster F1) — see `ui/session/SessionActions.kt`. */
+    actions: SessionListActions = SessionListActions(),
     onNavigate: (String) -> Unit = {},
-    onRename: (String, String) -> Unit = { _, _ -> },
-    onKill: (String) -> Unit = {},
-    onMute: (String, Boolean) -> Unit = { _, _ -> },
     /** Archived sessions folded into Settled (web task-list parity). */
     archived: List<ArchivedDto> = emptyList(),
-    onResume: (String) -> Unit = {},
     onOpenDraft: (String) -> Unit = {},
     onReorder: (List<String>) -> Unit = {},
     workspaces: List<WorkspaceDto> = emptyList(),
     archivedWorkspaces: List<WorkspaceDto> = emptyList(),
-    onArchiveWorkspace: (String) -> Unit = {},
-    onRestoreWorkspace: (String) -> Unit = {},
     onNewChatInWorkspace: (WorkspaceDto) -> Unit = {},
+    /** Fires after a row's kill lands — the phone host prunes its keep-alive layer here. */
+    onKilled: (String) -> Unit = {},
+    /** Collapsed project groups, read from the shared store before the first frame. */
+    initialCollapsedPaths: Set<String> = emptySet(),
+    onCollapsedPathsChange: (Set<String>) -> Unit = {},
     // ── Multi-host (spec §5). All default-empty so single-host callers render exactly as before. ──
     hosts: List<dev.supermux.host.HostView> = emptyList(),
     sessionHost: Map<String, String> = emptyMap(),
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
-    onRenameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
-    onForgetHost: (recordId: String) -> Unit = {},
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
     /**
@@ -514,10 +504,24 @@ fun SessionListScreen(
     val dragWorkingState = remember { SessionDragWorkingState() }
     val haptic = rememberHaptics()
 
-    // Which project groups are collapsed (keyed by group workdir), restored from and
-    // written back to SharedPreferences so the choice survives app restarts.
+    // Cluster F1: the screen's broker calls arrive in ONE holder. These aliases keep the (large,
+    // untouched) body below reading exactly as it did — F4 rewrites this screen for real.
+    val listScope = rememberCoroutineScope()
+    val onRename: (String, String) -> Unit = actions.rename
+    val onKill: (String) -> Unit = { id -> actions.kill(id) { onKilled(id) } }
+    val onMute: (String, Boolean) -> Unit = actions.setMute
+    // `resume` is suspend since F1 retyped the fleet's to desktop's shape; the launch is scoped to
+    // this composition, which is where the fire-and-forget it replaced already lived.
+    val onResume: (String) -> Unit = { id -> listScope.launch { actions.resume(id) } }
+    val onArchiveWorkspace: (String) -> Unit = actions.archiveWorkspace
+    val onRestoreWorkspace: (String) -> Unit = actions.restoreWorkspace
+    val onRenameHost: (String, String) -> Unit = actions.renameHost
+    val onForgetHost: (String) -> Unit = actions.forgetHost
+
+    // Which project groups are collapsed (keyed by group workdir). Seeded by the caller from the
+    // shared settings store and written back through [onCollapsedPathsChange].
     val ctx = LocalContext.current
-    var collapsedPaths by remember { mutableStateOf(loadCollapsedPaths(ctx)) }
+    var collapsedPaths by remember { mutableStateOf(initialCollapsedPaths) }
     // Group-by-project toggle (web layout.groupByProject). Default false — flat list.
     var groupByProject by remember {
         mutableStateOf(
@@ -998,7 +1002,7 @@ fun SessionListScreen(
                                         } else {
                                             collapsedPaths + g.key
                                         }
-                                        saveCollapsedPaths(ctx, collapsedPaths)
+                                        onCollapsedPathsChange(collapsedPaths)
                                     },
                                 )
                             }
@@ -1186,7 +1190,7 @@ fun SessionListScreen(
                                     } else {
                                         collapsedPaths + g.workdir
                                     }
-                                    saveCollapsedPaths(ctx, collapsedPaths)
+                                    onCollapsedPathsChange(collapsedPaths)
                                 },
                             )
                         }

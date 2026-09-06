@@ -4,6 +4,7 @@ import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.theme.AppearanceMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -106,6 +107,26 @@ class AppearancePrefsMigrationTest {
 
     @Test fun the_seed_falls_back_to_the_host_default_with_nothing_stored_anywhere() = runTest {
         val seed = seedAppearancePrefs(MemStore(), LegacyAppearancePrefs())
+        assertEquals(AppearanceMode.SYSTEM, seed.appearance)
+        assertEquals(1f, seed.textScale)
+    }
+
+    /**
+     * A corrupt/unreadable DataStore must NOT take `onCreate` down with it (E7 re-review minor):
+     * the seed runs under `runBlocking` before `setContent`, so an exception escaping the MIGRATION
+     * — not just the reads — would be a launch crash instead of a wrong-looking theme.
+     */
+    @Test fun a_throwing_store_degrades_to_the_default_instead_of_crashing_onCreate() = runTest {
+        val broken = object : SettingsStore {
+            // Throws on COLLECTION, the way a DataStore read actually fails (its flow is built
+            // eagerly by `UiPrefs`, so a constructor-time throw would not be the real shape).
+            override fun string(key: String): Flow<String?> = flow { throw IllegalStateException("corrupt DataStore") }
+            override suspend fun putString(key: String, value: String?) = Unit
+        }
+        val seed = seedAppearancePrefs(
+            broken,
+            LegacyAppearancePrefs(appearance = "LIGHT", textScale = 1.2f),
+        )
         assertEquals(AppearanceMode.SYSTEM, seed.appearance)
         assertEquals(1f, seed.textScale)
     }

@@ -247,6 +247,45 @@ class AppearanceSettingsScreenTest {
         waitForIdle()
         onNodeWithTag("appearance_text_scale_value").assertTextEquals("90%")
     }
+
+    /**
+     * E7 re-review minor: a drag that ENDS on the stored value writes nothing, so the effect that
+     * normally drops the local override never fires — without an explicit clear the screen would
+     * be stuck on its own value and stop following changes made anywhere else, for good.
+     *
+     * The store here drops its writes (a failing DataStore) purely so the drag can be made to land
+     * back on the unchanged stored value; the assertion is about the local override's lifecycle.
+     */
+    @Test fun a_drag_that_ends_on_the_stored_value_drops_the_local_override() = runComposeUiTest {
+        val store = DroppingSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { AppearanceSettingsScreen() }
+        waitForIdle()
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("100%")
+
+        // Drag away — the write is dropped, so only the LOCAL value moves.
+        onNodeWithTag("appearance_text_scale_slider")
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(1.3f) }
+        waitForIdle()
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("130%")
+
+        // …and back onto the stored value: nothing to persist, so the override must be cleared.
+        onNodeWithTag("appearance_text_scale_slider")
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(1f) }
+        waitForIdle()
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("100%")
+
+        // Proof it was cleared: an outside change still reaches the screen.
+        store.map.value = mapOf(SettingsKeys.TEXT_SCALE to "0.9")
+        waitForIdle()
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("90%")
+    }
+}
+
+/** A store whose writes never land — stands in for a DataStore that cannot persist. */
+private class DroppingSettingsStore : SettingsStore {
+    val map = MutableStateFlow<Map<String, String>>(emptyMap())
+    override fun string(key: String): Flow<String?> = map.map { it[key] }
+    override suspend fun putString(key: String, value: String?) = Unit
 }
 
 /** [FakeSettingsStore] that counts writes, so "once per drag" is assertable. */

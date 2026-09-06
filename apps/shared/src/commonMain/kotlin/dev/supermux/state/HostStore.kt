@@ -616,34 +616,9 @@ class HostStore(
 
     fun draft(sessionId: String): Flow<String?> = deps.settings.string(SettingsKeys.draft(sessionId))
 
-    fun saveLauncherPrefs(prefs: LauncherPrefs) {
-        stateScope.launch {
-            deps.settings.putString(SettingsKeys.LAUNCHER_PREFS, settingsJson.encodeToString(prefs))
-        }
-    }
-
-    val launcherPrefs: Flow<LauncherPrefs> =
-        deps.settings.string(SettingsKeys.LAUNCHER_PREFS).map { raw ->
-            raw?.let { runCatching { settingsJson.decodeFromString<LauncherPrefs>(it) }.getOrNull() }
-                ?: LauncherPrefs()
-        }
-
-    fun saveLauncherDraft(draft: LauncherDraft) {
-        stateScope.launch {
-            val encoded = if (draft == LauncherDraft()) null else settingsJson.encodeToString(draft)
-            deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, encoded)
-        }
-    }
-
-    val launcherDraft: Flow<LauncherDraft> =
-        deps.settings.string(SettingsKeys.LAUNCHER_DRAFT).map { raw ->
-            raw?.let { runCatching { settingsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() }
-                ?: LauncherDraft()
-        }
-
-    fun clearLauncherDraft() {
-        stateScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, null) }
-    }
+    // The launcher's prefs/draft used to live here as well as on [FleetStore], over the SAME two
+    // settings keys. Cluster F1 gave them ONE owner — `dev.supermux.ui.prefs.UiPrefs` — so the
+    // shared launcher reads and writes them without asking which store it was handed.
 
     // ── Session controls (HTTP via BrokerApi) ───────────────────────────────────────
 

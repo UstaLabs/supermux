@@ -152,6 +152,7 @@ import kotlinx.coroutines.launch
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicLong
 import dev.supermux.ui.session.AgentLogo
+import dev.supermux.ui.session.LauncherActions
 import dev.supermux.ui.session.hasAgentLogo
 
 /** Sentinel id for the "Default" (null-model) row in the model picker — maps back to a null model. */
@@ -231,12 +232,8 @@ fun SessionLauncherScreen(
     onBack: () -> Unit,
     /** Last message per session — drives most-recent-project default (web chooseDefaultProject). */
     lastBySession: Map<String, LogEntry?> = emptyMap(),
-    loadProjects: suspend () -> List<String>,
-    validatePath: suspend (String) -> PathValidation?,
-    loadModels: suspend (agent: String) -> List<ModelInfo>,
-    loadReasoningLevels: suspend (agent: String, model: String?) -> ReasoningResponse?,
-    /** `fetch=true` refreshes origin remote-tracking refs (once per repo on dialog open). */
-    loadRepoInfo: suspend (workdir: String, fetch: Boolean) -> RepoInfo?,
+    /** Every broker call this screen makes (cluster F1) — see `ui/session/SessionActions.kt`. */
+    actions: LauncherActions = LauncherActions(),
     loadPrefs: suspend () -> LauncherPrefs,
     onPrefsChange: (LauncherPrefs) -> Unit,
     loadDraft: suspend () -> LauncherDraft,
@@ -270,21 +267,11 @@ fun SessionLauncherScreen(
     initialWorkdir: String? = null,
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
-    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
     /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
     micCapture: MicCapture? = null,
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
     hosts: List<HostView> = emptyList(),
     selectedHost: String? = null,
-    onSelectHost: (String) -> Unit = {},
-    loadAgents: suspend () -> List<String> = { emptyList() },
-    // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
-    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
-    /** Null response = search failed (distinguishable from empty success). */
-    searchForge: suspend (query: String) -> ForgeSearchResponse? = { ForgeSearchResponse() },
-    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
-    createLocalRepo: suspend (name: String) -> String? = { null },
-    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -337,7 +324,7 @@ fun SessionLauncherScreen(
     LaunchedEffect(selectedHost, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         agents = listOf("claude", "codex", "cursor", "opencode", "grok")
-        val fetched = loadAgents()
+        val fetched = actions.launcherAgents()
         if (fetched.isNotEmpty()) {
             agents = fetched
             if (agent !in fetched) agent = fetched.first()
@@ -348,7 +335,7 @@ fun SessionLauncherScreen(
     LaunchedEffect(selectedHost, agent, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         models = emptyList()
-        val loadedModels = loadModels(agent)
+        val loadedModels = actions.launcherModels(agent)
         models = loadedModels
         if (model != null && loadedModels.none { it.id == model }) model = null
         if (shouldResetModelOnAgentChange(lastSeenAgent, agent, launcherRestoring)) model = null
@@ -361,7 +348,7 @@ fun SessionLauncherScreen(
     var reasoningVisible by remember { mutableStateOf(false) }
     LaunchedEffect(selectedHost, agent, model, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        val resp = loadReasoningLevels(agent, model)
+        val resp = actions.launcherReasoning(agent, model)
         val levels = resp?.levels ?: emptyList()
         reasoningLevels = levels
         reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
@@ -379,7 +366,7 @@ fun SessionLauncherScreen(
         if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
         val switchedRepoHost = lastRepoHost != null && lastRepoHost != selectedHost
         if (switchedRepoHost) fetchedRepos = emptySet()
-        val info = if (workdir.isBlank()) null else loadRepoInfo(workdir, false)
+        val info = if (workdir.isBlank()) null else actions.launcherRepoInfo(workdir, false)
         repoInfo = info
         lastRepoHost = selectedHost
         if (switchedRepoHost || shouldResetBaseBranchOnWorkdirChange(lastSeenWorkdir, workdir, baseBranch, launcherRestoring)) {
@@ -393,7 +380,7 @@ fun SessionLauncherScreen(
         val root = repoInfo?.repoRoot
         val shouldFetch = root != null && root !in fetchedRepos
         worktreeFetching = shouldFetch
-        val fresh = loadRepoInfo(workdir, shouldFetch)
+        val fresh = actions.launcherRepoInfo(workdir, shouldFetch)
         if (fresh != null) {
             repoInfo = fresh
             if (baseBranch.isBlank()) baseBranch = fresh.currentBranch.orEmpty()
@@ -471,7 +458,7 @@ fun SessionLauncherScreen(
             model = null
         }
         knownProjects = emptyList()
-        knownProjects = loadProjects()
+        knownProjects = actions.listProjects()
     }
 
     val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
@@ -559,7 +546,7 @@ fun SessionLauncherScreen(
     val dictation = rememberDictation(
         resetKey = Unit,
         mic = micCapture ?: platformMic,
-        transcribeAudio = transcribeAudio,
+        transcribeAudio = actions.transcribeAudio,
         onAppend = { cleaned ->
             val sep = if (message.text.isBlank()) "" else " "
             val newText = message.text + sep + cleaned
@@ -617,7 +604,7 @@ fun SessionLauncherScreen(
         // Multi-host: which broker this session spawns on (defaults to the active host).
         if (hosts.size > 1) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                LauncherHostPicker(hosts = hosts, selected = selectedHost, enabled = !launcherRestoring, onSelect = onSelectHost)
+                LauncherHostPicker(hosts = hosts, selected = selectedHost, enabled = !launcherRestoring, onSelect = actions.setActiveHost)
             }
         }
 
@@ -657,12 +644,12 @@ fun SessionLauncherScreen(
                     current = workdir,
                     projects = projects,
                     home = home,
-                    validatePath = validatePath,
-                    loadForges = loadForges,
-                    searchForge = searchForge,
-                    cloneForge = cloneForge,
-                    createLocalRepo = createLocalRepo,
-                    createForge = createForge,
+                    validatePath = actions.validatePath,
+                    loadForges = actions.listForges,
+                    searchForge = actions.searchForge,
+                    cloneForge = actions.cloneForge,
+                    createLocalRepo = actions.createLocalRepo,
+                    createForge = actions.createForge,
                     onPick = { workdir = it; workdirTouched = true; error = null },
                     onDismiss = { projectMenu = false },
                 )

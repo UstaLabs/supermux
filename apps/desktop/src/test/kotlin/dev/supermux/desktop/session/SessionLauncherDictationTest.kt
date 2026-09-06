@@ -12,6 +12,7 @@ import dev.supermux.ui.platform.LiveTranscript
 import dev.supermux.ui.platform.MicCapture
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
+import dev.supermux.ui.session.LauncherActions
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import kotlin.test.Test
@@ -46,18 +47,13 @@ class SessionLauncherDictationTest {
                 sessions = emptyList(),
                 home = "/home/u",
                 onBack = {},
-                loadProjects = { emptyList() },
-                validatePath = { null },
-                loadModels = { emptyList() },
-                loadReasoningLevels = { _, _ -> null },
-                loadRepoInfo = { _, _ -> null },
+                actions = LauncherActions(transcribeAudio = transcribeAudio),
                 loadPrefs = { LauncherPrefs() },
                 onPrefsChange = {},
                 loadDraft = { LauncherDraft() },
                 onDraftChange = {},
                 onClearDraft = {},
                 onSubmit = { _, _, _, _, _, _, _, _, _ -> },
-                transcribeAudio = transcribeAudio,
                 micCapture = micCapture,
             )
         }

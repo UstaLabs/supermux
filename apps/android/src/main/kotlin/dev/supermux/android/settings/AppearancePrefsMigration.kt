@@ -88,7 +88,9 @@ suspend fun seedAppearancePrefs(
     legacy: LegacyAppearancePrefs,
     default: AppearanceMode = AppearanceMode.SYSTEM,
 ): AppearanceSeed {
-    migrateAppearancePrefs(settings, legacy)
+    // Inside runCatching like the reads below: a corrupt/unreadable DataStore must degrade to the
+    // app's own default, never crash `onCreate` (this runs under `runBlocking` before setContent).
+    runCatching { migrateAppearancePrefs(settings, legacy) }
     val prefs = UiPrefs(settings)
     return AppearanceSeed(
         appearance = runCatching { prefs.appearance(default).first() }.getOrDefault(default),

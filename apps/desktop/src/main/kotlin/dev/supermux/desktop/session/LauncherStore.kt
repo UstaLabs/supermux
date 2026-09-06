@@ -1,17 +1,14 @@
-// Desktop launcher prefs/draft persistence: written to `launcher-state.json` next to the token /
-// ui-state store (ShellStateStore precedent). Mirrors the
-// Android `session/LauncherState.kt` DTOs (dev.supermux.android.session.LauncherPrefs/LauncherDraft)
-// field-for-field — keep the two in sync when either changes.
+// LEGACY desktop launcher state — `launcher-state.json`, READ-ONLY since cluster F1.
 //
-// One file, not two: [LauncherPrefs] (sticky agent/model/effort choices) and [LauncherDraft]
-// (in-progress new-session text) are wrapped together in [LauncherStateBlob], the same shape
-// ShellStateStore uses for its (layout, selectedId) pair. clearDraft() resets only the draft
-// half of the blob and re-persists — prefs in the same file are untouched.
+// The launcher's prefs/draft now live in the shared settings store under
+// `SettingsKeys.LAUNCHER_PREFS` / `LAUNCHER_DRAFT` and are reached through
+// `dev.supermux.ui.prefs.UiPrefs`, the same single owner Android reads — so the shared launcher
+// does not need to know which platform persisted it.
 //
-// Unlike ShellStateStore (plain writeString — its content is not considered
-// worth crash-safety), this store atomic-writes (temp file + ATOMIC_MOVE, falling back to a plain
-// move) following DesktopTokenStore's pattern: a draft in progress is more failure-sensitive to a
-// half-written file (a crash mid-save would otherwise risk truncating the user's typed message).
+// This class survives only as the MIGRATION SOURCE: `AppShell` reads it once per launch and
+// `UiPrefs.seedLauncher` drains whatever it holds into the shared store for keys still unset
+// (one-way, idempotent, non-destructive). Nothing writes this file any more, so its atomic-write
+// path and `clearDraft` are gone with the writers; the file is dead weight after the first launch.
 package dev.supermux.desktop.session
 
 import dev.supermux.desktop.auth.DesktopTokenStore
@@ -19,10 +16,8 @@ import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 
 @Serializable
 private data class LauncherStateBlob(
@@ -45,30 +40,8 @@ class LauncherStore(val path: Path = defaultPath()) {
             }
             .getOrDefault(LauncherStateBlob())
 
-    private fun write(blob: LauncherStateBlob) {
-        Files.createDirectories(path.parent)
-        val tmp = Files.createTempFile(path.parent, "launcher", ".tmp")
-        try {
-            Files.writeString(tmp, json.encodeToString(LauncherStateBlob.serializer(), blob))
-            try {
-                Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-            } catch (e: AtomicMoveNotSupportedException) {
-                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING)
-            }
-        } finally {
-            runCatching { Files.deleteIfExists(tmp) } // only present if the move failed
-        }
-    }
-
     fun loadPrefs(): LauncherPrefs = read().prefs
-    fun savePrefs(prefs: LauncherPrefs) = write(read().copy(prefs = prefs))
-
     fun loadDraft(): LauncherDraft = read().draft
-    fun saveDraft(draft: LauncherDraft) = write(read().copy(draft = draft))
-
-    /** Resets the draft to its defaults while leaving [loadPrefs] untouched — called after a
-     *  successful session submit. */
-    fun clearDraft() = write(read().copy(draft = LauncherDraft()))
 
     companion object {
         fun defaultPath(): Path = DesktopTokenStore.defaultPath().parent.resolve("launcher-state.json")

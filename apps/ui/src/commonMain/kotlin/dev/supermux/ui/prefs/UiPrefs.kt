@@ -15,6 +15,8 @@
 package dev.supermux.ui.prefs
 
 import androidx.compose.runtime.staticCompositionLocalOf
+import dev.supermux.state.LauncherDraft
+import dev.supermux.state.LauncherPrefs
 import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
@@ -27,6 +29,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /** Editor font-size bounds — the cm6 bundle's own range, shared by both editor engines. */
 const val EDITOR_FONT_MIN = 10
@@ -133,6 +138,105 @@ class UiPrefs(private val settings: SettingsStore) {
             SettingsKeys.TEXT_SCALE,
             value.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX).toString(),
         )
+
+    // ── Launcher + session list (cluster F1) ───────────────────────────────────────────────────
+    // Previously THREE stores for the same values: `HostStore`/`FleetStore` held the launcher pair
+    // over these very keys, desktop wrote `launcher-state.json` and `ui-state.json`, and Android's
+    // list wrote a `cmux-session-list` SharedPreferences file. One owner now; each host seeds its
+    // old store through once (`seedLauncher` / `seedCollapsedProjectPaths`).
+
+    /** Sticky launcher agent/model/effort choices. Unparsable JSON reads as the defaults. */
+    val launcherPrefs: Flow<LauncherPrefs> =
+        settings.string(SettingsKeys.LAUNCHER_PREFS).map { raw ->
+            raw?.let { runCatching { prefsJson.decodeFromString<LauncherPrefs>(it) }.getOrNull() }
+                ?: LauncherPrefs()
+        }
+
+    suspend fun putLauncherPrefs(prefs: LauncherPrefs) =
+        settings.putString(SettingsKeys.LAUNCHER_PREFS, prefsJson.encodeToString(prefs))
+
+    /** The in-progress new-session draft. Unparsable JSON reads as an empty draft. */
+    val launcherDraft: Flow<LauncherDraft> =
+        settings.string(SettingsKeys.LAUNCHER_DRAFT).map { raw ->
+            raw?.let { runCatching { prefsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() }
+                ?: LauncherDraft()
+        }
+
+    /** An EMPTY draft clears the key rather than storing `{}` — both stores did this before. */
+    suspend fun putLauncherDraft(draft: LauncherDraft) =
+        settings.putString(
+            SettingsKeys.LAUNCHER_DRAFT,
+            if (draft == LauncherDraft()) null else prefsJson.encodeToString(draft),
+        )
+
+    /** Drop the draft — the launcher calls this once a session is actually created. */
+    suspend fun clearLauncherDraft() = settings.putString(SettingsKeys.LAUNCHER_DRAFT, null)
+
+    /**
+     * Project-group keys collapsed in the session list, stored as a JSON array (a path may contain
+     * anything, so a delimiter-joined string would not survive). Unparsable JSON reads as empty.
+     */
+    val collapsedProjectPaths: Flow<Set<String>> =
+        settings.string(SettingsKeys.SESSION_LIST_COLLAPSED_PATHS).map { raw ->
+            raw?.let {
+                runCatching { prefsJson.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull()
+            }?.toSet() ?: emptySet()
+        }
+
+    /** Stored SORTED so the same set never rewrites the file with a different byte string. */
+    suspend fun putCollapsedProjectPaths(paths: Set<String>) =
+        settings.putString(
+            SettingsKeys.SESSION_LIST_COLLAPSED_PATHS,
+            prefsJson.encodeToString(ListSerializer(String.serializer()), paths.sorted()),
+        )
+
+    // The RAW stored strings. The parsed flows above flatten "never stored" into the defaults,
+    // which is exactly what a one-way seed must be able to tell apart.
+    internal fun launcherPrefsRaw(): Flow<String?> = settings.string(SettingsKeys.LAUNCHER_PREFS)
+    internal fun launcherDraftRaw(): Flow<String?> = settings.string(SettingsKeys.LAUNCHER_DRAFT)
+    internal fun collapsedPathsRaw(): Flow<String?> =
+        settings.string(SettingsKeys.SESSION_LIST_COLLAPSED_PATHS)
+
+    private companion object {
+        val prefsJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    }
+}
+
+/**
+ * The launcher pair, seeded ONCE from a host's legacy store when nothing is stored here yet.
+ *
+ * One-way, idempotent and non-destructive, exactly like [seedAppearance]: a key the shared store
+ * already holds wins (a user who typed a new draft post-upgrade keeps it), and re-running this on
+ * every launch is a no-op. Desktop passes what `launcher-state.json` held; Android passes nulls —
+ * its launcher pair was ALREADY on these keys (`FleetStore` wrote them), so there is nothing to
+ * drain.
+ */
+suspend fun UiPrefs.seedLauncher(
+    legacyPrefs: LauncherPrefs? = null,
+    legacyDraft: LauncherDraft? = null,
+) {
+    if (legacyPrefs != null && legacyPrefs != LauncherPrefs() &&
+        launcherPrefsRaw().first() == null
+    ) {
+        putLauncherPrefs(legacyPrefs)
+    }
+    if (legacyDraft != null && legacyDraft != LauncherDraft() &&
+        launcherDraftRaw().first() == null
+    ) {
+        putLauncherDraft(legacyDraft)
+    }
+}
+
+/**
+ * The collapsed project-group keys, seeded once from [legacy] (Android's `cmux-session-list`
+ * SharedPreferences, desktop's `ui-state.json`) and then READ — synchronously, by both hosts,
+ * before the list's first frame, so no frame paints groups expanded that the user had collapsed.
+ */
+suspend fun UiPrefs.seedCollapsedProjectPaths(legacy: Set<String>?): Set<String> {
+    if (!legacy.isNullOrEmpty() && collapsedPathsRaw().first() == null) {
+        putCollapsedProjectPaths(legacy)
+    }
+    return collapsedProjectPaths.first()
 }
 
 /**

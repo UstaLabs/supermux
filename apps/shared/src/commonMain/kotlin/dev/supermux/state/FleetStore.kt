@@ -828,14 +828,14 @@ class FleetStore(
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
 
-    /** Fire-and-forget resume-from-archive, then re-pull that host's archived list so the row
-     *  leaves the Archived screen (the resume produces no session_removed frame). */
-    fun resume(id: String) {
-        fleetScope.launch {
-            val app = appFor(id) ?: activeApp() ?: return@launch
-            app.resume(id)
-            app.refreshArchived()
-        }
+    /** Resume from archive on the owning host, then re-pull that host's archived list so the row
+     *  leaves the Archived screen (the resume produces no session_removed frame).
+     *  Suspend/Boolean like [HostStore.resume] since cluster F1 — the caller sees the refusal. */
+    suspend fun resume(id: String): Boolean {
+        val app = appFor(id) ?: activeApp() ?: return false
+        val ok = app.resume(id)
+        app.refreshArchived()
+        return ok
     }
     suspend fun archivedLogs(sessionId: String): List<LogEntry> = appFor(sessionId)?.archivedLogs(sessionId).orEmpty()
 
@@ -1038,26 +1038,8 @@ class FleetStore(
             scoped.map { it.name }
         }
 
-    fun saveLauncherPrefs(prefs: LauncherPrefs) {
-        fleetScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_PREFS, settingsJson.encodeToString(prefs)) }
-    }
-    val launcherPrefs: Flow<LauncherPrefs> =
-        deps.settings.string(SettingsKeys.LAUNCHER_PREFS).map { raw ->
-            raw?.let { runCatching { settingsJson.decodeFromString<LauncherPrefs>(it) }.getOrNull() } ?: LauncherPrefs()
-        }
-    fun saveLauncherDraft(draft: LauncherDraft) {
-        fleetScope.launch {
-            val encoded = if (draft == LauncherDraft()) null else settingsJson.encodeToString(draft)
-            deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, encoded)
-        }
-    }
-    val launcherDraft: Flow<LauncherDraft> =
-        deps.settings.string(SettingsKeys.LAUNCHER_DRAFT).map { raw ->
-            raw?.let { runCatching { settingsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() } ?: LauncherDraft()
-        }
-    fun clearLauncherDraft() {
-        fleetScope.launch { deps.settings.putString(SettingsKeys.LAUNCHER_DRAFT, null) }
-    }
+    // Launcher prefs/draft moved to `dev.supermux.ui.prefs.UiPrefs` in cluster F1 — same two
+    // settings keys, one owner, so the shared launcher does not care which store built its actions.
 
     suspend fun appConfig(): AppConfigDto? = activeApp()?.appConfig()
     suspend fun usage(): UsageResponse? {

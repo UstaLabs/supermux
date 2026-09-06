@@ -128,8 +128,11 @@ class FleetStoreRoutingTest {
         advanceUntilIdle()
         f.calls.values.forEach { it.clear() }
 
-        f.fleet.resume("s-b")
+        // Suspend + Boolean since cluster F1 (desktop's `HostStore.resume` shape), so a caller can
+        // see the refusal instead of the old fire-and-forget launch swallowing it.
+        val ok = f.fleet.resume("s-b")
         advanceUntilIdle()
+        assertTrue(ok, "a 200 from the owning host must come back as true")
 
         await("resume must POST then re-pull archived, got ${f.calls.getValue("b")}") {
             f.calls.getValue("b").any { it.contains("/sessions/s-b/resume") } &&

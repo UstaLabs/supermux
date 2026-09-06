@@ -55,7 +55,23 @@ class ShellStateStoreTest {
         val restored = ShellUiState().apply { restore(snap) }
         assertTrue(restored.sidebarCollapsed)
         assertEquals(440.dp, restored.sidebarWidth)
-        assertEquals(setOf("/home/a/proj", "/tmp/other"), restored.collapsedProjectPaths)
+        // Collapsed groups are NOT written here any more (cluster F1: the shared settings store
+        // owns them under SESSION_LIST_COLLAPSED_PATHS) — `snapshot()` leaves the field empty.
+        assertEquals(emptySet(), restored.collapsedProjectPaths)
+    }
+
+    @Test fun anOldFileWithCollapsedPathsStillRestoresThemForTheOneWayMigration() {
+        // The field stays DECODABLE so AppShell can hand a pre-F1 ui-state.json's value to
+        // `UiPrefs.seedCollapsedProjectPaths` once. Only the write side went away.
+        val dir = Files.createTempDirectory("smx-ui-state")
+        val path = dir.resolve("ui-state.json")
+        Files.writeString(
+            path,
+            """{"layout":{"sidebarCollapsed":false,"sidebarWidthDp":320.0,""" +
+                """"collapsedProjectPaths":["/home/a/proj"]},"selectedId":null}""",
+        )
+        val restored = ShellUiState().apply { ShellStateStore(path).load().layout?.let { restore(it) } }
+        assertEquals(setOf("/home/a/proj"), restored.collapsedProjectPaths)
     }
 
     @Test fun oldFileWithoutAppearanceOrCollapsedPathsStillLoads() {

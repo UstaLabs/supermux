@@ -71,8 +71,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import dev.supermux.desktop.editor.isMacOs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.supermux.net.AddViewBody
@@ -96,6 +98,11 @@ import dev.supermux.desktop.notify.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
+import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.prefs.seedCollapsedProjectPaths
+import dev.supermux.ui.prefs.seedLauncher
+import dev.supermux.ui.session.rememberLauncherActions
+import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.ui.theme.AppearanceMode
@@ -192,7 +199,13 @@ class ShellUiState {
      */
     var selectedArchivedWorkspaceId by mutableStateOf<String?>(null)
 
-    /** Project-group keys collapsed in the workspace list. Survives restart via [ShellStateStore]. */
+    /**
+     * Project-group keys collapsed in the workspace list — the in-memory copy.
+     *
+     * PERSISTED since cluster F1 under `SettingsKeys.SESSION_LIST_COLLAPSED_PATHS` (through
+     * `UiPrefs`), the same key Android's list writes, NOT in `ui-state.json` any more. The old
+     * field is still decoded so [restore] can hand it to the one-way seed, but nothing writes it.
+     */
     var collapsedProjectPaths by mutableStateOf(setOf<String>())
 
     /** Local light/dark (not a broker setting). Survives restart via [ShellStateStore]. */
@@ -467,12 +480,15 @@ class ShellUiState {
     fun snapshot() = SidebarSnapshot(
         sidebarCollapsed = sidebarCollapsed,
         sidebarWidthDp = sidebarWidth.value,
-        collapsedProjectPaths = collapsedProjectPaths.sorted(),
+        // `collapsedProjectPaths` deliberately left at its default: the shared settings store owns
+        // it now (F1), and writing it here too would give one value two owners.
     )
 
     fun restore(s: SidebarSnapshot) {
         sidebarCollapsed = s.sidebarCollapsed
         setSidebarWidth(s.sidebarWidthDp.dp)
+        // LEGACY only: whatever an old ui-state.json still carries is handed to
+        // `UiPrefs.seedCollapsedProjectPaths` once and never written back here.
         collapsedProjectPaths = s.collapsedProjectPaths.toSet()
     }
 
@@ -549,9 +565,11 @@ fun AppShell(
     app: HostStore,
     ui: ShellUiState,
     store: ShellStateStore,
-    // Injected (not `remember`-ed internally) for the SAME reason as [store]: production (Main.kt)
-    // constructs the real default-path file, while tests pass a temp path so they never touch the
-    // developer's real ~/.config/supermux-desktop/launcher-state.json.
+    // The LEGACY `launcher-state.json`, read once and drained into the shared settings store
+    // (`UiPrefs.seedLauncher`, cluster F1) — nothing writes it any more. Still injected (not
+    // `remember`-ed internally) for the SAME reason as [store]: production (Main.kt) constructs the
+    // real default-path file, while tests pass a temp path so they never touch the developer's
+    // real ~/.config/supermux-desktop/launcher-state.json.
     launcherStore: LauncherStore,
     // M5-3: injectable so production (Main.kt) passes the real Tray-backed controller while the
     // existing WorkspaceRootTest suite (and any other caller that doesn't care about
@@ -651,6 +669,30 @@ fun AppShell(
     // Scope for fire-and-forget overlay actions (e.g. the archived Resume POST) that must outlive
     // the overlay's composition — it closes the instant Resume is tapped.
     val overlayScope = rememberCoroutineScope()
+
+    // The session-list holder (cluster F1). With a fleet every op routes to the OWNING host —
+    // exactly what the `appFor(sid)` lambdas below did by hand; single-host falls back to [app].
+    val listActions =
+        if (fleet != null) rememberSessionListActions(fleet) else rememberSessionListActions(app)
+
+    // ── Launcher prefs / collapsed groups: shared store, seeded from this host's old files ──────
+    // Both values used to be desktop-only files (`launcher-state.json`, `ui-state.json`); since
+    // cluster F1 they are `SettingsKeys.LAUNCHER_PREFS`/`LAUNCHER_DRAFT`/`SESSION_LIST_COLLAPSED_PATHS`
+    // read through `UiPrefs`, which is what Android reads too.
+    //
+    // BLOCKING, and before anything reads them: the seed must win the race against the launcher's
+    // own first `loadPrefs()` and against the sidebar's first frame, or a user's restored draft
+    // could be overwritten by an empty one and their collapsed groups would paint expanded.
+    // `DesktopSettingsStore` holds its map in an eager `StateFlow`, so this never waits on IO.
+    val uiPrefs = LocalUiPrefs.current
+    val seededCollapsedPaths = remember(uiPrefs, launcherStore) {
+        runBlocking {
+            runCatching { uiPrefs.seedLauncher(launcherStore.loadPrefs(), launcherStore.loadDraft()) }
+            runCatching { uiPrefs.seedCollapsedProjectPaths(ui.collapsedProjectPaths) }
+                .getOrDefault(ui.collapsedProjectPaths)
+        }
+    }
+    LaunchedEffect(seededCollapsedPaths) { ui.collapsedProjectPaths = seededCollapsedPaths }
 
     // Per-session composer drafts, hoisted here so switching sessions preserves each draft.
     // In-memory only for M1 — broker-side draft sync is M4.
@@ -889,7 +931,7 @@ fun AppShell(
                             // the SessionListPanel branch below.
                             onRename = { wid, name ->
                                 val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
-                                if (sid != null) appFor(sid).rename(sid, name)
+                                if (sid != null) listActions.rename(sid, name)
                             },
                             onKill = { wid ->
                                 // Archive the WORKSPACE, not each chat session. The broker archives
@@ -898,22 +940,22 @@ fun AppShell(
                                 // behind whenever they are already archived — which is exactly what
                                 // made an rpc-worker workspace look impossible to archive.
                                 if (wsOf(wid)?.chatSessionIds()?.contains(ui.selectedId) == true) ui.selectedId = null
-                                app.archiveWorkspace(wid)
+                                listActions.archiveWorkspace(wid)
                             },
                             onMute = { wid, muted ->
                                 val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
-                                if (sid != null) appFor(sid).setMute(sid, muted)
+                                if (sid != null) listActions.setMute(sid, muted)
                             },
                             onNewSession = onNewSession,
                             archivedWorkspaces = archivedWorkspaces,
                             archivedActiveId = ui.selectedArchivedWorkspaceId,
                             onSelectArchived = { ui.selectArchivedWorkspace(it) },
                             onRestore = { wid ->
-                                app.restoreWorkspace(wid)
+                                listActions.restoreWorkspace(wid)
                                 ui.selectedArchivedWorkspaceId = null
                             },
                             onOpenDraft = { id -> ui.openLauncher(draftId = id) },
-                            onReorder = { ids -> app.reorderWorkspaces(ids) },
+                            onReorder = { ids -> listActions.reorderWorkspaces(ids) },
                             hosts = hostViews,
                             sessionHost = sessionHost,
                             hostFilter = hostFilter,
@@ -927,8 +969,11 @@ fun AppShell(
                             usageContent = usagePopoverBody,
                             appearance = appearance,
                             onToggleTheme = onToggleTheme,
-                            initialCollapsedPaths = ui.collapsedProjectPaths,
-                            onCollapsedPathsChange = { ui.collapsedProjectPaths = it },
+                            initialCollapsedPaths = seededCollapsedPaths,
+                            onCollapsedPathsChange = {
+                                ui.collapsedProjectPaths = it
+                                overlayScope.launch { uiPrefs.putCollapsedProjectPaths(it) }
+                            },
                             tabDragState = tabDragState,
                             modifier = Modifier
                                 .width(ui.sidebarWidth)
@@ -952,6 +997,13 @@ fun AppShell(
     // workspace tab: the new session joins that workspace (so it shares the work
     // tree) and the project picker starts on that workspace's directory. Both are
     // defaults, not limits — the user can still pick any project (spec decision 5).
+    // Every broker call the launcher makes, in one holder (cluster F1). Keyed on [hostApp], so
+    // switching hosts with the pill retargets every loader at once.
+    val launcherActions = rememberLauncherActions(
+        hostApp,
+        onSelectHost = { fleet?.setActiveHost(it) },
+        onOpenSession = { ui.selectSession(it) },
+    )
     val launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
@@ -966,39 +1018,29 @@ fun AppShell(
                         lastBySession = lastBySession,
                         // Host-global lookups + spawn target the ACTIVE host (`hostApp`);
                         // the host picker below switches it. Single-host → [app].
-                        loadProjects = { hostApp.listProjects() },
-                        validatePath = { hostApp.validatePath(it) },
-                        loadModels = { hostApp.launcherModels(it) },
-                        loadReasoningLevels = { a, m -> hostApp.launcherReasoning(a, m) },
-                        loadRepoInfo = { wd, fetch -> hostApp.launcherRepoInfo(wd, fetch) },
-                        transcribeAudio = { bytes, name -> hostApp.transcribeAudio(null, bytes, name)?.text },
-                        loadPrefs = { launcherStore.loadPrefs() },
-                        onPrefsChange = { launcherStore.savePrefs(it) },
-                        loadDraft = { launcherStore.loadDraft() },
-                        onDraftChange = { launcherStore.saveDraft(it) },
-                        onClearDraft = { launcherStore.clearDraft() },
+                        actions = launcherActions,
+                        loadPrefs = { uiPrefs.launcherPrefs.first() },
+                        onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
+                        loadDraft = { uiPrefs.launcherDraft.first() },
+                        onDraftChange = { overlayScope.launch { uiPrefs.putLauncherDraft(it) } },
+                        onClearDraft = { overlayScope.launch { uiPrefs.clearLauncherDraft() } },
                         // Spawn → select + send the first message → close. A null id is
                         // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
                         // turns any thrown message into the inline launcher_error text.
                         onSubmit = { workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch, replaceDraftId ->
-                            val newId = hostApp.createSessionWithFirstMessage(
+                            // Throws the broker's OWN refusal (bad workdir / spawn 4xx), which
+                            // SessionLauncherScreen's doSubmit turns into the inline error text.
+                            val newId = launcherActions.createSessionWithFirstMessage(
                                 workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-                                replaceDraftId = replaceDraftId,
+                                replaceDraftId,
                             )
-                            if (newId == null) {
-                                throw IllegalStateException(
-                                    "Couldn't create the session — check the working directory and try again.",
-                                )
-                            }
                             ui.selectedId = newId
                             hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
                             ui.launcherOpen = false; ui.launcherDraftId = null
                         },
                         onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
-                            hostApp.createDraftSession(
-                                workdir, agent, model, text,
-                                reasoningLevel = reasoningLevel,
-                                replaceDraftId = replaceDraftId,
+                            launcherActions.createDraftSession(
+                                workdir, agent, model, reasoningLevel, text, replaceDraftId,
                             )
                         },
                         initialWorkdir = seedWorkdir,
@@ -1006,13 +1048,6 @@ fun AppShell(
                         initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
                         hosts = hostViews,
                         selectedHost = activeHostId,
-                        onSelectHost = { fleet?.setActiveHost(it) },
-                        loadAgents = { hostApp.launcherAgents() },
-                        loadForges = { hostApp.listForges() },
-                        searchForge = { hostApp.searchForge(it) },
-                        cloneForge = { cid, owner, name -> hostApp.cloneForge(cid, owner, name) },
-                        createLocalRepo = { hostApp.createLocalRepo(it) },
-                        createForge = { cid, name -> hostApp.createForge(cid, name) },
                     )
         }
                     LaunchedEffect(activeWorkspace?.id) {

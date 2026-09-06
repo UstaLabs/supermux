@@ -18,6 +18,10 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
 import dev.supermux.desktop.session.LauncherStore
+import dev.supermux.ui.prefs.InMemorySettingsStore
+import dev.supermux.ui.prefs.UiPrefs
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import dev.supermux.desktop.DesktopWalkthroughSeam
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
@@ -186,10 +190,12 @@ class AppShellTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent, spawnId = "sess-new")
         val ui = ShellUiState().apply { launcherOpen = true }
-        val launcherStore = LauncherStore(tempPath("launcher"))
+        // The draft lives in the SHARED settings store since cluster F1 (`UiPrefs`), not in
+        // `launcher-state.json` — that file is only the one-way migration source now.
+        val prefs = UiPrefs(InMemorySettingsStore())
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(app, ui, ShellStateStore(tempPath("state")), launcherStore)
+            DesktopTheme(appearance = AppearanceMode.DARK, uiPrefs = prefs) {
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -214,7 +220,7 @@ class AppShellTest {
         // composable right around the same time — the exact race the T4 header note calls "no
         // longer load-bearing". Assert the draft actually landed cleared on disk, not just that
         // the overlay went away.
-        assertEquals("", launcherStore.loadDraft().text)
+        assertEquals("", runBlocking { prefs.launcherDraft.first().text })
     }
 
     @Test fun submit_with_a_null_id_keeps_the_overlay_open_and_surfaces_the_error() = runComposeUiTest {
@@ -244,10 +250,10 @@ class AppShellTest {
         val sent = mutableListOf<ClientFrame>()
         val app = appFor(sent)
         val ui = ShellUiState().apply { launcherOpen = true }
-        val launcherStore = LauncherStore(tempPath("launcher"))
+        val prefs = UiPrefs(InMemorySettingsStore())
         setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(app, ui, ShellStateStore(tempPath("state")), launcherStore)
+            DesktopTheme(appearance = AppearanceMode.DARK, uiPrefs = prefs) {
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
             }
         }
         waitForIdle()
@@ -264,7 +270,7 @@ class AppShellTest {
         // Viewing frame (unrelated to the launcher), so check the Send frame specifically.
         assertTrue(sent.filterIsInstance<ClientFrame.Send>().isEmpty())
         // The dispose-flush (T4) persists the in-progress text on the way out.
-        assertEquals("a draft in progress", launcherStore.loadDraft().text)
+        assertEquals("a draft in progress", runBlocking { prefs.launcherDraft.first().text })
     }
 
     @Test fun shell_shortcuts_are_gated_off_while_the_launcher_overlay_is_up() = runComposeUiTest {

@@ -40,6 +40,7 @@ import dev.supermux.net.RepoBranches
 import dev.supermux.net.RepoInfo
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.formatWorkdir
+import dev.supermux.ui.session.LauncherActions
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -175,11 +176,13 @@ class SessionLauncherScreenTest {
                 sessions = sessions,
                 home = "/home/u",
                 onBack = {},
-                loadProjects = { projects },
-                validatePath = { null },
-                loadModels = { models(it) },
-                loadReasoningLevels = { a, m -> reasoning(a, m) },
-                loadRepoInfo = { _, _ -> repoInfo },
+                actions = LauncherActions(
+                    listProjects = { projects },
+                    validatePath = { null },
+                    launcherModels = { models(it) },
+                    launcherReasoning = { a, m -> reasoning(a, m) },
+                    launcherRepoInfo = { _, _ -> repoInfo },
+                ),
                 loadPrefs = { prefs },
                 onPrefsChange = onPrefsChange,
                 loadDraft = { draft },

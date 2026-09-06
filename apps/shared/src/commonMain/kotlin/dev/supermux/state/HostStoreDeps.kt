@@ -13,9 +13,17 @@ interface SettingsStore {
 /** Every key both apps persist, in one place so they store the same thing. */
 object SettingsKeys {
     fun draft(sessionId: String) = "draft:$sessionId"
-    const val LAUNCHER_DRAFT = "launcher:draft"
+    /** Serialized [LauncherPrefs] — the launcher's sticky agent/model/effort choices.
+     *  Read/written through `dev.supermux.ui.prefs.UiPrefs` (one owner, both platforms). */
     const val LAUNCHER_PREFS = "launcher:prefs"
+    /** Serialized [LauncherDraft] — the in-progress new-session draft. Absent = no draft. */
+    const val LAUNCHER_DRAFT = "launcher:draft"
     const val HOST_FILTER = "host:filter"
+
+    /** JSON array of the session list's collapsed project-group keys (the PA group uses the
+     *  "__pas__" sentinel). Replaced Android's `cmux-session-list` SharedPreferences and desktop's
+     *  `ui-state.json` `collapsedProjectPaths`; both migrate once (cluster F1). */
+    const val SESSION_LIST_COLLAPSED_PATHS = "sessionList:collapsedPaths"
 
     // Editor + chat-detail UI preferences (read/written through `dev.supermux.ui.prefs.UiPrefs`).
     // They replaced the per-app stores (Android SharedPreferences `cmux-editor-settings` /

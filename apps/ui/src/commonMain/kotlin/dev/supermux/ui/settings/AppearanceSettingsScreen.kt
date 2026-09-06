@@ -235,6 +235,11 @@ private fun AppearanceSettingsBody(
                         val picked = draggedTextScale
                         if (picked != null && picked != storedTextScale) {
                             scope.launch { prefs.putTextScale(picked) }
+                        } else {
+                            // The drag ended back ON the stored value, so no write lands and the
+                            // effect above never fires — drop the local override here or the screen
+                            // would stop following an outside change for the rest of its life.
+                            draggedTextScale = null
                         }
                     },
                     valueRange = TEXT_SCALE_MIN..TEXT_SCALE_MAX,

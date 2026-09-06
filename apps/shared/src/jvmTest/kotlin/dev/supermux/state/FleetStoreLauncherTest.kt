@@ -175,17 +175,22 @@ class FleetStoreLauncherTest {
         f.close()
     }
 
+    /** F1 retyped `resume` to desktop's suspend/Boolean shape: no host connected → `false`, and
+     *  the caller finds out instead of the old fire-and-forget launch dropping it. */
+    @Test fun resumeWithNoHostConnectedReturnsFalse() = runTest(UnconfinedTestDispatcher()) {
+        val f = FleetStore(store = hostStore(), scope = this, deps = testDeps())
+        assertEquals(false, f.resume("s1"))
+        f.close()
+    }
+
+    // The launcher pair moved to `dev.supermux.ui.prefs.UiPrefs` in cluster F1 (same two keys, one
+    // owner) — its round-trip lives in `:ui`'s UiPrefsLauncherTest now. The per-session draft is
+    // still this store's, and still has to survive with no host connected.
     @Test fun settingsWritesPersistWithNoHostConnected() = runTest(UnconfinedTestDispatcher()) {
         val f = FleetStore(store = hostStore(), scope = this, deps = testDeps())
         f.saveDraft("s1", "typed offline")
-        f.saveLauncherPrefs(LauncherPrefs(agent = "codex"))
-        f.saveLauncherDraft(LauncherDraft(workdir = "/x"))
         advanceUntilIdle()
         assertEquals("typed offline", f.draft("s1").first())
-        assertEquals("codex", f.launcherPrefs.first().agent)
-        assertEquals("/x", f.launcherDraft.first().workdir)
-        f.clearLauncherDraft(); advanceUntilIdle()
-        assertNull(f.launcherDraft.first().workdir)
         f.close()
     }
 }

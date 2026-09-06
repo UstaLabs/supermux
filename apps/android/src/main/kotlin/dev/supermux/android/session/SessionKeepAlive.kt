@@ -54,6 +54,7 @@ import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.asSettledSession
 import dev.supermux.state.spawnFailureMessage
@@ -127,7 +128,11 @@ fun SessionKeepAlivePhoneHost(
     onAddHost: () -> Unit = {},
     workspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
     archivedWorkspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
+    /** Collapsed project groups (cluster F1) — read synchronously by `MainActivity.onCreate`. */
+    initialCollapsedPaths: Set<String> = emptySet(),
+    onCollapsedPathsChange: (Set<String>) -> Unit = {},
 ) {
+    val listActions = rememberSessionListActions(vm.fleet)
     // Phone AnimatedContent disposes SessionListScreen while a chat is open. Keep scroll
     // state here (survives that dispose + process death) so back returns to the same offset.
     val sessionListState = rememberSaveable(saver = LazyListState.Saver) {
@@ -239,37 +244,29 @@ fun SessionKeepAlivePhoneHost(
                         lastRead = lastRead,
                         agentState = agentState,
                         onNewSession = { onNavigate("new") },
-                        loadProjects = { vm.fleet.listProjects() },
-                        validatePath = { vm.fleet.validatePath(it) },
-                        onNavigate = onNavigate,
                         // Long-press row actions were never wired on the phone list host, so
                         // Kill/Rename/Mute opened their dialogs but the confirm was a no-op
-                        // (SessionListScreen defaults these to {}). Mirror the tablet host +
-                        // MainActivity wiring; kill also prunes the kept-alive layer.
-                        onRename = { id, name -> vm.fleet.rename(id, name) },
-                        onKill = { id ->
-                            vm.fleet.kill(id) {
-                                onRemoveVisited(id)
-                                if (selected == id) onClearSelected()
-                            }
+                        // (SessionListScreen defaults these to {}). The cluster-F1 holder wires
+                        // them all; kill still prunes the kept-alive layer, now via [onKilled].
+                        actions = listActions,
+                        onKilled = { id ->
+                            onRemoveVisited(id)
+                            if (selected == id) onClearSelected()
                         },
-                        onMute = { id, m -> vm.fleet.setMute(id, m) },
+                        onNavigate = onNavigate,
                         archived = archived,
-                        onResume = { id -> vm.fleet.resume(id) },
                         onOpenDraft = onOpenDraft,
-                        onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) vm.fleet.reorderSessions(ids) else vm.fleet.reorderWorkspaces(ids) },
+                        onReorder = { ids -> if (sidebarReorderKind(workspaces) == SidebarReorderKind.SESSIONS) listActions.reorderSessions(ids) else listActions.reorderWorkspaces(ids) },
                         workspaces = workspaces,
                         archivedWorkspaces = archivedWorkspaces,
-                        onArchiveWorkspace = { id -> vm.fleet.archiveWorkspace(id) },
-                        onRestoreWorkspace = { id -> vm.fleet.restoreWorkspace(id) },
                         onNewChatInWorkspace = onNewChatInWorkspace,
+                        initialCollapsedPaths = initialCollapsedPaths,
+                        onCollapsedPathsChange = onCollapsedPathsChange,
                         hosts = hosts,
                         sessionHost = sessionHost,
                         hostFilter = hostFilter,
                         onHostFilter = onHostFilter,
                         onAddHost = onAddHost,
-                        onRenameHost = { id, name -> vm.fleet.renameHost(id, name) },
-                        onForgetHost = { id -> vm.fleet.forgetHost(id) },
                         sharedScope = this@SharedTransitionLayout,
                         animScope = this,
                         listState = sessionListState,

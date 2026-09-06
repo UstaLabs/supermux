@@ -86,6 +86,7 @@ import dev.supermux.net.RepoInfo
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import dev.supermux.ui.session.LauncherActions
 import dev.supermux.session.chooseDefaultProject
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.orderProjectsByRecency
@@ -116,30 +117,8 @@ fun SessionLauncherScreen(
     onBack: () -> Unit,
     /** Last message per session — drives most-recent-project default (web chooseDefaultProject). */
     lastBySession: Map<String, LogEntry?> = emptyMap(),
-    loadProjects: suspend () -> List<String>,
-    validatePath: suspend (String) -> dev.supermux.net.PathValidation?,
-    // Launcher model list for the chosen agent (no session yet); refetched when the agent changes.
-    loadModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
-    // Launcher reasoning ("thinking") levels for the chosen agent+model (no session yet);
-    // refetched when either changes. Codex's are per-model; Cursor/OpenCode have none.
-    loadReasoningLevels: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
-    // Git status for the chosen project; gates the worktree picker on RepoInfo.eligible.
-    // `fetch=true` refreshes origin remote-tracking refs (once per repo on sheet open).
-    loadRepoInfo: suspend (workdir: String, fetch: Boolean) -> RepoInfo? = { _, _ -> null },
-    // Agent slash commands for the composer's "/" menu (no session yet); refetched on agent/project
-    // change, empty = no menu (iOS NewSessionView previewCommands parity).
-    loadCommands: suspend (agent: String, workdir: String) -> List<SlashCommand> = { _, _ -> emptyList() },
-    // Forge omnibox for the project picker (connections + clone/create). Defaults = "no forges".
-    loadForges: suspend () -> List<ForgeConnection> = { emptyList() },
-    searchForge: suspend (query: String) -> List<RemoteRepo> = { emptyList() },
-    cloneForge: suspend (connectionId: String, owner: String, name: String) -> String? = { _, _, _ -> null },
-    createLocalRepo: suspend (name: String) -> String? = { null },
-    createForge: suspend (connectionId: String, name: String) -> String? = { _, _ -> null },
-    // Voice dictation — no session yet, so these hit the broker's id-less /transcribe (the session
-    // only enriches cleanup context). Same wiring as chat, minus the session id.
-    loadGlossary: suspend () -> List<String> = { emptyList() },
-    transcribeDraft: suspend (draft: String) -> String? = { null },
-    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
+    /** Every broker call this screen makes (cluster F1) — see `ui/session/SessionActions.kt`. */
+    actions: LauncherActions = LauncherActions(),
     // Launcher state persistence — sticky agent/model prefs, and an in-progress draft cleared
     // once a session is actually created (see onSubmit's success path below).
     loadLauncherPrefs: suspend () -> LauncherPrefs = { LauncherPrefs() },
@@ -148,10 +127,11 @@ fun SessionLauncherScreen(
     onLauncherDraftChange: (LauncherDraft) -> Unit = {},
     // Spawn a session and send the first message. `staged` files upload right after spawn (there is
     // no session id to upload against until then) — see AppViewModel.createSessionWithFirstMessage.
-    onSubmit: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, worktree: Boolean, baseBranch: String?, staged: List<StagedUpload>, replaceDraftId: String?) -> String,
+    // Parameter order is DESKTOP's (…, message, staged, worktree, baseBranch, replaceDraftId) —
+    // cluster F1 unified the two so one shared launcher can call either host's submit.
+    onSubmit: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, staged: List<StagedUpload>, worktree: Boolean, baseBranch: String?, replaceDraftId: String?) -> String,
     /** Save as draft (no agent process). Returns draft session id. */
     onSaveDraft: suspend (workdir: String, agent: String, model: String?, reasoningLevel: String?, message: String, replaceDraftId: String?) -> String? = { _, _, _, _, _, _ -> null },
-    onOpenSession: (String) -> Unit,
     /** Reopened draft session id (web /new?draft=). Prefills composer from draft_payload. */
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
@@ -160,10 +140,6 @@ fun SessionLauncherScreen(
     // (models/projects/agents/commands) to that host via the caller's onSelectHost → active host.
     hosts: List<dev.supermux.host.HostView> = emptyList(),
     selectedHostId: String? = null,
-    onSelectHost: (String) -> Unit = {},
-    // The chosen host's installed/available agent kinds (GET /agents/status) — replaces the old
-    // hardcoded four-agent list. Empty → keep the default fallback.
-    loadAgents: suspend () -> List<String> = { emptyList() },
 ) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -213,7 +189,7 @@ fun SessionLauncherScreen(
             model = null
         }
         agents = listOf("claude", "codex", "cursor", "opencode", "grok")
-        val fetched = loadAgents()
+        val fetched = actions.launcherAgents()
         if (fetched.isNotEmpty()) {
             agents = fetched
             if (!fetched.contains(agent)) agent = fetched.first()
@@ -227,7 +203,7 @@ fun SessionLauncherScreen(
     LaunchedEffect(selectedHostId, agent, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         models = emptyList()
-        val loadedModels = loadModels(agent)
+        val loadedModels = actions.launcherModels(agent)
         models = loadedModels
         if (model != null && loadedModels.none { it.id == model }) model = null
         // Reset only when the live agent genuinely differs from what this effect last recorded
@@ -252,7 +228,7 @@ fun SessionLauncherScreen(
     var showReasoningSheet by remember { mutableStateOf(false) }
     LaunchedEffect(selectedHostId, agent, model, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        val resp = loadReasoningLevels(agent, model)
+        val resp = actions.launcherReasoning(agent, model)
         val levels = resp?.levels ?: emptyList()
         reasoningLevels = levels
         reasoningVisible = resp != null && resp.visible && showReasoningPicker(levels)
@@ -269,7 +245,7 @@ fun SessionLauncherScreen(
         if (launcherRestoring) { repoInfo = null; return@LaunchedEffect }
         val switchedRepoHost = lastRepoHostId != null && lastRepoHostId != selectedHostId
         if (switchedRepoHost) fetchedRepos = emptySet()
-        val info = if (workdir.isBlank()) null else loadRepoInfo(workdir, false)
+        val info = if (workdir.isBlank()) null else actions.launcherRepoInfo(workdir, false)
         repoInfo = info
         lastRepoHostId = selectedHostId
         if (switchedRepoHost || (lastSeenWorkdir != null && lastSeenWorkdir != workdir)) {
@@ -285,7 +261,7 @@ fun SessionLauncherScreen(
         val root = repoInfo?.repoRoot
         val shouldFetch = root != null && root !in fetchedRepos
         worktreeFetching = shouldFetch
-        val fresh = loadRepoInfo(workdir, shouldFetch)
+        val fresh = actions.launcherRepoInfo(workdir, shouldFetch)
         if (fresh != null) {
             repoInfo = fresh
             if (baseBranch.isBlank()) baseBranch = fresh.currentBranch.orEmpty()
@@ -303,7 +279,7 @@ fun SessionLauncherScreen(
     var launcherCommands by remember { mutableStateOf(emptyList<SlashCommand>()) }
     LaunchedEffect(selectedHostId, agent, workdir, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
-        launcherCommands = loadCommands(agent, workdir)
+        launcherCommands = actions.launcherCommands(agent, workdir)
     }
 
     // Restore persisted launcher state once. Runs after useWorktree/baseBranch are declared
@@ -394,7 +370,7 @@ fun SessionLauncherScreen(
     LaunchedEffect(selectedHostId, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
         knownProjects = emptyList()
-        knownProjects = loadProjects()
+        knownProjects = actions.listProjects()
     }
 
     val lastTs: (SessionInfo) -> String = { lastBySession[it.id]?.ts ?: "" }
@@ -420,9 +396,9 @@ fun SessionLauncherScreen(
     // pass no session id, so cleanup runs off the global glossary/engine/model via /transcribe.
     val voice = rememberDictation(
         resetKey = Unit,
-        loadGlossary = loadGlossary,
-        transcribeDraft = transcribeDraft,
-        transcribeAudio = transcribeAudio,
+        loadGlossary = actions.fetchGlossary,
+        transcribeDraft = actions.transcribeDraft,
+        transcribeAudio = actions.transcribeAudio,
         onAppend = {
             val joined = if (message.text.isBlank()) it else message.text.trimEnd() + " " + it
             message = TextFieldValue(joined, TextRange(joined.length)); error = null
@@ -538,10 +514,10 @@ fun SessionLauncherScreen(
         }
         scope.launch {
             try {
-                val sessionId = onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), wantsWorktree, base, toUpload, activeDraftId)
+                val sessionId = onSubmit(workdir.trim(), agent, model, reasoningLevel, message.text.trim(), toUpload, wantsWorktree, base, activeDraftId)
                 onLauncherDraftChange(LauncherDraft())
                 draftCleared = true
-                onOpenSession(sessionId)
+                actions.openSession(sessionId)
             } catch (e: Exception) {
                 error = e.message ?: "Failed to create session"
             } finally {
@@ -639,7 +615,7 @@ fun SessionLauncherScreen(
                     HostPickerPill(
                         hosts = hosts,
                         selectedHostId = selectedHostId,
-                        onSelect = onSelectHost,
+                        onSelect = actions.setActiveHost,
                     )
                 }
                 if (repoInfo?.eligible == true) {
@@ -1046,11 +1022,13 @@ fun SessionLauncherScreen(
             current = workdir,
             projects = projects,
             home = home,
-            loadForges = loadForges,
-            searchForge = searchForge,
-            cloneForge = cloneForge,
-            createLocalRepo = createLocalRepo,
-            createForge = createForge,
+            loadForges = actions.listForges,
+            // `null` from the shared holder means the SEARCH FAILED; the sheet's list shape cannot
+            // say that yet, so it reads as "no matches" exactly as it did before (F5 owns the fix).
+            searchForge = { actions.searchForge(it)?.repos.orEmpty() },
+            cloneForge = actions.cloneForge,
+            createLocalRepo = actions.createLocalRepo,
+            createForge = actions.createForge,
             onPick = { workdir = it; workdirTouched = true; error = null },
             onDismiss = { showProjectSheet = false },
         )

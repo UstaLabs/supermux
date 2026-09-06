@@ -66,23 +66,9 @@ class HostStoreActionsTest {
         s.close()
     }
 
-    @Test fun launcherPrefsRoundTrip() = runTest(UnconfinedTestDispatcher()) {
-        val s = fixture(this).store
-        s.saveLauncherPrefs(LauncherPrefs(agent = "codex", models = mapOf("codex" to "gpt"))); advanceUntilIdle()
-        assertEquals("codex", s.launcherPrefs.first().agent)
-        s.close()
-    }
-
-    @Test fun launcherDraftRoundTripAndEmptyClearsKey() = runTest(UnconfinedTestDispatcher()) {
-        val f = fixture(this)
-        f.store.saveLauncherDraft(LauncherDraft(workdir = "/x")); advanceUntilIdle()
-        assertEquals("/x", f.store.launcherDraft.first().workdir)
-        assertTrue(f.settings.map.value.containsKey(SettingsKeys.LAUNCHER_DRAFT))
-        f.store.saveLauncherDraft(LauncherDraft()); advanceUntilIdle()
-        assertEquals(null, f.settings.map.value[SettingsKeys.LAUNCHER_DRAFT])
-        assertEquals(null, f.store.launcherDraft.first().workdir)
-        f.store.close()
-    }
+    // `launcherPrefsRoundTrip` / `launcherDraftRoundTripAndEmptyClearsKey` moved to `:ui`'s
+    // UiPrefsLauncherTest with the values themselves (cluster F1 gave the two launcher keys one
+    // owner: `dev.supermux.ui.prefs.UiPrefs`, which both apps read).
 
     @Test fun revokeHitsTheRevokeEndpoint() = runBlocking {
         val f = fixture(httpScope())
