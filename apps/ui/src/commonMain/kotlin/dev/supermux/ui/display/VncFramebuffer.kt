@@ -4,8 +4,12 @@
 // Android's bitmap is ARGB_8888 and needs the swizzle.
 package dev.supermux.ui.display
 
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import dev.supermux.net.VncRect
 
 /**
@@ -56,7 +60,20 @@ object VncFrameOps {
     fun needsResize(curW: Int, curH: Int, w: Int, h: Int): Boolean =
         w > 0 && h > 0 && (w != curW || h != curH)
 
-    /** The union of every rect in [rects] that [accepts] lets through, or null if none does. */
+    /** Whether ANY rect in [rects] applies — the cheap form of [dirtyRegion] for a "did this
+     *  update change anything?" check, with no allocation. */
+    fun anyApplies(rects: List<VncRect>, fbW: Int, fbH: Int): Boolean =
+        rects.any { accepts(it, fbW, fbH) }
+
+    /**
+     * The union of every rect in [rects] that [accepts] lets through, or null if none does — the
+     * region of the framebuffer one update actually changed.
+     *
+     * Both actuals upload the whole bitmap today and only need [anyApplies]; this is the form a
+     * partial upload (a sub-rect `installPixels`/`setPixels`, or an invalidate passed to a host
+     * view) takes, and the merge rule lives in one tested place rather than in whichever host
+     * needs it first.
+     */
     fun dirtyRegion(rects: List<VncRect>, fbW: Int, fbH: Int): FrameRegion? {
         var acc: FrameRegion? = null
         for (r in rects) {
@@ -148,4 +165,24 @@ expect class VncFramebuffer() {
 
     /** Drop the frame and free the platform bitmap. The instance is reusable afterwards. */
     fun release()
+}
+
+/**
+ * Paint a framebuffer's latest frame, aspect-fit (`ContentScale.Fit` IS the letterbox
+ * `VncInput.mapToRemote` maps a pointer with, so a tap lands where it looks like it lands).
+ *
+ * A LEAF on purpose: it is the only composable that reads [VncFramebuffer.bitmap], so a frame from
+ * the server recomposes this and nothing else — reading the state in the panel's own body would
+ * recompose the status chip, the control bar and the hidden keyboard field at the frame rate.
+ * Draws nothing before the first frame.
+ */
+@Composable
+fun VncFrame(framebuffer: VncFramebuffer, modifier: Modifier = Modifier) {
+    val frame = framebuffer.bitmap.value ?: return
+    Image(
+        bitmap = frame,
+        contentDescription = null,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
 }

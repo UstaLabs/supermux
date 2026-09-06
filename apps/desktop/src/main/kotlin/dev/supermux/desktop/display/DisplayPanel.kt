@@ -4,7 +4,6 @@
 // a stream with transport != "vnc" shows a plain "unsupported" message rather than crashing.
 package dev.supermux.desktop.display
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -41,10 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isPrimaryPressed
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -59,7 +55,9 @@ import dev.supermux.net.VncStatus
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.launch
 import dev.supermux.display.VncInput
+import dev.supermux.ui.display.VncFrame
 import dev.supermux.ui.display.VncFramebuffer
+import dev.supermux.ui.display.vncPointerInput
 
 /**
  * Display pane for a session's running VNC stream. Resolves the newest running [DisplayStream]
@@ -149,7 +147,7 @@ private fun awtSpecialKey(keyCode: Int): VncInput.SpecialKey? = when (keyCode) {
 /**
  * Live VNC framebuffer + pointer/keyboard surface for a single display [streamId]. Runs the
  * [VncClient], blits decoded rects into a [VncFramebuffer], paints it aspect-fit via a
- * plain Compose [Image] (`ContentScale.Fit` does the letterbox — no manual Canvas math needed),
+ * plain Compose Image inside the shared [VncFrame] (ContentScale.Fit does the letterbox),
  * and forwards clicks (button-mask 1 on Press/Move, 0 on Release — matches Android's VncView) +
  * keyboard (AWT keyChar/keyCode → [VncInput]'s X11 keysym tables) to the remote. Not unit tested
  * — see [DisplayPanelTest]'s header for why; proven live by this milestone's Task 5.
@@ -160,7 +158,6 @@ private fun VncCanvas(streamId: String, provider: String, connectVnc: (String) -
     val fb = remember(streamId) { VncFramebuffer() }
     val status by client.status.collectAsState()
     val size by client.size.collectAsState()
-    val bitmap by fb.bitmap
     val scope = rememberCoroutineScope()
     val sizeRef by rememberUpdatedState(size)
     val focusRequester = remember { FocusRequester() }
@@ -200,33 +197,17 @@ private fun VncCanvas(streamId: String, provider: String, connectVnc: (String) -
                 scope.launch { client.sendKey(keysym, down) }
                 true
             }
-            .pointerInput(streamId) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull() ?: continue
-                        if (event.type == PointerEventType.Press) focusRequester.requestFocus()
-                        val mask = when (event.type) {
-                            PointerEventType.Press, PointerEventType.Move -> if (event.buttons.isPrimaryPressed) 1 else 0
-                            PointerEventType.Release -> 0
-                            else -> continue
-                        }
-                        val sz = sizeRef ?: continue
-                        val vs = viewSizeRef
-                        val (rx, ry) = VncInput.mapToRemote(change.position.x, change.position.y, vs.width, vs.height, sz.first, sz.second)
-                        scope.launch { client.sendPointer(rx, ry, mask) }
-                    }
-                }
-            },
+            // Shared with Android since G2's review fix: same mask rules, plus "ignore what the
+            // overlay buttons consumed" and "release a cancelled gesture".
+            .vncPointerInput(
+                key = streamId,
+                viewSize = { viewSizeRef },
+                remoteSize = { sizeRef },
+                onPress = { focusRequester.requestFocus() },
+            ) { rx, ry, mask -> scope.launch { client.sendPointer(rx, ry, mask) } },
     ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap!!,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-            )
-        }
+        // The ONLY reader of the framebuffer state, so a frame recomposes this leaf alone.
+        VncFrame(fb, Modifier.fillMaxSize())
         DisplayStatusChip(status, Modifier.align(Alignment.TopEnd).padding(Space.sm))
         TextButton(
             onClick = { scope.launch { client.sendCtrlAltDel() } },

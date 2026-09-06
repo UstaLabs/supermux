@@ -45,7 +45,7 @@ actual class VncFramebuffer actual constructor() {
     actual fun applyUpdate(rects: List<VncRect>, size: Pair<Int, Int>?) {
         val resized = size?.let { resize(it.first, it.second) } ?: false
         if (fbW <= 0 || fbH <= 0) return
-        val dirty = VncFrameOps.dirtyRegion(rects, fbW, fbH)
+        val applies = VncFrameOps.anyApplies(rects, fbW, fbH)
         for (r in rects) {
             if (!VncFrameOps.accepts(r, fbW, fbH)) continue
             if (r.isCopy) {
@@ -56,7 +56,7 @@ actual class VncFramebuffer actual constructor() {
         }
         // Nothing applied AND no reallocation: the painted frame is still current, so skip the
         // upload and the recomposition it would trigger.
-        if (dirty == null && !resized) return
+        if (!applies && !resized) return
         val bmp = skiaBitmap ?: return
         bmp.installPixels(buffer)
         frame.value = bmp.asComposeImageBitmap()

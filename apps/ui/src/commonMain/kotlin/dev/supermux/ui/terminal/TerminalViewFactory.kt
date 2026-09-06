@@ -5,6 +5,7 @@
 package dev.supermux.ui.terminal
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -112,17 +113,28 @@ interface TerminalSurface {
 class LazyTerminalClient(private val connect: () -> TerminalClient) {
     private var client: TerminalClient? = null
 
-    /** Whether the client has been built yet — for tests, and for a dispose that must not connect. */
-    val created: Boolean get() = client != null
-
     /** The client, building it on the first call. */
     fun get(): TerminalClient = client ?: connect().also { client = it }
+
+    /** Stop the client IF it was ever built — never connects one just to close it. */
+    fun stopIfCreated() {
+        client?.stop()
+    }
 }
 
-/** Remember one [LazyTerminalClient] for the life of the surface. */
+/**
+ * Remember one [LazyTerminalClient] for the life of the surface, stopping it on dispose.
+ *
+ * The dispose matters for the key-bar-only case: a client the sink built is not owned by any
+ * grid, so nothing else would ever close it. A client the grid DID mount is stopped by the panel
+ * too — [TerminalClient.stop] is idempotent.
+ */
 @Composable
-fun rememberLazyTerminalClient(connect: () -> TerminalClient): LazyTerminalClient =
-    remember { LazyTerminalClient(connect) }
+fun rememberLazyTerminalClient(connect: () -> TerminalClient): LazyTerminalClient {
+    val holder = remember { LazyTerminalClient(connect) }
+    DisposableEffect(holder) { onDispose { holder.stopIfCreated() } }
+    return holder
+}
 
 /**
  * Renders the shared `PredictionEngine`'s display ops against one engine's screen — the typed shape

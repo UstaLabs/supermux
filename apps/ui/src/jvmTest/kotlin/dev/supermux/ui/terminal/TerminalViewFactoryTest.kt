@@ -119,6 +119,20 @@ class TerminalViewFactoryTest {
     }
 
     @Test
+    fun disposing_a_surface_that_never_drew_never_connects_one_just_to_close_it() = runComposeUiTest {
+        val factory = FakeTerminalViewFactory()
+        var shown by mutableStateOf(true)
+        setContent { if (shown) factory.rememberTerminalSurface { connect() } }
+
+        shown = false
+        waitForIdle()
+
+        // The surface's dispose stops a client it BUILT (nothing else owns a key-bar-only one) —
+        // it must not build one to do it.
+        assertTrue(factory.connects.isEmpty())
+    }
+
+    @Test
     fun mounting_the_grid_connects_the_surface() = runComposeUiTest {
         val factory = FakeTerminalViewFactory()
         setContent { factory.TerminalView({ connect() }, Modifier, active = true, onExit = null) }

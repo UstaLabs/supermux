@@ -51,13 +51,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.IntSize
+import dev.supermux.ui.display.VncFrame
 import dev.supermux.ui.display.VncFramebuffer
+import dev.supermux.ui.display.vncPointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.foundation.text.KeyboardActions
@@ -455,7 +453,6 @@ internal fun ScrcpyView(
 private fun VncView(streamId: String, connectVnc: (String) -> VncClient, provider: String) {
     val client = remember(streamId) { connectVnc(streamId) }
     val fb = remember(streamId) { VncFramebuffer() }
-    val frame by fb.bitmap
     val status by client.status.collectAsState()
     val size by client.size.collectAsState()
     val scope = rememberCoroutineScope()
@@ -483,34 +480,15 @@ private fun VncView(streamId: String, connectVnc: (String) -> VncClient, provide
             .fillMaxSize()
             .testTag("vnc_surface")
             .onSizeChanged { viewSize = it }
-            .pointerInput(streamId) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull() ?: continue
-                        val mask = when (event.type) {
-                            PointerEventType.Press, PointerEventType.Move -> 1   // left button down
-                            PointerEventType.Release -> 0                        // release
-                            else -> continue
-                        }
-                        val sz = sizeRef ?: continue
-                        val vs = viewSizeRef
-                        val (rx, ry) = VncInput.mapToRemote(
-                            change.position.x, change.position.y, vs.width, vs.height, sz.first, sz.second,
-                        )
-                        scope.launch { client.sendPointer(rx, ry, mask) }
-                    }
-                }
-            },
+            .vncPointerInput(
+                key = streamId,
+                viewSize = { viewSizeRef },
+                remoteSize = { sizeRef },
+            ) { rx, ry, mask -> scope.launch { client.sendPointer(rx, ry, mask) } },
     ) {
-        if (frame != null) {
-            Image(
-                bitmap = frame!!,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-            )
-        }
+        // The ONLY reader of the framebuffer state: a new frame recomposes this leaf, not the
+        // control bar / status chip / keyboard field around it.
+        VncFrame(fb, Modifier.fillMaxSize())
 
         DisplayStatusChip(
             state = status.toDisplayState(),

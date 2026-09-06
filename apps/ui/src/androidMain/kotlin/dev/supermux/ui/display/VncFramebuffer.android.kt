@@ -43,7 +43,7 @@ actual class VncFramebuffer actual constructor() {
     actual fun applyUpdate(rects: List<VncRect>, size: Pair<Int, Int>?) {
         val resized = size?.let { resize(it.first, it.second) } ?: false
         val bmp = pixels ?: return
-        val dirty = VncFrameOps.dirtyRegion(rects, fbW, fbH)
+        val applies = VncFrameOps.anyApplies(rects, fbW, fbH)
         for (r in rects) {
             if (!VncFrameOps.accepts(r, fbW, fbH)) continue
             val n = r.width * r.height
@@ -56,7 +56,7 @@ actual class VncFramebuffer actual constructor() {
             bmp.setPixels(px, 0, r.width, r.x, r.y, r.width, r.height)
         }
         // Nothing applied AND no reallocation: the painted frame is still current.
-        if (dirty == null && !resized) return
+        if (!applies && !resized) return
         // A fresh (cheap) wrapper around the SAME native bitmap, so Compose's state sees a new
         // identity and repaints — mirrors the Skia actual.
         frame.value = bmp.asImageBitmap()
