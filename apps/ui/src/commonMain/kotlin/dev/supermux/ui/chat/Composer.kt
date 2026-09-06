@@ -1,7 +1,19 @@
-// The ONE chat composer (cluster D3) — a single soft rounded card holding the multiline draft, a
-// chip row while attachments are staged, and a bottom toolbar: + attach · model pill · effort pill
-// on the left; mic + send/stop on the right. Above the card sit the `/command` menu, the
-// "Transcribing…" strip and (while dictating) the RecordingBar takeover.
+// The ONE composer (cluster D3, widened to the launcher in F7) — a single soft rounded card holding
+// the multiline draft, a chip row while attachments are staged, and a bottom toolbar: + attach ·
+// model pill · effort pill on the left; mic + send/stop on the right. Above the card sit the
+// `/command` menu, the "Transcribing…" strip and (while dictating) the RecordingBar takeover.
+//
+// TWO screens render it: the chat panel and the New Session launcher, whose capsule card, staged
+// chips, field, key policy, attach/mic/send and slash menu used to be a hand-copy of this file's
+// (acknowledged as such in its own comments). The launcher now passes:
+//   - [ComposerChrome] — the rendering-only differences (solid card on a raised page, a taller
+//     field, its "/" menu drawn inside the card, a thumb-sized send disc) plus [ComposerTags], so
+//     its own suite and device automation keep addressing the very same nodes;
+//   - [ComposerStaging] — PRE-SPAWN staging: a pick goes to the caller's hoisted list instead of an
+//     upload, because there is no session to upload against until the spawn returns;
+//   - a `toolbar` slot — the launcher lays out its OWN pills (agent / model / effort) around the
+//     composer's attach / mic / send, which stay the composer's in behaviour, tag and shape;
+//   - `sendEnabled` / `onSend` — its submit policy (a project must be chosen too) and its spawn.
 //
 // It is desktop's composer as the base — the live UploadState machine, the runSeq stale-callback
 // guard, remember(sessionKey) scoping, the headless external hooks — widened with everything the
@@ -26,16 +38,23 @@
 // Failed, so a message is never sent minus its attachment.
 package dev.supermux.ui.chat
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -45,6 +64,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -64,12 +84,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -77,6 +99,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -88,7 +112,12 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.DEFAULT_MODEL_ID
@@ -102,12 +131,14 @@ import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.session.AgentLogo
 import dev.supermux.ui.session.hasAgentLogo
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
@@ -217,6 +248,132 @@ fun rememberComposerActions(
         gitPush = { app.gitPush(sessionId) },
         gitPublish = { app.gitPublish(sessionId) },
     )
+}
+
+/**
+ * Test tags for the composer's own chrome.
+ *
+ * The composer is rendered by TWO screens (cluster F7): the chat panel and the New Session
+ * launcher, whose card/field/attach/send used to be a hand-copy of this one. The launcher passes
+ * its own tags so its suite (and device automation) keeps addressing the very same nodes it always
+ * did, while there is only one implementation left to keep correct.
+ *
+ * Every piece is always rendered when its state calls for it; [stop] is simply never reached on a
+ * screen with no interruptible agent (the launcher).
+ */
+@Immutable
+data class ComposerTags(
+    val card: String = "composer-card",
+    val input: String = "composer-input",
+    val attach: String = "composer-attach",
+    val mic: String = "composer-mic",
+    val send: String = "composer-send",
+    val stop: String = "composer-stop",
+    val banner: String = "composer_banner",
+    val micError: String = "composer-mic-error",
+    /** Slash rows are tagged `"$slashItemPrefix${command.name}"`. */
+    val slashItemPrefix: String = "chat_slash_item_",
+    /** Staged (pre-spawn) chips are tagged `"$stagedChipPrefix${file.name}"`. */
+    val stagedChipPrefix: String = "composer_staged_",
+)
+
+/** Where the [RecordingBar] takes the composer over while dictating. */
+enum class ComposerRecordingTakeover {
+    /**
+     * Chat: the whole card is replaced by the recording bar, under a pointer as well as under
+     * touch — there is nothing to type into while the mic is live.
+     */
+    WholeCard,
+
+    /**
+     * Launcher: only the field + toolbar are replaced, and only where there is NO pointer. A
+     * desktop launcher keeps its field and spins the mic button in place, which is what it has
+     * always done; the card, its border and any staged chips stay put on both.
+     */
+    FieldOnTouch,
+}
+
+/**
+ * The composer's shape. Defaults ARE the chat composer; the launcher overrides the handful of
+ * places the two screens genuinely differ (a solid card on a raised page, a taller field, its
+ * insert-only "/" menu drawn inside the card, a big thumb-sized send disc).
+ *
+ * Everything here is a rendering decision only — behaviour (send gating, staging, dictation, the
+ * key policy) is shared verbatim by both screens.
+ */
+@Immutable
+data class ComposerChrome(
+    val tags: ComposerTags = ComposerTags(),
+    /** null → the chat card's translucent `surfaceContainerHigh`. */
+    val cardBackground: Color? = null,
+    val cardVerticalPadding: Dp = 12.dp,
+    /**
+     * Animate the whole border primary-tinted on focus. Touch only — a pointer host always gets
+     * the quiet static outline, so no animation runs on desktop at all.
+     */
+    val animatedFocusBorder: Boolean = false,
+    val fieldMinHeight: Dp = 28.dp,
+    val fieldMaxHeight: Dp = 160.dp,
+    val fieldFontSize: TextUnit = 14.sp,
+    val fieldLineHeight: TextUnit = 20.sp,
+    val fieldMaxLines: Int = 8,
+    val capitalizeSentences: Boolean = false,
+    /** Draw the "/" menu inside the card under the field (launcher) rather than above it (chat). */
+    val slashInsideCard: Boolean = false,
+    /**
+     * Every command inserts its text and nothing is filtered by `handledControlKinds`. The
+     * pre-spawn launcher has no session to run a CONTROL command against, so it offers the whole
+     * catalogue as insert-only (and draws no action glyph).
+     */
+    val slashInsertOnly: Boolean = false,
+    /** Draw the "Transcribing…" strip and the dictation banner inside the card, under the field. */
+    val transientLinesInsideCard: Boolean = false,
+    val recordingTakeover: ComposerRecordingTakeover = ComposerRecordingTakeover.WholeCard,
+    /** Under touch, the send disc grows to Android's 40dp press-scaled button. */
+    val largeTouchSend: Boolean = false,
+    val sendContentDescription: String = "Send",
+)
+
+/** One file staged BEFORE any session exists — the launcher's pre-spawn attachment. It carries no
+ *  upload state because there is nothing to upload against yet; the caller uploads them itself
+ *  once the spawn returns. */
+data class ComposerStagedFile(
+    val id: Long,
+    val name: String,
+    val mime: String,
+    val source: ChunkSource,
+)
+
+/**
+ * Pre-spawn staging (the launcher). Non-null replaces the live upload funnel entirely: a pick is
+ * handed to [onStage] instead of being uploaded, the chip strip renders name + × instead of upload
+ * progress, and clipboard paste / external drop stay off (there is no session to paste against).
+ *
+ * The list is HOISTED because only the caller can turn it into the `staged` argument of its spawn.
+ */
+@Immutable
+class ComposerStaging(
+    val files: List<ComposerStagedFile>,
+    val onStage: (PickedFile) -> Unit,
+    val onRemove: (ComposerStagedFile) -> Unit,
+)
+
+/**
+ * The composer's own toolbar controls, handed to a custom [Composer] `toolbar` so a screen can lay
+ * them out its own way (the launcher's pointer row vs its two thumb-reachable touch rows) while the
+ * composer keeps owning their behaviour, their tags and their input-mode branches.
+ *
+ * Each is a no-op where its seam is unbound: [Attach] draws nothing without an upload or staging
+ * seam, [Mic] nothing without a transcribe seam.
+ */
+@Stable
+interface ComposerToolbarScope {
+    @Composable fun Attach()
+
+    @Composable fun Mic()
+
+    /** The send disc — or the Stop disc while the agent is working. */
+    @Composable fun Send()
 }
 
 /** The composer's default hint line (a pointer host shows it; touch hosts name the session). */
@@ -409,9 +566,46 @@ fun Composer(
      * value opens it once.
      */
     openModelPickerNonce: Long = 0L,
+    /** How this screen wants the card drawn (cluster F7). Default = the chat composer. */
+    chrome: ComposerChrome = ComposerChrome(),
+    /**
+     * Caret-aware text, for a caller that must place the cursor itself (the launcher puts it at the
+     * end after a draft restore, a "/" insert and a dictation append). When non-null it REPLACES
+     * [draft]/[onDraftChange] as the field's value, and every programmatic edit the composer makes
+     * is delivered as a [TextFieldValue] whose selection is collapsed at the end of the new text.
+     */
+    value: TextFieldValue? = null,
+    onValueChange: (TextFieldValue) -> Unit = {},
+    /** Pre-spawn staging instead of live uploads — see [ComposerStaging]. */
+    staging: ComposerStaging? = null,
+    /** Identifies this screen to `Platform.pickFiles`/`captureImage`, so a pick that outlives an
+     *  activity recreation comes back to the screen that asked for it. */
+    pickRequester: String = COMPOSER_PICK_REQUESTER,
+    /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
+    micCapture: MicCapture? = null,
+    /**
+     * Overrides the composer's own send gating. The launcher also needs a project chosen, and its
+     * staged files never carry an upload state here, so it computes the whole predicate itself.
+     */
+    sendEnabled: Boolean? = null,
+    /** Spinner inside the send disc while a spawn is in flight (the launcher's submit). */
+    sendProgress: Boolean = false,
+    /**
+     * Replaces the default bottom toolbar. The screen lays out its OWN pills around the composer's
+     * attach / mic / send controls, which stay the composer's (behaviour, tags, input-mode shape).
+     */
+    toolbar: (@Composable ColumnScope.(ComposerToolbarScope) -> Unit)? = null,
 ) {
     val platform = LocalPlatform.current
     val pointer = LocalPointerAvailable.current
+    val tags = chrome.tags
+    // The field's text, whichever of the two value APIs the caller bound.
+    val text = value?.text ?: draft
+    // Every PROGRAMMATIC edit (slash insert, dictation append, external hooks) goes through here,
+    // so a caret-aware caller lands the cursor at the end instead of wherever it happened to be.
+    val setText: (String) -> Unit = { t ->
+        if (value != null) onValueChange(TextFieldValue(t, TextRange(t.length))) else onDraftChange(t)
+    }
     val haptic = rememberHaptics()
     val scope = rememberCoroutineScope()
 
@@ -462,8 +656,15 @@ fun Composer(
     }
 
     /** Stage ONE picked/captured/pasted/dropped file — the single funnel every source shares, so a
-     *  dropped file gets an identical chip + upload + progress to a dialog-picked one. */
+     *  dropped file gets an identical chip + upload + progress to a dialog-picked one. In
+     *  [ComposerStaging] mode the file is handed to the caller's hoisted list instead: there is no
+     *  session to upload against yet. */
     fun stage(picked: PickedFile): String {
+        if (staging != null) {
+            val id = ++ids.nextId
+            staging.onStage(picked)
+            return id.toString()
+        }
         val id = (++ids.nextId).toString()
         attachments.add(
             ComposerAttachment(
@@ -499,8 +700,8 @@ fun Composer(
     // `stage` reads the current session's list through the composition, so a late pick lands in the
     // session that is on screen when it arrives.
     val stageLatest by rememberUpdatedState<(PickedFile) -> Unit> { stage(it) }
-    LaunchedEffect(platform) {
-        platform.pendingPicks(COMPOSER_PICK_REQUESTER).collect { stageLatest(it) }
+    LaunchedEffect(platform, pickRequester) {
+        platform.pendingPicks(pickRequester).collect { stageLatest(it) }
     }
 
     // ── per-session draft persistence (survives switch + process death) ──────────────────
@@ -519,10 +720,10 @@ fun Composer(
     if (saveDraft != null) {
         // Debounced (~400ms) — avoids a persistence write per keystroke. Clearing on send writes
         // the empty draft through this same effect.
-        LaunchedEffect(sessionKey, draft, draftLoaded) {
+        LaunchedEffect(sessionKey, text, draftLoaded) {
             if (!draftLoaded) return@LaunchedEffect
             delay(400)
-            saveDraft(sessionKey, draft)
+            saveDraft(sessionKey, text)
         }
     }
 
@@ -565,13 +766,16 @@ fun Composer(
         }
     }
 
-    val canSend = canSendComposer(draft, attachments, sending)
+    // The launcher overrides this wholesale (it also needs a project, and its staged files carry
+    // no upload state); everything downstream — Enter, the disc, the external-attach send — reads
+    // this one value, so there is exactly one gate.
+    val canSend = sendEnabled ?: canSendComposer(text, attachments, sending)
 
     // Gather-and-send for an ARBITRARY [text] (not just the hoisted [draft]) — same gating +
     // file_id gather + chip clear the Send button/Enter key use. Parameterized so [externalAttach]
     // can send its own text without racing the hoisted draft's recomposition.
     fun sendWith(text: String) {
-        if (canSendComposer(text, attachments, sending)) {
+        if (sendEnabled ?: canSendComposer(text, attachments, sending)) {
             val fileIds = attachments.mapNotNull { (it.state as? UploadState.Done)?.fileId }
             onSend(text.trim(), fileIds)
             attachments.clear()
@@ -579,7 +783,7 @@ fun Composer(
     }
     val doSend = {
         if (canSend) haptic.perform(HapticKind.Confirm)
-        sendWith(draft)
+        sendWith(text)
     }
 
     val dictation = rememberDictation(
@@ -587,7 +791,8 @@ fun Composer(
         loadGlossary = actions.loadGlossary,
         transcribeDraft = actions.transcribeDraft,
         transcribeAudio = { bytes, name -> onTranscribeAudio?.invoke(bytes, name) },
-        onAppend = { cleaned -> onDraftChange(draft + (if (draft.isBlank()) "" else " ") + cleaned) },
+        onAppend = { cleaned -> setText(text + (if (text.isBlank()) "" else " ") + cleaned) },
+        mic = micCapture ?: platform.mic,
     )
 
     // SM_DICTATE headless hook: feed bytes already on disk through the SAME transcribe seam the mic
@@ -598,7 +803,7 @@ fun Composer(
         if (onTranscribeAudio != null && bytes != null) {
             val cleaned = onTranscribeAudio.invoke(bytes, request.filename)?.trim()
             if (!cleaned.isNullOrEmpty()) {
-                onDraftChange(draft + (if (draft.isBlank()) "" else " ") + cleaned)
+                setText(text + (if (text.isBlank()) "" else " ") + cleaned)
             }
         }
         onExternalDictateConsumed()
@@ -634,8 +839,11 @@ fun Composer(
     // ── slash-command menu: the active "/token" at the end of the draft (start-of-line or after
     //    whitespace), filtering on name OR family, capped at 8. Matching lives in SlashCommands.kt,
     //    shared with the New Session launcher. ──
-    val slashQuery = activeSlashQuery(draft)
-    val slashMatches = slashCommandMatches(draft, commands) { it in handledControlKinds }
+    val slashQuery = activeSlashQuery(text)
+    // Remembered: this ran on EVERY recomposition (every keystroke recomposes the whole card).
+    val slashMatches = remember(text, commands, handledControlKinds, chrome.slashInsertOnly) {
+        slashCommandMatches(text, commands) { chrome.slashInsertOnly || it in handledControlKinds }
+    }
     var selectedSlashIndex by remember { mutableIntStateOf(0) }
     var slashMenuDismissed by remember { mutableStateOf(false) }
     LaunchedEffect(slashQuery) { selectedSlashIndex = 0; slashMenuDismissed = false }
@@ -646,11 +854,11 @@ fun Composer(
     // token and fire onControl; everything else inserts its text.
     fun selectSlashCommand(cmd: SlashCommand) {
         haptic.perform(HapticKind.Tick)
-        if (cmd.action != null) {
-            onDraftChange(replaceSlashToken(draft, ""))
+        if (cmd.action != null && !chrome.slashInsertOnly) {
+            setText(replaceSlashToken(text, ""))
             onControl(cmd)
         } else {
-            onDraftChange(replaceSlashToken(draft, slashInsertText(cmd)))
+            setText(replaceSlashToken(text, slashInsertText(cmd)))
         }
     }
 
@@ -673,12 +881,451 @@ fun Composer(
     var dragOver by remember(sessionKey) { mutableStateOf(false) }
 
     val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp — matches the mock capsule
+    // Touch-only: the whole border animates primary-tinted on focus (the launcher's card). Read
+    // ONLY inside the branch that wants it, so no animation is ever started on a pointer host.
+    val animatedBorder = if (chrome.animatedFocusBorder && !pointer) {
+        val animated by animateColorAsState(
+            targetValue = if (inputFocused) cs.primary else cs.outlineVariant,
+            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            label = "composer_card_border",
+        )
+        animated
+    } else {
+        null
+    }
     val cardBorder = when {
         dragOver -> cs.primary
+        animatedBorder != null -> animatedBorder
         inputFocused -> cs.outline.copy(alpha = 0.55f)
         else -> cs.outlineVariant.copy(alpha = 0.65f)
     }
     val cardBorderWidth = if (dragOver) 2.dp else 1.dp
+
+    // Attach is bound by EITHER seam: a live upload (chat) or pre-spawn staging (the launcher).
+    val attachBound = onUpload != null || staging != null
+    val stagedFiles = staging?.files.orEmpty()
+    val largeSend = chrome.largeTouchSend && !pointer
+
+    // The composer's own controls, so a screen supplying its own [toolbar] still gets THESE — same
+    // behaviour, same tags, same input-mode branches — around its own pills.
+    val toolbarScope = object : ComposerToolbarScope {
+        @Composable
+        override fun Attach() {
+            if (!attachBound) return
+            AttachControl(
+                pointer = pointer,
+                camera = platform.caps.camera,
+                testTag = tags.attach,
+                clipboardHasImage = {
+                    // Pre-spawn staging has no clipboard path at all (nothing to paste against).
+                    staging == null && platform.caps.clipboardImages && platform.clipboard.hasImage()
+                },
+                onPickFiles = { kind ->
+                    scope.launch { stageFiles(platform.pickFiles(kind, pickRequester)) }
+                },
+                onCaptureImage = {
+                    scope.launch { platform.captureImage(pickRequester)?.let { stage(it) } }
+                },
+                onCaptureVideo = {
+                    scope.launch { platform.captureVideo(pickRequester)?.let { stage(it) } }
+                },
+                onPasteImage = { launchPasteImages() },
+            )
+        }
+
+        @Composable
+        override fun Mic() {
+            if (onTranscribeAudio == null) return
+            MicButton(
+                recording = dictation.recording,
+                transcribing = dictation.transcribing,
+                micUnavailable = dictation.micUnavailable,
+                onClick = { dictation.onMicClick() },
+                modifier = Modifier.testTag(tags.mic),
+            )
+        }
+
+        @Composable
+        override fun Send() {
+            if (agentWorking) {
+                IconButton(
+                    onClick = onInterrupt,
+                    modifier = Modifier.size(32.dp).testTag(tags.stop),
+                ) {
+                    Box(
+                        Modifier.size(28.dp).clip(CircleShape).background(cs.error),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.Stop,
+                            contentDescription = "Stop",
+                            tint = cs.onError,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
+            } else {
+                ComposerSendButton(
+                    enabled = canSend,
+                    progress = sendProgress,
+                    large = largeSend,
+                    contentDescription = chrome.sendContentDescription,
+                    testTag = tags.send,
+                    onClick = doSend,
+                )
+            }
+        }
+    }
+
+    // Recording takes the composer over: the WHOLE card in chat, only the field + toolbar (and only
+    // where there is no pointer) in the launcher.
+    val wholeCardRecording =
+        dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.WholeCard
+    val fieldRecording =
+        dictation.active && chrome.recordingTakeover == ComposerRecordingTakeover.FieldOnTouch && !pointer
+
+    val slashMenuBlock: @Composable () -> Unit = {
+        SlashMenu(
+            matches = slashMatches,
+            selectedIndex = safeSlashIndex,
+            onSelect = { selectSlashCommand(it) },
+            modifier = if (chrome.slashInsideCard) {
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(cs.surfaceContainerHigh)
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .background(cs.surfaceContainer)
+            },
+            testTagPrefix = tags.slashItemPrefix,
+            showActionGlyph = !chrome.slashInsertOnly,
+        )
+    }
+
+    val card: @Composable () -> Unit = {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(cardShape)
+                .background(chrome.cardBackground ?: cs.surfaceContainerHigh.copy(alpha = 0.72f))
+                .border(cardBorderWidth, cardBorder, cardShape)
+                .padding(horizontal = 14.dp, vertical = chrome.cardVerticalPadding)
+                .testTag(tags.card),
+        ) {
+            if (staging != null) {
+                // Pre-spawn strip: name + × only. There is no upload in flight to report on.
+                if (stagedFiles.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        stagedFiles.forEach { file ->
+                            key(file.id) {
+                                StagedChip(
+                                    name = file.name,
+                                    testTag = tags.stagedChipPrefix + file.name,
+                                    onRemove = { staging.onRemove(file) },
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (attachments.isNotEmpty() || pastePending) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (pastePending) PastePendingChip()
+                    attachments.forEach { att ->
+                        key(att.id) {
+                            ComposerChip(
+                                att = att,
+                                onRemove = { removeAttachment(att.id) },
+                                onRetry = { launchUpload(att.id) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (fieldRecording) {
+                RecordingBar(
+                    seconds = dictation.recordingSeconds,
+                    liveTranscript = dictation.liveTranscript.orEmpty(),
+                    onStop = { dictation.stopMic() },
+                    onCancel = { dictation.cancelMic() },
+                )
+            } else {
+                val fieldModifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = chrome.fieldMinHeight, max = chrome.fieldMaxHeight)
+                    .testTag(tags.input)
+                    .onPreviewKeyEvent { e: KeyEvent ->
+                        when {
+                            // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
+                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
+                                selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
+                                true
+                            }
+                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
+                                selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
+                                true
+                            }
+                            // Enter picks a slash command — soft OR hardware, since the menu is
+                            // on screen and picking is what Enter obviously means there.
+                            slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
+                                slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
+                                true
+                            }
+                            slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
+                                slashMenuDismissed = true
+                                true
+                            }
+                            // Per EVENT, not per window: a phone with a keyboard paired still
+                            // shows a soft IME, whose Return must insert a newline.
+                            e.isComposerSendEnter() -> {
+                                // Consume ONLY when we actually send; a blank/sending/upload-blocked
+                                // draft falls through so the multiline field handles Enter itself.
+                                if (canSend) {
+                                    doSend()
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            handleComposerPasteKey(
+                                key = e.key,
+                                type = e.type,
+                                ctrlPressed = e.isCtrlPressed,
+                                metaPressed = e.isMetaPressed,
+                                shiftPressed = e.isShiftPressed,
+                                // Staged mode has no live upload to paste into.
+                                uploadBound = onUpload != null,
+                                // Probe the clipboard ONLY after the paste chord matches — not
+                                // on every keystroke (cross-process selection can stall).
+                                likelyHasImage = { platform.clipboard.hasImage() },
+                                onPasteImage = { launchPasteImages() },
+                            ) -> true
+                            else -> false
+                        }
+                    }
+                val fieldTextStyle = TextStyle(
+                    color = cs.onSurface,
+                    fontSize = chrome.fieldFontSize,
+                    lineHeight = chrome.fieldLineHeight,
+                )
+                val fieldKeyboardOptions = if (chrome.capitalizeSentences) {
+                    KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
+                } else {
+                    KeyboardOptions.Default
+                }
+                val fieldDecoration: @Composable (@Composable () -> Unit) -> Unit = { inner ->
+                    Box(Modifier.fillMaxWidth()) {
+                        if (text.isEmpty()) {
+                            Text(
+                                text = placeholder,
+                                color = cs.onSurfaceVariant.copy(alpha = 0.72f),
+                                fontSize = chrome.fieldFontSize,
+                                lineHeight = chrome.fieldLineHeight,
+                                maxLines = 2,
+                            )
+                        }
+                        inner()
+                    }
+                }
+                if (value != null) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = fieldModifier,
+                        textStyle = fieldTextStyle,
+                        cursorBrush = SolidColor(cs.primary),
+                        maxLines = chrome.fieldMaxLines,
+                        keyboardOptions = fieldKeyboardOptions,
+                        interactionSource = inputInteraction,
+                        decorationBox = fieldDecoration,
+                    )
+                } else {
+                    BasicTextField(
+                        value = draft,
+                        onValueChange = onDraftChange,
+                        modifier = fieldModifier,
+                        textStyle = fieldTextStyle,
+                        cursorBrush = SolidColor(cs.primary),
+                        maxLines = chrome.fieldMaxLines,
+                        keyboardOptions = fieldKeyboardOptions,
+                        interactionSource = inputInteraction,
+                        decorationBox = fieldDecoration,
+                    )
+                }
+
+                if (chrome.slashInsideCard && slashMenuOpen) {
+                    Spacer(Modifier.height(8.dp))
+                    slashMenuBlock()
+                }
+
+                if (toolbar != null) {
+                    toolbar(toolbarScope)
+                } else {
+                    // Bottom toolbar — + · model · effort on the left; mic · send/stop on the right.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            toolbarScope.Attach()
+                            if (showModelPill) {
+                                val modelOptions = listOf(DEFAULT_MODEL_ID to "Default") +
+                                    (models?.models?.map { it.id to it.displayName } ?: emptyList())
+                                Box(Modifier.testTag("composer-model-picker")) {
+                                    ComposerPill(
+                                        label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
+                                        testTag = "composer-model-pill",
+                                        onClick = { onPickerOpened(); modelMenu = true },
+                                        leadingIcon = {
+                                            if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
+                                                AgentLogo(sessionAgent, size = 12.dp)
+                                            } else {
+                                                Icon(
+                                                    Icons.Filled.AutoAwesome,
+                                                    contentDescription = null,
+                                                    tint = cs.onSurfaceVariant,
+                                                    modifier = Modifier.size(13.dp),
+                                                )
+                                            }
+                                        },
+                                    )
+                                    if (pointer) {
+                                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                                            val selectedId = composerModelSelectedId(modelCurrent)
+                                            modelOptions.forEach { (id, label) ->
+                                                DropdownMenuItem(
+                                                    text = { Text(label) },
+                                                    trailingIcon = {
+                                                        if (id == selectedId) {
+                                                            Icon(
+                                                                Icons.Filled.Check,
+                                                                null,
+                                                                Modifier.size(16.dp),
+                                                                tint = cs.primary,
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier.testTag("composer-model-$id"),
+                                                    onClick = {
+                                                        modelMenu = false
+                                                        onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!pointer && modelMenu) {
+                                    PickerSheet(
+                                        title = "Select Model",
+                                        options = modelOptions,
+                                        current = composerModelSelectedId(modelCurrent),
+                                        onPick = { onPickModel(if (it == DEFAULT_MODEL_ID) "" else it) },
+                                        onDismiss = { modelMenu = false },
+                                    )
+                                }
+                            }
+                            if (r != null && showReasoningPill) {
+                                // Always low→high for menu + gauge (broker order is not trusted).
+                                val effortLevels = sortEffortLevelsLowToHigh(r.levels)
+                                val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
+                                    current = reasoningCurrent,
+                                    levels = r.levels,
+                                )
+                                Box(Modifier.testTag("composer-reasoning-picker")) {
+                                    ComposerPill(
+                                        label = composerReasoningLabel(r, reasoningCurrent),
+                                        testTag = "composer-reasoning-pill",
+                                        onClick = { onPickerOpened(); reasoningMenu = true },
+                                        leadingIcon = {
+                                            Speedometer(
+                                                levels = gaugeLevels,
+                                                value = gaugeValue,
+                                                tint = cs.onSurfaceVariant,
+                                                activeTint = cs.primary,
+                                                iconSize = 14.dp,
+                                                testTag = "composer-effort-gauge",
+                                            )
+                                        },
+                                    )
+                                    if (pointer) {
+                                        DropdownMenu(
+                                            expanded = reasoningMenu,
+                                            onDismissRequest = { reasoningMenu = false },
+                                        ) {
+                                            effortLevels.forEach { level ->
+                                                DropdownMenuItem(
+                                                    text = { Text(composerReasoningLevelLabel(level)) },
+                                                    trailingIcon = {
+                                                        if (level.id == reasoningCurrent) {
+                                                            Icon(
+                                                                Icons.Filled.Check,
+                                                                null,
+                                                                Modifier.size(16.dp),
+                                                                tint = cs.primary,
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier.testTag("composer-reasoning-${level.id}"),
+                                                    onClick = {
+                                                        reasoningMenu = false
+                                                        onPickReasoning(level.id)
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!pointer && reasoningMenu) {
+                                    PickerSheet(
+                                        title = "Select Effort Level",
+                                        options = effortLevels.map { it.id to (it.description ?: it.id) },
+                                        current = reasoningCurrent,
+                                        onPick = { onPickReasoning(it) },
+                                        onDismiss = { reasoningMenu = false },
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            toolbarScope.Mic()
+                            toolbarScope.Send()
+                        }
+                    }
+                }
+            }
+
+            if (chrome.transientLinesInsideCard) {
+                if (dictation.transcribing) {
+                    Spacer(Modifier.height(Space.sm))
+                    TranscribingIndicator()
+                }
+                if (!pointer) dictation.banner?.let { msg ->
+                    Spacer(Modifier.height(Space.xs))
+                    Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.testTag(tags.banner))
+                }
+            }
+        }
+    }
 
     Column(
         modifier
@@ -689,48 +1336,43 @@ fun Composer(
                 onFiles = { stageFiles(it) },
             ),
     ) {
-        if (slashMenuOpen) {
-            SlashMenu(
-                matches = slashMatches,
-                selectedIndex = safeSlashIndex,
-                onSelect = { selectSlashCommand(it) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(cs.surfaceContainer),
-                testTagPrefix = "chat_slash_item_",
-                showActionGlyph = true,
-            )
-            Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
-        } else if (slashQuery != null && !commandsResolved) {
-            // A fresh session whose command set hasn't resolved yet.
-            Text(
-                text = "Loading commands…",
-                color = cs.onSurfaceVariant,
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(cs.surfaceContainer)
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                    .testTag("chat_slash_loading"),
-            )
+        if (!chrome.slashInsideCard) {
+            if (slashMenuOpen) {
+                slashMenuBlock()
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+            } else if (slashQuery != null && !commandsResolved) {
+                // A fresh session whose command set hasn't resolved yet.
+                Text(
+                    text = "Loading commands…",
+                    color = cs.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(cs.surfaceContainer)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .testTag("chat_slash_loading"),
+                )
+            }
         }
 
-        // ONE transient line, not two: a touch host gets the takeover-style banner above the card,
-        // a pointer host the quieter inline line under it (both carry the same text).
-        if (!pointer) dictation.banner?.let { msg ->
-            Text(
-                msg,
-                color = cs.onSurfaceVariant,
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                    .testTag("composer_banner"),
-            )
+        if (!chrome.transientLinesInsideCard) {
+            // ONE transient line, not two: a touch host gets the takeover-style banner above the
+            // card, a pointer host the quieter inline line under it (both carry the same text).
+            if (!pointer) dictation.banner?.let { msg ->
+                Text(
+                    msg,
+                    color = cs.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag(tags.banner),
+                )
+            }
+            if (dictation.transcribing) TranscribingIndicator()
         }
-        if (dictation.transcribing) TranscribingIndicator()
 
-        if (dictation.active) {
+        if (wholeCardRecording) {
             // Recording takes the composer over entirely (iOS/Android parity).
             RecordingBar(
                 seconds = dictation.recordingSeconds,
@@ -738,337 +1380,25 @@ fun Composer(
                 onStop = { dictation.stopMic() },
                 onCancel = { dictation.cancelMic() },
             )
-        } else ComposerContextMenu(
-            pasteEnabled = onUpload != null,
-            onPasteImage = { launchPasteImages() },
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(cardShape)
-                    .background(cs.surfaceContainerHigh.copy(alpha = 0.72f))
-                    .border(cardBorderWidth, cardBorder, cardShape)
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-                    .testTag("composer-card"),
-            ) {
-                if (attachments.isNotEmpty() || pastePending) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        if (pastePending) PastePendingChip()
-                        attachments.forEach { att ->
-                            key(att.id) {
-                                ComposerChip(
-                                    att = att,
-                                    onRemove = { removeAttachment(att.id) },
-                                    onRetry = { launchUpload(att.id) },
-                                )
-                            }
-                        }
-                    }
-                }
-
-                BasicTextField(
-                    value = draft,
-                    onValueChange = onDraftChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 28.dp, max = 160.dp)
-                        .testTag("composer-input")
-                        .onPreviewKeyEvent { e: KeyEvent ->
-                            when {
-                                // Slash menu open → arrows move the highlight, Enter picks, Esc closes.
-                                slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown -> {
-                                    selectedSlashIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
-                                    true
-                                }
-                                slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.DirectionUp -> {
-                                    selectedSlashIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                                    true
-                                }
-                                // Enter picks a slash command — soft OR hardware, since the menu is
-                                // on screen and picking is what Enter obviously means there.
-                                slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
-                                    slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                                    true
-                                }
-                                slashMenuOpen && e.type == KeyEventType.KeyDown && e.key == Key.Escape -> {
-                                    slashMenuDismissed = true
-                                    true
-                                }
-                                // Per EVENT, not per window: a phone with a keyboard paired still
-                                // shows a soft IME, whose Return must insert a newline.
-                                e.isComposerSendEnter() -> {
-                                    // Consume ONLY when we actually send; a blank/sending/upload-blocked
-                                    // draft falls through so the multiline field handles Enter itself.
-                                    if (canSend) {
-                                        doSend()
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                handleComposerPasteKey(
-                                    key = e.key,
-                                    type = e.type,
-                                    ctrlPressed = e.isCtrlPressed,
-                                    metaPressed = e.isMetaPressed,
-                                    shiftPressed = e.isShiftPressed,
-                                    uploadBound = onUpload != null,
-                                    // Probe the clipboard ONLY after the paste chord matches — not
-                                    // on every keystroke (cross-process selection can stall).
-                                    likelyHasImage = { platform.clipboard.hasImage() },
-                                    onPasteImage = { launchPasteImages() },
-                                ) -> true
-                                else -> false
-                            }
-                        },
-                    textStyle = TextStyle(
-                        color = cs.onSurface,
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp,
-                    ),
-                    cursorBrush = SolidColor(cs.primary),
-                    maxLines = 8,
-                    interactionSource = inputInteraction,
-                    decorationBox = { inner ->
-                        Box(Modifier.fillMaxWidth()) {
-                            if (draft.isEmpty()) {
-                                Text(
-                                    text = placeholder,
-                                    color = cs.onSurfaceVariant.copy(alpha = 0.72f),
-                                    fontSize = 14.sp,
-                                    lineHeight = 20.sp,
-                                    maxLines = 2,
-                                )
-                            }
-                            inner()
-                        }
-                    },
-                )
-
-                // Bottom toolbar — + · model · effort on the left; mic · send on the right.
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        if (onUpload != null) {
-                            AttachControl(
-                                pointer = pointer,
-                                camera = platform.caps.camera,
-                                clipboardHasImage = {
-                                    platform.caps.clipboardImages && platform.clipboard.hasImage()
-                                },
-                                onPickFiles = { kind ->
-                                    scope.launch {
-                                        stageFiles(platform.pickFiles(kind, COMPOSER_PICK_REQUESTER))
-                                    }
-                                },
-                                onCaptureImage = {
-                                    scope.launch {
-                                        platform.captureImage(COMPOSER_PICK_REQUESTER)?.let { stage(it) }
-                                    }
-                                },
-                                onCaptureVideo = {
-                                    scope.launch {
-                                        platform.captureVideo(COMPOSER_PICK_REQUESTER)?.let { stage(it) }
-                                    }
-                                },
-                                onPasteImage = { launchPasteImages() },
-                            )
-                        }
-                        if (showModelPill) {
-                            val modelOptions = listOf(DEFAULT_MODEL_ID to "Default") +
-                                (models?.models?.map { it.id to it.displayName } ?: emptyList())
-                            Box(Modifier.testTag("composer-model-picker")) {
-                                ComposerPill(
-                                    label = composerModelLabel(modelCurrent, models?.models ?: emptyList()),
-                                    testTag = "composer-model-pill",
-                                    onClick = { onPickerOpened(); modelMenu = true },
-                                    leadingIcon = {
-                                        if (sessionAgent != null && hasAgentLogo(sessionAgent)) {
-                                            AgentLogo(sessionAgent, size = 12.dp)
-                                        } else {
-                                            Icon(
-                                                Icons.Filled.AutoAwesome,
-                                                contentDescription = null,
-                                                tint = cs.onSurfaceVariant,
-                                                modifier = Modifier.size(13.dp),
-                                            )
-                                        }
-                                    },
-                                )
-                                if (pointer) {
-                                    DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                                        val selectedId = composerModelSelectedId(modelCurrent)
-                                        modelOptions.forEach { (id, label) ->
-                                            DropdownMenuItem(
-                                                text = { Text(label) },
-                                                trailingIcon = {
-                                                    if (id == selectedId) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("composer-model-$id"),
-                                                onClick = {
-                                                    modelMenu = false
-                                                    onPickModel(if (id == DEFAULT_MODEL_ID) "" else id)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            if (!pointer && modelMenu) {
-                                PickerSheet(
-                                    title = "Select Model",
-                                    options = modelOptions,
-                                    current = composerModelSelectedId(modelCurrent),
-                                    onPick = { onPickModel(if (it == DEFAULT_MODEL_ID) "" else it) },
-                                    onDismiss = { modelMenu = false },
-                                )
-                            }
-                        }
-                        if (r != null && showReasoningPill) {
-                            // Always low→high for menu + gauge (broker order is not trusted).
-                            val effortLevels = sortEffortLevelsLowToHigh(r.levels)
-                            val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
-                                current = reasoningCurrent,
-                                levels = r.levels,
-                            )
-                            Box(Modifier.testTag("composer-reasoning-picker")) {
-                                ComposerPill(
-                                    label = composerReasoningLabel(r, reasoningCurrent),
-                                    testTag = "composer-reasoning-pill",
-                                    onClick = { onPickerOpened(); reasoningMenu = true },
-                                    leadingIcon = {
-                                        Speedometer(
-                                            levels = gaugeLevels,
-                                            value = gaugeValue,
-                                            tint = cs.onSurfaceVariant,
-                                            activeTint = cs.primary,
-                                            iconSize = 14.dp,
-                                            testTag = "composer-effort-gauge",
-                                        )
-                                    },
-                                )
-                                if (pointer) {
-                                    DropdownMenu(
-                                        expanded = reasoningMenu,
-                                        onDismissRequest = { reasoningMenu = false },
-                                    ) {
-                                        effortLevels.forEach { level ->
-                                            DropdownMenuItem(
-                                                text = { Text(composerReasoningLevelLabel(level)) },
-                                                trailingIcon = {
-                                                    if (level.id == reasoningCurrent) {
-                                                        Icon(
-                                                            Icons.Filled.Check,
-                                                            null,
-                                                            Modifier.size(16.dp),
-                                                            tint = cs.primary,
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier.testTag("composer-reasoning-${level.id}"),
-                                                onClick = {
-                                                    reasoningMenu = false
-                                                    onPickReasoning(level.id)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            if (!pointer && reasoningMenu) {
-                                PickerSheet(
-                                    title = "Select Effort Level",
-                                    options = effortLevels.map { it.id to (it.description ?: it.id) },
-                                    current = reasoningCurrent,
-                                    onPick = { onPickReasoning(it) },
-                                    onDismiss = { reasoningMenu = false },
-                                )
-                            }
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (onTranscribeAudio != null) {
-                            MicButton(
-                                recording = dictation.recording,
-                                transcribing = dictation.transcribing,
-                                micUnavailable = dictation.micUnavailable,
-                                onClick = { dictation.onMicClick() },
-                                modifier = Modifier.testTag("composer-mic"),
-                            )
-                        }
-                        if (agentWorking) {
-                            IconButton(
-                                onClick = onInterrupt,
-                                modifier = Modifier.size(32.dp).testTag("composer-stop"),
-                            ) {
-                                Box(
-                                    Modifier.size(28.dp).clip(CircleShape).background(cs.error),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Stop,
-                                        contentDescription = "Stop",
-                                        tint = cs.onError,
-                                        modifier = Modifier.size(14.dp),
-                                    )
-                                }
-                            }
-                        } else {
-                            IconButton(
-                                onClick = doSend,
-                                enabled = canSend,
-                                modifier = Modifier.size(32.dp).testTag("composer-send"),
-                            ) {
-                                Box(
-                                    Modifier
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(if (canSend) cs.primary else cs.surfaceContainerHighest),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = "Send",
-                                        tint = if (canSend) cs.onPrimary else cs.onSurfaceVariant.copy(alpha = 0.45f),
-                                        modifier = Modifier.size(14.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        } else if (staging != null) {
+            // No clipboard image path pre-spawn, so no right-click "Paste image" area either.
+            card()
+        } else {
+            ComposerContextMenu(
+                pasteEnabled = onUpload != null,
+                onPasteImage = { launchPasteImages() },
+                content = card,
+            )
         }
         if (pointer) dictation.errorMessage?.let { msg ->
             Text(
                 msg,
                 color = MaterialTheme.colorScheme.error,
                 fontSize = 11.sp,
-                modifier = Modifier.padding(top = 4.dp).testTag("composer-mic-error"),
+                modifier = Modifier.padding(top = 4.dp).testTag(tags.micError),
             )
         }
     }
-
     if (dictation.micDenied) MicDeniedDialog(onDismiss = { dictation.micDenied = false })
 }
 
@@ -1079,11 +1409,16 @@ fun Composer(
  * right-click menu, where a mouse user looks for it, and desktop has no camera. Under TOUCH it
  * opens the menu Android has always had: Paste (only when the clipboard actually holds an image),
  * Photos, Files, and — gated on `caps.camera` — Camera and Record video.
+ *
+ * Touch-target rule: a pointer keeps the compact 32dp button a mouse can hit exactly; a finger gets
+ * a full 48dp `IconButton` around a 34dp `surfaceContainerHigh` chip, so the `+` is both reachable
+ * and visible as an affordance rather than a bare glyph.
  */
 @Composable
 private fun AttachControl(
     pointer: Boolean,
     camera: Boolean,
+    testTag: String,
     clipboardHasImage: () -> Boolean,
     onPickFiles: (PickKind) -> Unit,
     onCaptureImage: () -> Unit,
@@ -1095,14 +1430,31 @@ private fun AttachControl(
     Box {
         IconButton(
             onClick = { if (pointer) onPickFiles(PickKind.Any) else menu = true },
-            modifier = Modifier.size(32.dp).testTag("composer-attach"),
+            modifier = Modifier.size(if (pointer) 32.dp else 48.dp).testTag(testTag),
         ) {
-            Icon(
-                Icons.Filled.Add,
-                contentDescription = "Attach",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+            if (pointer) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = "Attach",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            } else {
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(cs.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = "Attach",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
         }
         if (!pointer) {
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -1228,18 +1580,19 @@ private fun ComposerChip(
 }
 
 /** Compact text-style pill (optional leading icon + label + chevron) — the model / effort chips
- *  inside the composer card. Borderless + muted ink so they sit as chrome on the soft card. */
+ *  inside the composer card, and the launcher's own pointer-side pills. Borderless + muted ink so
+ *  they sit as chrome on the soft card. [testTag] is null where the tag lives on a wrapping node. */
 @Composable
-private fun ComposerPill(
+internal fun ComposerPill(
     label: String,
-    testTag: String,
+    testTag: String?,
     onClick: () -> Unit,
     leadingIcon: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
-            .testTag(testTag)
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
             .clip(RoundedCornerShape(Radii.pill))
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -1254,5 +1607,97 @@ private fun ComposerPill(
             tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
             modifier = Modifier.size(14.dp),
         )
+    }
+}
+
+/** One pre-spawn staged chip: the file's name and an × to drop it. No progress, no retry — there
+ *  is no upload in flight before the session exists. */
+@Composable
+private fun StagedChip(name: String, testTag: String, onRemove: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(Radii.pill))
+            .background(cs.surfaceContainerHigh)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(name, color = cs.onSurface, fontSize = 12.sp, maxLines = 1)
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "Remove",
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.size(14.dp).clickable { onRemove() },
+        )
+    }
+}
+
+/**
+ * The send disc. A pointer gets the compact 28dp disc inside a 32dp button; [large] gives a finger
+ * Android's 40dp press-scaled disc inside the IconButton's own 48dp target, and paints a DISABLED
+ * disc in a dimmed primary rather than the pointer host's grey (it reads as "not yet", not "off").
+ *
+ * [progress] swaps the glyph for a spinner while a spawn is in flight (the launcher's submit).
+ */
+@Composable
+private fun ComposerSendButton(
+    enabled: Boolean,
+    progress: Boolean,
+    large: Boolean,
+    contentDescription: String,
+    testTag: String,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    // Only the big touch disc scales on press — nothing animates on a pointer host.
+    val scale = if (large) {
+        val pressed by interaction.collectIsPressedAsState()
+        val animated by animateFloatAsState(
+            targetValue = if (pressed) 0.88f else 1f,
+            animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = Spring.DampingRatioMediumBouncy),
+            label = "send_scale",
+        )
+        animated
+    } else {
+        1f
+    }
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        interactionSource = interaction,
+        modifier = Modifier.then(if (large) Modifier else Modifier.size(32.dp)).testTag(testTag),
+    ) {
+        Box(
+            modifier = Modifier
+                .then(if (large) Modifier.scale(scale) else Modifier)
+                .size(if (large) 40.dp else 28.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        enabled -> cs.primary
+                        large -> cs.primary.copy(alpha = 0.35f)
+                        else -> cs.surfaceContainerHighest
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (progress) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(if (large) 18.dp else 14.dp),
+                    strokeWidth = 2.dp,
+                    color = cs.onPrimary,
+                )
+            } else {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = contentDescription,
+                    tint = if (enabled || large) cs.onPrimary else cs.onSurfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.size(if (large) 18.dp else 14.dp),
+                )
+            }
+        }
     }
 }

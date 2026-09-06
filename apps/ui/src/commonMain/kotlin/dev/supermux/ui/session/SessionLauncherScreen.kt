@@ -15,6 +15,14 @@
 // + `pendingPicks`; desktop's omnibox project picker, `initialWorkdir` (the launcher inside a
 // workspace tab), `onClearDraft`, the injectable `micCapture` and the inline broker-refusal text.
 //
+// THE CARD IS NOT THIS FILE'S (cluster F7). The capsule, its focus border, the staged-chip strip,
+// the message field + key policy, the "/" menu, attach/mic/send and the RecordingBar takeover are
+// `ui/chat/Composer`, rendered here with the launcher's [dev.supermux.ui.chat.ComposerChrome],
+// [dev.supermux.ui.chat.ComposerStaging] (pre-spawn: files are staged, never uploaded) and a
+// `toolbar` slot into which this screen drops its OWN pills — agent, model, effort — around the
+// composer's controls. What is left below is the launcher: the hero, the project picker, the
+// worktree/host pills, the settle-vs-change effects, and submit.
+//
 // THE SUBTLE PART (identical on both hosts, and the reason it is extracted + unit-tested): the
 // [launcherRestoring] gate plus lastSeenAgent / lastSeenWorkdir (NOT one-shot "armed" booleans)
 // distinguish a draft-restore SETTLING from a genuine later user change, so restoring a draft never
@@ -25,10 +33,9 @@ package dev.supermux.ui.session
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,12 +54,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -60,15 +63,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -87,37 +84,26 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.DEFAULT_MODEL_ID
 import dev.supermux.host.HostView
-import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.RepoInfo
@@ -139,26 +125,19 @@ import dev.supermux.state.StagedUpload
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.Composer
+import dev.supermux.ui.chat.ComposerActions
+import dev.supermux.ui.chat.ComposerChrome
+import dev.supermux.ui.chat.ComposerPill
+import dev.supermux.ui.chat.ComposerRecordingTakeover
+import dev.supermux.ui.chat.ComposerStagedFile
+import dev.supermux.ui.chat.ComposerStaging
+import dev.supermux.ui.chat.ComposerTags
 import dev.supermux.ui.chat.EffortPill
-import dev.supermux.ui.chat.MicButton
-import dev.supermux.ui.chat.MicDeniedDialog
 import dev.supermux.ui.chat.ModelPill
 import dev.supermux.ui.chat.PickerSheet
-import dev.supermux.ui.chat.RecordingBar
-import dev.supermux.ui.chat.SlashMenu
-import dev.supermux.ui.chat.TranscribingIndicator
-import dev.supermux.ui.chat.activeSlashQuery
-import dev.supermux.ui.chat.isComposerEnterKey
-import dev.supermux.ui.chat.isComposerSendEnter
-import dev.supermux.ui.chat.rememberDictation
-import dev.supermux.ui.chat.replaceSlashToken
-import dev.supermux.ui.chat.slashCommandMatches
-import dev.supermux.ui.chat.slashInsertText
 import dev.supermux.ui.host.HostDot
-import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
-import dev.supermux.ui.platform.PickKind
-import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.resources.Res
 import dev.supermux.ui.resources.mux_logo
 import dev.supermux.ui.theme.HapticKind
@@ -213,31 +192,10 @@ fun filterBranches(repoInfo: RepoInfo?, query: String): List<String> {
 }
 
 /**
- * Project paths filtered by a case-insensitive [query] substring matched against BOTH the raw path
- * and the [formatWorkdir]-style display label (the tilde-prefixed form the picker actually shows).
- * An empty query returns [projects] unchanged. Mirrors iOS `filteredProjects` so a typed "~" or
- * "alpha" narrows the list the same way the user already sees on phone.
- *
- * The shared [ProjectPicker]'s omnibox routes its local rows through `buildOmniboxOptions`, which
- * subsumes this; the rule is kept here (with its tests) because it is the launcher's project-search
- * contract that the iOS client still mirrors line for line.
- */
-fun filterProjects(projects: List<String>, home: String, query: String): List<String> {
-    val q = query.trim().lowercase()
-    if (q.isEmpty()) return projects
-    return projects.filter { path ->
-        path.lowercase().contains(q) || formatWorkdir(path, home).lowercase().contains(q)
-    }
-}
-
-/**
  * Max content width for the launcher form. Matches chat's reading column roughly so a wide detail
  * pane doesn't leave a thin ribbon of fields on ultra-wide layouts (a no-op on a phone).
  */
 private val LAUNCHER_MAX_WIDTH = 720.dp
-
-/** One attachment staged before any session exists (uploaded post-spawn by the caller's onSubmit). */
-private data class StagedChip(val id: Long, val name: String, val source: ChunkSource, val mime: String)
 
 /**
  * The New-Session launcher. Broker access is injected through [actions] (cluster F1) — no store ref
@@ -315,8 +273,6 @@ fun SessionLauncherScreen(
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    val platform = LocalPlatform.current
-    val haptic = rememberHaptics()
     val pointer = LocalPointerAvailable.current
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val chrome = (standalone || compact) && !topBarShown
@@ -539,20 +495,10 @@ fun SessionLauncherScreen(
     }
 
     // ── Staged attachments (no session yet — uploaded post-spawn by onSubmit) ────────────────────
-    val staged = remember { mutableStateListOf<StagedChip>() }
+    // Hoisted because only this screen can turn them into the spawn's `staged` argument; the shared
+    // Composer owns the picking, the recreation-stash re-delivery and the chip strip.
+    val staged = remember { mutableStateListOf<ComposerStagedFile>() }
     var stagedIdGen by remember { mutableStateOf(0L) }
-    fun stagePicked(picked: PickedFile) {
-        stagedIdGen += 1
-        staged.add(StagedChip(stagedIdGen, picked.name, picked.source, picked.mime))
-    }
-    // A pick/capture that completed while the activity was being re-created (Android rotation with
-    // the system picker up) has no coroutine left to await it — it is re-delivered here, tagged with
-    // THIS screen's requester so the chat composer never steals it. Collected for the whole
-    // lifetime of the screen: a one-shot read races the delivery.
-    val stageLatest by rememberUpdatedState<(PickedFile) -> Unit> { stagePicked(it) }
-    LaunchedEffect(platform) {
-        platform.pendingPicks(LAUNCHER_PICK_REQUESTER).collect { stageLatest(it) }
-    }
 
     // Follow the most-recently-used project as session/message data hydrates, but freeze once
     // the user engages (picked a path or started composing) — web chooseDefaultProject parity.
@@ -572,23 +518,43 @@ fun SessionLauncherScreen(
         )
     }
 
-    // ── Composer focus/send affordances (shared Composer chrome parity) ─────────────────────────
-    val composerInteraction = remember { MutableInteractionSource() }
-    val composerFocused by composerInteraction.collectIsFocusedAsState()
-    // Capsule card like chat, but solid fill — the launcher sits on surfaceContainerHigh, so a
-    // translucent high fill would disappear; surfaceContainerLowest lifts it off the page.
-    val cardShape = RoundedCornerShape(Radii.lg + 8.dp) // ~24dp capsule
-    // Touch animates the whole border primary-tinted (Android's card); a pointer gets the quieter
-    // static outline desktop has always drawn.
-    val animatedBorder by animateColorAsState(
-        targetValue = if (composerFocused) cs.primary else cs.outlineVariant,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "composer_card_border",
-    )
-    val cardBorder = if (pointer) {
-        if (composerFocused) cs.outline.copy(alpha = 0.55f) else cs.outlineVariant.copy(alpha = 0.65f)
-    } else {
-        animatedBorder
+    // ── The shared chat composer, wearing the launcher's clothes (cluster F7) ────────────────────
+    // Solid fill, not chat's translucent one: the launcher sits ON surfaceContainerHigh, so a
+    // translucent high fill would disappear; surfaceContainerLowest lifts the capsule off the page.
+    val composerChrome = remember(cs) {
+        ComposerChrome(
+            tags = ComposerTags(
+                card = "launcher_composer_card",
+                input = "launcher_message",
+                attach = "launcher_attach",
+                mic = "launcher_mic",
+                send = "launcher_submit",
+                banner = "launcher_banner",
+                micError = "launcher_mic_error",
+                slashItemPrefix = "launcher_slash_item_",
+                stagedChipPrefix = "launcher_staged_",
+            ),
+            cardBackground = cs.surfaceContainerLowest,
+            cardVerticalPadding = 14.dp,
+            animatedFocusBorder = true,
+            fieldMinHeight = 120.dp,
+            fieldMaxHeight = 280.dp,
+            fieldFontSize = 15.sp,
+            fieldLineHeight = 22.sp,
+            fieldMaxLines = 12,
+            capitalizeSentences = true,
+            slashInsideCard = true,
+            // Pre-spawn there is no session to run a CONTROL command against, so every command is
+            // offered and every pick just drops its text in (iOS SlashMenu showsActionGlyph:false).
+            slashInsertOnly = true,
+            transientLinesInsideCard = true,
+            recordingTakeover = ComposerRecordingTakeover.FieldOnTouch,
+            largeTouchSend = true,
+            sendContentDescription = "Start session",
+        )
+    }
+    val composerActions = remember(actions) {
+        ComposerActions(transcribeDraft = actions.transcribeDraft, loadGlossary = actions.fetchGlossary)
     }
     val canSend = workdir.isNotBlank() && (message.text.isNotBlank() || staged.isNotEmpty())
     val canSaveDraft = workdir.isNotBlank() && message.text.isNotBlank()
@@ -614,27 +580,12 @@ fun SessionLauncherScreen(
         }
     }
 
-    // Dictation (cluster D3): the pre-spawn launcher has no live session, so both transcribe paths
-    // route through the broker's id-less `/transcribe` (bound by the F1 holder). resetKey = Unit —
-    // there is only ever one launcher instance, so nothing to re-scope.
-    val voice = rememberDictation(
-        resetKey = Unit,
-        mic = micCapture ?: platform.mic,
-        loadGlossary = actions.fetchGlossary,
-        transcribeDraft = actions.transcribeDraft,
-        transcribeAudio = actions.transcribeAudio,
-        onAppend = { cleaned ->
-            val joined = if (message.text.isBlank()) cleaned else message.text.trimEnd() + " " + cleaned
-            message = TextFieldValue(joined, TextRange(joined.length))
-            error = null
-        },
-    )
-
     // Spawn → (upload staged files) → send first message. onSubmit does the broker work; success
     // clears the draft and hands the new id to [onOpenSession] where the caller wants it.
     fun doSubmit() {
         if (!canSend || submitting) return
-        haptic.perform(HapticKind.Confirm)
+        // No haptic here: the shared Composer's send path already fires the Confirm tick, and this
+        // is only ever reached through it (the button and Enter are both the composer's).
         submitting = true
         error = null
         val eligible = repoInfo?.eligible == true
@@ -659,25 +610,6 @@ fun SessionLauncherScreen(
                 submitting = false
             }
         }
-    }
-
-    // ── Slash-command menu (mirrors ChatPanel + iOS NewSessionView) ─────────────────────────────
-    // Matches for the active "/token" at the end of the draft. Insert-only here: pre-spawn there is
-    // no session to run a control command against, so a pick just drops the command's text in (iOS
-    // SlashMenu `showsActionGlyph: false`). Keyboard nav mirrors the chat composer.
-    val slashMatches = slashCommandMatches(message.text, launcherCommands)
-    var slashSelectedIndex by remember { mutableIntStateOf(0) }
-    var slashDismissed by remember { mutableStateOf(false) }
-    LaunchedEffect(activeSlashQuery(message.text)) { slashSelectedIndex = 0; slashDismissed = false }
-    val slashMenuOpen = slashMatches.isNotEmpty() && !slashDismissed
-    val safeSlashIndex = slashSelectedIndex.coerceIn(0, (slashMatches.size - 1).coerceAtLeast(0))
-    fun selectSlashCommand(cmd: SlashCommand) {
-        haptic.perform(HapticKind.Tick)
-        // The token is always the draft's tail (activeSlashQuery only matches end-of-draft), so the
-        // inserted command becomes the new tail — move the caret to the end, not the old offset.
-        val inserted = replaceSlashToken(message.text, slashInsertText(cmd))
-        message = TextFieldValue(inserted, TextRange(inserted.length))
-        error = null
     }
 
     val hostPill: @Composable () -> Unit = {
@@ -800,370 +732,233 @@ fun SessionLauncherScreen(
                         }
                     }
 
-                    // ── Composer card — same soft capsule + bottom toolbar as the shared Composer ──
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(cardShape)
-                            .background(cs.surfaceContainerLowest)
-                            .border(1.dp, cardBorder, cardShape)
-                            .padding(horizontal = 14.dp, vertical = 14.dp)
-                            .testTag("launcher_composer_card"),
-                    ) {
-                        // Staged attachment chips (name + remove; upload happens post-spawn).
-                        if (staged.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(bottom = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                staged.forEach { att ->
-                                    Row(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(Radii.pill))
-                                            .background(cs.surfaceContainerHigh)
-                                            .padding(horizontal = 10.dp, vertical = 5.dp)
-                                            .testTag("launcher_staged_${att.name}"),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    // ── The composer card IS the shared chat Composer (cluster F7) ──────────────
+                    // Only the pills below are the launcher's own; the capsule, the staged strip,
+                    // the field + its key policy, the "/" menu, attach/mic/send and the recording
+                    // takeover all come from `ui/chat/Composer`.
+                    val agentControl: @Composable () -> Unit = {
+                        Box {
+                            LauncherAgentPill(
+                                agent = agent,
+                                pointer = pointer,
+                                enabled = !launcherRestoring,
+                                onClick = { agentMenu = true },
+                                modifier = Modifier.testTag("launcher_agent_pill"),
+                            )
+                            DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
+                                agents.forEach { a ->
+                                    DropdownMenuItem(
+                                        text = { Text(a.replaceFirstChar { it.uppercase() }) },
+                                        leadingIcon = { AgentLogo(a, size = if (pointer) 14.dp else 20.dp) },
+                                        modifier = Modifier.testTag("agent_$a"),
+                                        onClick = {
+                                            agent = a
+                                            onPrefsChange(
+                                                LauncherPrefs(
+                                                    agent = a,
+                                                    models = launcherModels,
+                                                    reasoningLevels = launcherReasoning,
+                                                ),
+                                            )
+                                            agentMenu = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    val modelLabel = model?.let { id ->
+                        models.firstOrNull { it.id == id }?.displayName ?: id
+                    } ?: "Default"
+                    val pickModel: (String?) -> Unit = { newModel ->
+                        model = newModel
+                        launcherModels = if (newModel != null) {
+                            launcherModels + (agent to newModel)
+                        } else {
+                            launcherModels - agent
+                        }
+                        onPrefsChange(
+                            LauncherPrefs(
+                                agent = agent,
+                                models = launcherModels,
+                                reasoningLevels = launcherReasoning,
+                            ),
+                        )
+                    }
+                    val modelControl: @Composable () -> Unit = {
+                        Box(Modifier.testTag("launcher_model_picker")) {
+                            if (pointer) {
+                                ComposerPill(
+                                    label = modelLabel,
+                                    testTag = null,
+                                    onClick = { if (!launcherRestoring) modelMenu = true },
+                                    leadingIcon = {
+                                        if (hasAgentLogo(agent)) AgentLogo(agent, size = 12.dp)
+                                    },
+                                )
+                                DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                                    val opts = listOf(DEFAULT_MODEL_ID to "Default") +
+                                        models.map { it.id to it.displayName }
+                                    opts.forEach { (id, label) ->
+                                        val selected = (model ?: DEFAULT_MODEL_ID) == id
+                                        DropdownMenuItem(
+                                            text = { Text(label) },
+                                            trailingIcon = {
+                                                if (selected) {
+                                                    Icon(
+                                                        Icons.Filled.Check,
+                                                        null,
+                                                        Modifier.size(16.dp),
+                                                        tint = cs.primary,
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("model_$id"),
+                                            onClick = {
+                                                pickModel(if (id == DEFAULT_MODEL_ID) null else id)
+                                                modelMenu = false
+                                            },
+                                        )
+                                    }
+                                }
+                            } else {
+                                ModelPill(
+                                    current = modelLabel,
+                                    onClick = { if (!launcherRestoring) modelMenu = true },
+                                )
+                                if (modelMenu) {
+                                    PickerSheet(
+                                        title = "Select Model",
+                                        options = listOf(DEFAULT_MODEL_ID to "Default") +
+                                            models.map { it.id to it.displayName },
+                                        current = model ?: DEFAULT_MODEL_ID,
+                                        onPick = { pickModel(if (it == DEFAULT_MODEL_ID) null else it) },
+                                        onDismiss = { modelMenu = false },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    val pickEffort: (String) -> Unit = { level ->
+                        reasoningLevel = level
+                        launcherReasoning = launcherReasoning + (agent to level)
+                        onPrefsChange(
+                            LauncherPrefs(
+                                agent = agent,
+                                models = launcherModels,
+                                reasoningLevels = launcherReasoning,
+                            ),
+                        )
+                    }
+                    val effortControl: @Composable () -> Unit = {
+                        if (reasoningVisible) {
+                            Box(Modifier.testTag("launcher_effort_picker")) {
+                                if (pointer) {
+                                    val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
+                                        current = reasoningLevel,
+                                        levels = reasoningLevels,
+                                    )
+                                    ComposerPill(
+                                        label = reasoningLevel ?: "effort",
+                                        testTag = null,
+                                        onClick = { if (!launcherRestoring) reasoningMenu = true },
+                                        leadingIcon = {
+                                            Speedometer(
+                                                levels = gaugeLevels,
+                                                value = gaugeValue,
+                                                tint = cs.onSurfaceVariant,
+                                                activeTint = cs.primary,
+                                                iconSize = 14.dp,
+                                                testTag = "launcher_effort_gauge",
+                                            )
+                                        },
+                                    )
+                                    DropdownMenu(
+                                        expanded = reasoningMenu,
+                                        onDismissRequest = { reasoningMenu = false },
                                     ) {
-                                        Text(att.name, color = cs.onSurface, fontSize = 12.sp, maxLines = 1)
-                                        Icon(
-                                            Icons.Filled.Close,
-                                            contentDescription = "Remove",
-                                            tint = cs.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clickable { staged.removeAll { it.id == att.id } },
+                                        sortEffortLevelsLowToHigh(reasoningLevels).forEach { level ->
+                                            val selected = level.id == reasoningLevel
+                                            DropdownMenuItem(
+                                                text = { Text(level.id) },
+                                                trailingIcon = {
+                                                    if (selected) {
+                                                        Icon(
+                                                            Icons.Filled.Check,
+                                                            null,
+                                                            Modifier.size(16.dp),
+                                                            tint = cs.primary,
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.testTag("effort_${level.id}"),
+                                                onClick = {
+                                                    pickEffort(level.id)
+                                                    reasoningMenu = false
+                                                },
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    EffortPill(
+                                        current = reasoningLevel?.replaceFirstChar { it.uppercase() },
+                                        onClick = { if (!launcherRestoring) reasoningMenu = true },
+                                    )
+                                    if (reasoningMenu) {
+                                        PickerSheet(
+                                            title = "Thinking level",
+                                            options = reasoningLevels.map { it.id to (it.description ?: it.id) },
+                                            current = reasoningLevel,
+                                            onPick = { pickEffort(it) },
+                                            onDismiss = { reasoningMenu = false },
                                         )
                                     }
                                 }
                             }
                         }
+                    }
+                    val saveDraftButton: @Composable () -> Unit = {
+                        TextButton(
+                            onClick = { doSaveDraft() },
+                            enabled = canSaveDraft && !submitting,
+                            modifier = Modifier.testTag("launcher_save_draft"),
+                        ) {
+                            Text("Save draft", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                        }
+                    }
 
-                        // A touch host hands the whole card over to the RecordingBar while
-                        // dictating (Android/iOS parity); a pointer host keeps the field and spins
-                        // the mic button in place, which is what desktop has always done.
-                        if (!pointer && voice.active) {
-                            RecordingBar(
-                                seconds = voice.recordingSeconds,
-                                liveTranscript = voice.liveTranscript.orEmpty(),
-                                onStop = { voice.stopMic() },
-                                onCancel = { voice.cancelMic() },
-                            )
-                        } else {
-                            BasicTextField(
-                                value = message,
-                                onValueChange = { message = it; error = null },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 120.dp, max = 280.dp)
-                                    .testTag("launcher_message")
-                                    // With the "/" menu open, ↑/↓ move the highlight, Enter picks
-                                    // and Esc closes; otherwise a REAL keyboard's Enter submits
-                                    // while Shift+Enter and a soft-IME Return insert a newline
-                                    // (isComposerSendEnter answers that per event).
-                                    .onPreviewKeyEvent { e ->
-                                        if (e.type != KeyEventType.KeyDown) false
-                                        else when {
-                                            slashMenuOpen && e.key == Key.DirectionDown -> {
-                                                slashSelectedIndex = (safeSlashIndex + 1).coerceAtMost(slashMatches.size - 1)
-                                                true
-                                            }
-                                            slashMenuOpen && e.key == Key.DirectionUp -> {
-                                                slashSelectedIndex = (safeSlashIndex - 1).coerceAtLeast(0)
-                                                true
-                                            }
-                                            slashMenuOpen && e.isComposerEnterKey() && !e.isShiftPressed -> {
-                                                slashMatches.getOrNull(safeSlashIndex)?.let { selectSlashCommand(it) }
-                                                true
-                                            }
-                                            slashMenuOpen && e.key == Key.Escape -> {
-                                                slashDismissed = true
-                                                true
-                                            }
-                                            e.isComposerSendEnter() -> {
-                                                if (canSend && !submitting) {
-                                                    doSubmit()
-                                                    true
-                                                } else {
-                                                    false
-                                                }
-                                            }
-                                            else -> false
-                                        }
-                                    },
-                                textStyle = TextStyle(
-                                    color = cs.onSurface,
-                                    fontSize = 15.sp,
-                                    lineHeight = 22.sp,
-                                ),
-                                cursorBrush = SolidColor(cs.primary),
-                                maxLines = 12,
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                                interactionSource = composerInteraction,
-                                decorationBox = { inner ->
-                                    Box(Modifier.fillMaxWidth()) {
-                                        if (message.text.isEmpty()) {
-                                            Text(
-                                                text = "What should the agent do?",
-                                                color = cs.onSurfaceVariant.copy(alpha = 0.72f),
-                                                fontSize = 15.sp,
-                                                lineHeight = 22.sp,
-                                                maxLines = 2,
-                                            )
-                                        }
-                                        inner()
-                                    }
-                                },
-                            )
-
-                            // ── "/" command menu: matches for the active token (insert-only) ──
-                            if (slashMenuOpen) {
-                                Spacer(Modifier.height(8.dp))
-                                SlashMenu(
-                                    matches = slashMatches,
-                                    selectedIndex = safeSlashIndex,
-                                    onSelect = { selectSlashCommand(it) },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(cs.surfaceContainerHigh),
-                                    testTagPrefix = "launcher_slash_item_",
-                                    showActionGlyph = false,
+                    Composer(
+                        // Both text APIs bound: the launcher owns a TextFieldValue because a draft
+                        // restore, a "/" insert and a dictation append must land the caret at the
+                        // end, which the String field cannot express.
+                        draft = message.text,
+                        onDraftChange = { message = TextFieldValue(it, TextRange(it.length)); error = null },
+                        value = message,
+                        onValueChange = { message = it; error = null },
+                        sending = submitting,
+                        agentWorking = false,
+                        onSend = { _, _ -> doSubmit() },
+                        onInterrupt = {},
+                        onTranscribeAudio = actions.transcribeAudio,
+                        actions = composerActions,
+                        commands = launcherCommands,
+                        placeholder = "What should the agent do?",
+                        chrome = composerChrome,
+                        staging = ComposerStaging(
+                            files = staged,
+                            onStage = { picked ->
+                                stagedIdGen += 1
+                                staged.add(
+                                    ComposerStagedFile(stagedIdGen, picked.name, picked.mime, picked.source),
                                 )
-                            }
-
-                            val agentControl: @Composable () -> Unit = {
-                                Box {
-                                    LauncherAgentPill(
-                                        agent = agent,
-                                        pointer = pointer,
-                                        enabled = !launcherRestoring,
-                                        onClick = { agentMenu = true },
-                                        modifier = Modifier.testTag("launcher_agent_pill"),
-                                    )
-                                    DropdownMenu(expanded = agentMenu, onDismissRequest = { agentMenu = false }) {
-                                        agents.forEach { a ->
-                                            DropdownMenuItem(
-                                                text = { Text(a.replaceFirstChar { it.uppercase() }) },
-                                                leadingIcon = { AgentLogo(a, size = if (pointer) 14.dp else 20.dp) },
-                                                modifier = Modifier.testTag("agent_$a"),
-                                                onClick = {
-                                                    agent = a
-                                                    onPrefsChange(
-                                                        LauncherPrefs(
-                                                            agent = a,
-                                                            models = launcherModels,
-                                                            reasoningLevels = launcherReasoning,
-                                                        ),
-                                                    )
-                                                    agentMenu = false
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            val modelLabel = model?.let { id ->
-                                models.firstOrNull { it.id == id }?.displayName ?: id
-                            } ?: "Default"
-                            val pickModel: (String?) -> Unit = { newModel ->
-                                model = newModel
-                                launcherModels = if (newModel != null) {
-                                    launcherModels + (agent to newModel)
-                                } else {
-                                    launcherModels - agent
-                                }
-                                onPrefsChange(
-                                    LauncherPrefs(
-                                        agent = agent,
-                                        models = launcherModels,
-                                        reasoningLevels = launcherReasoning,
-                                    ),
-                                )
-                            }
-                            val modelControl: @Composable () -> Unit = {
-                                Box(Modifier.testTag("launcher_model_picker")) {
-                                    if (pointer) {
-                                        LauncherPill(
-                                            label = modelLabel,
-                                            onClick = { if (!launcherRestoring) modelMenu = true },
-                                            leadingIcon = {
-                                                if (hasAgentLogo(agent)) AgentLogo(agent, size = 12.dp)
-                                            },
-                                        )
-                                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                                            val opts = listOf(DEFAULT_MODEL_ID to "Default") +
-                                                models.map { it.id to it.displayName }
-                                            opts.forEach { (id, label) ->
-                                                val selected = (model ?: DEFAULT_MODEL_ID) == id
-                                                DropdownMenuItem(
-                                                    text = { Text(label) },
-                                                    trailingIcon = {
-                                                        if (selected) {
-                                                            Icon(
-                                                                Icons.Filled.Check,
-                                                                null,
-                                                                Modifier.size(16.dp),
-                                                                tint = cs.primary,
-                                                            )
-                                                        }
-                                                    },
-                                                    modifier = Modifier.testTag("model_$id"),
-                                                    onClick = {
-                                                        pickModel(if (id == DEFAULT_MODEL_ID) null else id)
-                                                        modelMenu = false
-                                                    },
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        ModelPill(
-                                            current = modelLabel,
-                                            onClick = { if (!launcherRestoring) modelMenu = true },
-                                        )
-                                        if (modelMenu) {
-                                            PickerSheet(
-                                                title = "Select Model",
-                                                options = listOf(DEFAULT_MODEL_ID to "Default") +
-                                                    models.map { it.id to it.displayName },
-                                                current = model ?: DEFAULT_MODEL_ID,
-                                                onPick = { pickModel(if (it == DEFAULT_MODEL_ID) null else it) },
-                                                onDismiss = { modelMenu = false },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            val pickEffort: (String) -> Unit = { level ->
-                                reasoningLevel = level
-                                launcherReasoning = launcherReasoning + (agent to level)
-                                onPrefsChange(
-                                    LauncherPrefs(
-                                        agent = agent,
-                                        models = launcherModels,
-                                        reasoningLevels = launcherReasoning,
-                                    ),
-                                )
-                            }
-                            val effortControl: @Composable () -> Unit = {
-                                if (reasoningVisible) {
-                                    Box(Modifier.testTag("launcher_effort_picker")) {
-                                        if (pointer) {
-                                            val (gaugeLevels, gaugeValue) = effortSpeedometerParams(
-                                                current = reasoningLevel,
-                                                levels = reasoningLevels,
-                                            )
-                                            LauncherPill(
-                                                label = reasoningLevel ?: "effort",
-                                                onClick = { if (!launcherRestoring) reasoningMenu = true },
-                                                leadingIcon = {
-                                                    Speedometer(
-                                                        levels = gaugeLevels,
-                                                        value = gaugeValue,
-                                                        tint = cs.onSurfaceVariant,
-                                                        activeTint = cs.primary,
-                                                        iconSize = 14.dp,
-                                                        testTag = "launcher_effort_gauge",
-                                                    )
-                                                },
-                                            )
-                                            DropdownMenu(
-                                                expanded = reasoningMenu,
-                                                onDismissRequest = { reasoningMenu = false },
-                                            ) {
-                                                sortEffortLevelsLowToHigh(reasoningLevels).forEach { level ->
-                                                    val selected = level.id == reasoningLevel
-                                                    DropdownMenuItem(
-                                                        text = { Text(level.id) },
-                                                        trailingIcon = {
-                                                            if (selected) {
-                                                                Icon(
-                                                                    Icons.Filled.Check,
-                                                                    null,
-                                                                    Modifier.size(16.dp),
-                                                                    tint = cs.primary,
-                                                                )
-                                                            }
-                                                        },
-                                                        modifier = Modifier.testTag("effort_${level.id}"),
-                                                        onClick = {
-                                                            pickEffort(level.id)
-                                                            reasoningMenu = false
-                                                        },
-                                                    )
-                                                }
-                                            }
-                                        } else {
-                                            EffortPill(
-                                                current = reasoningLevel?.replaceFirstChar { it.uppercase() },
-                                                onClick = { if (!launcherRestoring) reasoningMenu = true },
-                                            )
-                                            if (reasoningMenu) {
-                                                PickerSheet(
-                                                    title = "Thinking level",
-                                                    options = reasoningLevels.map { it.id to (it.description ?: it.id) },
-                                                    current = reasoningLevel,
-                                                    onPick = { pickEffort(it) },
-                                                    onDismiss = { reasoningMenu = false },
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            val attachControl: @Composable () -> Unit = {
-                                LauncherAttachControl(
-                                    pointer = pointer,
-                                    camera = platform.caps.camera,
-                                    onPickFiles = { kind ->
-                                        scope.launch {
-                                            platform.pickFiles(kind, LAUNCHER_PICK_REQUESTER)
-                                                .forEach { stagePicked(it) }
-                                        }
-                                    },
-                                    onCaptureImage = {
-                                        scope.launch {
-                                            platform.captureImage(LAUNCHER_PICK_REQUESTER)?.let { stagePicked(it) }
-                                        }
-                                    },
-                                    onCaptureVideo = {
-                                        scope.launch {
-                                            platform.captureVideo(LAUNCHER_PICK_REQUESTER)?.let { stagePicked(it) }
-                                        }
-                                    },
-                                )
-                            }
-                            val micButton: @Composable () -> Unit = {
-                                MicButton(
-                                    recording = voice.recording,
-                                    transcribing = voice.transcribing,
-                                    micUnavailable = voice.micUnavailable,
-                                    onClick = { voice.onMicClick() },
-                                    modifier = Modifier.testTag("launcher_mic"),
-                                )
-                            }
-                            val saveDraftButton: @Composable () -> Unit = {
-                                TextButton(
-                                    onClick = { doSaveDraft() },
-                                    enabled = canSaveDraft && !submitting,
-                                    modifier = Modifier.testTag("launcher_save_draft"),
-                                ) {
-                                    Text("Save draft", fontSize = 12.sp, color = cs.onSurfaceVariant)
-                                }
-                            }
-                            val sendButton: @Composable () -> Unit = {
-                                LauncherSendButton(
-                                    pointer = pointer,
-                                    canSend = canSend,
-                                    submitting = submitting,
-                                    onClick = { doSubmit() },
-                                )
-                            }
-
+                            },
+                            onRemove = { file -> staged.removeAll { it.id == file.id } },
+                        ),
+                        pickRequester = LAUNCHER_PICK_REQUESTER,
+                        micCapture = micCapture,
+                        sendEnabled = canSend && !submitting,
+                        sendProgress = submitting,
+                        toolbar = { composer ->
                             if (pointer) {
                                 // Desktop's ONE toolbar: + · agent · model · effort | mic · draft · send.
                                 Row(
@@ -1177,15 +972,15 @@ fun SessionLauncherScreen(
                                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                                         modifier = Modifier.weight(1f),
                                     ) {
-                                        attachControl()
+                                        composer.Attach()
                                         agentControl()
                                         modelControl()
                                         effortControl()
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        micButton()
+                                        composer.Mic()
                                         saveDraftButton()
-                                        sendButton()
+                                        composer.Send()
                                     }
                                 }
                             } else {
@@ -1207,32 +1002,18 @@ fun SessionLauncherScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
                                 ) {
-                                    attachControl()
-                                    micButton()
+                                    composer.Attach()
+                                    composer.Mic()
                                     Spacer(Modifier.weight(1f))
                                     saveDraftButton()
-                                    sendButton()
+                                    composer.Send()
                                 }
                             }
-                        }
-
-                        if (voice.transcribing) {
-                            Spacer(Modifier.height(Space.sm))
-                            TranscribingIndicator()
-                        }
-                        // ONE transient line, not two (the shared Composer's rule): the takeover
-                        // banner on touch, the quieter inline error under the card on a pointer.
-                        if (!pointer) voice.banner?.let { msg ->
-                            Spacer(Modifier.height(Space.xs))
-                            Text(msg, color = cs.onSurfaceVariant, fontSize = 12.sp)
-                        }
-                    }
+                        },
+                    )
 
                     error?.let {
                         Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_error"))
-                    }
-                    if (pointer) voice.errorMessage?.let {
-                        Text(it, color = cs.error, fontSize = 12.sp, modifier = Modifier.testTag("launcher_mic_error"))
                     }
 
                     // Folder caption — a calm restatement of the resolved workdir.
@@ -1304,8 +1085,6 @@ fun SessionLauncherScreen(
             onDismiss = { showWorktreePicker = false },
         )
     }
-
-    if (voice.micDenied) MicDeniedDialog(onDismiss = { voice.micDenied = false })
 }
 
 /**
@@ -1358,17 +1137,18 @@ private fun LauncherHostPill(
             modifier = Modifier.testTag("launcher_host_menu"),
         ) {
             hosts.forEach { h ->
-                DropdownMenuItem(
-                    leadingIcon = { HostDot(h.colorIndex, size = if (pointer) 9.dp else 10.dp) },
-                    // Both hosts' row tags kept: desktop's on the row, Android's on its label.
-                    text = {
-                        Box(Modifier.testTag("launcher_host_${h.recordId}")) {
-                            Text(h.displayLabel + if (!h.online) " (offline)" else "")
-                        }
-                    },
-                    onClick = { onSelect(h.recordId); expanded = false },
-                    modifier = Modifier.testTag("launcher_host_item_${h.recordId}"),
-                )
+                // Both hosts' row tags kept AND both reachable without `useUnmergedTree`: a
+                // DropdownMenuItem MERGES its subtree, so Android's tag nested in `text` used to be
+                // invisible to the merged semantics tree. It now sits on a plain (non-merging) Box
+                // around the item, which stays a node of its own.
+                Box(Modifier.testTag("launcher_host_${h.recordId}")) {
+                    DropdownMenuItem(
+                        leadingIcon = { HostDot(h.colorIndex, size = if (pointer) 9.dp else 10.dp) },
+                        text = { Text(h.displayLabel + if (!h.online) " (offline)" else "") },
+                        onClick = { onSelect(h.recordId); expanded = false },
+                        modifier = Modifier.fillMaxWidth().testTag("launcher_host_item_${h.recordId}"),
+                    )
+                }
             }
         }
     }
@@ -1408,7 +1188,13 @@ private fun LauncherAgentPill(
                         .border(1.dp, cs.outline, RoundedCornerShape(20.dp))
                 },
             )
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled) {
+            // A pointer host keeps the platform ripple (desktop's agent pill lost it when the two
+            // branches were merged); touch suppresses it because the press-scale IS the feedback.
+            .clickable(
+                interactionSource = interaction,
+                indication = if (pointer) LocalIndication.current else null,
+                enabled = enabled,
+            ) {
                 haptic.perform(HapticKind.Tick)
                 onClick()
             }
@@ -1438,38 +1224,6 @@ private fun LauncherAgentPill(
     }
 }
 
-/** Borderless model/effort pill matching the shared Composer pills (optional leading icon). */
-@Composable
-private fun LauncherPill(
-    label: String,
-    onClick: () -> Unit,
-    leadingIcon: (@Composable () -> Unit)? = null,
-) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(Radii.pill))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        leadingIcon?.invoke()
-        Text(
-            label.take(22),
-            color = cs.onSurfaceVariant,
-            fontSize = 12.sp,
-            maxLines = 1,
-        )
-        Icon(
-            Icons.Filled.KeyboardArrowDown,
-            contentDescription = null,
-            tint = cs.onSurfaceVariant.copy(alpha = 0.75f),
-            modifier = Modifier.size(14.dp),
-        )
-    }
-}
-
 /** Capsule pill for the worktree toggle — tinted (primary) when worktree is on. */
 @Composable
 private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -1488,126 +1242,6 @@ private fun WorktreePill(label: String, active: Boolean, onClick: () -> Unit, mo
         Icon(Icons.AutoMirrored.Filled.CallSplit, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
         Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = tint.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
-    }
-}
-
-/**
- * The `+` affordance, following the shared Composer's rule (cluster D3): under a POINTER it opens
- * the file dialog directly (desktop has no camera and one dialog covers every type); under TOUCH it
- * opens Android's menu — Photos, Files and, gated on `Caps.camera`, Camera and Record video.
- */
-@Composable
-private fun LauncherAttachControl(
-    pointer: Boolean,
-    camera: Boolean,
-    onPickFiles: (PickKind) -> Unit,
-    onCaptureImage: () -> Unit,
-    onCaptureVideo: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    var menu by remember { mutableStateOf(false) }
-    Box {
-        IconButton(
-            onClick = { if (pointer) onPickFiles(PickKind.Any) else menu = true },
-            modifier = Modifier.size(if (pointer) 32.dp else 40.dp).testTag("launcher_attach"),
-        ) {
-            Icon(
-                Icons.Filled.Add,
-                contentDescription = "Attach",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(if (pointer) 18.dp else 19.dp),
-            )
-        }
-        if (!pointer) {
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("Photos") },
-                    leadingIcon = { Icon(Icons.Filled.Image, null, Modifier.size(18.dp)) },
-                    modifier = Modifier.testTag("attach_menu_photos"),
-                    onClick = { menu = false; onPickFiles(PickKind.Media) },
-                )
-                DropdownMenuItem(
-                    text = { Text("Files") },
-                    leadingIcon = { Icon(Icons.Filled.InsertDriveFile, null, Modifier.size(18.dp)) },
-                    modifier = Modifier.testTag("attach_menu_files"),
-                    onClick = { menu = false; onPickFiles(PickKind.Any) },
-                )
-                if (camera) {
-                    DropdownMenuItem(
-                        text = { Text("Camera") },
-                        leadingIcon = { Icon(Icons.Filled.PhotoCamera, null, Modifier.size(18.dp)) },
-                        modifier = Modifier.testTag("attach_menu_camera"),
-                        onClick = { menu = false; onCaptureImage() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Record video") },
-                        leadingIcon = { Icon(Icons.Filled.Videocam, null, Modifier.size(18.dp)) },
-                        modifier = Modifier.testTag("attach_menu_record_video"),
-                        onClick = { menu = false; onCaptureVideo() },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** Round send button — desktop's 28dp disc under a pointer, Android's 40dp press-scaled one on touch. */
-@Composable
-private fun LauncherSendButton(
-    pointer: Boolean,
-    canSend: Boolean,
-    submitting: Boolean,
-    onClick: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed && !pointer) 0.88f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium, dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "send_scale",
-    )
-    val enabled = canSend && !submitting
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        interactionSource = interaction,
-        modifier = Modifier
-            .then(if (pointer) Modifier.size(32.dp) else Modifier)
-            .testTag("launcher_submit"),
-    ) {
-        Box(
-            modifier = Modifier
-                .then(if (pointer) Modifier else Modifier.scale(scale))
-                .size(if (pointer) 28.dp else 40.dp)
-                .clip(CircleShape)
-                .background(
-                    when {
-                        enabled -> cs.primary
-                        pointer -> cs.surfaceContainerHighest
-                        else -> cs.primary.copy(alpha = 0.35f)
-                    },
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (submitting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(if (pointer) 14.dp else 18.dp),
-                    strokeWidth = 2.dp,
-                    color = cs.onPrimary,
-                )
-            } else {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Start session",
-                    tint = when {
-                        enabled || !pointer -> cs.onPrimary
-                        else -> cs.onSurfaceVariant.copy(alpha = 0.45f)
-                    },
-                    modifier = Modifier.size(if (pointer) 14.dp else 18.dp),
-                )
-            }
-        }
     }
 }
 

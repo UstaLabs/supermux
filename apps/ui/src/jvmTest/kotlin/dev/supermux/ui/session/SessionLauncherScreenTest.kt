@@ -46,7 +46,7 @@ import kotlinx.coroutines.runBlocking
  * The shared [SessionLauncherScreen] (cluster F6) — three layers:
  *
  *  1. The PURE settle-vs-change helpers ([shouldResetModelOnAgentChange] /
- *     [shouldResetBaseBranchOnWorkdirChange]) + [filterBranches] / [filterProjects] are unit-tested
+ *     [shouldResetBaseBranchOnWorkdirChange]) + [filterBranches] are unit-tested
  *     directly (no Compose). These encode the subtle draft-restore-vs-genuine-change logic that
  *     caused a real device bug on iOS/Android — a restore-settle must NEVER reset the model or the
  *     base branch, a genuine later change MUST.
@@ -110,26 +110,6 @@ class SessionLauncherScreenTest {
         assertEquals(listOf("feat/Login"), filterBranches(info, "login"))
         assertEquals(listOf("main", "origin/main"), filterBranches(info, "MAIN"))
         assertTrue(filterBranches(null, "x").isEmpty())
-    }
-
-    // ── filterProjects (project-picker search) ──────────────────────────────────────────────────
-
-    @Test fun filter_projects_empty_query_returns_all() {
-        val all = listOf("/home/u/alpha", "/home/u/beta", "/home/u/gamma")
-        assertEquals(all, filterProjects(all, home = "/home/u", query = ""))
-    }
-
-    @Test fun filter_projects_matches_path_substring_case_insensitive() {
-        val all = listOf("/home/u/alpha", "/home/u/beta", "/home/u/gamma")
-        assertEquals(listOf("/home/u/alpha"), filterProjects(all, home = "/home/u", query = "ALPH"))
-        assertEquals(listOf("/home/u/beta"), filterProjects(all, home = "/home/u", query = "beta"))
-    }
-
-    @Test fun filter_projects_matches_formatted_label_too() {
-        // The picker shows formatWorkdir(path, home) — the tilde-prefixed form. Filtering must match
-        // against the displayed label, not just the raw path, so typing "~" still narrows the list.
-        val all = listOf("/home/u/alpha", "/home/u/beta")
-        assertEquals(all, filterProjects(all, home = "/home/u", query = "~"))
     }
 
     // ── (2) UI: fakes + harness ─────────────────────────────────────────────────────────────────
@@ -229,6 +209,29 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_submit").assertIsDisplayed()
         // Empty draft → send is disabled (no text, no attachments).
         onNodeWithTag("launcher_submit").assertIsNotEnabled()
+    }
+
+    @Test fun the_card_is_the_shared_composer_under_both_input_modes() = runComposeUiTest {
+        // The capsule, the field, the staged strip and the attach/mic/send controls are
+        // `ui/chat/Composer`'s now (cluster F7) — wearing the launcher's tags via ComposerTags, so
+        // every one of these nodes is the shared composer's under BOTH input modes.
+        pointerContent { Harness() }
+        waitForIdle()
+        onNodeWithTag("launcher_composer_card").assertIsDisplayed()
+        onNodeWithTag("launcher_message").assertIsDisplayed()
+        onNodeWithTag("launcher_attach").assertIsDisplayed()
+        onNodeWithTag("launcher_mic").assertIsDisplayed()
+        onNodeWithTag("launcher_submit").assertIsDisplayed()
+    }
+
+    @Test fun the_card_is_the_shared_composer_under_touch_too() = runComposeUiTest {
+        touchContent { Harness() }
+        waitForIdle()
+        onNodeWithTag("launcher_composer_card").assertIsDisplayed()
+        onNodeWithTag("launcher_message").assertIsDisplayed()
+        onNodeWithTag("launcher_attach").assertIsDisplayed()
+        onNodeWithTag("launcher_mic").assertIsDisplayed()
+        onNodeWithTag("launcher_submit").assertIsDisplayed()
     }
 
     @Test fun submit_calls_onSubmit_with_the_assembled_args() = runComposeUiTest {

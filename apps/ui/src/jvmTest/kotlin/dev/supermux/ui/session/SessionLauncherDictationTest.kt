@@ -33,8 +33,11 @@ private class ScriptedMicCapture(private val startsOk: Boolean, private val wav:
  * id-less (mirrors [dev.supermux.state.HostStore.transcribeAudio]'s `sessionId = null` path). Uses
  * the SAME [dev.supermux.ui.chat.MicButton]/[dev.supermux.ui.chat.DictationController] the composer
  * tests already prove — only the host composable + append target (the launcher's `TextFieldValue`
- * message) differ. Driven under a POINTER, where the mic button stays in place while recording (a
- * touch host hands the card over to the `RecordingBar`, exactly as the shared Composer does).
+ * message) differ. Mostly driven under a POINTER, where the field stays and the mic button spins in
+ * place; the last two cases pin the input-mode split itself — a TOUCH host hands the field (not the
+ * whole card: the launcher keeps its capsule and any staged chips) over to the shared
+ * [dev.supermux.ui.chat.RecordingBar], which is
+ * [dev.supermux.ui.chat.ComposerRecordingTakeover.FieldOnTouch].
  */
 @OptIn(ExperimentalTestApi::class)
 class SessionLauncherDictationTest {
@@ -69,6 +72,14 @@ class SessionLauncherDictationTest {
             content = content,
         )
 
+    private fun androidx.compose.ui.test.ComposeUiTest.touchContent(content: @Composable () -> Unit) =
+        setPlatformContent(
+            pointer = false,
+            widthClass = WindowWidthClass.Compact,
+            inputMode = InputMode.Touch,
+            content = content,
+        )
+
     @Test fun mic_button_renders_next_to_attach() = runComposeUiTest {
         pointerContent { Harness() }
         waitForIdle()
@@ -93,5 +104,31 @@ class SessionLauncherDictationTest {
         onNodeWithTag("launcher_mic").performClick()
         waitForIdle()
         onNodeWithTag("launcher_mic").assertIsNotEnabled()
+    }
+
+    @Test fun a_touch_host_hands_the_field_over_to_the_recording_bar() = runComposeUiTest {
+        // ComposerRecordingTakeover.FieldOnTouch: the card and its border stay put, the field and
+        // toolbar are replaced by the shared RecordingBar. (A pointer host keeps typing — below.)
+        touchContent { Harness() }
+        waitForIdle()
+        onNodeWithTag("launcher_mic").performClick()
+        waitForIdle()
+        onNodeWithTag("composer_recording_bar").assertIsDisplayed()
+        onNodeWithTag("launcher_composer_card").assertIsDisplayed()
+        onNodeWithTag("launcher_message").assertDoesNotExist()
+        onNodeWithTag("launcher_submit").assertDoesNotExist()
+        // Stopping hands the card back.
+        onNodeWithTag("voice_stop").performClick()
+        waitForIdle()
+        onNodeWithTag("launcher_message").assertIsDisplayed()
+    }
+
+    @Test fun a_pointer_host_keeps_the_field_while_recording() = runComposeUiTest {
+        pointerContent { Harness() }
+        waitForIdle()
+        onNodeWithTag("launcher_mic").performClick()
+        waitForIdle()
+        onNodeWithTag("composer_recording_bar").assertDoesNotExist()
+        onNodeWithTag("launcher_message").assertIsDisplayed()
     }
 }
