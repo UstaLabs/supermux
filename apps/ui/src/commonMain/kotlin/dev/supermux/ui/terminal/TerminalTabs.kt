@@ -213,6 +213,10 @@ fun TerminalTabs(
     // Local operations the broker has not caught up with yet (Android's reconciliation inputs).
     val pendingCreates = remember(sessionId) { mutableStateMapOf<String, Long>() }
     val pendingCloses = remember(sessionId) { mutableStateMapOf<String, Boolean>() }
+    // Bumped by a close so the re-sync loop restarts NOW instead of up to TERMINAL_RESYNC_MS later
+    // (G3 review): the broker's confirmation is what clears the hide-mark, and the strip looked
+    // frozen for three seconds after every ×.
+    var syncNonce by remember(sessionId) { mutableStateOf(0) }
 
     fun selectTab(id: String) {
         if (id == activeId) return
@@ -257,7 +261,10 @@ fun TerminalTabs(
         // (web parity: the shell may already have exited). A FAILED close drops the hide-mark
         // (Android's rule) so the next re-sync brings the still-live terminal back rather than
         // hiding it forever.
-        scope.launch { if (runCatching { closeTerminal(id) }.isFailure) pendingCloses.remove(id) }
+        scope.launch {
+            if (runCatching { closeTerminal(id) }.isFailure) pendingCloses.remove(id)
+            syncNonce++
+        }
     }
 
     // Rebuild the tab set from the broker (live tmux) on first show for this session, then keep it
@@ -269,7 +276,7 @@ fun TerminalTabs(
     // rebuild would wipe it, disposing its panel and orphaning the freshly created tmux terminal
     // until the next hydration. [reconcileTerminalTabs] retains it (for the create grace window),
     // and the current active tab is kept whenever it survives.
-    LaunchedEffect(sessionId, active) {
+    LaunchedEffect(sessionId, active, syncNonce) {
         if (!active) return@LaunchedEffect
         while (true) {
             val remoteIds = runCatching { listTerminals().sortedBy { it.createdAt }.map { it.id } }.getOrNull()
@@ -296,7 +303,15 @@ fun TerminalTabs(
                 if (merged.isEmpty()) {
                     // A session with no tmux terminal yet opens on the broker's default name, so
                     // connecting lands on the terminal the broker would auto-create (web parity).
-                    if (!hydrated) addTab(DEFAULT_TERMINAL_ID)
+                    if (!hydrated) {
+                        addTab(DEFAULT_TERMINAL_ID)
+                    } else {
+                        // Every terminal is gone (closed here or on another device): drop the
+                        // selection too, or `activeId` keeps naming a tab that no longer exists
+                        // and the key bar would type into a dead sink (G3 review).
+                        activeId = ""
+                        lastActiveId = null
+                    }
                 } else {
                     activeId = activeTerminalAfterSync(merged, activeId)
                 }
@@ -311,7 +326,10 @@ fun TerminalTabs(
     // outside every grid) can reach the active surface's sink in the same composition.
     // key(id) wraps the WHOLE body (not just the `if`): a conditional group outside the key would
     // be matched positionally, so a list shift could dispose one tab's surface and rebuild another's.
-    val live = LinkedHashMap<String, TerminalSurface>()
+    // Rebuilt in place each composition rather than reallocated (G3 review): the map is a plain
+    // per-composition index into the surfaces the `key(id)` blocks below hand out, not state.
+    val live = remember(sessionId) { LinkedHashMap<String, TerminalSurface>() }
+    live.clear()
     tabs.forEach { id ->
         key(id) {
             if (id == activeId || id == lastActiveId) live[id] = surfaceFor(id) { connect(id) }
@@ -330,10 +348,11 @@ fun TerminalTabs(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            tabs.forEach { id ->
+            tabs.forEachIndexed { index, id ->
                 key(id) {
                     TerminalTabChip(
                         id = id,
+                        label = terminalTabLabel(id, index, LocalPointerAvailable.current),
                         selected = id == activeId,
                         onSelect = { selectTab(id) },
                         onClose = { closeTab(id) },
@@ -410,11 +429,21 @@ fun TerminalTabs(
     }
 }
 
-/** One tab chip: mono id label + an always-present (hover-brightened) × close affordance. Middle-
+/**
+ * The name a tab wears. A pointer client sees the raw tmux id (desktop's strip always did, and it
+ * is what you type into `tmux attach`); a touch client — where the id is a random hex blob on a
+ * narrow chip — sees "Terminal N" by POSITION, which is also what its close button announces
+ * (Android's phone chips lost both when the strip moved to `:ui`; G3 review).
+ */
+internal fun terminalTabLabel(id: String, index: Int, pointer: Boolean): String =
+    if (pointer) id else "Terminal ${index + 1}"
+
+/** One tab chip: mono label + an always-present (hover-brightened) × close affordance. Middle-
  *  click also closes (a desktop convenience the web strip lacks). */
 @Composable
 private fun TerminalTabChip(
     id: String,
+    label: String,
     selected: Boolean,
     onSelect: () -> Unit,
     onClose: () -> Unit,
@@ -455,7 +484,7 @@ private fun TerminalTabChip(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
-                text = id,
+                text = label,
                 color = fg,
                 fontFamily = MonoFontFamily,
                 fontSize = 11.sp,
@@ -474,7 +503,7 @@ private fun TerminalTabChip(
                 ) {
                     Icon(
                         Icons.Filled.Close,
-                        contentDescription = "Close terminal",
+                        contentDescription = "Close $label",
                         tint = fg,
                         modifier = Modifier.size(12.dp),
                     )

@@ -24,7 +24,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.AppViewModel
-import dev.supermux.android.display.DisplayPanel
+import dev.supermux.ui.display.DisplayPanel
+import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.editor.DiffPane
 import dev.supermux.ui.editor.ExplorerPane
 import dev.supermux.ui.editor.FilePane
@@ -409,11 +410,7 @@ private fun DisplayViewPane(
     val sessionName = stream?.sessionName ?: workspace.name
     DisplayPanel(
         sessionName = sessionName,
-        displays = vm.fleet.displays,
-        listDisplays = { vm.fleet.listDisplays() },
-        connectScrcpy = { vm.fleet.connectScrcpy(it) },
-        connectVnc = { vm.fleet.connectVnc(it) },
-        onStartDisplay = { vm.fleet.startDisplay(sessionName) },
+        actions = rememberDisplayActions(vm.fleet),
         modifier = modifier.fillMaxSize().testTag("view_display"),
     )
 }

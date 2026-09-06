@@ -97,7 +97,8 @@ import dev.supermux.android.workspace.addViewState
 import dev.supermux.android.workspace.workspaceShortcuts
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.toDomainOrNull
-import dev.supermux.android.display.DisplaysScreen
+import dev.supermux.ui.display.DisplaysScreen
+import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.android.settings.AndroidSettingsExtra
 import dev.supermux.android.settings.AndroidSettingsSection
 import dev.supermux.android.session.readGroupByProject
@@ -909,14 +910,10 @@ class MainActivity : ComponentActivity() {
                     }
                     composable<Route.Displays> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) {
-                            LaunchedEffect(activeHost) { vm.fleet.listDisplays() }
                             DisplaysScreen(
+                                actions = rememberDisplayActions(vm.fleet),
                                 onBack = { navController.popBackStack() },
-                                displays = vm.fleet.displays,
-                                onStart = { sessionName -> vm.fleet.startDisplay(sessionName) },
-                                onStop = { id -> vm.fleet.stopDisplay(id) },
-                                connectVnc = { vm.fleet.connectVnc(it) },
-                                connectScrcpy = { vm.fleet.connectScrcpy(it) },
+                                standalone = true,
                             )
                         } }
                     }

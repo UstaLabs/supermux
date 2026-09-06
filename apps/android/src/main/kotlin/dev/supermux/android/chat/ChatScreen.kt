@@ -109,7 +109,7 @@ import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.formatDuration
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
-import dev.supermux.android.display.DisplayPanel
+import dev.supermux.ui.display.DisplayPanel
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.ui.editor.EditorPanel
 import dev.supermux.ui.editor.EditorPanelActions
@@ -206,12 +206,8 @@ fun ChatScreen(
     closeTerminal: suspend (String) -> Unit = {},
     // Native tab — terminal bound to the agent PTY with kind="agent"; iOS parity, claude-only.
     connectAgentTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
-    listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
-    connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
-    connectVnc: ((String) -> dev.supermux.net.VncClient)? = null,
-    displays: kotlinx.coroutines.flow.StateFlow<List<dev.supermux.net.DisplayStream>> =
-        kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
-    onStartDisplay: suspend () -> Unit = {},
+    /** Cluster G4: the whole Display seam in one holder; null = this shell has no display transport. */
+    displayActions: dev.supermux.ui.display.DisplayActions? = null,
     onOpenDisplays: () -> Unit = {},
     consumePendingFirst: (String) -> dev.supermux.state.HostStore.PendingFirstMessage? = { null },
     onContinue: (suspend (ContinueHandoff) -> String?)? = null,
@@ -741,18 +737,12 @@ fun ChatScreen(
                 }
             }
             if (SessionPanel.Display in shownPanels) {
-                val ld = listDisplays
-                val cScrcpy = connectScrcpy
-                val cVnc = connectVnc
+                val da = displayActions
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Display)) {
-                    if (ld != null && cScrcpy != null && cVnc != null) {
+                    if (da != null) {
                         DisplayPanel(
                             sessionName = session.name,
-                            displays = displays,
-                            listDisplays = ld,
-                            connectScrcpy = cScrcpy,
-                            connectVnc = cVnc,
-                            onStartDisplay = onStartDisplay,
+                            actions = da,
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {

@@ -31,7 +31,8 @@ import dev.supermux.ui.chat.rememberChatActions
 import dev.supermux.ui.chat.rememberChatState
 import dev.supermux.ui.chat.ComposerExternalAttach
 import dev.supermux.ui.chat.ComposerExternalDictate
-import dev.supermux.desktop.display.DisplayPanel
+import dev.supermux.ui.display.DisplayPanel
+import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.editor.DiffPane
@@ -589,8 +590,8 @@ private fun DiffPaneForWorkspace(
 }
 
 /**
- * Display adapter for a view that names a stream by id. Resolves the stream's session
- * name and reuses [DisplayPanel] with the same call shape SessionDetail uses.
+ * Display adapter for a view that names a stream by id. Resolves the stream's session name and
+ * reuses the shared [DisplayPanel] (cluster G4) with the same call shape SessionDetail uses.
  */
 @Composable
 private fun DisplayPanelForStream(
@@ -599,7 +600,6 @@ private fun DisplayPanelForStream(
     modifier: Modifier,
 ) {
     val live by app.displays.collectAsState()
-    val sessions by app.sessions.collectAsState()
     LaunchedEffect(displayId) { app.listDisplays() }
     val stream = live.firstOrNull { it.id == displayId }
     if (stream == null) {
@@ -616,16 +616,9 @@ private fun DisplayPanelForStream(
         }
         return
     }
-    val session = sessions.firstOrNull { it.name == stream.sessionName }
-        ?: SessionInfo(
-            id = "display-$displayId",
-            name = stream.sessionName,
-            workdir = "",
-            agent = "unknown",
-        )
     DisplayPanel(
-        app = app,
-        session = session,
+        sessionName = stream.sessionName,
+        actions = rememberDisplayActions(app),
         modifier = modifier.fillMaxSize().testTag("view_display"),
     )
 }

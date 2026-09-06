@@ -14,7 +14,9 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performTouchInput
@@ -471,5 +473,74 @@ class TerminalTabsTest {
         assertEquals("third", activeTerminalAfterSync(listOf("first", "third"), "second", preferredIndex = 1))
         assertEquals("first", activeTerminalAfterSync(listOf("first"), "second", preferredIndex = 1))
         assertEquals("", activeTerminalAfterSync(emptyList(), "second"))
+    }
+    // ── cluster-G4 follow-ups from the G3 review ───────────────────────────────────────────────
+
+    @Test
+    fun terminal_tab_label_is_the_id_under_a_pointer_and_a_friendly_name_under_touch() {
+        assertEquals("t4f0a91b2", terminalTabLabel("t4f0a91b2", 0, pointer = true))
+        assertEquals("Terminal 1", terminalTabLabel("t4f0a91b2", 0, pointer = false))
+        assertEquals("Terminal 3", terminalTabLabel("main", 2, pointer = false))
+    }
+
+    @Test
+    fun a_touch_client_sees_friendly_labels_and_per_tab_close_descriptions() = runComposeUiTest {
+        val app = appWithTerminals(
+            """{"terminals":[{"id":"main","createdAt":1},{"id":"t2","createdAt":2}]}""")
+        setContent { host(app, input = InputMode.Touch) }
+
+        waitForTag("term-tab-main")
+        // The raw tmux ids are gone from the chips; the position-based names took their place.
+        onNodeWithText("Terminal 1").assertIsDisplayed()
+        onNodeWithText("Terminal 2").assertIsDisplayed()
+        // …and each × announces WHICH terminal it closes (they were all "Close terminal").
+        onNodeWithContentDescription("Close Terminal 1").assertIsDisplayed()
+        onNodeWithContentDescription("Close Terminal 2").assertIsDisplayed()
+    }
+
+    @Test
+    fun a_pointer_client_still_sees_the_tmux_id_on_the_chip() = runComposeUiTest {
+        val app = appWithTerminals("""{"terminals":[{"id":"main","createdAt":1}]}""")
+        setContent { host(app) }
+
+        waitForTag("term-tab-main")
+        onNodeWithText("main").assertIsDisplayed()
+        onNodeWithContentDescription("Close main").assertIsDisplayed()
+    }
+
+    @Test
+    fun closing_the_last_tab_clears_the_selection_and_re_syncs_immediately() = runComposeUiTest {
+        val lists = java.util.concurrent.atomic.AtomicInteger(0)
+        val app = appWithEngine(
+            MockEngine { req ->
+                val body = if (req.url.encodedPath.contains("/api/term/list")) {
+                    lists.incrementAndGet()
+                    """{"terminals":[]}"""
+                } else {
+                    "{}"
+                }
+                respond(
+                    content = ByteReadChannel(body),
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            },
+        )
+        setContent { host(app) }
+
+        waitForTag("term-tab-main")
+        val before = lists.get()
+
+        onNodeWithTag("term-tab-close-main").performClick()
+
+        // A close used to wait out the whole 3s poll before the broker was asked again; the strip
+        // now re-syncs at once (well inside that window).
+        waitUntil(timeoutMillis = 2_000) { lists.get() > before }
+
+        // …and with the merged list empty, the selection is cleared rather than left naming a tab
+        // that no longer exists (the key bar would have typed into a dead sink).
+        waitForTag("terminal_empty_add")
+        assertEquals(0, tagCount("term-tab-main"))
+        assertTrue(disposals.contains("main"))
     }
 }

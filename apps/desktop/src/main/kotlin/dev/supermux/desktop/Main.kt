@@ -490,6 +490,9 @@ fun main() {
                         Item("Archived…") {
                             ui.openArchived()
                         }
+                        Item("Displays…") {
+                            ui.openDisplays()
+                        }
                         Item("Usage…") {
                             ui.openUsage()
                         }

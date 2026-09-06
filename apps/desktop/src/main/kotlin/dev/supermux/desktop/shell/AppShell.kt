@@ -130,6 +130,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonObject
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
+import dev.supermux.ui.display.DisplaysScreen
+import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.shell.SessionsRail
@@ -290,6 +292,8 @@ class ShellUiState {
 
     // Read-only views of the stack (for load effects / assertions). Open via [navigate] / open*.
     val archivedOpen: Boolean get() = currentRoute is Route.Archived
+    /** Cluster G4: desktop GAINED the Displays management screen; it renders as a full-pane overlay. */
+    val displaysOpen: Boolean get() = currentRoute is Route.Displays
     val settingsOpen: Boolean get() = currentRoute is Route.Settings
     val appUpdateOpen: Boolean get() = currentRoute is Route.AppUpdate
     val lspSettingsOpen: Boolean
@@ -315,7 +319,7 @@ class ShellUiState {
      * full-pane (`[Home, route]`), and close the detail-pane launcher + usage popover.
      *
      * Only the [desktopRoutes] subset is renderable here — the shared [Route] union also carries
-     * Android's destinations (`NewSession`, `AddHost`, `Usage`, `Devices`, `Proxies`, `Displays`,
+     * Android's destinations (`NewSession`, `AddHost`, `Usage`, `Devices`, `Proxies`,
      * `Appearance`), which desktop expresses differently (the launcher is a detail-pane swap, Usage
      * a popover, the rest are Settings sections). Pushing one is a programming error, and failing
      * here names the caller instead of leaving `NavDisplay` with no `entry<>` for the key.
@@ -375,6 +379,7 @@ class ShellUiState {
 
     // Menu / chrome conveniences → navigate / popover
     fun openArchived() = navigate(Route.Archived)
+    fun openDisplays() = navigate(Route.Displays)
     /**
      * Icon-anchored Usage popover. Toggle when already open; otherwise open (closes
      * launcher + full-pane routes for mutual exclusion).
@@ -529,11 +534,12 @@ class ShellUiState {
         val SIDEBAR_MAX = 560.dp
 
         /** Human-readable form of [isDesktopRoute], for [navigate]'s failure message. */
-        private const val DESKTOP_ROUTES = "Home, Settings(section), Archived, AppUpdate"
+        private const val DESKTOP_ROUTES = "Home, Settings(section), Archived, Displays, AppUpdate"
 
         /** The members of the shared [Route] union the desktop shell has an `entry<>` for. */
         private fun isDesktopRoute(route: Route): Boolean = when (route) {
-            is Route.Home, is Route.Settings, is Route.Archived, is Route.AppUpdate -> true
+            is Route.Home, is Route.Settings, is Route.Archived, is Route.Displays,
+            is Route.AppUpdate -> true
             else -> false
         }
     }
@@ -1450,6 +1456,25 @@ fun AppShell(
                                     // Same as the usage popover: this overlay paints the
                                     // HostScopePicker and closes with Esc / the shell's own back,
                                     // so a narrow desktop window must not grow a phone top bar.
+                                    topBarShown = true,
+                                )
+                            }
+                        }
+                    }
+
+                    // Cluster G4: the shared Displays management screen — desktop's first one.
+                    entry<Route.Displays>(
+                        metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                    ) {
+                        Column(Modifier.fillMaxSize().testTag("displays_overlay")) {
+                            HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
+                            Box(Modifier.weight(1f)) {
+                                DisplaysScreen(
+                                    actions = rememberDisplayActions(hostApp),
+                                    onBack = { ui.goBack() },
+                                    // Same rule as the Archived overlay: this pane paints the
+                                    // HostScopePicker and closes with the shell's own back, so a
+                                    // narrow desktop window must not grow a phone top bar too.
                                     topBarShown = true,
                                 )
                             }

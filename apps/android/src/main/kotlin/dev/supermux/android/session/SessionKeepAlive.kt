@@ -42,6 +42,7 @@ import androidx.compose.ui.zIndex
 import dev.supermux.android.AppViewModel
 import dev.supermux.android.DevConfig
 import dev.supermux.android.chat.ChatScreen
+import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.host.workspaceForSession
 import dev.supermux.android.workspace.AndroidWorkspaceKeepAliveHost
@@ -505,6 +506,8 @@ private fun SessionChatLayer(
                 }
             },
     ) {
+        // Cluster G4: the shared Display panel's broker seam, built once per fleet.
+        val displayActions = rememberDisplayActions(vm.fleet)
         // 4f — old broker (`workspaces` empty): session-only chat + agent terminal. Editor/diff
         // panes from the private layout are gone; do not crash if a session has no workspace.
         ChatScreen(
@@ -558,11 +561,7 @@ private fun SessionChatLayer(
             listTerminals = { vm.fleet.listTerminals(session.id) },
             closeTerminal = { terminalId -> vm.fleet.closeTerminal(session.id, terminalId) },
             connectAgentTerminal = { vm.fleet.connectAgentTerminal(session.id) },
-            listDisplays = { vm.fleet.listDisplays() },
-            connectScrcpy = { vm.fleet.connectScrcpy(it) },
-            connectVnc = { vm.fleet.connectVnc(it) },
-            displays = vm.fleet.displays,
-            onStartDisplay = { vm.fleet.startDisplay(session.name) },
+            displayActions = displayActions,
             onOpenDisplays = onOpenDisplays,
             consumePendingFirst = { vm.fleet.consumePendingFirst(it) },
             onContinue = { handoff ->
