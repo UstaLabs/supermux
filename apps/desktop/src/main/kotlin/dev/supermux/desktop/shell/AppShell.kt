@@ -106,7 +106,7 @@ import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.session.SessionListScreen
 import dev.supermux.ui.session.withWorkspaceOps
-import dev.supermux.desktop.session.SessionLauncherScreen
+import dev.supermux.ui.session.SessionLauncherScreen
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.proto.stateString
@@ -1062,6 +1062,9 @@ fun AppShell(
                             ui.selectedId = newId
                             hostApp.sendMessage(newId, text, hostApp.consumeFirstUploads(newId))
                             ui.launcherOpen = false; ui.launcherDraftId = null
+                            // The shell already selected + closed; nothing left for the screen's
+                            // onOpenSession (which this mount deliberately leaves unset) to do.
+                            null
                         },
                         onSaveDraft = { workdir, agent, model, reasoningLevel, text, replaceDraftId ->
                             launcherActions.createDraftSession(
@@ -1073,6 +1076,10 @@ fun AppShell(
                         initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
                         hosts = hostViews,
                         selectedHost = activeHostId,
+                        // The shell owns this pane's chrome (tab strip / sidebar header), so the
+                        // screen never paints cluster E's compact bar — a narrow desktop window
+                        // keeps exactly the bar-less launcher it has always had.
+                        topBarShown = true,
                     )
         }
                     LaunchedEffect(activeWorkspace?.id) {

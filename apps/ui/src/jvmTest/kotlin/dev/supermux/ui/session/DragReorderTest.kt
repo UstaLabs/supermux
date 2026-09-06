@@ -310,14 +310,20 @@ class DragReorderTest {
         }
         waitForIdle()
 
-        onNodeWithTag("a").performTouchInput {
-            down(center)
-            moveBy(Offset(0f, 25f))
-            moveBy(Offset(0f, 55f))
-            moveBy(Offset(0f, 60f))
-            moveBy(Offset(0f, 60f))
-            up()
+        // Frames are driven BY HAND: the move guard holds the next move until the list has
+        // re-measured, so whether one gesture's events happen to straddle a frame decided the
+        // outcome under autoAdvance. One explicit frame pair per move makes that deterministic.
+        mainClock.autoAdvance = false
+        onNodeWithTag("a").performTouchInput { down(center) }
+        mainClock.advanceTimeByFrame()
+        listOf(25f, 55f, 60f, 60f).forEach { dy ->
+            onNodeWithTag("a").performTouchInput { moveBy(Offset(0f, dy)) }
+            mainClock.advanceTimeByFrame()
+            mainClock.advanceTimeByFrame()
         }
+        onNodeWithTag("a").performTouchInput { up() }
+        mainClock.advanceTimeByFrame()
+        mainClock.autoAdvance = true
         waitForIdle()
 
         assertTrue(moves.size >= 2, "the drag wedged after the order was overwritten: $moves")

@@ -86,7 +86,7 @@ import dev.supermux.android.session.SessionKeepAliveTabletHost
 import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.workspace.ChatActivationHandle
 import dev.supermux.android.workspace.chatActivationDecision
-import dev.supermux.android.session.SessionLauncherScreen
+import dev.supermux.ui.session.SessionLauncherScreen
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.session.SessionListScreen
 import dev.supermux.ui.shell.SessionsRail
@@ -777,20 +777,25 @@ class MainActivity : ComponentActivity() {
                                         lastBySession = lastBySession,
                                         onBack = { navController.popBackStack() },
                                         actions = launcherActions,
-                                        loadLauncherPrefs = { vm.uiPrefs.launcherPrefs.first() },
-                                        onLauncherPrefsChange = { prefsScope.launch { vm.uiPrefs.putLauncherPrefs(it) } },
-                                        loadLauncherDraft = { vm.uiPrefs.launcherDraft.first() },
-                                        onLauncherDraftChange = { prefsScope.launch { vm.uiPrefs.putLauncherDraft(it) } },
+                                        loadPrefs = { vm.uiPrefs.launcherPrefs.first() },
+                                        onPrefsChange = { prefsScope.launch { vm.uiPrefs.putLauncherPrefs(it) } },
+                                        loadDraft = { vm.uiPrefs.launcherDraft.first() },
+                                        onDraftChange = { prefsScope.launch { vm.uiPrefs.putLauncherDraft(it) } },
+                                        onClearDraft = { prefsScope.launch { vm.uiPrefs.clearLauncherDraft() } },
                                         onSubmit = { wd, ag, md, rl, msg, staged, wt, base, replaceDraftId ->
                                             launcherActions.createSessionWithFirstMessage(wd, ag, md, rl, msg, staged, wt, base, replaceDraftId)
                                         },
                                         onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
                                             launcherActions.createDraftSession(wd, ag, md, rl, msg, replaceDraftId)
                                         },
+                                        onOpenSession = launcherActions.openSession,
                                         initialDraftId = draftId,
                                         initialDraft = draftSession,
                                         hosts = hostViews,
-                                        selectedHostId = activeHost,
+                                        selectedHost = activeHost,
+                                        // A route, not a pane: the screen owns its own bar + Back
+                                        // at every width (cluster E's chrome rule).
+                                        standalone = true,
                                     )
                                 }
                             }
@@ -801,20 +806,25 @@ class MainActivity : ComponentActivity() {
                                 lastBySession = lastBySession,
                                 onBack = { navController.popBackStack() },
                                 actions = launcherActions,
-                                loadLauncherPrefs = { vm.uiPrefs.launcherPrefs.first() },
-                                onLauncherPrefsChange = { prefsScope.launch { vm.uiPrefs.putLauncherPrefs(it) } },
-                                loadLauncherDraft = { vm.uiPrefs.launcherDraft.first() },
-                                onLauncherDraftChange = { prefsScope.launch { vm.uiPrefs.putLauncherDraft(it) } },
+                                loadPrefs = { vm.uiPrefs.launcherPrefs.first() },
+                                onPrefsChange = { prefsScope.launch { vm.uiPrefs.putLauncherPrefs(it) } },
+                                loadDraft = { vm.uiPrefs.launcherDraft.first() },
+                                onDraftChange = { prefsScope.launch { vm.uiPrefs.putLauncherDraft(it) } },
+                                onClearDraft = { prefsScope.launch { vm.uiPrefs.clearLauncherDraft() } },
                                 onSubmit = { wd, ag, md, rl, msg, staged, wt, base, replaceDraftId ->
                                     launcherActions.createSessionWithFirstMessage(wd, ag, md, rl, msg, staged, wt, base, replaceDraftId)
                                 },
                                 onSaveDraft = { wd, ag, md, rl, msg, replaceDraftId ->
                                     launcherActions.createDraftSession(wd, ag, md, rl, msg, replaceDraftId)
                                 },
+                                onOpenSession = launcherActions.openSession,
                                 initialDraftId = draftId,
                                 initialDraft = draftSession,
                                 hosts = hostViews,
-                                selectedHostId = activeHost,
+                                selectedHost = activeHost,
+                                // A route, not a pane: the screen owns its own bar + Back
+                                // at every width (cluster E's chrome rule).
+                                standalone = true,
                             )
                         }
                     }

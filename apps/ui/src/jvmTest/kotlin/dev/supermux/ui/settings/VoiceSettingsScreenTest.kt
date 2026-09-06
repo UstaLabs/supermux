@@ -8,6 +8,7 @@ import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -546,7 +547,14 @@ class VoiceSettingsScreenTest {
             }
         }
         waitForIdle()
-        onNodeWithTag("voice_glossary_link").performClick()
+        // The config load settles the rows ABOVE this one, so the link moves between the semantics
+        // query and the injected click unless the row is waited for and scrolled into view first —
+        // that race is what made this case flaky under load.
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithTag("voice_glossary_link").fetchSemanticsNodes().size == 1
+        }
+        waitForIdle()
+        onNodeWithTag("voice_glossary_link").performScrollTo().performClick()
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("voice_glossary_load_error").assertIsDisplayed()
