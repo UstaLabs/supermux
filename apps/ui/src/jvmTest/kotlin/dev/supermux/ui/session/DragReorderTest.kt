@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
@@ -30,6 +31,7 @@ import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.LocalHaptics
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.math.abs
 import kotlin.test.assertTrue
 
 private const val ROW_PX = 60
@@ -319,6 +321,47 @@ class DragReorderTest {
         waitForIdle()
 
         assertTrue(moves.size >= 2, "the drag wedged after the order was overwritten: $moves")
+    }
+
+    @Test fun aDroppedRowSettlesInsteadOfSnappingHome() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        setContent { ReorderHarness(InputMode.Pointer, ids, moves, RecordingHaptics()) }
+        waitForIdle()
+        val home = onNodeWithTag("b").getBoundsInRoot().top
+
+        // Less than one slot, so no move is accepted — the row is purely displaced.
+        onNodeWithTag("b").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 12f))
+            moveBy(Offset(0f, 18f))
+        }
+        waitForIdle()
+        val held = onNodeWithTag("b").getBoundsInRoot().top
+        assertTrue((held - home).value > 1f, "the row did not follow the pointer: $held vs $home")
+
+        // Drive the clock by hand from here: the release frame must be inspectable.
+        mainClock.autoAdvance = false
+        onNodeWithTag("b").performTouchInput { up() }
+        mainClock.advanceTimeByFrame()
+        mainClock.advanceTimeByFrame()
+
+        assertEquals(emptyList(), moves)
+        // The drop must ANIMATE home from where the finger left it — the offset captured at
+        // release, not the drag state that onDragStop has already zeroed.
+        val onRelease = onNodeWithTag("b").getBoundsInRoot().top
+        assertTrue(
+            (onRelease - home).value > 1f,
+            "the drop snapped home instead of settling: released at $onRelease, slot at $home",
+        )
+
+        mainClock.autoAdvance = true
+        waitForIdle()
+        val settled = onNodeWithTag("b").getBoundsInRoot().top
+        assertTrue(
+            abs((settled - home).value) < 1f,
+            "the settle did not finish: $settled vs $home",
+        )
     }
 
     // ── SessionDragReorderState: the ghost-row press-drag ─────────────────────────────────────

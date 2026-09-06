@@ -21,7 +21,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -38,6 +37,7 @@ import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.LocalHaptics
 import dev.supermux.ui.theme.NoHaptics
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -290,11 +290,12 @@ class ReorderableListState internal constructor(
      * a single drag past one neighbour away through the whole list.
      *
      * The guard is the layout pass ITSELF (instance identity), not the key order it produced, so
-     * it cannot wedge: any new measure releases it, including one that puts the visible order back
-     * exactly as it was (an optimistic order overwritten by a server refresh, a scroll that
-     * re-lands on the same keys). Comparing key ORDER instead would hold the guard forever in that
-     * case and leave a dead row under the finger for the rest of the gesture — it self-heals on
-     * the next drag ([onDragStart] and [onDragStop] both clear it), which is far too late.
+     * a new measure releases it even when the visible order came back exactly as it was (an
+     * optimistic order overwritten by a server refresh, a scroll that re-lands on the same keys) —
+     * comparing key ORDER would hold forever there. And it expires unconditionally once the
+     * pointer has travelled a further row height ([pointerYAtMove]), which covers the case where
+     * the overwrite means no new measure happens AT ALL. Neither can wedge the rest of a gesture;
+     * without them a dead row follows the finger until it lifts.
      */
     private var lastMoveLayout: Any? = null
 
@@ -312,6 +313,7 @@ class ReorderableListState internal constructor(
         lastMoveLayout = null
         val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
         pointerY = if (item != null) item.offset + item.size / 2f else 0f
+        pointerYAtMove = pointerY
         startEdgeScroll()
     }
 
@@ -322,9 +324,28 @@ class ReorderableListState internal constructor(
         settleMoves()
     }
 
+    /**
+     * The row that was just released, and the offset it was displaced by at that instant.
+     *
+     * The drop-settle animation starts from HERE rather than from [draggingOffset], which
+     * [onDragStop] zeroes in the same snapshot that clears [draggingKey]: anything sampling the
+     * live offset would be racing the recomposition that notices the drag ended, and a lost sample
+     * means the row snaps home instead of settling. Written before the two are cleared, so the
+     * recomposition that sees `draggingKey == null` already sees the drop it has to animate.
+     */
+    /** [pointerY] when the last move was accepted — the second half of the move guard. */
+    private var pointerYAtMove = 0f
+
+    var lastDropKey by mutableStateOf<Any?>(null)
+        private set
+    var lastDropOffset by mutableFloatStateOf(0f)
+        private set
+
     internal fun onDragStop() {
         scrollJob?.cancel()
         scrollJob = null
+        lastDropKey = draggingKey
+        lastDropOffset = draggingOffset
         draggingKey = null
         draggingOffset = 0f
         lastMoveLayout = null
@@ -334,15 +355,17 @@ class ReorderableListState internal constructor(
         val key = draggingKey ?: return
         val info = listState.layoutInfo
         val visible = info.visibleItemsInfo
-        // Still the very layout the last accepted move was computed from: wait for a new measure.
-        if (info === lastMoveLayout) return
         val from = visible.firstOrNull { it.key == key } ?: return
+        // Still the very layout the last accepted move was computed from: wait for a new measure,
+        // or for the pointer to have dragged a whole further row (that measure may never come).
+        if (info === lastMoveLayout && abs(pointerY - pointerYAtMove) < from.size) return
         val center = from.offset + draggingOffset + from.size / 2f
         val to = visible.firstOrNull {
             it.key != key && center >= it.offset && center <= it.offset + it.size
         } ?: return
         if (!onMove(from, to)) return
         lastMoveLayout = info
+        pointerYAtMove = pointerY
         // The row is about to be laid out in the target's slot; keep it under the finger.
         draggingOffset -= (to.offset - from.offset).toFloat()
     }
@@ -489,18 +512,21 @@ fun LazyItemScope.ReorderableItem(
     // during composition (not in an effect) so the frame the drag ends already renders the settle
     // instead of one snapped-to-zero frame.
     val settle = remember(key) { Animatable(0f) }
-    // Plain (non-snapshot) holder: the drag offset is sampled here every frame, and observing it in
-    // composition would recompose the whole row per frame. Drag frames stay draw-only — the only
-    // composition read of the offset is inside the graphicsLayer lambda below.
+    // Plain (non-snapshot) holder, so nothing here observes a per-frame value: drag frames stay
+    // draw-only, and the only composition read of the LIVE offset is the graphicsLayer lambda
+    // below. It is filled once, from the offset the state captured at release.
     val settleFrom = remember(key) { floatArrayOf(0f) }
     var settling by remember(key) { mutableStateOf(false) }
     var wasDragging by remember(key) { mutableStateOf(false) }
-    LaunchedEffect(dragging) {
-        if (dragging) snapshotFlow { state.draggingOffset }.collect { settleFrom[0] = it }
-    }
     if (dragging != wasDragging) {
         wasDragging = dragging
-        if (!dragging && settleFrom[0] != 0f) settling = true
+        if (!dragging) {
+            val dropped = if (state.lastDropKey == key) state.lastDropOffset else 0f
+            if (dropped != 0f) {
+                settleFrom[0] = dropped
+                settling = true
+            }
+        }
     }
     LaunchedEffect(settling) {
         if (settling) {
