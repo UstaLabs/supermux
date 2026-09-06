@@ -87,6 +87,7 @@ import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.ui.session.LauncherActions
+import dev.supermux.ui.session.ProjectPicker
 import dev.supermux.session.chooseDefaultProject
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.orderProjectsByRecency
@@ -1017,22 +1018,17 @@ fun SessionLauncherScreen(
     }
 
     // ── Forge-aware project picker (known projects + typed path + clone/create) ──
-    if (showProjectSheet) {
-        ProjectPickerSheet(
-            current = workdir,
-            projects = projects,
-            home = home,
-            loadForges = actions.listForges,
-            // `null` from the shared holder means the SEARCH FAILED; the sheet's list shape cannot
-            // say that yet, so it reads as "no matches" exactly as it did before (F5 owns the fix).
-            searchForge = { actions.searchForge(it)?.repos.orEmpty() },
-            cloneForge = actions.cloneForge,
-            createLocalRepo = actions.createLocalRepo,
-            createForge = actions.createForge,
-            onPick = { workdir = it; workdirTouched = true; error = null },
-            onDismiss = { showProjectSheet = false },
-        )
-    }
+    // The shared picker: a ModalBottomSheet under Compact (this is where Android's own
+    // ProjectPickerSheet went), the desktop heading dropdown on a wide window.
+    ProjectPicker(
+        expanded = showProjectSheet,
+        current = workdir,
+        projects = projects,
+        home = home,
+        actions = actions,
+        onPick = { workdir = it; workdirTouched = true; error = null },
+        onDismiss = { showProjectSheet = false },
+    )
 
     if (voice.micDenied) MicDeniedDialog(onDismiss = { voice.micDenied = false })
 }
