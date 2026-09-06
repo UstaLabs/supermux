@@ -1,4 +1,4 @@
-package dev.supermux.android.session
+package dev.supermux.ui.session
 
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.background
@@ -27,12 +27,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 private val ActionWidth = 104.dp
+
+/**
+ * Horizontal swipe-to-reveal row actions (Android's list rows, moved verbatim).
+ *
+ * Touch only: under [InputMode.Pointer] the row renders just its [content] — a mouse
+ * reaches the same actions through the row's context menu, and a trackpad fling would
+ * otherwise open a drawer nobody asked for. Only one row is open at a time; the caller
+ * owns that id ([openRowId] / [onOpenRowChange]).
+ */
 
 @Composable
 fun SwipeActionRow(
@@ -41,8 +60,8 @@ fun SwipeActionRow(
     onOpenRowChange: (String?) -> Unit,
     startLabel: String?,
     endLabel: String?,
-    startIcon: Int? = null,
-    endIcon: Int? = null,
+    startIcon: ImageVector? = null,
+    endIcon: ImageVector? = null,
     onStartAction: () -> Unit,
     onEndAction: () -> Unit,
     modifier: Modifier = Modifier,
@@ -51,6 +70,12 @@ fun SwipeActionRow(
     endColor: Color = MaterialTheme.colorScheme.errorContainer,
     content: @Composable () -> Unit,
 ) {
+    if (LocalInputMode.current != InputMode.Touch) {
+        // Pointer hosts have no swipe: the same affordances live in the row's
+        // right-click menu, so the row renders its content and nothing else.
+        Box(modifier) { content() }
+        return
+    }
     val scope = rememberCoroutineScope()
     val revealPx = with(LocalDensity.current) { ActionWidth.toPx() }
     var offsetPx by remember(rowId) { mutableFloatStateOf(0f) }
@@ -97,7 +122,7 @@ fun SwipeActionRow(
                         ) {
                             if (startIcon != null) {
                                 Icon(
-                                    painter = painterResource(startIcon),
+                                    imageVector = startIcon,
                                     contentDescription = null,
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -122,7 +147,7 @@ fun SwipeActionRow(
                         ) {
                             if (endIcon != null) {
                                 Icon(
-                                    painter = painterResource(endIcon),
+                                    imageVector = endIcon,
                                     contentDescription = null,
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -168,3 +193,21 @@ fun SwipeActionRow(
         }
     }
 }
+
+/**
+ * The Material glyph for a swipe action — Android's `R.drawable.ic_*` set, one mapping
+ * for every list that renders these rows. [SessionSwipeAction.Settle] is `Check` in the
+ * session list and `Archive` on a workspace row, so that one is the caller's to override.
+ */
+fun sessionSwipeActionIcon(action: SessionSwipeAction?): ImageVector? = when (action) {
+    SessionSwipeAction.Mute -> Icons.AutoMirrored.Filled.VolumeOff
+    SessionSwipeAction.Unmute -> Icons.AutoMirrored.Filled.VolumeUp
+    SessionSwipeAction.Settle -> Icons.Filled.Check
+    SessionSwipeAction.Edit -> Icons.Filled.Edit
+    SessionSwipeAction.Discard -> Icons.Filled.Delete
+    SessionSwipeAction.Activate -> Icons.Filled.PlayArrow
+    null -> null
+}
+
+/** Workspace rows call the archive box a workspace "Archive", not a session "Settle". */
+val WorkspaceArchiveSwipeIcon: ImageVector get() = Icons.Filled.Archive

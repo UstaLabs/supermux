@@ -238,6 +238,13 @@ fun SessionLauncherScreen(
     onPrefsChange: (LauncherPrefs) -> Unit,
     loadDraft: suspend () -> LauncherDraft,
     onDraftChange: (LauncherDraft) -> Unit,
+    /**
+     * The dispose-path draft write. [onDraftChange] is debounced and typically launches into the
+     * composition's scope, which is already cancelled when the WINDOW closes — so the last 400 ms
+     * of typing would be lost. The caller passes a write that outlives the composition here;
+     * the default keeps the old behaviour for tests and previews.
+     */
+    onDraftFlush: (LauncherDraft) -> Unit = onDraftChange,
     onClearDraft: () -> Unit,
     onSubmit: suspend (
         workdir: String,
@@ -431,12 +438,13 @@ fun SessionLauncherScreen(
         )
     }
 
-    // Flush the live (non-debounced) draft on dispose so navigating away mid-debounce never loses
-    // it — UNLESS a successful submit already cleared it (draftCleared), which must not be resurrected.
+    // Flush the live (non-debounced) draft on dispose so navigating away (or closing the window)
+    // mid-debounce never loses it — UNLESS a successful submit already cleared it (draftCleared),
+    // which must not be resurrected.
     DisposableEffect(Unit) {
         onDispose {
             if (!launcherRestoring && !draftCleared) {
-                onDraftChange(
+                onDraftFlush(
                     LauncherDraft(
                         workdir = if (workdirTouched) workdir else null,
                         useWorktree = useWorktree,

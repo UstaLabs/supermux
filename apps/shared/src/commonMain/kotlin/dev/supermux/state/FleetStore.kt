@@ -85,7 +85,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -148,7 +147,6 @@ class FleetStore(
     // tearing down the caller's scope, and one failed fold never cancels its siblings.
     private val fleetScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
     private val lock = SynchronizedObject()
-    private val settingsJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     // Insertion-ordered so the merged list / active-fallback follow the store's host order.
     private val conns = LinkedHashMap<String, HostConn>()

@@ -93,7 +93,6 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -160,7 +159,6 @@ class HostStore(
     private val projectionJob = SupervisorJob(scope.coroutineContext[Job])
     private val projectionScope = CoroutineScope(Dispatchers.Unconfined + projectionJob)
     internal val projectionsActive: Boolean get() = projectionJob.isActive
-    private val settingsJson = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val http = deps.httpFactory(null)
     val client = BrokerClient(baseUrl, token, http, onConnectionChange = onConnectionChange)

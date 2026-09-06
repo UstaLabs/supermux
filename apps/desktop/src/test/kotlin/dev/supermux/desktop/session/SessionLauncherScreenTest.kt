@@ -16,6 +16,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -995,4 +996,28 @@ class SessionLauncherScreenTest {
         assertEquals("conn-9", target.get())
         assertEquals("/home/u/solo-proj", picked.get())
     }
+
+    /**
+     * A failed spawn must show the BROKER's own refusal, verbatim — not a generic
+     * "Failed to create session". `AppShell` throws the broker's message out of
+     * `onSubmit`; this pins that the launcher renders that message in `launcher_error`.
+     */
+    @Test fun failed_submit_shows_the_brokers_refusal_text() = runComposeUiTest {
+        setContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
+                onSubmit = { _, _, _, _, _, _, _, _, _ ->
+                    throw IllegalStateException("spawn refused: workdir is not a directory")
+                },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithTag("launcher_error").fetchSemanticsNodes().isNotEmpty()
+        }
+        onNodeWithTag("launcher_error")
+            .assertTextEquals("spawn refused: workdir is not a directory")
+    }
+
 }

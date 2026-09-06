@@ -37,7 +37,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -52,6 +51,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewAgenda
+import dev.supermux.ui.session.rememberSessionDragReorderState
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.widgets.AlertDialog
@@ -467,10 +467,7 @@ fun SessionListPanel(
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<SessionInfo?>(null) }
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val dragReorder = remember(listState) {
-        SessionDragReorderState(scope, listState) { ids -> onReorder(ids) }
-    }
+    val dragReorder = rememberSessionDragReorderState(listState) { ids -> onReorder(ids) }
     var listRootOffset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
     fun sectionOrder(section: TaskSection): List<SessionInfo> {
         val live = dragReorder.liveOrder

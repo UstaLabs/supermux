@@ -1,5 +1,20 @@
 package dev.supermux.android.session
 
+import dev.supermux.ui.session.SessionSwipeAction
+import dev.supermux.ui.session.sessionSwipeActionIcon
+import dev.supermux.ui.session.SwipeActionRow
+import dev.supermux.ui.session.sessionSwipeActions
+import dev.supermux.ui.session.moveWithinScope
+import dev.supermux.ui.session.applyWorkingOrders
+import dev.supermux.ui.session.SessionDragWorkingState
+import dev.supermux.ui.session.SessionReorderScope
+import dev.supermux.ui.session.reorderScope
+import dev.supermux.ui.session.WorkspaceListTestIds
+import dev.supermux.ui.session.deriveWorkspaceRow
+import dev.supermux.ui.session.deriveArchivedWorkspaceRow
+import dev.supermux.ui.session.resolveWorkspaceOpenSessionId
+import dev.supermux.ui.session.sessionListShowsArchivedWorkspaceFold
+
 import dev.supermux.ui.TestIds
 import android.content.Context
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -22,8 +37,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import sh.calvin.reorderable.rememberReorderableLazyListState
-import sh.calvin.reorderable.ReorderableItem
+import dev.supermux.ui.session.ReorderableListState
+import dev.supermux.ui.session.rememberReorderableListState
+import dev.supermux.ui.session.ReorderableItem
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -240,16 +256,6 @@ fun SessionRow(
         null -> null
     }
 
-    fun icon(action: SessionSwipeAction?): Int? = when (action) {
-        SessionSwipeAction.Mute -> R.drawable.ic_volume_x
-        SessionSwipeAction.Unmute -> R.drawable.ic_volume_2
-        SessionSwipeAction.Settle -> R.drawable.ic_check
-        SessionSwipeAction.Edit -> R.drawable.ic_pencil
-        SessionSwipeAction.Discard -> R.drawable.ic_trash
-        SessionSwipeAction.Activate -> R.drawable.ic_play
-        null -> null
-    }
-
     fun runAction(action: SessionSwipeAction?) {
         when (action) {
             SessionSwipeAction.Mute, SessionSwipeAction.Unmute -> {
@@ -283,8 +289,8 @@ fun SessionRow(
             onOpenRowChange = onOpenSwipeRowChange,
             startLabel = label(actions.start),
             endLabel = label(actions.end),
-            startIcon = icon(actions.start),
-            endIcon = icon(actions.end),
+            startIcon = sessionSwipeActionIcon(actions.start),
+            endIcon = sessionSwipeActionIcon(actions.end),
             onStartAction = { runAction(actions.start) },
             onEndAction = { runAction(actions.end) },
             enabled = !isDragging,
@@ -635,19 +641,19 @@ fun SessionListScreen(
     val onRenameWs: (WorkspaceDto) -> Unit = { renameWorkspaceTarget = it; renameText = it.name }
     val onArchiveWs: (WorkspaceDto) -> Unit = { archiveWorkspaceTarget = it }
 
-    // Native Compose reorder (sh.calvin.reorderable) — elevates the item, auto-scrolls,
-    // animates neighbors. Used by production apps (Pocket Casts, ProtonVPN, etc.).
-    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
-        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
-        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+    // Shared reorder (ui/session/DragReorder.kt) — elevates the item, auto-scrolls,
+    // animates neighbours. The lift is a long-press here because LocalInputMode is Touch.
+    val reorderableState = rememberReorderableListState(listState) { from, to ->
+        val fromKey = from.key as? String ?: return@rememberReorderableListState false
+        val toKey = to.key as? String ?: return@rememberReorderableListState false
         if (useWorkspaces) {
             if (!fromKey.startsWith("ws:") || !toKey.startsWith("ws:")) {
-                return@rememberReorderableLazyListState
+                return@rememberReorderableListState false
             }
             val fromId = fromKey.removePrefix("ws:")
             val toId = toKey.removePrefix("ws:")
-            val scopeKey = wsScopeOf(fromId) ?: return@rememberReorderableLazyListState
-            if (wsScopeOf(toId) != scopeKey) return@rememberReorderableLazyListState
+            val scopeKey = wsScopeOf(fromId) ?: return@rememberReorderableListState false
+            if (wsScopeOf(toId) != scopeKey) return@rememberReorderableListState false
             val rows = wsRowsForScope(scopeKey)
             val move = moveWorkspaceWithinScope(
                 rows = rows,
@@ -655,15 +661,15 @@ fun SessionListScreen(
                 scopeKey = scopeKey,
                 fromId = fromId,
                 toId = toId,
-            ) ?: return@rememberReorderableLazyListState
+            ) ?: return@rememberReorderableListState false
             val originalIds = wsWorkingOrders[scopeKey] ?: rows.map { it.id }
             wsDragState.beginIfIdle(move.scope, originalIds)
             wsWorkingOrders[scopeKey] = move.orderedIds
             wsDragState.move(move.orderedIds)
-            return@rememberReorderableLazyListState
+            return@rememberReorderableListState true
         }
         if (!fromKey.startsWith("task:") || !toKey.startsWith("task:")) {
-            return@rememberReorderableLazyListState
+            return@rememberReorderableListState false
         }
         val move = moveWithinScope(
             rows = reorderRows,
@@ -671,15 +677,16 @@ fun SessionListScreen(
             fromId = fromKey.removePrefix("task:"),
             toId = toKey.removePrefix("task:"),
             projectScoped = groupByProject,
-        ) ?: return@rememberReorderableLazyListState
+        ) ?: return@rememberReorderableListState false
         val originalIds = workingOrders[move.scope]
             ?: reorderRows
                 .filter { reorderScope(it, projectScoped = groupByProject) == move.scope }
                 .map { it.id }
         dragWorkingState.beginIfIdle(move.scope, originalIds)
-        // Calvin requires this mutation before onMove returns so neighbors can animate.
+        // The mutation must land before onMove returns so neighbours can animate.
         workingOrders[move.scope] = move.orderedIds
         dragWorkingState.move(move.orderedIds)
+        true
     }
     LaunchedEffect(reorderableState) {
         var wasDragging = reorderableState.isAnyItemDragging
@@ -1123,7 +1130,7 @@ fun SessionListScreen(
                             ReorderableItem(reorderableState, key = "task:${s.id}") { isDragging ->
                                 // Whole-row long-press on the swipe shell (parent of Surface click).
                                 // Shared interactionSource keeps click + long-press from fighting
-                                // (Calvin demo pattern). Swipe is disabled while isDragging.
+                                // (shared drag-handle pattern). Swipe is disabled while isDragging.
                                 val rowInteraction = remember { MutableInteractionSource() }
                                 SessionRow(
                                     s = s,
@@ -1138,7 +1145,7 @@ fun SessionListScreen(
                                     interactionSource = rowInteraction,
                                     openSwipeRowId = openSwipeRowId,
                                     onOpenSwipeRowChange = { openSwipeRowId = it },
-                                    dragModifier = Modifier.longPressDraggableHandle(
+                                    dragModifier = Modifier.reorderDragHandle(
                                         interactionSource = rowInteraction,
                                         onDragStarted = { beginDrag(s) },
                                         onDragStopped = { finishDrag() },
@@ -1242,7 +1249,7 @@ fun SessionListScreen(
                                         onOpenSwipeRowChange = { openSwipeRowId = it },
                                         isDragging = isDragging,
                                         interactionSource = rowInteraction,
-                                        dragModifier = Modifier.longPressDraggableHandle(
+                                        dragModifier = Modifier.reorderDragHandle(
                                             interactionSource = rowInteraction,
                                             onDragStarted = { beginDrag(s) },
                                             onDragStopped = { finishDrag() },
@@ -1488,7 +1495,7 @@ private fun LazyItemScope.WorkspaceReorderableRow(
     grouped: Boolean,
     first: Boolean,
     last: Boolean,
-    reorderableState: sh.calvin.reorderable.ReorderableLazyListState,
+    reorderableState: ReorderableListState,
     sessionById: Map<String, SessionInfo>,
     agentTyped: Map<String, dev.supermux.proto.AgentStatus>,
     lastBySession: Map<String, LogEntry?>,
@@ -1533,7 +1540,7 @@ private fun LazyItemScope.WorkspaceReorderableRow(
             hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[openSid ?: ""]] else null,
             isDragging = isDragging,
             interactionSource = rowInteraction,
-            dragModifier = Modifier.longPressDraggableHandle(
+            dragModifier = Modifier.reorderDragHandle(
                 interactionSource = rowInteraction,
                 onDragStarted = { onBeginDrag(w) },
                 onDragStopped = { onFinishDrag() },

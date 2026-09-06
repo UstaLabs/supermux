@@ -110,9 +110,11 @@ import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.workspace.groupWorkspaces
 import dev.supermux.workspace.isMultiAgent
-import dev.supermux.workspace.workspaceActivity
-import sh.calvin.reorderable.ReorderableItem
-import sh.calvin.reorderable.rememberReorderableLazyListState
+import dev.supermux.ui.session.ReorderableItem
+import dev.supermux.ui.session.ReorderableListState
+import dev.supermux.ui.session.WorkspaceListTestIds
+import dev.supermux.ui.session.deriveWorkspaceRow
+import dev.supermux.ui.session.rememberReorderableListState
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
 import dev.supermux.workspace.WorkspaceDragWorkingState
@@ -258,7 +260,7 @@ fun WorkspaceListPanel(
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<WorkspaceDto?>(null) }
     val listState = rememberLazyListState()
-    // Live order while dragging (Android SessionListScreen / calvin pattern). Keyed by
+    // Live order while dragging (Android SessionListScreen pattern). Keyed by
     // group path or WORKSPACE_FLAT_SCOPE so neighbors can animate before the PATCH returns.
     val workingOrders = remember { mutableStateMapOf<String, List<String>>() }
     val dragWorkingState = remember { WorkspaceDragWorkingState() }
@@ -272,7 +274,7 @@ fun WorkspaceListPanel(
         }
     }
 
-    // Scope → current rows used by onMove to keep calvin mutations section-local.
+    // Scope → current rows used by onMove to keep the mutations section-local.
     fun rowsForScope(scopeKey: String): List<WorkspaceDto> = when (scopeKey) {
         WORKSPACE_FLAT_SCOPE -> groups
             .filter { it.key != PA_GROUP_KEY }
@@ -291,18 +293,18 @@ fun WorkspaceListPanel(
         }?.key
     }
 
-    // Native Compose reorder (sh.calvin.reorderable) — elevates the item, auto-scrolls,
-    // animates neighbors. Same library + pattern as Android SessionListScreen.
-    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
-        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
-        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+    // Shared reorder (ui/session/DragReorder.kt) — elevates the item, auto-scrolls,
+    // animates neighbours. The lift is press+slop here because LocalInputMode is Pointer.
+    val reorderableState = rememberReorderableListState(listState) { from, to ->
+        val fromKey = from.key as? String ?: return@rememberReorderableListState false
+        val toKey = to.key as? String ?: return@rememberReorderableListState false
         if (!fromKey.startsWith("ws:") || !toKey.startsWith("ws:")) {
-            return@rememberReorderableLazyListState
+            return@rememberReorderableListState false
         }
         val fromId = fromKey.removePrefix("ws:")
         val toId = toKey.removePrefix("ws:")
-        val scopeKey = scopeOf(fromId) ?: return@rememberReorderableLazyListState
-        if (scopeOf(toId) != scopeKey) return@rememberReorderableLazyListState
+        val scopeKey = scopeOf(fromId) ?: return@rememberReorderableListState false
+        if (scopeOf(toId) != scopeKey) return@rememberReorderableListState false
         val rows = rowsForScope(scopeKey)
         val move = moveWorkspaceWithinScope(
             rows = rows,
@@ -310,12 +312,13 @@ fun WorkspaceListPanel(
             scopeKey = scopeKey,
             fromId = fromId,
             toId = toId,
-        ) ?: return@rememberReorderableLazyListState
+        ) ?: return@rememberReorderableListState false
         val originalIds = workingOrders[scopeKey] ?: rows.map { it.id }
         dragWorkingState.beginIfIdle(move.scope, originalIds)
-        // Calvin requires this mutation before onMove returns so neighbors can animate.
+        // The mutation must land before onMove returns so neighbours can animate.
         workingOrders[scopeKey] = move.orderedIds
         dragWorkingState.move(move.orderedIds)
+        true
     }
     LaunchedEffect(reorderableState) {
         var wasDragging = reorderableState.isAnyItemDragging
@@ -368,7 +371,7 @@ fun WorkspaceListPanel(
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .testTag("workspaces_list")
+                .testTag(WorkspaceListTestIds.LIST)
                 .fillMaxSize(),
         ) {
             if (groups.isEmpty() && archivedWorkspaces.isEmpty()) {
@@ -462,7 +465,7 @@ fun WorkspaceListPanel(
                                 ),
                                 isDragging = isDragging,
                                 interactionSource = rowInteraction,
-                                dragModifier = Modifier.draggableHandle(
+                                dragModifier = Modifier.reorderDragHandle(
                                     interactionSource = rowInteraction,
                                     onDragStarted = {
                                         val ids = workingOrders[WORKSPACE_FLAT_SCOPE]
@@ -572,7 +575,7 @@ fun WorkspaceListPanel(
                                     } else null,
                                     isDragging = isDragging,
                                     interactionSource = rowInteraction,
-                                    dragModifier = Modifier.draggableHandle(
+                                    dragModifier = Modifier.reorderDragHandle(
                                         interactionSource = rowInteraction,
                                         onDragStarted = {
                                             val ids = workingOrders[g.key] ?: ordered.map { it.id }
@@ -720,7 +723,7 @@ private fun ArchivedFoldButton(
     val cs = MaterialTheme.colorScheme
     TextButton(
         onClick = onClick,
-        modifier = Modifier.testTag("archived_fold"),
+        modifier = Modifier.testTag(WorkspaceListTestIds.ARCHIVED_FOLD),
     ) {
         Text(
             if (expanded) "Hide $count archived" else "Show $count archived",
@@ -756,7 +759,7 @@ private fun ArchivedWorkspaceRow(
                 .background(rowBg)
                 .clickable(onClick = onSelect)
                 .padding(horizontal = 8.dp, vertical = 8.dp)
-                .testTag("archived_workspace_${w.id}"),
+                .testTag(WorkspaceListTestIds.archived(w.id)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -785,7 +788,7 @@ private fun WorkspaceListEntry(
     host: HostView? = null,
     projectTag: String? = null,
     modifier: Modifier = Modifier,
-    /** Calvin drag handle — whole-row press-drag on desktop (Android uses long-press). */
+    /** Shared reorder drag handle — press-drag under Pointer, long-press under Touch. */
     dragModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
     isDragging: Boolean = false,
@@ -796,10 +799,23 @@ private fun WorkspaceListEntry(
     onToggleMute: () -> Unit,
     tabDragState: PaneDragController? = null,
 ) {
-    val activity = workspaceActivity(w, agentState)
-    val primarySid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
+    // The row shape comes from the shared `deriveWorkspaceRow` (cluster F2) — the same
+    // activity / primary-session / git / multi-agent derivation Android's list already used,
+    // computed inline here before. `active`, `preview` and `lastReadAt` stay desktop's own:
+    // the sidebar keys "active" on the WORKSPACE id, not on the resolved chat session.
+    val model = deriveWorkspaceRow(
+        w = w,
+        sessionsById = sessionById,
+        agentState = agentState,
+        lastBySession = lastBySession,
+        lastRead = lastRead,
+        home = "",
+        selectedSessionId = null,
+    )
+    val activity = model.activity
+    val primarySid = model.primarySessionId
     val primary = primarySid?.let { sessionById[it] }
-    val git = primary?.git
+    val git = model.git
     val preview = primarySid?.let { lastBySession[it] }
     val lastReadAt = primarySid?.let { lastRead[it] }
     Column(Modifier.fillMaxWidth()) {
@@ -824,14 +840,15 @@ private fun WorkspaceListEntry(
             onToggleMute = onToggleMute,
             tabDragState = tabDragState,
         )
-        if (w.isMultiAgent()) {
+        if (model.multiAgent) {
             Column(
                 Modifier
-                    .testTag("workspace-children-${w.id}")
+                    .testTag(WorkspaceListTestIds.children(w.id))
                     .fillMaxWidth()
                     .padding(start = 28.dp, end = 8.dp),
             ) {
-                for (sid in w.chatSessionIds()) {
+                for (child in model.children) {
+                    val sid = child.sessionId
                     val childName = names[sid] ?: sid
                     val childWorking = agentState[sid]?.working == true
                     WorkspaceChildRow(
@@ -877,7 +894,7 @@ fun WorkspaceRow(
     host: HostView? = null,
     projectTag: String? = null,
     modifier: Modifier = Modifier,
-    /** Applied outside the clickable so press-drag can own the gesture (Calvin handle). */
+    /** Applied outside the clickable so the drag handle can own the gesture. */
     dragModifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource? = null,
     /** Elevation while the row is being dragged by the reorder library. */
@@ -954,7 +971,7 @@ fun WorkspaceRow(
         ) {
         Row(
             rowModifier
-                .testTag("workspace_row_${w.id}")
+                .testTag(WorkspaceListTestIds.row(w.id))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Top,
         ) {
@@ -982,7 +999,7 @@ fun WorkspaceRow(
                         Box(
                             Modifier
                                 .size(14.dp)
-                                .testTag("workspace-multiagent-${w.id}"),
+                                .testTag(WorkspaceListTestIds.multiAgent(w.id)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(

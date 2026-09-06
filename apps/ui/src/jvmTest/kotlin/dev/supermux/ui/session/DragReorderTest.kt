@@ -1,0 +1,364 @@
+package dev.supermux.ui.session
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.unit.dp
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.Haptics
+import dev.supermux.ui.theme.LocalHaptics
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+private const val ROW_PX = 60
+private const val LONG_PRESS_MS = 800L
+
+private class RecordingHaptics : Haptics {
+    val kinds = mutableListOf<HapticKind>()
+    override fun perform(kind: HapticKind) { kinds += kind }
+}
+
+/**
+ * The one drag-reorder implementation, under both input modes.
+ *
+ * [InputMode.Pointer] grabs on press + touch slop (desktop's mouse-friendly reorder);
+ * [InputMode.Touch] grabs only after a long press, so a vertical fling still scrolls the list
+ * (Android's `sh.calvin.reorderable` semantics, reimplemented in `ui/session/DragReorder.kt`).
+ */
+@OptIn(ExperimentalTestApi::class)
+class DragReorderTest {
+
+    // ── ReorderableListState: the elevate-and-shuffle list reorder ────────────────────────────
+
+    @Composable
+    private fun ReorderHarness(
+        mode: InputMode,
+        ids: MutableList<String>,
+        moves: MutableList<Pair<String, String>>,
+        haptics: Haptics,
+        onListState: (LazyListState) -> Unit = {},
+        rejectAll: Boolean = false,
+    ) {
+        CompositionLocalProvider(
+            LocalInputMode provides mode,
+            LocalHaptics provides haptics,
+        ) {
+            val listState = rememberLazyListState()
+            onListState(listState)
+            val state = rememberReorderableListState(listState) { from, to ->
+                val f = from.key as String
+                val t = to.key as String
+                val fi = ids.indexOf(f)
+                val ti = ids.indexOf(t)
+                if (rejectAll || fi < 0 || ti < 0) return@rememberReorderableListState false
+                moves += f to t
+                ids.removeAt(fi)
+                ids.add(ti, f)
+                true
+            }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height((ROW_PX * 3).dp)
+                    .testTag("list"),
+            ) {
+                items(ids.toList(), key = { it }) { id ->
+                    ReorderableItem(state, key = id) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(ROW_PX.dp)
+                                .background(Color.DarkGray)
+                                .testTag(id)
+                                .reorderDragHandle(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test fun pointerPressDragMovesTheRowPastItsNeighbour() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        setContent { ReorderHarness(InputMode.Pointer, ids, moves, RecordingHaptics()) }
+        waitForIdle()
+
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+
+        assertEquals(listOf("a" to "b"), moves)
+        assertEquals(listOf("b", "a", "c"), ids.toList())
+    }
+
+    @Test fun pointerDragBelowTheRowHeightKeepsTheOrder() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        setContent { ReorderHarness(InputMode.Pointer, ids, moves, RecordingHaptics()) }
+        waitForIdle()
+
+        // The row's centre never leaves its own slot, so no neighbour is crossed.
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 12f))
+            moveBy(Offset(0f, 8f))
+            up()
+        }
+        waitForIdle()
+
+        assertEquals(emptyList(), moves)
+        assertEquals(listOf("a", "b", "c"), ids.toList())
+    }
+
+    @Test fun touchDragWithoutALongPressScrollsInsteadOfReordering() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        setContent { ReorderHarness(InputMode.Touch, ids, moves, RecordingHaptics()) }
+        waitForIdle()
+
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+
+        assertEquals(emptyList(), moves)
+        assertEquals(listOf("a", "b", "c"), ids.toList())
+    }
+
+    @Test fun touchLongPressLiftsWithAHapticAndThenReorders() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        val haptics = RecordingHaptics()
+        setContent { ReorderHarness(InputMode.Touch, ids, moves, haptics) }
+        waitForIdle()
+
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            advanceEventTime(LONG_PRESS_MS)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+
+        assertEquals(listOf("a" to "b"), moves)
+        assertEquals(listOf("b", "a", "c"), ids.toList())
+        assertTrue(HapticKind.Tick in haptics.kinds, "the lift must be felt")
+    }
+
+    @Test fun aRejectedMoveLeavesTheListAloneAndKeepsTheRowUnderTheFinger() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        setContent {
+            ReorderHarness(InputMode.Pointer, ids, moves, RecordingHaptics(), rejectAll = true)
+        }
+        waitForIdle()
+
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+
+        // Cross-section drags answer `false`: nothing shuffles.
+        assertEquals(emptyList(), moves)
+        assertEquals(listOf("a", "b", "c"), ids.toList())
+    }
+
+    @Test fun releasingEndsTheGestureAndClearsTheDragState() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        var listState: LazyListState? = null
+        setContent {
+            ReorderHarness(
+                InputMode.Pointer, ids, moves, RecordingHaptics(),
+                onListState = { listState = it },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+        // The gesture is over: nothing is dragging, so the sidebar's finishDrag() has fired.
+        assertTrue(listState != null)
+        assertEquals(listOf("b", "a", "c"), ids.toList())
+    }
+
+    @Test fun edgeAutoScrollPullsTheListWhileTheRowSitsAtTheBottom() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c", "d", "e", "f", "g", "h")
+        val moves = mutableListOf<Pair<String, String>>()
+        var listState: LazyListState? = null
+        setContent {
+            ReorderHarness(
+                InputMode.Pointer, ids, moves, RecordingHaptics(),
+                onListState = { listState = it },
+            )
+        }
+        waitForIdle()
+
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 140f)) // parked inside the bottom edge zone
+        }
+        waitUntil(timeoutMillis = 5_000) {
+            val s = listState ?: return@waitUntil false
+            s.firstVisibleItemIndex > 0 || s.firstVisibleItemScrollOffset > 0
+        }
+        // "a" may have scrolled out of the viewport by now — release through the list node.
+        onNodeWithTag("list").performTouchInput { up() }
+        waitForIdle()
+    }
+
+    // ── SessionDragReorderState: the ghost-row press-drag ─────────────────────────────────────
+
+    @Composable
+    private fun GhostHarness(
+        mode: InputMode,
+        ids: List<String>,
+        haptics: Haptics,
+        onState: (SessionDragReorderState) -> Unit = {},
+        onCommit: (List<String>) -> Unit,
+    ) {
+        CompositionLocalProvider(
+            LocalInputMode provides mode,
+            LocalHaptics provides haptics,
+        ) {
+            val listState = rememberLazyListState()
+            val scope = rememberCoroutineScope()
+            val state = remember(mode) {
+                SessionDragReorderState(scope, listState, mode, haptics, onCommit)
+            }
+            onState(state)
+            Column(Modifier.fillMaxWidth()) {
+                for (id in state.displayOrder(ids)) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(ROW_PX.dp)
+                            .background(Color.DarkGray)
+                            .testTag(id)
+                            .then(state.rowModifier(id, { ids }, enabled = true)),
+                    )
+                }
+            }
+        }
+    }
+
+    @Test fun ghostDragUnderPointerCommitsTheNewOrder() = runComposeUiTest {
+        var committed: List<String>? = null
+        setContent {
+            GhostHarness(InputMode.Pointer, listOf("a", "b", "c"), RecordingHaptics()) {
+                committed = it
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+        assertEquals(listOf("b", "a", "c"), committed)
+    }
+
+    @Test fun ghostDragUnderTouchNeedsTheLongPress() = runComposeUiTest {
+        var committed: List<String>? = null
+        setContent {
+            GhostHarness(InputMode.Touch, listOf("a", "b", "c"), RecordingHaptics()) {
+                committed = it
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+        assertEquals(null, committed)
+
+        val haptics = RecordingHaptics()
+        // Same gesture with the lift in front of it does commit.
+        var committed2: List<String>? = null
+        setContent {
+            GhostHarness(InputMode.Touch, listOf("a", "b", "c"), haptics) { committed2 = it }
+        }
+        waitForIdle()
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            advanceEventTime(LONG_PRESS_MS)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+        assertEquals(listOf("b", "a", "c"), committed2)
+        assertTrue(HapticKind.Tick in haptics.kinds)
+    }
+
+    @Test fun cancellingTheGestureCommitsNothingAndClearsTheGhost() = runComposeUiTest {
+        var committed: List<String>? = null
+        var state: SessionDragReorderState? = null
+        setContent {
+            GhostHarness(
+                InputMode.Pointer, listOf("a", "b", "c"), RecordingHaptics(),
+                onState = { state = it },
+            ) { committed = it }
+        }
+        waitForIdle()
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+        }
+        waitForIdle()
+        assertEquals(listOf("b", "a", "c"), state?.liveOrder)
+
+        state?.cancel()
+        waitForIdle()
+        assertEquals(null, committed)
+        assertEquals(null, state?.liveOrder)
+        assertEquals(null, state?.ghost)
+        onNodeWithTag("a").performTouchInput { up() }
+    }
+}

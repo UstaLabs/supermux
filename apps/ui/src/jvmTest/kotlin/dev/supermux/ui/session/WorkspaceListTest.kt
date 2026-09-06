@@ -1,4 +1,4 @@
-package dev.supermux.android.session
+package dev.supermux.ui.session
 
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitLiteStatusDto
@@ -7,6 +7,8 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.session.formatWorkdir
 import dev.supermux.workspace.WorkspaceActivity
+import dev.supermux.workspace.chatSessionIds
+import dev.supermux.workspace.isMultiAgent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -213,4 +215,56 @@ class WorkspaceListTest {
         assertEquals(formatWorkdir("/home/u/projects/app", "/home/u"), row.pathLabel)
         assertEquals("2026-08-02T00:00:00Z", row.archivedAt)
     }
+
+    /**
+     * Desktop's `WorkspaceListEntry` computed activity / primary session / git / multi-agent
+     * children inline; cluster F2 pointed it at [deriveWorkspaceRow]. This pins the two against
+     * each other so the swap stayed byte-identical for the sidebar.
+     */
+    @Test
+    fun rowModel_matchesTheInlineDerivationDesktopUsedToDo() {
+        val git = GitLiteStatusDto(compareRef = "main", dirty = 1)
+        val rows = listOf(
+            ws(id = "w1", views = listOf(chatView("v1", "s1")), primarySessionId = "s1"),
+            ws(
+                id = "w2",
+                views = listOf(chatView("v1", "s1", "w2"), chatView("v2", "s2", "w2")),
+                primarySessionId = null,
+            ),
+            ws(id = "w3", views = listOf(termView("v1", "w3"))),
+        )
+        val sessions = mapOf(
+            "s1" to session("s1", git = git),
+            "s2" to session("s2"),
+        )
+        val agent = mapOf("s2" to AgentStatus(phase = "running", working = true))
+
+        for (w in rows) {
+            // The old inline block, verbatim.
+            val inlineActivity = dev.supermux.workspace.workspaceActivity(w, agent)
+            val inlinePrimarySid = w.primarySessionId
+                ?: w.chatSessionIds().firstOrNull()
+            val inlineGit = inlinePrimarySid?.let { sessions[it] }?.git
+            val inlineMulti = w.isMultiAgent()
+            val inlineChildren =
+                if (inlineMulti) w.chatSessionIds() else emptyList()
+
+            val model = deriveWorkspaceRow(
+                w = w,
+                sessionsById = sessions,
+                agentState = agent,
+                lastBySession = emptyMap(),
+                lastRead = emptyMap(),
+                home = "",
+                selectedSessionId = null,
+            )
+
+            assertEquals(inlineActivity, model.activity, w.id)
+            assertEquals(inlinePrimarySid, model.primarySessionId, w.id)
+            assertEquals(inlineGit, model.git, w.id)
+            assertEquals(inlineMulti, model.multiAgent, w.id)
+            assertEquals(inlineChildren, model.children.map { it.sessionId }, w.id)
+        }
+    }
+
 }

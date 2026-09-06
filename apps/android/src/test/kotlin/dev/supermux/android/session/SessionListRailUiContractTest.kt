@@ -1,5 +1,7 @@
 package dev.supermux.android.session
 
+import dev.supermux.ui.session.WorkspaceListTestIds
+
 import dev.supermux.android.workspace.WorkspaceChatPaneTestIds
 import dev.supermux.session.SessionListRailIndicator
 import dev.supermux.session.sessionListRailIndicator

@@ -1,4 +1,4 @@
-package dev.supermux.android.session
+package dev.supermux.ui.session
 
 import dev.supermux.proto.SessionInfo
 import dev.supermux.session.SectionKey

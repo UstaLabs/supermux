@@ -40,9 +40,8 @@ dependencies {
     // class loading (verified by smokeJcefEditor), keeping its Java classes and native Chromium an
     // exact build pair. That JBR image is prepared below for :run/:hotRun and every distribution.
     implementation(libs.jcef)
-    // Native LazyList reorder (elevates, auto-scrolls, animates neighbors) — same library Android uses.
-    // Custom detectDragGestures step-math was jumpy on desktop trackpads; Calvin is production-proven.
-    implementation(libs.reorderable)
+    // (LazyList reorder is :ui's own ui/session/DragReorder.kt since cluster F2 — one
+    //  implementation for both hosts, gesture branched on LocalInputMode.)
     // (composemediaplayer moved to :ui commonMain in cluster D1 — it comes in transitively with
     //  the shared timeline, and both apps now use the same player.)
     // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub,

@@ -1,4 +1,4 @@
-package dev.supermux.android.session
+package dev.supermux.ui.session
 
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto

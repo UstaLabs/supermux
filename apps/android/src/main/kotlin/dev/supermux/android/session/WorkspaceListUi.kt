@@ -1,5 +1,13 @@
 package dev.supermux.android.session
 
+import dev.supermux.ui.session.SessionSwipeAction
+import dev.supermux.ui.session.WorkspaceArchiveSwipeIcon
+import dev.supermux.ui.session.sessionSwipeActionIcon
+import dev.supermux.ui.session.SwipeActionRow
+import dev.supermux.ui.session.WorkspaceListTestIds
+import dev.supermux.ui.session.WorkspaceRowModel
+import dev.supermux.ui.session.ArchivedWorkspaceRowModel
+
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
@@ -97,10 +105,8 @@ fun WorkspaceRow(
     }
 
     fun icon(action: SessionSwipeAction) = when (action) {
-        SessionSwipeAction.Mute -> R.drawable.ic_volume_x
-        SessionSwipeAction.Unmute -> R.drawable.ic_volume_2
-        SessionSwipeAction.Settle -> R.drawable.ic_archive
-        else -> null
+        SessionSwipeAction.Settle -> WorkspaceArchiveSwipeIcon
+        else -> sessionSwipeActionIcon(action)
     }
 
     Column(Modifier.fillMaxWidth()) {

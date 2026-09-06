@@ -41,7 +41,6 @@ jbrApi = "1.10.1"
 jcef = "137.0.17-gf354b0e-chromium-137.0.7151.104-api-1.20-253-b13"
 markdown = "0.7.6"
 coil = "3.5.0"
-reorderable = "3.1.0"
 # Compose Media Player — inline video in the desktop chat stream. MIT (vlcj, the obvious
 # alternative, is GPLv3 and would relicense the app). Per-platform native backends compiled into
 # the jar: AVPlayer on macOS, Media Foundation on Windows, GStreamer on Linux — no system install.
@@ -98,7 +97,6 @@ markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }
 # Async image loading for inline markdown images (Android). ktor3 backend matches our ktor client.
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }
-reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 compose-media-player = { module = "io.github.kdroidfilter:composemediaplayer", version.ref = "composeMediaPlayer" }
 # JetBrains multiplatform Navigation 3 UI (pulls navigation3-runtime transitively).
 jetbrains-navigation3-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "navigation3" }

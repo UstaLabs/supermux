@@ -476,20 +476,34 @@ class ShellUiState {
      */
     var forceWorkspaceView by mutableStateOf<Pair<String, JsonObject>?>(null)
 
+    /**
+     * Whatever the legacy `ui-state.json` still carried, kept verbatim until
+     * [UiPrefs.seedCollapsedProjectPaths] has actually taken it (see [legacyCollapsedPathsSeeded]).
+     */
+    var legacyCollapsedProjectPaths: List<String> = emptyList()
+        private set
+
+    /** True once the shared settings store owns the collapsed paths and the legacy copy is safe to drop. */
+    var legacyCollapsedPathsSeeded by mutableStateOf(false)
+
     /** The persisted slice of this state — see [ShellStateStore]. */
     fun snapshot() = SidebarSnapshot(
         sidebarCollapsed = sidebarCollapsed,
         sidebarWidthDp = sidebarWidth.value,
-        // `collapsedProjectPaths` deliberately left at its default: the shared settings store owns
-        // it now (F1), and writing it here too would give one value two owners.
+        // The shared settings store owns the collapsed paths now (F1). The legacy array is
+        // carried forward UNTOUCHED until the seed has actually succeeded — a save that runs
+        // after a THROWN seed would otherwise erase the only copy of the user's groups.
+        collapsedProjectPaths =
+            if (legacyCollapsedPathsSeeded) emptyList() else legacyCollapsedProjectPaths,
     )
 
     fun restore(s: SidebarSnapshot) {
         sidebarCollapsed = s.sidebarCollapsed
         setSidebarWidth(s.sidebarWidthDp.dp)
         // LEGACY only: whatever an old ui-state.json still carries is handed to
-        // `UiPrefs.seedCollapsedProjectPaths` once and never written back here.
+        // `UiPrefs.seedCollapsedProjectPaths` once, and kept in the file until that succeeds.
         collapsedProjectPaths = s.collapsedProjectPaths.toSet()
+        legacyCollapsedProjectPaths = s.collapsedProjectPaths
     }
 
     /**
@@ -689,6 +703,7 @@ fun AppShell(
         runBlocking {
             runCatching { uiPrefs.seedLauncher(launcherStore.loadPrefs(), launcherStore.loadDraft()) }
             runCatching { uiPrefs.seedCollapsedProjectPaths(ui.collapsedProjectPaths) }
+                .onSuccess { ui.legacyCollapsedPathsSeeded = true }
                 .getOrDefault(ui.collapsedProjectPaths)
         }
     }
@@ -1023,6 +1038,9 @@ fun AppShell(
                         onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
                         loadDraft = { uiPrefs.launcherDraft.first() },
                         onDraftChange = { overlayScope.launch { uiPrefs.putLauncherDraft(it) } },
+                        // Dispose can BE the window closing, which cancels overlayScope before a
+                        // launched write runs. This one blocks until the draft is on disk.
+                        onDraftFlush = { runBlocking { uiPrefs.putLauncherDraft(it) } },
                         onClearDraft = { overlayScope.launch { uiPrefs.clearLauncherDraft() } },
                         // Spawn → select + send the first message → close. A null id is
                         // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch
