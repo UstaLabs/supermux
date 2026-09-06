@@ -24,6 +24,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 
@@ -148,3 +149,23 @@ class InMemorySettingsStore : SettingsStore {
 
 /** Provided by each app's theme wrapper (`AndroidTheme` / `DesktopTheme`). */
 val LocalUiPrefs = staticCompositionLocalOf<UiPrefs> { error("No UiPrefs provided") }
+
+/**
+ * The stored theme mode, seeding it from a host's LEGACY value the first time (and only the first
+ * time) nothing is stored yet.
+ *
+ * Callers read this ONCE, synchronously, before their first frame — desktop's `Main.kt` from its
+ * `ShellUiState` initialiser — because a theme resolved asynchronously means one or more frames
+ * painted in the wrong one. `DesktopSettingsStore` holds its map in an eager `StateFlow`, so the
+ * `first()` inside returns without ever suspending there.
+ *
+ * @param legacy what this host stored before the value moved here (desktop: `ui-state.json`'s
+ *   `appearance` field). Written through so the old file is never consulted again; `null` when
+ *   there is nothing to migrate.
+ */
+suspend fun UiPrefs.seedAppearance(default: AppearanceMode, legacy: AppearanceMode?): AppearanceMode {
+    appearanceMode.first()?.let { return it }
+    if (legacy == null) return default
+    putAppearance(legacy)
+    return legacy
+}

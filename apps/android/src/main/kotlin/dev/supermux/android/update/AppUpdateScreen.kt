@@ -39,6 +39,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.android.R
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsSectionHeader
 import dev.supermux.update.ClientUpdateStatus
@@ -53,6 +55,10 @@ import kotlinx.coroutines.launch
  * @param topBarShown the Settings hub already painted this page's title + Back (cluster E7: every
  *   settings page is shared now, so the hub owns the compact chrome). The page then drops its own
  *   `TopAppBar` and `BackHandler` — one bar, one Back owner — and keeps Recheck as a body action.
+ *
+ * The gate is `compact && !topBarShown`, exactly as every shared settings screen: above Compact
+ * the hub is a rail beside its detail and OWNS navigation, so a full-width bar here would be a
+ * second one, and this page's `BackHandler` would close the whole hub instead of the page.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,11 +88,14 @@ fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
         loading = false
     }
 
-    if (!topBarShown) BackHandler { onBack() }
+    // Same chrome rule as the shared settings screens (`(standalone || compact) && !topBarShown`,
+    // with no standalone route on this one).
+    val ownChrome = LocalWindowWidthClass.current == WindowWidthClass.Compact && !topBarShown
+    if (ownChrome) BackHandler { onBack() }
 
     Scaffold(
         topBar = {
-            if (!topBarShown) {
+            if (ownChrome) {
                 TopAppBar(
                     title = { Text("Check for updates", color = cs.onSurface) },
                     navigationIcon = {
@@ -117,8 +126,9 @@ fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                // The hub's bar has no room for actions, so Recheck rides in the body there.
-                if (topBarShown) {
+                // Whoever painted the bar above has no room for actions, so Recheck rides in the
+                // body whenever this page did not paint its own.
+                if (!ownChrome) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { refresh() }, enabled = !loading && !installing) {
                             Text("Recheck")

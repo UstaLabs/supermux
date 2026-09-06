@@ -2,6 +2,7 @@ package dev.supermux.android.settings
 
 import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
+import dev.supermux.ui.theme.AppearanceMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -71,5 +72,41 @@ class AppearancePrefsMigrationTest {
         val store = MemStore()
         migrateAppearancePrefs(store, LegacyAppearancePrefs(textScale = 4f))
         assertEquals(1.3f, store.string(SettingsKeys.TEXT_SCALE).first()?.toFloat())
+    }
+
+    // ── the synchronous cold-start seed ───────────────────────────────────────────────────────
+    //
+    // `MainActivity` reads this BEFORE `setContent` and hands it to `collectAsState` as the initial
+    // value, because a DataStore read is asynchronous and a hardcoded default would paint the first
+    // frames of every cold start in the wrong theme. These pin that the seed IS the stored value —
+    // never the default — in each of the three states the store can be in.
+
+    @Test fun the_seed_is_the_migrated_legacy_value_on_the_first_launch_after_the_upgrade() = runTest {
+        val store = MemStore()
+        val seed = seedAppearancePrefs(
+            store,
+            LegacyAppearancePrefs(appearance = "LIGHT", textScale = 1.2f),
+        )
+        assertEquals(AppearanceMode.LIGHT, seed.appearance)
+        assertEquals(1.2f, seed.textScale)
+    }
+
+    @Test fun the_seed_is_the_shared_store_value_once_it_holds_one() = runTest {
+        val store = MemStore()
+        store.putString(SettingsKeys.APPEARANCE, "DARK")
+        store.putString(SettingsKeys.TEXT_SCALE, "0.9")
+        // A stale legacy file must not win — the post-upgrade choice is the answer.
+        val seed = seedAppearancePrefs(
+            store,
+            LegacyAppearancePrefs(appearance = "LIGHT", textScale = 1.3f),
+        )
+        assertEquals(AppearanceMode.DARK, seed.appearance)
+        assertEquals(0.9f, seed.textScale)
+    }
+
+    @Test fun the_seed_falls_back_to_the_host_default_with_nothing_stored_anywhere() = runTest {
+        val seed = seedAppearancePrefs(MemStore(), LegacyAppearancePrefs())
+        assertEquals(AppearanceMode.SYSTEM, seed.appearance)
+        assertEquals(1f, seed.textScale)
     }
 }

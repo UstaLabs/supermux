@@ -73,7 +73,9 @@ fun AppUpdateScreen(onBack: () -> Unit, topBarShown: Boolean = false) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(cs.surfaceContainerHigh)
+                    // Under the hub's own bar this row is just the Recheck action, so it must not
+                    // paint a second full-width raised strip beneath it.
+                    .then(if (topBarShown) Modifier else Modifier.background(cs.surfaceContainerHigh))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

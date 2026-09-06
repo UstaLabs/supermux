@@ -60,6 +60,8 @@ class EditorSettingsScreenTest {
         waitForIdle()
         onNodeWithTag("editor_font_size").assertTextEquals("14")
         assertEquals("14", store.map.value[SettingsKeys.EDITOR_FONT_SIZE])
+        // Two taps with no frame between them: each step reads the CURRENT stored size, so they
+        // are 14 → 13 → 12, not two writes of 13 from the one value both taps saw on screen.
         onNodeWithTag("editor_font_minus").performClick()
         onNodeWithTag("editor_font_minus").performClick()
         waitForIdle()

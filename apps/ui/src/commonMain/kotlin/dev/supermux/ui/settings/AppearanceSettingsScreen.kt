@@ -44,8 +44,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -127,7 +131,16 @@ private fun AppearanceSettingsBody(
     val scope = rememberCoroutineScope()
     val appearance by prefs.appearance(defaultAppearance).collectAsState(defaultAppearance)
     val dynamicColor by prefs.dynamicColor.collectAsState(false)
-    val textScale by prefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
+    val storedTextScale by prefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
+    // The slider is DRAGGED, so it cannot be driven by the persisted value: writing on every frame
+    // of the gesture is a disk write per frame, and the thumb would lag behind the finger by a
+    // round trip through the store. The drag lives here and is persisted once, on release; this
+    // local value is dropped again as soon as the store has caught up to it.
+    var draggedTextScale by remember { mutableStateOf<Float?>(null) }
+    val textScale = draggedTextScale ?: storedTextScale
+    LaunchedEffect(storedTextScale) {
+        if (draggedTextScale == storedTextScale) draggedTextScale = null
+    }
 
     Column(
         modifier
@@ -216,8 +229,13 @@ private fun AppearanceSettingsBody(
                     value = textScale,
                     onValueChange = { raw ->
                         // Snap to 5% increments so the stored value stays clean.
-                        val snapped = (raw * 20).roundToInt() / 20f
-                        if (snapped != textScale) scope.launch { prefs.putTextScale(snapped) }
+                        draggedTextScale = (raw * 20).roundToInt() / 20f
+                    },
+                    onValueChangeFinished = {
+                        val picked = draggedTextScale
+                        if (picked != null && picked != storedTextScale) {
+                            scope.launch { prefs.putTextScale(picked) }
+                        }
                     },
                     valueRange = TEXT_SCALE_MIN..TEXT_SCALE_MAX,
                     steps = 7,

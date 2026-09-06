@@ -67,6 +67,7 @@ import dev.supermux.ui.prefs.EDITOR_FONT_MIN
 import dev.supermux.ui.prefs.EDITOR_LINE_WRAP_DEFAULT
 import dev.supermux.ui.prefs.LocalUiPrefs
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -186,11 +187,19 @@ private fun EditorSettingsBody(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // Each step reads the CURRENT stored size rather than the collected one: the
+                // collected value only catches up a frame after the write, so two fast taps that
+                // both saw the same frame would otherwise write the same size twice and lose a
+                // step. `putEditorFontSize` clamps, so neither end can be overrun.
                 StepperButton(
                     text = "−",
                     enabled = fontSize > EDITOR_FONT_MIN,
                     testTag = "editor_font_minus",
-                ) { scope.launch { prefs.putEditorFontSize(fontSize - 1) } }
+                ) {
+                    scope.launch {
+                        prefs.putEditorFontSize(prefs.editorFontSize.first() - 1)
+                    }
+                }
                 Text(
                     fontSize.toString(),
                     color = cs.onSurface,
@@ -202,7 +211,11 @@ private fun EditorSettingsBody(
                     text = "+",
                     enabled = fontSize < EDITOR_FONT_MAX,
                     testTag = "editor_font_plus",
-                ) { scope.launch { prefs.putEditorFontSize(fontSize + 1) } }
+                ) {
+                    scope.launch {
+                        prefs.putEditorFontSize(prefs.editorFontSize.first() + 1)
+                    }
+                }
             }
         }
         HorizontalDivider(color = cs.outlineVariant)

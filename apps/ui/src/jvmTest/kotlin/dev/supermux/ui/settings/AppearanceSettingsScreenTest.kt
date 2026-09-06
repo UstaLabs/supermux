@@ -8,14 +8,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.state.SettingsKeys
+import dev.supermux.state.SettingsStore
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.FakeSettingsStore
 import dev.supermux.ui.chat.setPlatformContent
@@ -25,6 +28,9 @@ import dev.supermux.ui.prefs.TEXT_SCALE_DEFAULT
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -208,5 +214,50 @@ class AppearanceSettingsScreenTest {
         }
         waitForIdle()
         onNodeWithTag("appearance_settings_back").assertIsDisplayed()
+    }
+
+    /**
+     * The slider persists through `onValueChangeFinished`, not `onValueChange`: a drag would
+     * otherwise commit to disk on every frame of the gesture (a DataStore write per frame on
+     * Android) and the thumb would follow the persisted value rather than the finger. The drag
+     * itself is held in local state — see `draggedTextScale` — and this drives the Slider's own
+     * value-change path end to end, asserting that the release wrote once and that the screen and
+     * the store agree afterwards.
+     *
+     * (A synthetic multi-event drag does not move an M3 Slider under the skiko test harness, so
+     * the semantics action is what actually exercises the two lambdas here.)
+     */
+    @Test fun changing_the_text_scale_persists_the_new_value_on_release() = runComposeUiTest {
+        val store = CountingSettingsStore()
+        setPlatformContent(uiPrefs = UiPrefs(store)) { AppearanceSettingsScreen() }
+        waitForIdle()
+        assertEquals(0, store.writes)
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("100%")
+
+        onNodeWithTag("appearance_text_scale_slider")
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(1.3f) }
+        waitForIdle()
+        assertEquals(1, store.writes)
+        assertEquals(1.3f, store.map.value[SettingsKeys.TEXT_SCALE]?.toFloat())
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("130%")
+
+        // The local drag value is dropped once the store has caught up, so a change made anywhere
+        // else still reaches this screen.
+        store.map.value = mapOf(SettingsKeys.TEXT_SCALE to "0.9")
+        waitForIdle()
+        onNodeWithTag("appearance_text_scale_value").assertTextEquals("90%")
+    }
+}
+
+/** [FakeSettingsStore] that counts writes, so "once per drag" is assertable. */
+private class CountingSettingsStore : SettingsStore {
+    val map = MutableStateFlow<Map<String, String>>(emptyMap())
+    var writes = 0
+        private set
+
+    override fun string(key: String): Flow<String?> = map.map { it[key] }
+    override suspend fun putString(key: String, value: String?) {
+        writes++
+        map.value = if (value == null) map.value - key else map.value + (key to value)
     }
 }

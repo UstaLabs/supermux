@@ -3,6 +3,7 @@ package dev.supermux.ui.prefs
 import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
+import dev.supermux.ui.theme.AppearanceMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /** Copied from `:shared` jvmTest `state/TestDeps.kt` — `:ui` cannot see another module's tests. */
 class FakeSettingsStore : SettingsStore {
@@ -115,5 +117,72 @@ class UiPrefsTest {
         assertEquals(13, p.editorFontSize.first())
         p.putEditorFontSize(20)
         assertEquals(20, p.editorFontSize.first())
+    }
+
+    // ── appearance (cluster E7) ───────────────────────────────────────────────────────────────
+
+    @Test
+    fun appearance_round_trips_and_keeps_never_chosen_distinguishable() = runTest {
+        val (_, p) = prefs()
+        assertNull(p.appearanceMode.first())
+        // Two hosts, two fallbacks, one stored value.
+        assertEquals(AppearanceMode.SYSTEM, p.appearance(AppearanceMode.SYSTEM).first())
+        assertEquals(AppearanceMode.DARK, p.appearance(AppearanceMode.DARK).first())
+        p.putAppearance(AppearanceMode.LIGHT)
+        assertEquals(AppearanceMode.LIGHT, p.appearance(AppearanceMode.DARK).first())
+    }
+
+    @Test
+    fun an_unrecognised_stored_mode_reads_as_never_chosen() = runTest {
+        val (store, p) = prefs()
+        store.map.value = mapOf(SettingsKeys.APPEARANCE to "PLAID")
+        assertNull(p.appearanceMode.first())
+        assertEquals(AppearanceMode.DARK, p.appearance(AppearanceMode.DARK).first())
+    }
+
+    @Test
+    fun text_scale_round_trips_and_clamps_both_ways() = runTest {
+        val (store, p) = prefs()
+        assertEquals(1f, p.textScale.first())
+        p.putTextScale(5f)
+        assertEquals(1.3f, p.textScale.first())
+        store.map.value = mapOf(SettingsKeys.TEXT_SCALE to "0.1")
+        assertEquals(0.9f, p.textScale.first())
+    }
+
+    // `seedAppearance` is what desktop's `Main.kt` reads synchronously before its first frame —
+    // `ShellUiState.appearance` defaults to DARK, so resolving this in an effect would show a LIGHT
+    // user one dark composition on every launch.
+
+    @Test
+    fun seed_migrates_the_hosts_legacy_value_when_nothing_is_stored() = runTest {
+        val (store, p) = prefs()
+        assertEquals(
+            AppearanceMode.LIGHT,
+            p.seedAppearance(default = AppearanceMode.DARK, legacy = AppearanceMode.LIGHT),
+        )
+        // ...and writes it through, so the old file is never consulted again.
+        assertEquals("LIGHT", store.map.value[SettingsKeys.APPEARANCE])
+    }
+
+    @Test
+    fun seed_prefers_the_stored_value_over_the_legacy_one() = runTest {
+        val (store, p) = prefs()
+        p.putAppearance(AppearanceMode.SYSTEM)
+        assertEquals(
+            AppearanceMode.SYSTEM,
+            p.seedAppearance(default = AppearanceMode.DARK, legacy = AppearanceMode.LIGHT),
+        )
+        assertEquals("SYSTEM", store.map.value[SettingsKeys.APPEARANCE])
+    }
+
+    @Test
+    fun seed_falls_back_to_the_host_default_and_writes_nothing() = runTest {
+        val (store, p) = prefs()
+        assertEquals(
+            AppearanceMode.DARK,
+            p.seedAppearance(default = AppearanceMode.DARK, legacy = null),
+        )
+        assertEquals(emptyMap(), store.map.value)
     }
 }

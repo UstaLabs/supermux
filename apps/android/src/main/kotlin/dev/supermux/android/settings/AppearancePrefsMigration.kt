@@ -11,6 +11,8 @@ package dev.supermux.android.settings
 import android.content.Context
 import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
+import dev.supermux.ui.prefs.TEXT_SCALE_DEFAULT
+import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.TEXT_SCALE_MAX
 import dev.supermux.ui.theme.TEXT_SCALE_MIN
@@ -63,4 +65,33 @@ suspend fun migrateAppearancePrefs(settings: SettingsStore, legacy: LegacyAppear
             scale.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX).toString(),
         )
     }
+}
+
+/** The values the very first composition needs, so no frame paints the wrong theme. */
+data class AppearanceSeed(
+    val appearance: AppearanceMode,
+    val textScale: Float,
+)
+
+/**
+ * Migrate (see [migrateAppearancePrefs]) and then READ the two values the root theme needs.
+ *
+ * `MainActivity` calls this from `onCreate`, before `setContent`, and hands the result to
+ * `collectAsState` as its initial value. That is the whole point: DataStore reads are
+ * asynchronous, so collecting with a hardcoded default would paint one or more frames in the
+ * WRONG theme on every cold start (and flip the status-bar icon contrast with them) before the
+ * stored value arrived — the SharedPreferences this replaced were read synchronously and never
+ * did that. Blocking here costs the same single small disk read that `getSharedPreferences` did.
+ */
+suspend fun seedAppearancePrefs(
+    settings: SettingsStore,
+    legacy: LegacyAppearancePrefs,
+    default: AppearanceMode = AppearanceMode.SYSTEM,
+): AppearanceSeed {
+    migrateAppearancePrefs(settings, legacy)
+    val prefs = UiPrefs(settings)
+    return AppearanceSeed(
+        appearance = runCatching { prefs.appearance(default).first() }.getOrDefault(default),
+        textScale = runCatching { prefs.textScale.first() }.getOrDefault(TEXT_SCALE_DEFAULT),
+    )
 }

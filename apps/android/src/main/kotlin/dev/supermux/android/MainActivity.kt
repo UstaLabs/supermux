@@ -60,6 +60,7 @@ import androidx.navigation.compose.rememberNavController
 import dev.supermux.android.platform.AndroidPlatform
 import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import dev.supermux.ui.host.AddHostScreen
@@ -98,7 +99,7 @@ import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AndroidSettingsExtra
 import dev.supermux.android.settings.AndroidSettingsSection
-import dev.supermux.android.settings.migrateAppearancePrefs
+import dev.supermux.android.settings.seedAppearancePrefs
 import dev.supermux.android.settings.readLegacyAppearancePrefs
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.rememberArchivedActions
@@ -184,24 +185,32 @@ class MainActivity : ComponentActivity() {
         PushPermission.request(this)
         intentState.value = intent
         enableEdgeToEdge()
+
+        // The theme's persisted UI preferences. Built here — NOT from the AppViewModel — because
+        // the VM must stay below the pairing gate (see the invariant there), and
+        // `AndroidSettingsStore(context)` is a process-wide DataStore delegate: this instance and
+        // `vm.uiPrefs` read and write exactly the same data.
+        //
+        // Since cluster E7 the appearance values live in that store too (SettingsKeys.APPEARANCE /
+        // DYNAMIC_COLOR / TEXT_SCALE) rather than in this activity's SharedPreferences, so the
+        // SHARED Appearance screen can write them on either platform. The old file is drained into
+        // the store once — see `AppearancePrefsMigration`.
+        //
+        // BLOCKING, and before `setContent`, deliberately: a DataStore read is asynchronous, so
+        // collecting it with a hardcoded default would paint the first frames of every cold start
+        // in the wrong theme (and flip the status-bar icon contrast with them) before the stored
+        // value landed. The SharedPreferences this replaced were read synchronously inside
+        // `remember` and never did that; this is the same one small disk read, in the same place.
+        val settingsStore = AndroidSettingsStore(applicationContext)
+        val appearanceSeed = runBlocking {
+            seedAppearancePrefs(settingsStore, readLegacyAppearancePrefs(applicationContext))
+        }
+
         setContent {
-            // The theme's persisted UI preferences. Built here — NOT from the AppViewModel —
-            // because the VM must stay below the pairing gate (see the invariant there), and
-            // `AndroidSettingsStore(context)` is a process-wide DataStore delegate: this instance
-            // and `vm.uiPrefs` read and write exactly the same data.
-            //
-            // Since cluster E7 the appearance values live in that store too (SettingsKeys.APPEARANCE
-            // / DYNAMIC_COLOR / TEXT_SCALE) rather than in this activity's SharedPreferences, so the
-            // SHARED Appearance screen can write them on either platform. The old file is drained
-            // into the store once — see `AppearancePrefsMigration` — before anything reads it.
-            val settingsStore = remember { AndroidSettingsStore(applicationContext) }
             val themeUiPrefs = remember { UiPrefs(settingsStore) }
-            LaunchedEffect(settingsStore) {
-                migrateAppearancePrefs(settingsStore, readLegacyAppearancePrefs(applicationContext))
-            }
             val appearance by themeUiPrefs.appearance(AppearanceMode.SYSTEM)
-                .collectAsState(AppearanceMode.SYSTEM)
-            val textScale by themeUiPrefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
+                .collectAsState(appearanceSeed.appearance)
+            val textScale by themeUiPrefs.textScale.collectAsState(appearanceSeed.textScale)
             AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = themeUiPrefs) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired

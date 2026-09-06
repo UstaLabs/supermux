@@ -29,6 +29,7 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,8 +95,8 @@ import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
-import dev.supermux.ui.prefs.TEXT_SCALE_DEFAULT
 import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.prefs.seedAppearance
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.editor.WalkthroughState
@@ -338,28 +339,39 @@ fun main() {
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
         val uiStore = remember { ShellStateStore() }
         val persistedUi = remember { uiStore.load() }
+        // Appearance is NOT in ui-state.json any more (cluster E7): it lives in the shared settings
+        // store under `SettingsKeys.APPEARANCE`, which is also what the shared Appearance screen
+        // writes — so the sidebar's theme toggle and Settings are one value, not two.
+        // `ui.appearance` stays the in-memory copy every composable reads.
+        //
+        // Seeded SYNCHRONOUSLY here, before the first composition: `ShellUiState.appearance`
+        // defaults to DARK, so resolving the stored value in an effect would show a LIGHT user one
+        // dark frame on every launch. `DesktopSettingsStore` already holds its map in an eager
+        // `StateFlow`, so this `runBlocking` never actually waits on IO; the one-time write it can
+        // do is the ui-state.json migration.
+        val seededAppearance = remember {
+            runBlocking {
+                desktopUiPrefs.seedAppearance(
+                    default = AppearanceMode.DARK,
+                    legacy = persistedUi.appearance
+                        ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() },
+                )
+            }
+        }
+        val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
         val ui = remember {
             ShellUiState().apply {
                 persistedUi.layout?.let { restore(it) }
                 selectedId = persistedUi.selectedId
+                appearance = seededAppearance
                 pendingWindowHosts = persistedUi.windows
             }
         }
-        // Appearance is NOT in ui-state.json any more (cluster E7): it lives in the shared
-        // settings store under `SettingsKeys.APPEARANCE`, which is also what the shared Appearance
-        // screen writes — so the sidebar's theme toggle and Settings are one value, not two.
-        // `ui.appearance` stays the in-memory copy every composable reads, mirrored from the store.
-        // An existing ui-state.json is drained into the store once, when nothing is stored there.
+        // ...and mirrored from here on, so a change made in Settings repaints the shell.
         LaunchedEffect(Unit) {
-            val stored = desktopUiPrefs.appearanceMode.first()
-            if (stored == null) {
-                val legacy = persistedUi.appearance
-                    ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
-                if (legacy != null) desktopUiPrefs.putAppearance(legacy)
-            }
             desktopUiPrefs.appearance(AppearanceMode.DARK).collect { ui.appearance = it }
         }
-        val appTextScale by desktopUiPrefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
+        val appTextScale by desktopUiPrefs.textScale.collectAsState(seededTextScale)
         val themeScope = rememberCoroutineScope()
         val notificationController = remember {
             NotificationController(TrayNotificationManager(trayState))

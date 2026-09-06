@@ -36,7 +36,10 @@ class AndroidPlatformTest {
                 saveAs = true,
                 walkthrough = true,
                 appearanceControls = true,
-                dynamicColor = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
+                // Literal, not the production expression: repeating `SDK_INT >= S` here would
+                // pass no matter what the table said. A JVM unit test reports SDK_INT = 0, so the
+                // Material You row is off; on a real Android 12+ device the same gate reads true.
+                dynamicColor = false,
                 appUpdate = true,
             ),
             ANDROID_CAPS,

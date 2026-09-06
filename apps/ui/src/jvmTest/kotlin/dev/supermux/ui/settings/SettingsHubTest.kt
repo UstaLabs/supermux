@@ -306,8 +306,13 @@ class SettingsHubTest {
         onNodeWithTag("page_own_bar").assertDoesNotExist()
     }
 
-    /** The wide rail is the mirror image: the hub paints no detail bar, so the page must. */
-    @Test fun a_wide_detail_pane_leaves_the_bar_to_the_page() = runComposeUiTest {
+    /**
+     * The wide rail is the mirror image: the hub paints its own header + Back ABOVE the rail and
+     * nothing over the detail, so `topBarShown` is false there. That is not an invitation for the
+     * page to draw a bar — the shared screens deliberately draw none above Compact, since the rail
+     * owns navigation — it is the flag telling each page which side of that line it is on.
+     */
+    @Test fun a_wide_detail_pane_reports_that_the_hub_painted_no_detail_bar() = runComposeUiTest {
         setPlatformContent(widthClass = WindowWidthClass.Expanded) {
             SettingsHub(
                 section = SettingsSection.System,
@@ -315,14 +320,14 @@ class SettingsHubTest {
                 onBack = {},
                 content = { _, scope ->
                     Text(
-                        if (scope.topBarShown) "hub" else "page",
+                        if (scope.topBarShown) "hub-detail-bar" else "no-detail-bar",
                         modifier = Modifier.testTag("bar_owner"),
                     )
                 },
             )
         }
         waitForIdle()
-        onNodeWithTag("bar_owner").assertTextEquals("page")
+        onNodeWithTag("bar_owner").assertTextEquals("no-detail-bar")
         onNodeWithTag("settings_detail_title").assertDoesNotExist()
     }
 
