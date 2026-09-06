@@ -1,6 +1,6 @@
 // The one workspace row both hosts' lists render (cluster F3).
 //
-// Desktop's sidebar row is the base and stays byte-identical (pinned by WorkspaceListPanelTest):
+// Desktop’s sidebar row is the base and stays byte-identical (pinned by SessionListScreenTest):
 // hover affordance, right-click context menu, message preview + branch + project tag, no swipe.
 // Android's phone row is the Touch branch of the SAME composable: a swipeable card with the
 // mono path label, the git badge row, an overflow menu and expandable multi-agent children.
@@ -754,7 +754,7 @@ fun ArchivedWorkspaceRow(
  * [LocalContextMenuAvailable] is false (Android with a keyboard or mouse attached).
  */
 @Composable
-private fun RowOverflowMenu(
+internal fun RowOverflowMenu(
     entries: List<RowContextMenuEntry>,
     newChatTag: String? = null,
 ) {

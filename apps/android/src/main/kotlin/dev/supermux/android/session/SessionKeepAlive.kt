@@ -54,6 +54,8 @@ import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
+import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.session.SessionListScreen
 import dev.supermux.ui.session.rememberSessionListActions
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.asSettledSession
@@ -131,6 +133,9 @@ fun SessionKeepAlivePhoneHost(
     /** Collapsed project groups (cluster F1) — read synchronously by `MainActivity.onCreate`. */
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
+    /** Group-by-project toggle, read synchronously by `MainActivity.onCreate`. */
+    initialGroupByProject: Boolean = false,
+    onGroupByProjectChange: (Boolean) -> Unit = {},
 ) {
     val listActions = rememberSessionListActions(vm.fleet)
     // Phone AnimatedContent disposes SessionListScreen while a chat is open. Keep scroll
@@ -267,9 +272,14 @@ fun SessionKeepAlivePhoneHost(
                         hostFilter = hostFilter,
                         onHostFilter = onHostFilter,
                         onAddHost = onAddHost,
-                        sharedScope = this@SharedTransitionLayout,
-                        animScope = this,
+                        initialGroupByProject = initialGroupByProject,
+                        onGroupByProjectChange = onGroupByProjectChange,
                         listState = sessionListState,
+                        // Fleet list, keyed on the chat SESSION id, and the phone's whole screen —
+                        // so it paints the top bar + FAB (cluster E's chrome rule).
+                        mode = SessionListMode.Fleet,
+                        openWorkspaceByWorkspaceId = false,
+                        standalone = true,
                     )
                 }
             }

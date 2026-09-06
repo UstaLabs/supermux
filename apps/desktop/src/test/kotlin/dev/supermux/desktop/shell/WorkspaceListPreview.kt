@@ -12,6 +12,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
+import dev.supermux.ui.session.SessionListScreen
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.ViewDto
@@ -20,7 +21,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Design-approval preview for [WorkspaceListPanel]. Test-source only — never ships.
+ * Design-approval preview for the sidebar half of [SessionListScreen]. Test-source only — never ships.
  *
  * Covers the cases that decide the row design:
  *  1. one chat view (common case — near today's session row)
@@ -43,7 +44,7 @@ fun main() = application {
     val fixtures = previewFixtures()
     Window(
         onCloseRequest = ::exitApplication,
-        title = "WorkspaceListPanel preview",
+        title = "Workspace list preview",
         state = rememberWindowState(width = 340.dp, height = 700.dp),
     ) {
         // Same theme wrapper Main.kt applies around the shell.
@@ -53,7 +54,7 @@ fun main() = application {
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background),
             ) {
-                WorkspaceListPanel(
+                SessionListScreen(
                     workspaces = fixtures.workspaces,
                     home = home,
                     activeId = "w-solo",

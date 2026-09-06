@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.session
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
@@ -12,8 +12,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.HostView
-import dev.supermux.ui.session.archivedWorkspaceRowContextLabels
-import dev.supermux.ui.session.workspaceRowContextLabels
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -36,13 +34,18 @@ private fun ws(id: String, name: String, workdir: String, branch: String? = null
         layout = LayoutNodeDto.Group(id = "g", viewIds = views.map { it.id }),
     )
 
+/**
+ * The workspace half of the shared [SessionListScreen] — desktop's `WorkspaceListPanelTest`, moved
+ * by name. `:ui` jvmTest defaults are Pointer + Expanded + a real context menu, i.e. exactly the
+ * desktop sidebar these cases pinned.
+ */
 @OptIn(ExperimentalTestApi::class)
-class WorkspaceListPanelTest {
+class SessionListScreenTest {
 
     @Test
     fun showsOneRowPerWorkspaceUnderItsProjectHeader() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(
                     ws("w1", "Fix Renaming", "/home/u/projects/app"),
                     ws("w2", "Add Search", "/home/u/projects/app"),
@@ -62,7 +65,7 @@ class WorkspaceListPanelTest {
     fun showsTheBranch() = runComposeUiTest {
         // The user hard-rejected every list concept that dropped the branch.
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "a", "/p", branch = "mux/fix-renaming")),
                 home = "/home/u", activeId = null, onOpen = {},
             )
@@ -73,7 +76,7 @@ class WorkspaceListPanelTest {
     @Test
     fun aOneChatWorkspaceShowsNoChildRows() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "solo", "/p", views = listOf(chatView("v1", "s1", "w1")))),
                 home = "/home/u", activeId = null, onOpen = {},
             )
@@ -84,10 +87,13 @@ class WorkspaceListPanelTest {
     @Test
     fun aTwoChatWorkspaceShowsItsChildRowsAndTheMultiAgentMark() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
-                workspaces = listOf(ws("w1", "shared", "/p", views = listOf(
-                    chatView("v1", "s1", "w1"), chatView("v2", "s2", "w1"),
-                ))),
+            SessionListScreen(
+                workspaces = listOf(
+                    ws(
+                        "w1", "shared", "/p",
+                        views = listOf(chatView("v1", "s1", "w1"), chatView("v2", "s2", "w1")),
+                    ),
+                ),
                 home = "/home/u", activeId = null, onOpen = {},
                 sessionNames = mapOf("s1" to "agent one", "s2" to "agent two"),
             )
@@ -95,8 +101,7 @@ class WorkspaceListPanelTest {
         onNodeWithTag("workspace-children-w1").assertIsDisplayed()
         onNodeWithText("agent one").assertIsDisplayed()
         onNodeWithText("agent two").assertIsDisplayed()
-        // Icon semantics merge into the row; unmerged tree is the reliable finder
-        // (same pattern as SessionStatusRailTest).
+        // Icon semantics merge into the row; the unmerged tree is the reliable finder.
         onNodeWithTag("workspace-multiagent-w1", useUnmergedTree = true).assertIsDisplayed()
     }
 
@@ -104,7 +109,7 @@ class WorkspaceListPanelTest {
     fun clickingARowOpensThatWorkspace() = runComposeUiTest {
         var opened: String? = null
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "a", "/p")),
                 home = "/home/u", activeId = null, onOpen = { opened = it },
             )
@@ -117,10 +122,13 @@ class WorkspaceListPanelTest {
     fun clickingAChildRowOpensThatSessionsView() = runComposeUiTest {
         var openedSession: String? = null
         setContent {
-            WorkspaceListPanel(
-                workspaces = listOf(ws("w1", "shared", "/p", views = listOf(
-                    chatView("v1", "s1", "w1"), chatView("v2", "s2", "w1"),
-                ))),
+            SessionListScreen(
+                workspaces = listOf(
+                    ws(
+                        "w1", "shared", "/p",
+                        views = listOf(chatView("v1", "s1", "w1"), chatView("v2", "s2", "w1")),
+                    ),
+                ),
                 home = "/home/u", activeId = null, onOpen = {},
                 sessionNames = mapOf("s1" to "agent one", "s2" to "agent two"),
                 onOpenSession = { _, s -> openedSession = s },
@@ -133,7 +141,7 @@ class WorkspaceListPanelTest {
     @Test
     fun anArchivedWorkspaceIsNotListed() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "gone", "/p").copy(status = "archived")),
                 home = "/home/u", activeId = null, onOpen = {},
             )
@@ -141,14 +149,14 @@ class WorkspaceListPanelTest {
         onNodeWithText("gone").assertDoesNotExist()
     }
 
-    // ── Chrome parity with SessionListPanel (these are the tests that would have
-    // caught the thin rewrite that dropped the + button and footer rail). ─────
+    // ── Chrome parity (the tests that would have caught the thin rewrite that dropped
+    // the + button and the footer rail). ─────────────────────────────────────────────
 
     @Test
     fun newSessionRow_rendersAndFires_onNewSession() = runComposeUiTest {
         var fired = false
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "a", "/p")),
                 home = "/home/u",
                 activeId = null,
@@ -166,7 +174,7 @@ class WorkspaceListPanelTest {
     fun newSessionRow_rendersAndFires_inEmptyState() = runComposeUiTest {
         var fired = false
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = emptyList(),
                 home = "/home/u",
                 activeId = null,
@@ -186,15 +194,20 @@ class WorkspaceListPanelTest {
         var devices = false
         var theme = false
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = emptyList(),
                 home = "/home/u",
                 activeId = null,
                 onOpen = {},
-                onUsage = { usage = true },
-                onSettings = { settings = true },
-                onDevices = { devices = true },
-                onToggleTheme = { theme = true },
+                footer = {
+                    SessionListFooter(
+                        appearance = dev.supermux.ui.theme.AppearanceMode.DARK,
+                        onToggleTheme = { theme = true },
+                        onUsage = { usage = true },
+                        onDevices = { devices = true },
+                        onSettings = { settings = true },
+                    )
+                },
             )
         }
         onNodeWithTag("sidebar_footer").assertIsDisplayed()
@@ -208,7 +221,7 @@ class WorkspaceListPanelTest {
     @Test
     fun archivedSection_appearsWhenArchivedWorkspacesAreSupplied() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = emptyList(),
                 home = "/home/u",
                 activeId = null,
@@ -224,7 +237,7 @@ class WorkspaceListPanelTest {
     @Test
     fun archivedSection_appearsUnderProjectGroupWhenArchivedMatchesPath() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "live", "/home/u/projects/app")),
                 home = "/home/u",
                 activeId = null,
@@ -239,8 +252,8 @@ class WorkspaceListPanelTest {
 
     @Test
     fun rowContextMenu_offersRenameMuteArchive() {
-        // Desktop ContextMenuArea is awkward to drive under headless Skiko; assert the
-        // same label set the row wires into the menu so chrome can't silently drop actions.
+        // The right-click menu is awkward to drive under headless Skiko; assert the same label set
+        // the row wires into it so chrome can't silently drop actions.
         val labels = workspaceRowContextLabels(mute = false)
         assertEquals(listOf("Rename", "Mute", "Archive"), labels)
         assertEquals(listOf("Rename", "Unmute", "Archive"), workspaceRowContextLabels(mute = true))
@@ -252,7 +265,7 @@ class WorkspaceListPanelTest {
         val h2 = HostView(recordId = "r2", hostId = "h2", displayName = "Beta", online = true)
         val session = SessionInfo(id = "s1", name = "sess", workdir = "/p", agent = "claude")
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "a", "/p", views = listOf(chatView("v1", "s1", "w1")))),
                 home = "/home/u",
                 activeId = null,
@@ -270,7 +283,7 @@ class WorkspaceListPanelTest {
     fun hostChips_absentWithSingleHost() = runComposeUiTest {
         val h1 = HostView(recordId = "r1", hostId = "h1", displayName = "Only", online = true)
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "a", "/p")),
                 home = "/home/u",
                 activeId = null,
@@ -284,14 +297,13 @@ class WorkspaceListPanelTest {
     // ── Visual regressions the first 16 chrome tests missed ───────────────────
 
     /**
-     * SessionListPanel group mode draws one settled fold per live project group and
-     * hides settled-only projects. The workspace panel must not invent extra folds
-     * (orphan path + per-group) that stack three "Show N settled" buttons.
+     * Group mode draws one archived fold per live project group and hides archived-only projects.
+     * The list must not invent extra folds (orphan path + per-group) that stack three buttons.
      */
     @Test
     fun archivedFold_exactlyOne_forLiveGroupWithArchivedOnlyElsewhere() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "live", "/home/u/projects/app")),
                 home = "/home/u",
                 activeId = null,
@@ -321,7 +333,7 @@ class WorkspaceListPanelTest {
     fun row_rendersMessagePreviewFromPrimarySession() = runComposeUiTest {
         val previewText = "Merged into `dev` (fast-forward). — Commit: cd…"
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(
                     ws(
                         "w1", "feature", "/home/u/projects/app",
@@ -353,7 +365,7 @@ class WorkspaceListPanelTest {
     @Test
     fun row_rendersSuspendedBadgeWhenPrimarySessionIsSuspended() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(
                     ws(
                         "w1", "paused", "/home/u/projects/app",
@@ -380,7 +392,7 @@ class WorkspaceListPanelTest {
     @Test
     fun flatMode_hidesInProgressHeaderWhenNoPersonalAgents() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(ws("w1", "task-a", "/home/u/projects/app")),
                 home = "/home/u",
                 activeId = null,
@@ -397,7 +409,7 @@ class WorkspaceListPanelTest {
     @Test
     fun flatMode_showsInProgressHeaderWhenPersonalAgentsExist() = runComposeUiTest {
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = listOf(
                     ws(
                         "pa1", "My PA", "/home/u",
@@ -427,17 +439,15 @@ class WorkspaceListPanelTest {
     }
 
     /**
-     * Prove there is no take(n)/cap on workspace rows inside a project group.
-     * Scroll every row into the LazyColumn viewport and assert it exists — if the
-     * list were capped at 7, rows 8–19 would not be scrollable/found.
+     * Prove there is no take(n)/cap on workspace rows inside a project group. Scroll every row into
+     * the LazyColumn viewport and assert it exists — if the list were capped at 7, rows 8–19 would
+     * not be scrollable/found.
      */
     @Test
     fun groupOfNineteenWorkspaces_rendersAllNineteenRows() = runComposeUiTest {
-        val list = (1..19).map { i ->
-            ws("w$i", "ws-$i", "/home/u/projects/supermux")
-        }
+        val list = (1..19).map { i -> ws("w$i", "ws-$i", "/home/u/projects/supermux") }
         setContent {
-            WorkspaceListPanel(
+            SessionListScreen(
                 workspaces = list,
                 home = "/home/u",
                 activeId = null,
@@ -445,8 +455,7 @@ class WorkspaceListPanelTest {
             )
         }
         for (i in 1..19) {
-            onNodeWithTag("workspaces_list")
-                .performScrollToNode(hasTestTag("workspace_row_w$i"))
+            onNodeWithTag("workspaces_list").performScrollToNode(hasTestTag("workspace_row_w$i"))
             onNodeWithTag("workspace_row_w$i").assertExists()
         }
     }

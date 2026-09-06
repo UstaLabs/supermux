@@ -87,7 +87,8 @@ import dev.supermux.android.session.rememberVisitedSessions
 import dev.supermux.android.workspace.ChatActivationHandle
 import dev.supermux.android.workspace.chatActivationDecision
 import dev.supermux.android.session.SessionLauncherScreen
-import dev.supermux.android.session.SessionListScreen
+import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.session.SessionListScreen
 import dev.supermux.ui.shell.SessionsRail
 import dev.supermux.ui.shell.CompactSidebarDivider
 import dev.supermux.android.workspace.SidebarState
@@ -99,7 +100,9 @@ import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AndroidSettingsExtra
 import dev.supermux.android.settings.AndroidSettingsSection
+import dev.supermux.android.session.readGroupByProject
 import dev.supermux.android.session.readLegacyCollapsedPaths
+import dev.supermux.android.session.writeGroupByProject
 import dev.supermux.android.session.seedSessionListPrefs
 import dev.supermux.android.settings.seedAppearancePrefs
 import dev.supermux.ui.session.rememberLauncherActions
@@ -211,6 +214,10 @@ class MainActivity : ComponentActivity() {
         // paint the first frames with every group expanded), same one-way non-destructive drain.
         val appearanceSeed: dev.supermux.android.settings.AppearanceSeed
         val collapsedPathsSeed: Set<String>
+        // Same read, same place: the group-by-project toggle stays in `cmux-session-list` (a
+        // per-device view preference, never synced) and is hoisted here so no frame paints the
+        // wrong grouping.
+        val groupByProjectSeed = readGroupByProject(applicationContext)
         runBlocking {
             appearanceSeed = seedAppearancePrefs(settingsStore, readLegacyAppearancePrefs(applicationContext))
             collapsedPathsSeed = seedSessionListPrefs(settingsStore, readLegacyCollapsedPaths(applicationContext))
@@ -356,6 +363,11 @@ class MainActivity : ComponentActivity() {
                     onOpenSession = { selected = it; navController.popBackStack() },
                 )
                 var collapsedPaths by remember { mutableStateOf(collapsedPathsSeed) }
+                var groupByProject by remember { mutableStateOf(groupByProjectSeed) }
+                val onGroupByProjectChange: (Boolean) -> Unit = { value ->
+                    groupByProject = value
+                    writeGroupByProject(applicationContext, value)
+                }
                 val prefsScope = rememberCoroutineScope()
                 val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
                     collapsedPaths = paths
@@ -613,6 +625,10 @@ class MainActivity : ComponentActivity() {
                                                 hostFilter = hostFilter,
                                                 onHostFilter = setHostFilter,
                                                 onAddHost = { navController.navigate(Route.AddHost) },
+                                                initialGroupByProject = groupByProject,
+                                                onGroupByProjectChange = onGroupByProjectChange,
+                                                mode = SessionListMode.Fleet,
+                                                openWorkspaceByWorkspaceId = false,
                                             )
                                         }
                                     }
@@ -703,6 +719,8 @@ class MainActivity : ComponentActivity() {
                                 archivedWorkspaces = archivedWorkspaces,
                                 initialCollapsedPaths = collapsedPaths,
                                 onCollapsedPathsChange = onCollapsedPathsChange,
+                                initialGroupByProject = groupByProject,
+                                onGroupByProjectChange = onGroupByProjectChange,
                             )
                         }
                     }
@@ -738,6 +756,10 @@ class MainActivity : ComponentActivity() {
                                         hostFilter = hostFilter,
                                         onHostFilter = setHostFilter,
                                         onAddHost = { navController.navigate(Route.AddHost) },
+                                        initialGroupByProject = groupByProject,
+                                        onGroupByProjectChange = onGroupByProjectChange,
+                                        mode = SessionListMode.Fleet,
+                                        openWorkspaceByWorkspaceId = false,
                                     )
                                 }
                                 Box(
@@ -945,6 +967,8 @@ private fun PhoneNavHost(
     archivedWorkspaces: List<dev.supermux.proto.WorkspaceDto> = emptyList(),
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
+    initialGroupByProject: Boolean = false,
+    onGroupByProjectChange: (Boolean) -> Unit = {},
 ) {
     SessionKeepAlivePhoneHost(
         selected = selected,
@@ -975,5 +999,7 @@ private fun PhoneNavHost(
         archivedWorkspaces = archivedWorkspaces,
         initialCollapsedPaths = initialCollapsedPaths,
         onCollapsedPathsChange = onCollapsedPathsChange,
+        initialGroupByProject = initialGroupByProject,
+        onGroupByProjectChange = onGroupByProjectChange,
     )
 }

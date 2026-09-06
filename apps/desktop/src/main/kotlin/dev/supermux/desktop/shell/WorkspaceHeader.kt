@@ -9,7 +9,7 @@
 //
 // The badge's DATA and its ops are still session-keyed on the broker (`GET/POST
 // /sessions/<id>/git/*`, `SessionInfo.git`), so the workspace resolves ONE session — its primary
-// chat, the same one WorkspaceListPanel already reads `git` off for the sidebar row — and drives
+// chat, the same one the shared session list already reads `git` off for the sidebar row — and drives
 // the menu through it. A workspace with no chat session, or a non-repo work tree, draws no strip
 // at all rather than an empty bar.
 package dev.supermux.desktop.shell

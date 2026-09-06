@@ -16,6 +16,29 @@ import dev.supermux.state.SettingsStore
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.prefs.seedCollapsedProjectPaths
 
+/**
+ * The old SharedPreferences file. Still holds the group-by-project toggle (a per-device view
+ * preference, never synced), which is why the file outlives the collapsed-set migration.
+ */
+internal const val COLLAPSE_PREFS = "cmux-session-list"
+internal const val COLLAPSE_KEY = "collapsed-paths"
+internal const val GROUP_BY_PROJECT_KEY = "group-by-project"
+
+/** The list's group-by-project toggle, read synchronously (as `remember` used to). */
+fun readGroupByProject(context: Context): Boolean =
+    context.applicationContext
+        .getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
+        .getBoolean(GROUP_BY_PROJECT_KEY, false)
+
+/** Persist the list's group-by-project toggle. */
+fun writeGroupByProject(context: Context, value: Boolean) {
+    context.applicationContext
+        .getSharedPreferences(COLLAPSE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(GROUP_BY_PROJECT_KEY, value)
+        .apply()
+}
+
 /** The pre-F1 collapsed set, as read out of `cmux-session-list`. Empty when there was none. */
 fun readLegacyCollapsedPaths(context: Context): Set<String> =
     context.applicationContext

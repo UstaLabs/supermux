@@ -15,7 +15,7 @@ import dev.supermux.workspace.workspaceActivity
 import dev.supermux.state.SidebarReorderKind
 import dev.supermux.state.sidebarReorderKind
 
-/** Compose test-id vocabulary shared with desktop [WorkspaceListPanel]. */
+/** Compose test-id vocabulary shared by both hosts’ [SessionListScreen] rows. */
 object WorkspaceListTestIds {
     const val LIST = "workspaces_list"
     const val ARCHIVED_FOLD = "archived_fold"

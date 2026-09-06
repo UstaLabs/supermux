@@ -209,6 +209,29 @@ class SessionListActions(
     val forgetHost: (recordId: String) -> Unit = {},
 )
 
+/**
+ * The same holder with the two WORKSPACE ops wrapped, so a shell can add its own selection side
+ * effects (deselect the chat it just archived, close the archived overlay it just restored)
+ * without rebuilding the bundle or teaching the screen about them.
+ */
+fun SessionListActions.withWorkspaceOps(
+    archiveWorkspace: (workspaceId: String) -> Unit = this.archiveWorkspace,
+    restoreWorkspace: (workspaceId: String) -> Unit = this.restoreWorkspace,
+): SessionListActions = SessionListActions(
+    listProjects = listProjects,
+    validatePath = validatePath,
+    rename = rename,
+    kill = kill,
+    setMute = setMute,
+    resume = resume,
+    reorderSessions = reorderSessions,
+    reorderWorkspaces = reorderWorkspaces,
+    archiveWorkspace = archiveWorkspace,
+    restoreWorkspace = restoreWorkspace,
+    renameHost = renameHost,
+    forgetHost = forgetHost,
+)
+
 /** [SessionListActions] against ONE paired host — single-host desktop. */
 @Composable
 fun rememberSessionListActions(

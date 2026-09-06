@@ -103,8 +103,10 @@ import dev.supermux.ui.prefs.seedCollapsedProjectPaths
 import dev.supermux.ui.prefs.seedLauncher
 import dev.supermux.ui.session.rememberLauncherActions
 import dev.supermux.ui.session.rememberSessionListActions
+import dev.supermux.ui.session.SessionListFooter
+import dev.supermux.ui.session.SessionListScreen
+import dev.supermux.ui.session.withWorkspaceOps
 import dev.supermux.desktop.session.SessionLauncherScreen
-import dev.supermux.desktop.session.SessionListPanel
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.proto.stateString
@@ -929,7 +931,7 @@ fun AppShell(
                         // (opening a workspace row selects its first chat session), which is what
                         // the viewing/notification paths above read.
                         val wsOf = { wid: String -> workspaces.firstOrNull { it.id == wid } }
-                        WorkspaceListPanel(
+                        SessionListScreen(
                             workspaces = workspaces,
                             home = home,
                             activeId = workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id,
@@ -941,53 +943,51 @@ fun AppShell(
                             sessionNames = remember(sessions) { sessions.associate { it.id to it.name } },
                             sessionRoles = remember(sessions) { sessions.associate { it.id to it.role } },
                             onOpenSession = { _, sid -> ui.selectSession(sid) },
-                            // Workspace-scoped ops resolve the primary/chat sessions, then route
-                            // to the OWNING host (multi-host); single-host → [app]. Same targets as
-                            // the SessionListPanel branch below.
-                            onRename = { wid, name ->
-                                val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
-                                if (sid != null) listActions.rename(sid, name)
-                            },
-                            onKill = { wid ->
-                                // Archive the WORKSPACE, not each chat session. The broker archives
-                                // the sessions and the workspace row together and broadcasts
-                                // workspace_removed. Killing sessions one by one leaves the row
-                                // behind whenever they are already archived — which is exactly what
-                                // made an rpc-worker workspace look impossible to archive.
-                                if (wsOf(wid)?.chatSessionIds()?.contains(ui.selectedId) == true) ui.selectedId = null
-                                listActions.archiveWorkspace(wid)
-                            },
-                            onMute = { wid, muted ->
-                                val sid = wsOf(wid)?.primarySessionId ?: wsOf(wid)?.chatSessionIds()?.firstOrNull()
-                                if (sid != null) listActions.setMute(sid, muted)
+                            // The row's workspace-scoped ops resolve the primary/chat session and
+                            // route to the OWNING host (multi-host); single-host → [app]. Archive
+                            // hits the WORKSPACE, not each chat session: the broker archives the
+                            // sessions and the row together and broadcasts workspace_removed.
+                            actions = remember(listActions, workspaces) {
+                                listActions.withWorkspaceOps(
+                                    archiveWorkspace = { wid ->
+                                        if (wsOf(wid)?.chatSessionIds()?.contains(ui.selectedId) == true) {
+                                            ui.selectedId = null
+                                        }
+                                        listActions.archiveWorkspace(wid)
+                                    },
+                                    restoreWorkspace = { wid ->
+                                        listActions.restoreWorkspace(wid)
+                                        ui.selectedArchivedWorkspaceId = null
+                                    },
+                                )
                             },
                             onNewSession = onNewSession,
                             archivedWorkspaces = archivedWorkspaces,
                             archivedActiveId = ui.selectedArchivedWorkspaceId,
                             onSelectArchived = { ui.selectArchivedWorkspace(it) },
-                            onRestore = { wid ->
-                                listActions.restoreWorkspace(wid)
-                                ui.selectedArchivedWorkspaceId = null
-                            },
                             onOpenDraft = { id -> ui.openLauncher(draftId = id) },
                             onReorder = { ids -> listActions.reorderWorkspaces(ids) },
                             hosts = hostViews,
                             sessionHost = sessionHost,
                             hostFilter = hostFilter,
-                            onSelectHostFilter = { hostFilter = it },
+                            onHostFilter = { hostFilter = it },
                             onAddHost = { addHostOpen = true },
-                            onUsage = { ui.openUsage() },
-                            onSettings = { ui.openSettings() },
-                            onDevices = { ui.openSettings(SettingsSection.Devices) },
-                            usageOpen = ui.usageOpen,
-                            onUsageDismiss = { ui.closeUsage() },
-                            usageContent = usagePopoverBody,
-                            appearance = appearance,
-                            onToggleTheme = onToggleTheme,
                             initialCollapsedPaths = seededCollapsedPaths,
                             onCollapsedPathsChange = {
                                 ui.collapsedProjectPaths = it
                                 overlayScope.launch { uiPrefs.putCollapsedProjectPaths(it) }
+                            },
+                            footer = {
+                                SessionListFooter(
+                                    appearance = appearance,
+                                    onToggleTheme = onToggleTheme,
+                                    onUsage = { ui.openUsage() },
+                                    onDevices = { ui.openSettings(SettingsSection.Devices) },
+                                    onSettings = { ui.openSettings() },
+                                    usageOpen = ui.usageOpen,
+                                    onUsageDismiss = { ui.closeUsage() },
+                                    usageContent = usagePopoverBody,
+                                )
                             },
                             tabDragState = tabDragState,
                             modifier = Modifier
