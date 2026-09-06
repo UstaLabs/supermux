@@ -469,7 +469,7 @@ private fun SessionChatLayer(
         // Soft keyboard up: Back must dismiss the IME only — not leave the session. An always-on
         // session BackHandler was consuming the event before the platform/IME could hide the
         // keyboard. Explicit hide+clearFocus covers chat/editor Compose focus and termlib's
-        // showSoftKeyboard path (TerminalPanel watches isImeVisible → clears wantKeyboard).
+        // showSoftKeyboard path (TermlibTerminalView watches isImeVisible → clears wantKeyboard).
         // Predictive exit gesture stays disabled while the IME is up so Back never animates out.
         val imeVisible = WindowInsets.isImeVisible
         val backAction = phoneLayerBackAction(wide, editorConsumesBack, imeVisible)

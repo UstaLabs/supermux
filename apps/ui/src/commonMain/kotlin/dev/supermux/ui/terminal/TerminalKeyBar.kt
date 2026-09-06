@@ -1,4 +1,8 @@
-package dev.supermux.android.terminal
+// Cluster G3: the accessory key bar is SHARED. It was Android's (`android/terminal/TerminalKeyBar.kt`)
+// and moved here verbatim — the tri-state machine it renders already lived in `:ui`
+// (`TerminalKeySink`, cluster G1), so nothing about the bar was ever Android-specific. Its call
+// sites gate it on `LocalInputMode == Touch` (a mouse-driven client has the real keys).
+package dev.supermux.ui.terminal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -27,22 +32,10 @@ import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.SpecialKey
-import dev.supermux.ui.terminal.TerminalKey
-import dev.supermux.ui.terminal.TerminalModKey
-import dev.supermux.ui.terminal.TerminalModState
-
-// Cluster G1: the three key-bar types are the SHARED ones now (`ui/terminal/TerminalKeySink.kt`),
-// which own the tri-state machine this bar renders and the panel used to run by hand. Kept as
-// aliases so this file (and cluster G3's move of it into `:ui`) reads unchanged.
-typealias ModState = TerminalModState
-
-typealias ModKey = TerminalModKey
-
-typealias KeyPress = TerminalKey
 
 // On-screen key layout. Gaps render as thin dividers between logical groups.
 private sealed interface BarKey {
-    data class Mod(val key: ModKey, val label: String) : BarKey
+    data class Mod(val key: TerminalModKey, val label: String) : BarKey
     data class Special(val key: SpecialKey, val label: String) : BarKey
     data class Printable(val ch: Char) : BarKey
     data object Gap : BarKey
@@ -52,8 +45,8 @@ private val KEYS: List<BarKey> = listOf(
     BarKey.Special(SpecialKey.Escape, "Esc"),
     BarKey.Special(SpecialKey.Tab, "Tab"),
     BarKey.Gap,
-    BarKey.Mod(ModKey.CTRL, "Ctrl"),
-    BarKey.Mod(ModKey.ALT, "Alt"),
+    BarKey.Mod(TerminalModKey.CTRL, "Ctrl"),
+    BarKey.Mod(TerminalModKey.ALT, "Alt"),
     BarKey.Gap,
     BarKey.Special(SpecialKey.ArrowLeft, "←"),
     BarKey.Special(SpecialKey.ArrowDown, "↓"),
@@ -72,16 +65,28 @@ private val KEYS: List<BarKey> = listOf(
 )
 
 /**
+ * The bar bound to ONE terminal surface's [TerminalKeySink] — the shape every call site uses.
+ *
+ * The sink belongs to the surface, so a bar drawn outside the pane's own subtree (pinned above the
+ * soft keyboard, as [TerminalTabs] draws it) still types into that pane's pty and shares one
+ * modifier state with the grid's real keyboard.
+ */
+@Composable
+fun TerminalKeyBar(keys: TerminalKeySink, modifier: Modifier = Modifier) {
+    TerminalKeyBar(ctrl = keys.ctrl, alt = keys.alt, onPress = { keys.press(it) }, modifier = modifier)
+}
+
+/**
  * A horizontally-scrollable row of keys the soft keyboard lacks (Esc/Tab/Ctrl/
- * Alt/arrows/…). Purely presentational: it reports each press up to the panel,
+ * Alt/arrows/…). Purely presentational: it reports each press up to its caller,
  * which owns the modifier state machine and byte-sending. Ctrl/Alt render their
  * tri-state (off / armed-once / locked) so the active modifier is visible.
  */
 @Composable
 fun TerminalKeyBar(
-    ctrl: ModState,
-    alt: ModState,
-    onPress: (KeyPress) -> Unit,
+    ctrl: TerminalModState,
+    alt: TerminalModState,
+    onPress: (TerminalKey) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -90,7 +95,8 @@ fun TerminalKeyBar(
         modifier
             .background(cs.surfaceContainerHigh)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = Space.sm, vertical = 6.dp),
+            .padding(horizontal = Space.sm, vertical = 6.dp)
+            .testTag("terminal_key_bar"),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -104,11 +110,11 @@ fun TerminalKeyBar(
                     )
 
                 is BarKey.Mod -> {
-                    val state = if (key.key == ModKey.CTRL) ctrl else alt
+                    val state = if (key.key == TerminalModKey.CTRL) ctrl else alt
                     KeyButton(
                         label = key.label,
-                        active = state != ModState.OFF,
-                        locked = state == ModState.LOCKED,
+                        active = state != TerminalModState.OFF,
+                        locked = state == TerminalModState.LOCKED,
                         mono = false,
                     ) {
                         haptic.perform(HapticKind.Tick)
@@ -148,7 +154,9 @@ private fun KeyButton(
             .clip(RoundedCornerShape(8.dp))
             .background(if (active) cs.primary else cs.surfaceContainerHighest)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 12.dp)
+            // Per-key tag (new in G3): the shared bar is now driven by tests through the strip.
+            .testTag("terminal_key_$label"),
         contentAlignment = Alignment.Center,
     ) {
         Text(

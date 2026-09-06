@@ -1,4 +1,4 @@
-// Modeled on apps/android/src/main/kotlin/dev/supermux/android/terminal/TerminalPanel.kt —
+// Modeled on apps/android/src/main/kotlin/dev/supermux/android/terminal/TermlibTerminalView.kt —
 // same public shape (connect/active/onExit), same lifecycle discipline, same status chip.
 // DELIBERATE DIVERGENCE: onExit fires on the broker's exit frame (TerminalClient.exit — web
 // parity), not on Android's CONNECTED→DISCONNECTED status latch; see the onExit KDoc. Platform
@@ -63,11 +63,11 @@ import kotlinx.coroutines.launch
  *   (reconnect backoff, wifi blip, broker restart — routine here: every deploy restarts the
  *   broker) keeps the panel alive and the client's reconnect loop resumes the pty. The agent-PTY
  *   ("Native") view uses this to fall back to Chat on agent exit. Null = no-op (scratch terminal).
- *   NB deliberate divergence: Android's TerminalPanel still uses the CONNECTED→DISCONNECTED status
+ *   NB deliberate divergence: Android's TermlibTerminalView still uses the CONNECTED→DISCONNECTED status
  *   heuristic (same reconnect false-positive) — consider backporting the exit-frame trigger there.
  */
 @Composable
-fun DesktopTerminalPanel(
+fun JediTermTerminalView(
     connect: () -> TerminalClient,
     modifier: Modifier = Modifier,
     active: Boolean = true,
@@ -172,7 +172,7 @@ fun DesktopTerminalPanel(
         client.exit.collect {
             // Notable lifecycle event (the PTY ended server-side) — log for observability so an
             // agent exit / Native→Chat fallback is traceable in run logs.
-            println("[DesktopTerminalPanel] pty exit frame received → onExit")
+            println("[JediTermTerminalView] pty exit frame received → onExit")
             onExit?.invoke()
         }
     }

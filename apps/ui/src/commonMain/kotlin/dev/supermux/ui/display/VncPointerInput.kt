@@ -31,6 +31,14 @@ import dev.supermux.display.VncInput
  *  - a CANCELLED gesture releases: if the loop is torn down (a parent takes the gesture over, the
  *    pane leaves the composition) while the button is down, the remote would otherwise keep it
  *    held forever. This is the old `ACTION_CANCEL -> mask 0` branch.
+ *
+ * LIMITATION (recorded in cluster G3, from the G2 review): both hosts pass a [send] that launches
+ * on `rememberCoroutineScope()`, so on the LEAVE-COMPOSITION path that release is dropped — the
+ * scope is cancelled in the same dispose that tears this loop down. It is harmless as wired,
+ * because the only way to leave the composition here also disposes the pane, and the pane's own
+ * dispose stops the VNC client (the server drops the whole connection's button state with it). A
+ * caller that keeps a client alive ACROSS a pane's disposal must send the release on a scope that
+ * outlives the composition, or the remote keeps the button held.
  */
 fun Modifier.vncPointerInput(
     key: Any?,

@@ -13,3 +13,10 @@ import androidx.compose.ui.input.pointer.PointerEvent
  * do and what a mouse on an Android tablet reports too.
  */
 internal expect fun PointerEvent.isSecondaryButtonPress(): Boolean
+
+/**
+ * True when [this] is the *press* half of a MIDDLE-click (tertiary mouse button) — the desktop
+ * "close this tab" convenience the terminal strip carries. Same per-platform declaration problem as
+ * [isSecondaryButtonPress], same one-line seam.
+ */
+internal expect fun PointerEvent.isTertiaryButtonPress(): Boolean

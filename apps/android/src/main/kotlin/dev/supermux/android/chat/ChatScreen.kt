@@ -118,7 +118,7 @@ import dev.supermux.ui.editor.PendingEditorOpen
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
-import dev.supermux.android.terminal.ScratchTerminalPanel
+import dev.supermux.ui.terminal.TerminalTabs
 import dev.supermux.ui.session.SessionAvatar
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
@@ -723,7 +723,9 @@ fun ChatScreen(
                 val ct = connectTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Terminal)) {
                     if (ct != null) {
-                        ScratchTerminalPanel(
+                        // Cluster G3: the shared strip (`:ui` terminal/TerminalTabs) — one tab UI
+                        // for every client, with the accessory key bar under Touch.
+                        TerminalTabs(
                             sessionId = session.id,
                             connect = ct,
                             listTerminals = listTerminals,

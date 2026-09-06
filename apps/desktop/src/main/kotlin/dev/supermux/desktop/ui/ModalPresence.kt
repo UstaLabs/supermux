@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
  * Ahmet: "most modals etc. stays under when there is terminal view".
  *
  * Compose cannot paint over a heavyweight AWT child. The two in this app are
- * JediTerm (DesktopTerminalPanel) and JCEF (the shared EditorSurface), and everything
+ * JediTerm (JediTermTerminalView) and JCEF (the shared EditorSurface), and everything
  * Compose draws in its own layer — all 22 AlertDialogs, both raw Dialogs, all 24
  * DropdownMenus — is simply invisible while one of them is on screen.
  *
@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
  * DialogWindow works but only solves dialogs: a dropdown cannot sensibly become
  * its own OS window, and it would mean converting 49 call sites. So this takes
  * the approach the codebase already proves everywhere else — swap, don't overlay
- * (DropZones.kt:26, EditorPanel.kt:563, DesktopTerminalPanel.kt:170). While
+ * (DropZones.kt:26, EditorPanel.kt:563, JediTermTerminalView.kt:170). While
  * anything modal is open the heavyweight child is laid out at 0×0, which is the
  * only kind of hiding it respects, and Compose then draws normally.
  *

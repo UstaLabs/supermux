@@ -2,10 +2,8 @@ package dev.supermux.android.terminal
 
 import android.graphics.Typeface
 import android.os.SystemClock
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,29 +13,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -49,7 +35,6 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -63,185 +48,29 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.net.DEFAULT_CONFIG
 import dev.supermux.net.PredictionEngine
 import dev.supermux.net.TerminalClient
-import dev.supermux.net.TerminalSummary
 import dev.supermux.net.TerminalStatus
 import dev.supermux.net.decodeInput
 import dev.supermux.net.linesFromPixels
 import dev.supermux.net.printableSequence
 import dev.supermux.net.wheelEventsFromLines
 import kotlin.math.abs
-import java.util.UUID
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.connectbot.terminal.Terminal
 import org.connectbot.terminal.TerminalEmulator
 import org.connectbot.terminal.TerminalEmulatorFactory
 
 /**
- * Broker-backed scratch-terminal tabs. The terminal IDs come from `/api/term/list`, whose source of
- * truth is the host's persistent tmux server, so Android, iOS, web, and desktop attach to the same
- * shells. Only the selected tab mounts a viewer; every other shell continues running on the host.
- */
-@Composable
-fun ScratchTerminalPanel(
-    sessionId: String,
-    connect: (terminalId: String) -> TerminalClient,
-    listTerminals: suspend () -> List<TerminalSummary>,
-    closeTerminal: suspend (terminalId: String) -> Unit,
-    modifier: Modifier = Modifier,
-    active: Boolean = true,
-) {
-    val scope = rememberCoroutineScope()
-    var tabs by remember(sessionId) { mutableStateOf<List<String>>(emptyList()) }
-    var activeId by remember(sessionId) { mutableStateOf("") }
-    var loaded by remember(sessionId) { mutableStateOf(false) }
-    val pendingCreates = remember(sessionId) { mutableStateMapOf<String, Long>() }
-    val pendingCloses = remember(sessionId) { mutableStateMapOf<String, Boolean>() }
-
-    fun addTab() {
-        val id = UUID.randomUUID().toString().replace("-", "").take(16)
-        pendingCreates[id] = SystemClock.elapsedRealtime()
-        tabs = tabs + id
-        activeId = id
-    }
-
-    fun removeLocal(id: String) {
-        val old = tabs
-        val index = old.indexOf(id).coerceAtLeast(0)
-        tabs = old.filterNot { it == id }
-        activeId = activeTerminalAfterSync(tabs, activeId, index)
-        pendingCreates.remove(id)
-    }
-
-    suspend fun refresh() {
-        val remoteIds = runCatching { listTerminals().map { it.id } }.getOrNull()
-        if (remoteIds == null) {
-            if (!loaded && tabs.isEmpty()) addTab()
-            loaded = true
-            return
-        }
-        val now = SystemClock.elapsedRealtime()
-        remoteIds.forEach { pendingCreates.remove(it) }
-        pendingCreates.entries
-            .filter { now - it.value >= TERMINAL_CREATE_GRACE_MS }
-            .map { it.key }
-            .forEach { pendingCreates.remove(it) }
-        pendingCloses.keys.filter { it !in remoteIds }.forEach { pendingCloses.remove(it) }
-
-        val reconciled = reconcileTerminalTabs(
-            remoteIds = remoteIds,
-            localIds = tabs,
-            pendingCreates = pendingCreates,
-            pendingCloses = pendingCloses.keys,
-            nowMs = now,
-        )
-        tabs = reconciled
-        if (tabs.isEmpty() && !loaded) addTab()
-        else activeId = activeTerminalAfterSync(tabs, activeId)
-        loaded = true
-    }
-
-    fun closeTab(id: String) {
-        val index = tabs.indexOf(id).coerceAtLeast(0)
-        pendingCreates.remove(id)
-        pendingCloses[id] = true
-        tabs = tabs.filterNot { it == id }
-        activeId = activeTerminalAfterSync(tabs, activeId, index)
-        scope.launch {
-            if (runCatching { closeTerminal(id) }.isFailure) pendingCloses.remove(id)
-            refresh()
-        }
-    }
-
-    // Reconcile on entry and while visible so a terminal opened/closed from another device appears
-    // without leaving this screen. Active selection intentionally remains local to each device.
-    LaunchedEffect(sessionId, active) {
-        if (!active) return@LaunchedEffect
-        while (true) {
-            refresh()
-            delay(3_000L)
-        }
-    }
-
-    Column(modifier.fillMaxSize().background(Color(LocalPanes.current.terminal))) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Space.sm, vertical = Space.xs)
-                .testTag("terminal_tabs"),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            tabs.forEachIndexed { index, id ->
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = if (activeId == id) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier
-                        .padding(end = Space.xs)
-                        .clickable { activeId = id }
-                        .testTag("terminal_tab_$id"),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Terminal ${index + 1}",
-                            modifier = Modifier.padding(start = Space.sm, top = Space.xs, bottom = Space.xs),
-                            color = if (activeId == id) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp,
-                        )
-                        IconButton(
-                            onClick = { closeTab(id) },
-                            modifier = Modifier.size(28.dp).testTag("terminal_close_$id"),
-                        ) {
-                            Icon(Icons.Filled.Close, contentDescription = "Close Terminal ${index + 1}", modifier = Modifier.size(14.dp))
-                        }
-                    }
-                }
-            }
-            IconButton(onClick = { addTab() }, modifier = Modifier.size(32.dp).testTag("terminal_add")) {
-                Icon(Icons.Filled.Add, contentDescription = "New terminal", modifier = Modifier.size(18.dp))
-            }
-        }
-
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (activeId.isNotEmpty()) {
-                val terminalId = activeId
-                key(terminalId) {
-                    TerminalPanel(
-                        connect = { connect(terminalId) },
-                        modifier = Modifier.fillMaxSize(),
-                        active = active,
-                        onExit = { removeLocal(terminalId) },
-                    )
-                }
-            } else if (loaded) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Surface(
-                        onClick = { addTab() },
-                        shape = RoundedCornerShape(Radii.md),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.testTag("terminal_empty_add"),
-                    ) {
-                        Row(Modifier.padding(horizontal = Space.lg, vertical = Space.md), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text("New terminal", modifier = Modifier.padding(start = Space.sm))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Native terminal panel backed by ConnectBot termlib (libvterm).
- * I/O stays on the broker websocket via [TerminalClient].
+ * Native terminal grid backed by ConnectBot termlib (libvterm), the engine half of
+ * [TermlibTerminalViewFactory]. I/O stays on the broker websocket via [TerminalClient].
+ *
+ * Cluster G3: this draws the GRID ONLY. The accessory key bar and the IME/navigation-bar inset it
+ * used to own moved into `:ui` (`TerminalPane` / `TerminalTabs`) so one shared bar can sit above
+ * the soft keyboard for whichever pane is active; the sink it renders is still this surface's, so
+ * an armed Ctrl still modifies the REAL keyboard's next keystroke below.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TerminalPanel(
+fun TermlibTerminalView(
     connect: () -> TerminalClient,
     modifier: Modifier = Modifier,
     // Whether this terminal is the foreground pane. Drives soft-keyboard focus: a background
@@ -374,15 +203,9 @@ fun TerminalPanel(
     // chat composer's inset handling. Resizing the view makes termlib recompute its grid and emit a
     // pty resize, so the shell reflows to the visible rows/cols instead of the cursor line hiding
     // behind the IME. (Background stays full-bleed; only the content insets.)
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(Color(c.terminal))
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
-    ) {
+    Box(modifier.fillMaxSize().background(Color(c.terminal))) {
       Column(Modifier.fillMaxSize()) {
-        // The terminal viewport takes the space above the key bar; boxHeightPx measures THIS inner
-        // box (not the bar) so the drag→row math stays correct.
+        // boxHeightPx measures THIS inner box so the drag→row math stays correct.
         Box(
             Modifier
                 .fillMaxWidth()
@@ -493,17 +316,6 @@ fun TerminalPanel(
                 .align(Alignment.TopEnd)
                 .padding(Space.sm),
         )
-        }
-
-        // Key-accessory bar pinned above the soft keyboard. Foreground pane only — a kept-alive
-        // background terminal must not show it. (Android is always touch, so no pointer gate.)
-        if (active) {
-            TerminalKeyBar(
-                ctrl = sink.ctrl,
-                alt = sink.alt,
-                onPress = { sink.press(it) },
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
       }
     }

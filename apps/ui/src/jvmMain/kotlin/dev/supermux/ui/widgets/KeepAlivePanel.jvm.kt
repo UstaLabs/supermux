@@ -23,7 +23,7 @@ import androidx.compose.ui.zIndex
  * On re-show the same SwingPanel re-lays-out to full size and re-shows the SAME widget instance
  * (the factory result is remembered by the content), so the grid/scrollback are intact and the
  * client never dropped its websocket. A 0-size layout pass can make JediTerm report a degenerate
- * grid; DesktopTerminalPanel guards `resize` against cols/rows <= 0 so the remote pty is never
+ * grid; JediTermTerminalView guards `resize` against cols/rows <= 0 so the remote pty is never
  * shrunk by a hide.
  *
  * Verified live (M2 Task 3 probe): client status stayed CONNECTED across hide → show with the

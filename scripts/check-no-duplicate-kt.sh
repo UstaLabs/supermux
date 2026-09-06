@@ -22,7 +22,6 @@ twins=(
   "workspace/AndroidViewHost.kt|shell/ViewHost.kt"
   "workspace/WorkspaceScreen.kt|shell/AppShell.kt"
   "chat/ChatScreen.kt|chat/DesktopComposer.kt chat/ComposerFooter.kt"
-  "terminal/TerminalPanel.kt|terminal/DesktopTerminalPanel.kt"
   "update/AppUpdateScreen.kt|update/AppUpdateUi.kt"
 )
 left=0

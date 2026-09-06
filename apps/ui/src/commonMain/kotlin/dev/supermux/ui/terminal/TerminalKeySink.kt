@@ -36,7 +36,7 @@ sealed interface TerminalKey {
  * own subtree, which is what a shared bar pinned above the IME needs — always types into the pane
  * it was handed, and a background pane's armed Ctrl cannot leak into the foreground one.
  *
- * Behaviour is Android's `TerminalPanel.onKeyPress` verbatim (itself the web `TerminalPane.vue`
+ * Behaviour is Android's `TermlibTerminalView.onKeyboardInput` verbatim (itself the web `TerminalPane.vue`
  * rule): a modifier press cycles off → once → locked; any other key is encoded with the modifiers
  * currently held (`appCursor = false` — no client exposes DECCKM) and sent, after which a `once`
  * modifier is consumed and a `locked` one stays armed.

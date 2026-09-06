@@ -270,7 +270,7 @@ fun main() {
     // It stays because it is the half of the problem that IS solved, at no cost
     // measured on Metal, and because the remaining half is about input routing
     // rather than painting. The moment input is sorted, the terminal can stop
-    // hiding by flipping one argument in DesktopTerminalPanel — read the note
+    // hiding by flipping one argument in JediTermTerminalView — read the note
     // there first.
     //
     // Compose 1.11.1 gates blending on the render API — Direct3D and Metal only,

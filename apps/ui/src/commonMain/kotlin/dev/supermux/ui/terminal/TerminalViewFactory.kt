@@ -4,11 +4,25 @@
 // that guards this module matches those literals anywhere in the file, comments included.)
 package dev.supermux.ui.terminal
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.net.CursorPos
 import dev.supermux.net.DisplayOp
 import dev.supermux.net.TerminalClient
@@ -76,7 +90,38 @@ interface TerminalViewFactory {
         active: Boolean,
         onExit: (() -> Unit)?,
     ) {
-        rememberTerminalSurface(connect).Content(modifier, active, onExit)
+        TerminalPane(rememberTerminalSurface(connect), modifier, active, onExit)
+    }
+}
+
+/**
+ * One terminal pane: the grid, and under Touch the accessory [TerminalKeyBar] beneath it.
+ *
+ * Cluster G3: the key bar and the IME/navigation-bar inset live HERE rather than inside either
+ * engine's surface, because a bar has to sit ABOVE the soft keyboard and therefore outside the
+ * grid's own subtree, and because shrinking this whole block (not just the grid) is what makes the
+ * emulator recompute its rows and resize the remote pty. [TerminalTabs] draws the same two pieces
+ * around its own bounded set of surfaces; a single-surface mount gets them from here.
+ */
+@Composable
+fun TerminalPane(
+    surface: TerminalSurface,
+    modifier: Modifier = Modifier,
+    active: Boolean = true,
+    onExit: (() -> Unit)? = null,
+) {
+    // Background stays full-bleed behind the insets; only the content is padded.
+    Box(modifier.fillMaxSize().background(Color(LocalPanes.current.terminal))) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                surface.Content(Modifier.fillMaxSize(), active, onExit)
+            }
+            // Touch only (a mouse-driven client has the real keys) and foreground only — a
+            // kept-alive background terminal must not show a bar.
+            if (active && LocalInputMode.current == InputMode.Touch) {
+                TerminalKeyBar(keys = surface.keys, modifier = Modifier.fillMaxWidth())
+            }
+        }
     }
 }
 

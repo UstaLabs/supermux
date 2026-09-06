@@ -46,7 +46,7 @@ class ChatHeaderTest {
     private val codexSession =
         SessionInfo(id = "s1", name = "demo", workdir = "/w/s1", agent = "codex")
 
-    // The real native panel is a SwingPanel (DesktopTerminalPanel) which cannot be hosted under
+    // The real native panel is a SwingPanel (JediTermTerminalView) which cannot be hosted under
     // runComposeUiTest, so inject a pure-Compose stand-in that captures its onExit.
     private var capturedOnExit: (() -> Unit)? = null
     private val fakeNative: @Composable (onExit: () -> Unit) -> Unit = { onExit ->

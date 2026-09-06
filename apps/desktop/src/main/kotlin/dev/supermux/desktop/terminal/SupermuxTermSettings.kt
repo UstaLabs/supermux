@@ -56,7 +56,7 @@ class SupermuxTermSettings(
 
     // ── Mouse reporting: DELIBERATELY LEFT AT THE DEFAULT (`enableMouseReporting()` == true) ──
     //
-    // Do NOT add a custom wheel→tmux bridge to DesktopTerminalPanel, and do NOT override
+    // Do NOT add a custom wheel→tmux bridge to JediTermTerminalView, and do NOT override
     // `enableMouseReporting()` — JediTerm 3.73 already does the whole job natively, unlike the
     // touch-only terminal libs (SwiftTerm-iOS, ConnectBot termlib) that forced Android/iOS to
     // build the shared `dev.supermux.net.TerminalScroll` bridge. Task 4 established this
