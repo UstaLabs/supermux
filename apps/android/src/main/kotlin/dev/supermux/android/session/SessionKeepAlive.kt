@@ -249,6 +249,8 @@ fun SessionKeepAlivePhoneHost(
                         lastRead = lastRead,
                         agentState = agentState,
                         onNewSession = { onNavigate("new") },
+                        // A multi-agent workspace's child rows open that CHAT directly.
+                        onOpenSession = { _, sid -> onSelect(sid) },
                         // Long-press row actions were never wired on the phone list host, so
                         // Kill/Rename/Mute opened their dialogs but the confirm was a no-op
                         // (SessionListScreen defaults these to {}). The cluster-F1 holder wires

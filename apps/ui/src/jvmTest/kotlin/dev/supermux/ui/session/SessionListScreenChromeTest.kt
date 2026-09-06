@@ -132,6 +132,37 @@ class SessionListScreenChromeTest {
             }
         }
         onNodeWithTag("new_session_fab").assertIsDisplayed()
+        onNodeWithText("supermux").assertIsDisplayed()
+    }
+
+    /**
+     * Narrowing a desktop window past 600dp flips this screen into its Compact chrome. The sidebar
+     * footer (Usage / Devices / Settings / theme) is the ONLY place those destinations live on that
+     * host, so it must survive the flip.
+     */
+    @Test fun a_compact_window_keeps_the_footer_rail() = runComposeUiTest {
+        var usage = false
+        setContent {
+            CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Compact) {
+                SessionListScreen(
+                    home = "/home/u",
+                    activeId = null,
+                    onOpen = {},
+                    footer = {
+                        SessionListFooter(
+                            appearance = AppearanceMode.DARK,
+                            onToggleTheme = {},
+                            onUsage = { usage = true },
+                            onDevices = {},
+                            onSettings = {},
+                        )
+                    },
+                )
+            }
+        }
+        onNodeWithTag("sidebar_footer").assertIsDisplayed()
+        onNodeWithTag("sidebar_footer_usage").performClick()
+        assertTrue(usage, "the footer rail must stay reachable in the Compact branch")
     }
 
     @Test fun a_caller_that_already_painted_a_bar_gets_none() = runComposeUiTest {

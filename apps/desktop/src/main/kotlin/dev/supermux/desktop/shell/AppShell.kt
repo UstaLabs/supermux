@@ -977,6 +977,11 @@ fun AppShell(
                                 ui.collapsedProjectPaths = it
                                 overlayScope.launch { uiPrefs.putCollapsedProjectPaths(it) }
                             },
+                            // Narrowing the window past 600dp flips the screen into its Compact
+                            // chrome; the sidebar is a PANE inside the shell's own frame, so it
+                            // must not grow a top bar + FAB there (same declaration as the usage
+                            // popover's `topBarShown` above).
+                            topBarShown = true,
                             footer = {
                                 SessionListFooter(
                                     appearance = appearance,

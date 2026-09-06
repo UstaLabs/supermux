@@ -200,7 +200,12 @@ fun SessionListScreen(
     archivedActiveId: String? = null,
     /** Every broker call this screen makes (cluster F1). */
     actions: SessionListActions = SessionListActions(),
-    onOpenSession: (workspaceId: String, sessionId: String) -> Unit = { _, _ -> },
+    /**
+     * Open one CHAT of a multi-agent workspace (its child row). Null means the caller has no
+     * per-workspace open — the child falls back to [onOpen] with the session id, which is what
+     * Android's list did before this screen was shared.
+     */
+    onOpenSession: ((workspaceId: String, sessionId: String) -> Unit)? = null,
     onNewSession: () -> Unit = {},
     onNewChatInWorkspace: (WorkspaceDto) -> Unit = {},
     onOpenDraft: (String) -> Unit = {},
@@ -261,9 +266,12 @@ fun SessionListScreen(
 
     // The host filter applies to sessions first; a workspace stays visible while any of its chat
     // sessions (or its primary) still passes.
-    val visibleSessions = if (multiHost) filterSessions(sessions, sessionHost, hostFilter) else sessions
-    val onlineSessions =
+    val visibleSessions = remember(sessions, multiHost, sessionHost, hostFilter) {
+        if (multiHost) filterSessions(sessions, sessionHost, hostFilter) else sessions
+    }
+    val onlineSessions = remember(visibleSessions, multiHost, sessionHost, offlineIds) {
         if (multiHost) visibleSessions.filter { (sessionHost[it.id] ?: "") !in offlineIds } else visibleSessions
+    }
     val visibleSessionIds = remember(visibleSessions) { visibleSessions.map { it.id }.toHashSet() }
     val visibleWorkspaces = remember(workspaces, multiHost, hostFilter, sessionHost, visibleSessionIds) {
         if (!multiHost || hostFilter == null) workspaces
@@ -310,11 +318,13 @@ fun SessionListScreen(
         sessionsByUserOrder(visibleSessions.filter { it.sectionKey() == SectionKey.DRAFT })
     }
     // Offline hosts (greyed groups with last-seen), honouring the filter.
-    val offlineGroups = if (multiHost && mode == SessionListMode.Fleet) {
-        hosts.filter { !it.online && (hostFilter == null || hostFilter == it.recordId) }
-            .map { h -> h to visibleSessions.filter { sessionHost[it.id] == h.recordId } }
-    } else {
-        emptyList()
+    val offlineGroups = remember(hosts, multiHost, mode, hostFilter, visibleSessions, sessionHost) {
+        if (multiHost && mode == SessionListMode.Fleet) {
+            hosts.filter { !it.online && (hostFilter == null || hostFilter == it.recordId) }
+                .map { h -> h to visibleSessions.filter { sessionHost[it.id] == h.recordId } }
+        } else {
+            emptyList()
+        }
     }
 
     // ── Screen state ──────────────────────────────────────────────────────────────────────────
@@ -485,6 +495,11 @@ fun SessionListScreen(
         { id -> expandedChildren = if (id in expandedChildren) expandedChildren - id else expandedChildren + id }
     }
 
+    fun openChild(workspaceId: String, sessionId: String) {
+        val open = onOpenSession
+        if (open != null) open(workspaceId, sessionId) else onOpen(sessionId)
+    }
+
     fun openSession(s: SessionInfo) {
         when (s.sectionKey()) {
             SectionKey.DRAFT -> onOpenDraft(s.id)
@@ -596,7 +611,7 @@ fun SessionListScreen(
                         val sid = model.primarySessionId ?: return@WorkspaceRow
                         onMute(sid, !(primary?.mute ?: false))
                     },
-                    onChildClick = { sid -> onOpenSession(w.id, sid) },
+                    onChildClick = { sid -> openChild(w.id, sid) },
                 )
                 // The Pointer row has no child fold — desktop's sidebar lists a multi-agent
                 // workspace's chats inline underneath it (the Touch row expands its own).
@@ -611,7 +626,7 @@ fun SessionListScreen(
                             WorkspaceChildRow(
                                 name = names[child.sessionId] ?: child.sessionId,
                                 working = agentTyped[child.sessionId]?.working == true,
-                                onClick = { onOpenSession(w.id, child.sessionId) },
+                                onClick = { openChild(w.id, child.sessionId) },
                             )
                         }
                     }
@@ -654,15 +669,19 @@ fun SessionListScreen(
                     WorkspaceEntry(
                         w = w, scopeKey = null, grouped = false,
                         first = index == 0, last = index == pas.lastIndex,
-                        draggable = false, showProjectTag = false,
+                        draggable = false,
+                        // Android's flat list tagged every row including the PAs; desktop's
+                        // sidebar tagged only the rows below the PA block.
+                        showProjectTag = mode == SessionListMode.Fleet,
                     )
                 }
             }
             val rest = applyWorkspaceWorkingOrder(wsFlatRows, wsWorkingOrders[WORKSPACE_FLAT_SCOPE])
             if (rest.isNotEmpty()) {
-                // Section chrome only when PAs are also listed — otherwise a lone "IN PROGRESS"
-                // header over the whole flat list is noise.
-                if (pas.isNotEmpty()) {
+                // Desktop's sidebar labels the non-PA block, and only when PAs are also listed —
+                // a lone "IN PROGRESS" header over the whole flat list is noise. Android's flat
+                // list never drew one, so it does not gain one here.
+                if (pas.isNotEmpty() && mode == SessionListMode.Workspaces) {
                     item(key = "flat:h:in_progress") { SectionLabel("IN PROGRESS") }
                 }
                     itemsIndexed(rest, key = { _, w -> "ws:${w.id}" }) { index, w ->
@@ -1139,14 +1158,20 @@ fun SessionListScreen(
             floatingActionButtonPosition = FabPosition.End,
             containerColor = cs.surfaceContainerHigh,
         ) { innerPadding ->
-            Box(Modifier.fillMaxSize().padding(innerPadding)) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .testTag(listTag)
-                        .fillMaxSize()
-                        .background(cs.surfaceContainerHigh),
-                ) { body() }
+            Column(Modifier.fillMaxSize().padding(innerPadding)) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .testTag(listTag)
+                            .fillMaxSize()
+                            .background(cs.surfaceContainerHigh),
+                    ) { body() }
+                }
+                // A caller that supplies a footer still gets it here: narrowing a desktop window
+                // past 600dp flips this branch on, and the rail is where Usage / Devices /
+                // Settings / the theme toggle live on that host.
+                footer?.invoke()
             }
         }
     } else {

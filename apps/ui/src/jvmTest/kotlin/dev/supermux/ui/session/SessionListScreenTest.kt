@@ -138,6 +138,29 @@ class SessionListScreenTest {
         assertEquals("s2", openedSession)
     }
 
+    /**
+     * A host with no per-workspace open (all three Android mounts, before this screen was shared)
+     * must still be able to tap a child: the row falls back to `onOpen(sessionId)`.
+     */
+    @Test
+    fun aChildRowOpensTheSessionWithNoOnOpenSessionSupplied() = runComposeUiTest {
+        var opened: String? = null
+        setContent {
+            SessionListScreen(
+                workspaces = listOf(
+                    ws(
+                        "w1", "shared", "/p",
+                        views = listOf(chatView("v1", "s1", "w1"), chatView("v2", "s2", "w1")),
+                    ),
+                ),
+                home = "/home/u", activeId = null, onOpen = { opened = it },
+                sessionNames = mapOf("s1" to "agent one", "s2" to "agent two"),
+            )
+        }
+        onNodeWithText("agent two").performClick()
+        assertEquals("s2", opened)
+    }
+
     @Test
     fun anArchivedWorkspaceIsNotListed() = runComposeUiTest {
         setContent {
@@ -436,6 +459,38 @@ class SessionListScreenTest {
         onNodeWithText("IN PROGRESS").assertIsDisplayed()
         onNodeWithText("My PA").assertIsDisplayed()
         onNodeWithText("task-a").assertIsDisplayed()
+    }
+
+    /**
+     * Android's flat list tagged EVERY row with its project and never drew an "IN PROGRESS"
+     * header; desktop's sidebar does the opposite. Both stay themselves.
+     */
+    @Test
+    fun flatMode_fleetTagsThePaRowsAndDrawsNoInProgressHeader() = runComposeUiTest {
+        val pa = ws("pa1", "My PA", "/home/u/projects/pa", views = listOf(chatView("v1", "s-pa", "pa1")))
+            .copy(primarySessionId = "s-pa")
+        val task = ws("w1", "task-a", "/home/u/projects/app")
+        val sessions = listOf(
+            SessionInfo(
+                id = "s-pa", name = "My PA", workdir = "/home/u/projects/pa", agent = "claude",
+                role = "personal_assistant",
+            ),
+        )
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                workspaces = listOf(pa, task),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                sessions = sessions,
+            )
+        }
+        onNodeWithContentDescription("Flat list").performClick()
+        onNodeWithText("PERSONAL ASSISTANTS").assertIsDisplayed()
+        onNodeWithText("IN PROGRESS").assertDoesNotExist()
+        // projectLabel of the PA's own workdir — the tag Android's flat row carried.
+        onNodeWithText("pa").assertIsDisplayed()
     }
 
     /**
