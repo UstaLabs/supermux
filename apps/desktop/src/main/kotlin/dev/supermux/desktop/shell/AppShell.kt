@@ -1466,7 +1466,25 @@ fun AppShell(
                     entry<Route.Displays>(
                         metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                     ) {
-                        Column(Modifier.fillMaxSize().testTag("displays_overlay")) {
+                        // Esc closes it, exactly as the Settings / AppUpdate overlays do: this
+                        // pane suppresses the screen's own Back (the HostScopePicker is its
+                        // chrome) and `shellShortcuts` is off while an overlay is up, so without
+                        // this handler the overlay would be a one-way door (G4 review).
+                        val displaysFocus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { runCatching { displaysFocus.requestFocus() } }
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .testTag("displays_overlay")
+                                .focusRequester(displaysFocus)
+                                .focusable()
+                                .onPreviewKeyEvent { e ->
+                                    if (e.type == KeyEventType.KeyDown && e.key == Key.Escape) {
+                                        ui.goBack()
+                                        true
+                                    } else false
+                                },
+                        ) {
                             HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
                             Box(Modifier.weight(1f)) {
                                 DisplaysScreen(

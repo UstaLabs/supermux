@@ -77,7 +77,7 @@ import dev.supermux.net.VncClient
 import dev.supermux.net.VncStatus
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.theme.LocalPanes
+import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
@@ -350,20 +350,31 @@ private fun VncView(
             .fillMaxSize()
             .testTag("vnc_surface")
             .onSizeChanged { viewSize = it }
-            .focusRequester(focusRequester)
-            .focusable()
-            .onPreviewKeyEvent { e ->
-                val keysym = keysymForKeyEvent(e) ?: return@onPreviewKeyEvent false
-                scope.launch { client.sendKey(keysym, e.type == KeyEventType.KeyDown) }
-                true
-            }
+            // Desktop's hardware-key route, and ONLY where there is a pointer (G4 review): on a
+            // phone the surface taking focus on the first remote tap pulls it off
+            // [HiddenKeyboardField] and drops the IME, and the field only re-requests focus when
+            // the toggle flips — so a touch client would lose its keyboard on its first tap.
+            .then(
+                if (!touch) {
+                    Modifier
+                        .focusRequester(focusRequester)
+                        .focusable()
+                        .onPreviewKeyEvent { e ->
+                            val keysym = keysymForKeyEvent(e) ?: return@onPreviewKeyEvent false
+                            scope.launch { client.sendKey(keysym, e.type == KeyEventType.KeyDown) }
+                            true
+                        }
+                } else {
+                    Modifier
+                }
+            )
             // Shared with the scrcpy path's own listener since G2's review fix: same mask rules,
             // plus "ignore what the overlay buttons consumed" and "release a cancelled gesture".
             .vncPointerInput(
                 key = streamId,
                 viewSize = { viewSizeRef },
                 remoteSize = { sizeRef },
-                onPress = { runCatching { focusRequester.requestFocus() } },
+                onPress = { if (!touch) runCatching { focusRequester.requestFocus() } },
             ) { rx, ry, mask -> scope.launch { client.sendPointer(rx, ry, mask) } },
     ) {
         // The ONLY reader of the framebuffer state: a new frame recomposes this leaf, not the
@@ -534,11 +545,12 @@ private fun VncPasswordPrompt(provider: String, onSubmit: (String) -> Unit, onDi
 /** Subtle top-right indicator tinted by the stream connection [state] (4-state). */
 @Composable
 fun DisplayStatusChip(state: DisplayState, modifier: Modifier = Modifier) {
-    val c = LocalPanes.current
     val cs = MaterialTheme.colorScheme
+    // Connected is GREEN: desktop painted a literal green and Android an amber `Panes.warning`,
+    // which was the odd one out — the union is the semantic success role (G4 review).
     val (label, tint) = when (state) {
         DisplayState.CONNECTING -> "Connecting…" to cs.primary
-        DisplayState.CONNECTED -> "Connected" to Color(c.warning)
+        DisplayState.CONNECTED -> "Connected" to LocalSemantics.current.success
         DisplayState.DISCONNECTED -> "Disconnected" to cs.onSurfaceVariant
         DisplayState.NEEDS_PASSWORD -> "Password required" to cs.primary
     }

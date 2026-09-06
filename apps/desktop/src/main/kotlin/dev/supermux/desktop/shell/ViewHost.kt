@@ -47,7 +47,6 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.TerminalClient
-import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString

@@ -60,6 +60,7 @@ import androidx.compose.ui.window.DialogProperties
 import dev.supermux.net.DisplayStream
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.MonoFontFamily
@@ -231,7 +232,8 @@ private fun DisplayRow(display: DisplayStream, onClick: () -> Unit, modifier: Mo
     Column(
         modifier
             .clickable(onClick = onClick)
-            .heightIn(min = 56.dp)
+            // A finger needs a real row target; a mouse does not (the panel's `touchTarget()` rule).
+            .then(if (LocalPointerAvailable.current) Modifier else Modifier.heightIn(min = 56.dp))
             .padding(horizontal = Space.lg, vertical = Space.md)
             .testTag("displays_row_${display.id}"),
         verticalArrangement = Arrangement.spacedBy(2.dp),

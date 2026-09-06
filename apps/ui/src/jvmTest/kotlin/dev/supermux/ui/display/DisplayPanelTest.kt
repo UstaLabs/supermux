@@ -1,12 +1,16 @@
 package dev.supermux.ui.display
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.DisplayStream
@@ -239,4 +243,25 @@ class DisplayPanelTest {
         assertEquals(0, tagCount("display_keyboard_toggle"))
         assertEquals(1, tagCount("display_ctrl_alt_del"))
     }
+
+    @Test fun a_touch_surface_does_not_steal_focus_from_the_hidden_keyboard_on_a_tap() =
+        runComposeUiTest {
+            setPlatformContent(platform = FakePlatform(), pointer = false) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    DisplayStreamSurface(vncStream, vncActions())
+                }
+            }
+            waitForIdle()
+            // Raise the soft keyboard, then tap the remote surface.
+            onNodeWithTag("display_keyboard_toggle").performClick()
+            waitForIdle()
+            onNodeWithTag("display_hidden_keyboard").assertIsFocused()
+
+            onNodeWithTag("vnc_surface").performTouchInput { click(Offset(10f, 10f)) }
+            waitForIdle()
+
+            // The surface is not focusable under Touch (G4 review): the IME stays up, and the
+            // field only re-requests focus when the toggle flips, so a steal here was permanent.
+            onNodeWithTag("display_hidden_keyboard").assertIsFocused()
+        }
 }
