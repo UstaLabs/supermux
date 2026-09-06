@@ -1039,8 +1039,10 @@ fun AppShell(
                         loadDraft = { uiPrefs.launcherDraft.first() },
                         onDraftChange = { overlayScope.launch { uiPrefs.putLauncherDraft(it) } },
                         // Dispose can BE the window closing, which cancels overlayScope before a
-                        // launched write runs. This one blocks until the draft is on disk.
-                        onDraftFlush = { runBlocking { uiPrefs.putLauncherDraft(it) } },
+                        // launched write runs. This one blocks until the draft is on disk — and
+                        // swallows a failure (disk full, prefs file locked mid-shutdown): a dying
+                        // window must not throw out of onDispose over a lost draft.
+                        onDraftFlush = { runCatching { runBlocking { uiPrefs.putLauncherDraft(it) } } },
                         onClearDraft = { overlayScope.launch { uiPrefs.clearLauncherDraft() } },
                         // Spawn → select + send the first message → close. A null id is
                         // surfaced by THROWING — SessionLauncherScreen's doSubmit try/catch

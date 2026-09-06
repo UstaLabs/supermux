@@ -21,6 +21,7 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningLevel
 import dev.supermux.net.ReasoningResponse
+import dev.supermux.ui.session.headerGitBadgeLabel
 import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo

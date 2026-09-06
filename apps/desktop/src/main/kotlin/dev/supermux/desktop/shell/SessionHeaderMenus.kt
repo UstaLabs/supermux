@@ -87,11 +87,10 @@ import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
-import dev.supermux.proto.GitBadge
-import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
+import dev.supermux.ui.session.headerGitBadgeLabel
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
@@ -99,13 +98,6 @@ import kotlinx.coroutines.launch
 import dev.supermux.ui.prefs.LocalUiPrefs
 
 // ── Pure, testable bits (no Compose) ──────────────────────────────────────────────────
-
-/** The header label for a rendered [GitBadge]: BASE-kind badges prefix the compare ref (e.g.
- *  `main +2 ·1`), every other kind is just the glyph text (Android SessionShellDetail:400). */
-fun headerGitBadgeLabel(badge: GitBadge): String =
-    if (badge.kind == GitBadgeKind.BASE && badge.compareRef.isNotEmpty())
-        "${badge.compareRef} ${badge.text}"
-    else badge.text
 
 /** The exposed proxies belonging to [session] — the broker returns ALL proxies, so the links menu
  *  filters by session name client-side (Android threads a pre-filtered list; desktop filters here). */

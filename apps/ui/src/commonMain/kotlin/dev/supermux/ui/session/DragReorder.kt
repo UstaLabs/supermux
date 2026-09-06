@@ -1,7 +1,10 @@
 package dev.supermux.ui.session
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -10,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -280,16 +284,23 @@ class ReorderableListState internal constructor(
     private var scrollJob: Job? = null
 
     /**
-     * Visible key order at the last accepted move. The layout has not caught up with a move
-     * until this changes, so we hold off on the next one — otherwise a single drag past one
-     * neighbour would run away through the whole list on stale [LazyListState.layoutInfo].
+     * The layout pass an accepted move was computed from. Until the list is measured again,
+     * [LazyListState.layoutInfo] still describes the pre-move layout, and acting on it would run
+     * a single drag past one neighbour away through the whole list.
+     *
+     * The guard is the layout pass ITSELF (instance identity), not the key order it produced, so
+     * it cannot wedge: any new measure releases it, including one that puts the visible order back
+     * exactly as it was (an optimistic order overwritten by a server refresh, a scroll that
+     * re-lands on the same keys). Comparing key ORDER instead would hold the guard forever in that
+     * case and leave a dead row under the finger for the rest of the gesture — it self-heals on
+     * the next drag ([onDragStart] and [onDragStop] both clear it), which is far too late.
      */
-    private var lastMoveOrder: List<Any?>? = null
+    private var lastMoveLayout: Any? = null
 
     internal fun onDragStart(key: Any) {
         draggingKey = key
         draggingOffset = 0f
-        lastMoveOrder = null
+        lastMoveLayout = null
         startEdgeScroll()
     }
 
@@ -304,22 +315,22 @@ class ReorderableListState internal constructor(
         scrollJob = null
         draggingKey = null
         draggingOffset = 0f
-        lastMoveOrder = null
+        lastMoveLayout = null
     }
 
     private fun settleMoves() {
         val key = draggingKey ?: return
         val info = listState.layoutInfo
         val visible = info.visibleItemsInfo
-        val order = visible.map { it.key }
-        if (order == lastMoveOrder) return
+        // Still the very layout the last accepted move was computed from: wait for a new measure.
+        if (info === lastMoveLayout) return
         val from = visible.firstOrNull { it.key == key } ?: return
         val center = from.offset + draggingOffset + from.size / 2f
         val to = visible.firstOrNull {
             it.key != key && center >= it.offset && center <= it.offset + it.size
         } ?: return
         if (!onMove(from, to)) return
-        lastMoveOrder = order
+        lastMoveLayout = info
         // The row is about to be laid out in the target's slot; keep it under the finger.
         draggingOffset -= (to.offset - from.offset).toFloat()
     }
@@ -327,23 +338,31 @@ class ReorderableListState internal constructor(
     private fun startEdgeScroll() {
         scrollJob?.cancel()
         scrollJob = scope.launch {
+            // Direction of the last edge pull. A fast drag can carry the row out of
+            // `visibleItemsInfo` entirely (it is only translated, its slot stays behind); stopping
+            // there would strand the list mid-scroll with the row pinned off-screen, so we keep
+            // pulling the same way until the row is laid out again or the gesture ends.
+            var lastDelta = 0f
             while (isActive && draggingKey != null) {
                 val info = listState.layoutInfo
                 val dragged = info.visibleItemsInfo.firstOrNull { it.key == draggingKey }
-                if (dragged != null) {
+                val delta = if (dragged != null) {
                     val center = dragged.offset + draggingOffset + dragged.size / 2f
-                    val delta = when {
+                    when {
                         center < info.viewportStartOffset + EDGE_SCROLL_ZONE_PX ->
                             -EDGE_SCROLL_STEP_PX
                         center > info.viewportEndOffset - EDGE_SCROLL_ZONE_PX ->
                             EDGE_SCROLL_STEP_PX
                         else -> 0f
                     }
-                    if (delta != 0f) {
-                        // The list moved under a finger that did not: keep the visual offset.
-                        draggingOffset += listState.scrollBy(delta)
-                        settleMoves()
-                    }
+                } else {
+                    lastDelta
+                }
+                lastDelta = delta
+                if (delta != 0f) {
+                    // The list moved under a finger that did not: keep the visual offset.
+                    draggingOffset += listState.scrollBy(delta)
+                    settleMoves()
                 }
                 delay(16)
             }
@@ -424,9 +443,15 @@ class ReorderableItemScope internal constructor(
                     onDragCancel = { end(true) },
                 )
             } else {
-                detectDragGestures(
+                // Vertical only — the library this replaced used `draggable(Orientation.Vertical)`.
+                // A horizontal mouse drag across a row (a text swipe, an aimed-at-the-scrollbar
+                // slip) must not lift it and swallow the click that follows.
+                detectVerticalDragGestures(
                     onDragStart = begin,
-                    onDrag = drag,
+                    onVerticalDrag = { change, dy ->
+                        change.consume()
+                        state.onDrag(dy)
+                    },
                     onDragEnd = { end(false) },
                     onDragCancel = { end(true) },
                 )
@@ -435,11 +460,19 @@ class ReorderableItemScope internal constructor(
     }
 }
 
+/** How long the dropped row takes to slide from under the finger into its new slot. */
+private const val DROP_SETTLE_MS = 160
+
 /**
  * One reorderable row of a `LazyColumn`. [key] must be the same key the `items` call used.
  *
  * The dragged row rides above its neighbours (translated, `zIndex` 1); every other row animates
  * into its new slot through the lazy list's own item placement animation.
+ *
+ * On release the row does NOT snap: its `translationY` animates from wherever the finger left it
+ * down to 0 over [DROP_SETTLE_MS], still above its neighbours, and only then is placement handed
+ * back to `animateItem`. Without that, a drop that moved the row by less than a full slot (or a
+ * rejected cross-scope drag, which never moved the list at all) jumped visibly.
  */
 @Composable
 fun LazyItemScope.ReorderableItem(
@@ -450,14 +483,39 @@ fun LazyItemScope.ReorderableItem(
 ) {
     val dragging = state.draggingKey == key
     val itemScope = remember(state, key) { ReorderableItemScope(state, key) }
+
+    // Offset the finger left behind, and whether we are still animating it away. Both are decided
+    // during composition (not in an effect) so the frame the drag ends already renders the settle
+    // instead of one snapped-to-zero frame.
+    val settle = remember(key) { Animatable(0f) }
+    var settleFrom by remember(key) { mutableFloatStateOf(0f) }
+    var settling by remember(key) { mutableStateOf(false) }
+    var wasDragging by remember(key) { mutableStateOf(false) }
+    if (dragging) settleFrom = state.draggingOffset
+    if (dragging != wasDragging) {
+        wasDragging = dragging
+        if (!dragging && settleFrom != 0f) settling = true
+    }
+    LaunchedEffect(settling) {
+        if (settling) {
+            settle.snapTo(settleFrom)
+            settle.animateTo(0f, tween(DROP_SETTLE_MS))
+            settleFrom = 0f
+            settling = false
+        }
+    }
+
     Box(
         modifier
-            .zIndex(if (dragging) 1f else 0f)
+            .zIndex(if (dragging || settling) 1f else 0f)
             .then(
-                if (dragging) {
-                    Modifier.graphicsLayer { translationY = state.draggingOffset }
-                } else {
-                    Modifier.animateItem()
+                when {
+                    dragging -> Modifier.graphicsLayer { translationY = state.draggingOffset }
+                    settling -> Modifier.graphicsLayer {
+                        // Before the first frame of the animation lands, hold the drop position.
+                        translationY = if (settle.isRunning) settle.value else settleFrom
+                    }
+                    else -> Modifier.animateItem()
                 },
             ),
     ) {

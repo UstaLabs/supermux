@@ -113,6 +113,10 @@ import dev.supermux.workspace.isMultiAgent
 import dev.supermux.ui.session.ReorderableItem
 import dev.supermux.ui.session.ReorderableListState
 import dev.supermux.ui.session.WorkspaceListTestIds
+import dev.supermux.ui.session.ArchivedFoldButton
+import dev.supermux.ui.session.ArchivedWorkspaceRow
+import dev.supermux.ui.session.WorkspaceRow
+import dev.supermux.ui.session.deriveArchivedWorkspaceRow
 import dev.supermux.ui.session.deriveWorkspaceRow
 import dev.supermux.ui.session.rememberReorderableListState
 import dev.supermux.ui.panes.PaneDragController
@@ -523,7 +527,7 @@ fun WorkspaceListPanel(
                     if (flatArchivedExpanded) {
                         items(flatArchived, key = { "f:a:${it.id}" }) { w ->
                             ArchivedWorkspaceRow(
-                                w = w,
+                                model = deriveArchivedWorkspaceRow(w, effectiveHome),
                                 active = w.id == archivedActiveId,
                                 onSelect = { onSelectArchived(w.id) },
                                 onRestore = { onRestore(w.id) },
@@ -638,7 +642,7 @@ fun WorkspaceListPanel(
                         if (archivedExpanded.contains(g.key)) {
                             items(archivedHere, key = { "a:${it.id}" }) { w ->
                                 ArchivedWorkspaceRow(
-                                    w = w,
+                                    model = deriveArchivedWorkspaceRow(w, effectiveHome),
                                     active = w.id == archivedActiveId,
                                     onSelect = { onSelectArchived(w.id) },
                                     onRestore = { onRestore(w.id) },
@@ -660,7 +664,7 @@ fun WorkspaceListPanel(
                         if (flatArchivedExpanded) {
                             items(allArchived, key = { "a:all:${it.id}" }) { w ->
                                 ArchivedWorkspaceRow(
-                                    w = w,
+                                    model = deriveArchivedWorkspaceRow(w, effectiveHome),
                                     active = w.id == archivedActiveId,
                                     onSelect = { onSelectArchived(w.id) },
                                     onRestore = { onRestore(w.id) },
@@ -713,66 +717,6 @@ fun WorkspaceListPanel(
     }
 }
 
-/** "Show N archived" / "Hide N archived" — shared by flat + per-group folds. */
-@Composable
-private fun ArchivedFoldButton(
-    count: Int,
-    expanded: Boolean,
-    onClick: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    TextButton(
-        onClick = onClick,
-        modifier = Modifier.testTag(WorkspaceListTestIds.ARCHIVED_FOLD),
-    ) {
-        Text(
-            if (expanded) "Hide $count archived" else "Show $count archived",
-            fontSize = 12.sp,
-            color = cs.onSurfaceVariant,
-        )
-    }
-}
-
-fun archivedWorkspaceRowContextLabels(): List<String> = listOf("Restore")
-
-@Composable
-private fun ArchivedWorkspaceRow(
-    w: WorkspaceDto,
-    active: Boolean,
-    onSelect: () -> Unit,
-    onRestore: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    val rowBg = if (active) cs.surfaceContainer else Color.Transparent
-    ContextMenuArea(
-        items = {
-            archivedWorkspaceRowContextLabels().map { label ->
-                ContextMenuItem(label) { if (label == "Restore") onRestore() }
-            }
-        },
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(rowBg)
-                .clickable(onClick = onSelect)
-                .padding(horizontal = 8.dp, vertical = 8.dp)
-                .testTag(WorkspaceListTestIds.archived(w.id)),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                w.name,
-                fontSize = 13.sp,
-                color = cs.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
 /**
  * Workspace row + optional multi-agent children. Keeps list item keys stable.
  */
@@ -812,18 +756,16 @@ private fun WorkspaceListEntry(
         home = "",
         selectedSessionId = null,
     )
-    val activity = model.activity
     val primarySid = model.primarySessionId
     val primary = primarySid?.let { sessionById[it] }
-    val git = model.git
     val preview = primarySid?.let { lastBySession[it] }
     val lastReadAt = primarySid?.let { lastRead[it] }
     Column(Modifier.fillMaxWidth()) {
+        // The shared row (cluster F3). The Pointer branch IS this sidebar row; the tab-drop
+        // affordance reaches it as a plain flag + a bounds callback so `:ui` needs no desktop type.
         WorkspaceRow(
-            w = w,
+            model = model,
             active = w.id == activeId,
-            activity = activity,
-            git = git,
             preview = preview,
             lastReadAt = lastReadAt,
             sessionStatus = primary?.status,
@@ -838,7 +780,8 @@ private fun WorkspaceListEntry(
             onRename = onRename,
             onKill = onKill,
             onToggleMute = onToggleMute,
-            tabDragState = tabDragState,
+            dropHover = tabDragState?.hoverWorkspaceId == w.id,
+            onRowBounds = tabDragState?.let { d -> { bounds -> d.registerWorkspace(w.id, bounds) } },
         )
         if (model.multiAgent) {
             Column(
@@ -860,230 +803,6 @@ private fun WorkspaceListEntry(
             }
         }
     }
-}
-
-/**
- * Labels offered by a workspace row's right-click menu.
- * Extracted so chrome tests can assert rename/mute/archive without driving the desktop context menu.
- * Reorder is drag-only (no Move up / Move down) — same as Android.
- */
-fun workspaceRowContextLabels(
-    mute: Boolean = false,
-): List<String> = buildList {
-    add("Rename")
-    add(if (mute) "Unmute" else "Mute")
-    add("Archive")
-}
-
-/**
- * One workspace row: status rail, name, multi-agent mark, message preview, branch —
- * lean by design (SessionRow parity). No per-row avatar. Path is omitted (group header owns it).
- * Preview + lifecycle badge come from the primary session (SessionRow plumbing).
- */
-@Composable
-fun WorkspaceRow(
-    w: WorkspaceDto,
-    active: Boolean,
-    activity: WorkspaceActivity,
-    git: dev.supermux.proto.GitLiteStatusDto? = null,
-    preview: LogEntry? = null,
-    lastReadAt: String? = null,
-    /** Lifecycle status of the primary session (`suspended`, …) — SessionRow badge. */
-    sessionStatus: String? = null,
-    mute: Boolean = false,
-    host: HostView? = null,
-    projectTag: String? = null,
-    modifier: Modifier = Modifier,
-    /** Applied outside the clickable so the drag handle can own the gesture. */
-    dragModifier: Modifier = Modifier,
-    interactionSource: MutableInteractionSource? = null,
-    /** Elevation while the row is being dragged by the reorder library. */
-    isDragging: Boolean = false,
-    onClick: () -> Unit,
-    onRename: () -> Unit = {},
-    onKill: () -> Unit = {},
-    onToggleMute: () -> Unit = {},
-    /** When set, this row is a drop target for a tab dragged out of the layout. */
-    tabDragState: PaneDragController? = null,
-) {
-    val c = LocalPanes.current
-    val cs = MaterialTheme.colorScheme
-    val working = activity == WorkspaceActivity.WORKING
-    val dropHover = tabDragState?.hoverWorkspaceId == w.id
-    val hasUnread = dev.supermux.session.sessionListShowsUnread(
-        active = active,
-        working = working,
-        lastMessageTs = preview?.ts,
-        lastReadAt = lastReadAt,
-    )
-
-    val interaction = interactionSource ?: remember { MutableInteractionSource() }
-    val elevation by animateDpAsState(
-        if (isDragging) 6.dp else 0.dp,
-        label = "workspace-drag-elevation",
-    )
-
-    val rowBg = when {
-        dropHover -> cs.primary.copy(alpha = 0.18f)
-        active -> cs.surfaceContainer
-        else -> Color.Transparent
-    }
-    val rowModifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 8.dp, vertical = 4.dp)
-        .then(if (active && !isDragging) Modifier.softElevation(radius = Radii.md) else Modifier)
-        .clip(RoundedCornerShape(6.dp))
-        .background(rowBg)
-        .onGloballyPositioned { coords ->
-            tabDragState?.registerWorkspace(w.id, coords.boundsInRoot())
-        }
-        .hoverable(interaction)
-        .clickable(
-            interactionSource = interaction,
-            indication = null,
-            enabled = !isDragging,
-            onClick = onClick,
-        )
-
-    Box(
-        modifier
-            .then(dragModifier)
-            .fillMaxWidth(),
-    ) {
-    ContextMenuArea(
-        items = {
-            workspaceRowContextLabels(mute = mute).map { label ->
-                ContextMenuItem(label) {
-                    when (label) {
-                        "Rename" -> onRename()
-                        "Mute", "Unmute" -> onToggleMute()
-                        "Archive" -> onKill()
-                    }
-                }
-            }
-        },
-    ) {
-        Surface(
-            tonalElevation = elevation,
-            shadowElevation = elevation,
-            color = Color.Transparent,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-        Row(
-            rowModifier
-                .testTag(WorkspaceListTestIds.row(w.id))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            SessionStatusRail(
-                git = git,
-                working = working,
-                bgOpen = 0,
-                unread = hasUnread,
-                modifier = Modifier.align(Alignment.CenterVertically),
-            )
-            Spacer(Modifier.width(10.dp))
-
-            Column(Modifier.weight(1f)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        w.name,
-                        color = cs.onSurface,
-                        fontSize = 13.sp,
-                        fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (w.isMultiAgent()) {
-                        Box(
-                            Modifier
-                                .size(14.dp)
-                                .testTag(WorkspaceListTestIds.multiAgent(w.id)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Groups,
-                                contentDescription = "multi-agent",
-                                tint = cs.primary,
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
-                    if (projectTag != null) {
-                        Spacer(Modifier.width(Space.sm))
-                        Text(
-                            projectTag,
-                            color = cs.onSurfaceVariant.copy(alpha = 0.75f),
-                            fontFamily = MonoFontFamily,
-                            fontSize = 10.sp,
-                            maxLines = 1,
-                        )
-                    }
-                    val timeStr = relTime(preview?.ts)
-                    if (timeStr.isNotEmpty()) {
-                        Spacer(Modifier.width(Space.sm))
-                        Text(
-                            timeStr,
-                            color = cs.onSurfaceVariant,
-                            fontFamily = MonoFontFamily,
-                            fontSize = 10.sp,
-                        )
-                    }
-                }
-
-                if (host != null) {
-                    Spacer(Modifier.height(2.dp))
-                    HostBadge(host)
-                }
-
-                // Status badge — SessionRow parity: non-null and not "active".
-                val status = sessionStatus
-                if (status != null && status != "active") {
-                    val badgeColor = if (status == "suspended") Color(c.warning)
-                    else cs.onSurfaceVariant.copy(alpha = 0.6f)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        status,
-                        color = badgeColor,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 10.sp,
-                    )
-                } else {
-                    Spacer(Modifier.height(Space.xs))
-                }
-
-                // Preview: last message from primary session — SessionRow truncation + styling.
-                // No workdir fallback: group header owns the path (do not bring path back).
-                val previewText = preview?.text?.replace("\n", " ")?.take(80)
-                if (previewText != null) {
-                    Text(
-                        previewText,
-                        color = cs.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                // Branch — machine content, mono. Hard requirement from design rules.
-                val branch = w.branch
-                if (!branch.isNullOrBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        branch,
-                        color = cs.onSurfaceVariant,
-                        fontFamily = MonoFontFamily,
-                        fontSize = 10.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-        } // Surface
-    } // ContextMenuArea
-    } // Box
 }
 
 /** Indented child session under a multi-agent workspace. */

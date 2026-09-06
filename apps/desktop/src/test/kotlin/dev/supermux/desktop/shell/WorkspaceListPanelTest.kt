@@ -12,6 +12,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.host.HostView
+import dev.supermux.ui.session.archivedWorkspaceRowContextLabels
+import dev.supermux.ui.session.workspaceRowContextLabels
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo

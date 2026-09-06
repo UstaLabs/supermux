@@ -60,6 +60,8 @@ class DragReorderTest {
         haptics: Haptics,
         onListState: (LazyListState) -> Unit = {},
         rejectAll: Boolean = false,
+        onLifted: (String) -> Unit = {},
+        afterMove: (Int) -> Unit = {},
     ) {
         CompositionLocalProvider(
             LocalInputMode provides mode,
@@ -76,6 +78,7 @@ class DragReorderTest {
                 moves += f to t
                 ids.removeAt(fi)
                 ids.add(ti, f)
+                afterMove(moves.size)
                 true
             }
             LazyColumn(
@@ -86,7 +89,8 @@ class DragReorderTest {
                     .testTag("list"),
             ) {
                 items(ids.toList(), key = { it }) { id ->
-                    ReorderableItem(state, key = id) {
+                    ReorderableItem(state, key = id) { isDragging ->
+                        if (isDragging) onLifted(id)
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -245,6 +249,76 @@ class DragReorderTest {
         // "a" may have scrolled out of the viewport by now — release through the list node.
         onNodeWithTag("list").performTouchInput { up() }
         waitForIdle()
+    }
+
+    @Test fun aHorizontalPointerDragDoesNotLiftTheRow() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c")
+        val moves = mutableListOf<Pair<String, String>>()
+        val lifted = mutableListOf<String>()
+        setContent {
+            ReorderHarness(
+                InputMode.Pointer, ids, moves, RecordingHaptics(),
+                onLifted = { lifted += it },
+            )
+        }
+        waitForIdle()
+
+        // A sideways mouse drag across the row (aimed at the scrollbar, a text swipe): the reorder
+        // is vertical-only, so it must not grab the row and swallow the click that follows.
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(60f, 0f))
+            moveBy(Offset(60f, 0f))
+            up()
+        }
+        waitForIdle()
+
+        assertEquals(emptyList(), lifted)
+        assertEquals(emptyList(), moves)
+        assertEquals(listOf("a", "b", "c"), ids.toList())
+
+        // The same row still lifts and reorders on a vertical drag.
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            up()
+        }
+        waitForIdle()
+        assertEquals(listOf("a" to "b"), moves)
+        assertTrue("a" in lifted)
+    }
+
+    @Test fun anOverwrittenOrderDoesNotWedgeTheRestOfTheGesture() = runComposeUiTest {
+        val ids = mutableStateListOf("a", "b", "c", "d")
+        val moves = mutableListOf<Pair<String, String>>()
+        setContent {
+            ReorderHarness(
+                InputMode.Pointer, ids, moves, RecordingHaptics(),
+                // A server refresh lands mid-drag and puts the optimistic order back exactly as it
+                // was before the first accepted move. The move guard must NOT read that as "the
+                // layout still hasn't caught up" and skip every later move of this gesture.
+                afterMove = { n ->
+                    if (n == 1) {
+                        ids.clear()
+                        ids.addAll(listOf("a", "b", "c", "d"))
+                    }
+                },
+            )
+        }
+        waitForIdle()
+
+        onNodeWithTag("a").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, 25f))
+            moveBy(Offset(0f, 55f))
+            moveBy(Offset(0f, 60f))
+            moveBy(Offset(0f, 60f))
+            up()
+        }
+        waitForIdle()
+
+        assertTrue(moves.size >= 2, "the drag wedged after the order was overwritten: $moves")
     }
 
     // ── SessionDragReorderState: the ghost-row press-drag ─────────────────────────────────────

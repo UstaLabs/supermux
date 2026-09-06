@@ -10,6 +10,9 @@ import dev.supermux.ui.session.SessionDragWorkingState
 import dev.supermux.ui.session.SessionReorderScope
 import dev.supermux.ui.session.reorderScope
 import dev.supermux.ui.session.WorkspaceListTestIds
+import dev.supermux.ui.session.ArchivedFoldButton
+import dev.supermux.ui.session.ArchivedWorkspaceRow
+import dev.supermux.ui.session.WorkspaceRow
 import dev.supermux.ui.session.deriveWorkspaceRow
 import dev.supermux.ui.session.deriveArchivedWorkspaceRow
 import dev.supermux.ui.session.resolveWorkspaceOpenSessionId
@@ -1537,7 +1540,7 @@ private fun LazyItemScope.WorkspaceReorderableRow(
         WorkspaceRow(
             model = model,
             active = isActive,
-            hostBadge = if (showRowHostBadge) hostByRecord[sessionHost[openSid ?: ""]] else null,
+            host = if (showRowHostBadge) hostByRecord[sessionHost[openSid ?: ""]] else null,
             isDragging = isDragging,
             interactionSource = rowInteraction,
             dragModifier = Modifier.reorderDragHandle(
