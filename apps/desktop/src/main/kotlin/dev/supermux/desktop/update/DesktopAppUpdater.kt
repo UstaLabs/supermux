@@ -8,9 +8,11 @@ import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.platform.UpdateStatus
+import dev.supermux.ui.platform.settled
 import dev.supermux.update.ClientUpdateChecker
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,10 @@ class DesktopAppUpdater(
     override val currentVersionCode: Int? = null
 
     override suspend fun check(): UpdateStatus {
+        // A live download/install owns the phase: the page and the banner BOTH check on open, and
+        // opening one mid-download must not flip Downloading → Checking (losing the progress and
+        // re-enabling the CTA). Poll again when it settles.
+        if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
         val result = runCatching { AppUpdate.check(http, currentVersion) }
         val next = result.fold(
@@ -65,37 +71,52 @@ class DesktopAppUpdater(
             bytesReceived = 0L,
             contentLength = null,
         )
-        val bytes = try {
-            ClientUpdateChecker(http).download(url) { received, total ->
-                state.value = state.value.copy(bytesReceived = received, contentLength = total)
-                onProgress(received, total)
+        // A caller that navigates away cancels this coroutine mid-transfer; without the `finally`
+        // the phase would stay Downloading forever and every CTA stays disabled.
+        try {
+            val bytes = try {
+                ClientUpdateChecker(http).download(url) { received, total ->
+                    state.value = state.value.copy(bytesReceived = received, contentLength = total)
+                    onProgress(received, total)
+                }
+            } catch (e: CancellationException) {
+                // Not a failure: the CALLER went away (navigating off the page). Let it propagate
+                // so the `finally` settles the phase instead of showing a spurious "Download
+                // failed" under a disabled CTA.
+                throw e
+            } catch (e: Throwable) {
+                state.value = state.value.copy(phase = UpdatePhase.Failed, error = e.message ?: "Download failed")
+                return@withContext null
             }
-        } catch (e: Throwable) {
-            state.value = state.value.copy(phase = UpdatePhase.Failed, error = e.message ?: "Download failed")
-            return@withContext null
-        }
-        val ext = AppUpdate.installerExtension()
-        val file = try {
-            val dir = Files.createTempDirectory("supermux-update").toFile()
-            File(dir, "supermux-update.$ext").also { it.writeBytes(bytes) }
-        } catch (e: Throwable) {
+            val ext = AppUpdate.installerExtension()
+            val file = try {
+                val dir = Files.createTempDirectory("supermux-update").toFile()
+                File(dir, "supermux-update.$ext").also { it.writeBytes(bytes) }
+            } catch (e: Throwable) {
+                state.value = state.value.copy(
+                    phase = UpdatePhase.Failed,
+                    error = e.message ?: "Could not write installer",
+                )
+                return@withContext null
+            }
             state.value = state.value.copy(
-                phase = UpdatePhase.Failed,
-                error = e.message ?: "Could not write installer",
+                bytesReceived = bytes.size.toLong(),
+                contentLength = bytes.size.toLong(),
             )
-            return@withContext null
+            DownloadedInstaller(location = file.absolutePath, kind = ext)
+        } finally {
+            if (state.value.phase == UpdatePhase.Downloading) state.value = state.value.settled()
         }
-        state.value = state.value.copy(
-            bytesReceived = bytes.size.toLong(),
-            contentLength = bytes.size.toLong(),
-        )
-        DownloadedInstaller(location = file.absolutePath, kind = ext)
     }
 
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.IO) {
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
         try {
             AppUpdate.openInstaller(File(installer.location))
+            // The OS installer is up; this process keeps running until it is replaced, so the page
+            // must settle back to a usable state (the old `installing = false`) rather than stay
+            // Installing with every CTA disabled.
+            state.value = state.value.settled()
             null
         } catch (e: Throwable) {
             val msg = e.message ?: "Could not open installer"
@@ -124,6 +145,4 @@ class DesktopAppUpdater(
         val shared: DesktopAppUpdater by lazy { DesktopAppUpdater() }
     }
 
-    /** The installer extension this platform downloads — the page's "Downloads the latest .x" line. */
-    fun installerExtension(): String = AppUpdate.installerExtension()
 }

@@ -39,10 +39,10 @@ import dev.supermux.ui.terminal.PredictionSink
  * ### CursorPos convention (matched to the Android adapter — consistency matters, base doesn't)
  * The shared engine only ever COMPARES cursor positions and does relative `col ± 1` math, so any
  * self-consistent base works — but this adapter matches the Android adapter's semantics exactly so
- * the three platforms stay identical. Android's `cursor()` (JediTermPredictionAdapter.kt:99-108) returns
- * termlib's snapshot `cursorRow`/`cursorCol` as-is and its `cup()` (JediTermPredictionAdapter.kt:175-176)
- * adds 1 to reach the 1-based CUP escape — i.e. Android treats [CursorPos] as **0-based in both
- * axes**, and `readCell(row, col)` (JediTermPredictionAdapter.kt:149-157) indexes the snapshot 0-based.
+ * the three platforms stay identical. `TermlibPredictionAdapter.cursor()` returns
+ * termlib's snapshot `cursorRow`/`cursorCol` as-is and its `cup()` adds 1 to reach the 1-based CUP
+ * escape — i.e. Android treats [CursorPos] as **0-based in both axes**, and its
+ * `readCell(row, col)` indexes the snapshot 0-based.
  * This adapter uses the SAME 0-based [CursorPos]; the JediTerm↔CursorPos conversions are the ONLY
  * platform difference (JediTerm's public cursor getters are 1-based, its `getCharAt` is 0-based):
  *  - [cursor]:  JediTerm `cursorX/cursorY` are 1-based → subtract 1 → 0-based [CursorPos].

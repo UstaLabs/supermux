@@ -11,7 +11,7 @@ import dev.supermux.ui.theme.Haptics
 /**
  * Everything a shared screen needs from the machine it happens to be running on.
  *
- * Screens NEVER touch a platform API directly — no `Intent`, no `java.awt.Desktop`, no
+ * Screens NEVER touch a platform API directly — no `Intent`, no AWT `Desktop`, no
  * `ClipboardManager`, no `rememberLauncherForActivityResult`. They read [LocalPlatform] and call
  * one of the members below, so the same composable compiles and behaves on Android and desktop.
  * Each app implements this once (`AndroidPlatform` / `DesktopPlatform`) and provides it at its

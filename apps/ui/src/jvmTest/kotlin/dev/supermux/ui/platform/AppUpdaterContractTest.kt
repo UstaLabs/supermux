@@ -1,7 +1,11 @@
 package dev.supermux.ui.platform
 
 import dev.supermux.update.ClientUpdateStatus
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -116,13 +120,16 @@ class AppUpdaterContractTest {
     }
 
     @Test
-    fun `install moves to installing and returns null on success`() = runTest {
+    fun `install returns null on success and does not stay Installing`() = runTest {
         val updater = FakeAppUpdater(release = release())
         updater.check()
         val installer = updater.download { _, _ -> }
         assertNotNull(installer)
         assertNull(updater.install(installer))
-        assertEquals(UpdatePhase.Installing, updater.status.value.phase)
+        // `Installing` is TRANSIENT: it is `busy` while the hand-off runs (so both CTAs disable),
+        // then settles — this process keeps running until the new build replaces it.
+        assertEquals(UpdatePhase.Available, updater.status.value.phase)
+        assertFalse(updater.status.value.busy)
     }
 
     @Test
@@ -184,5 +191,85 @@ class AppUpdaterContractTest {
             "Not supported",
             NoAppUpdater.install(DownloadedInstaller("/tmp/x", "deb")),
         )
+    }
+
+    // ── the phase always settles, and a live transfer owns it ───────────────────────────────────
+
+    @Test
+    fun `a finished install settles back to a usable phase`() = runTest {
+        val updater = FakeAppUpdater(release = release())
+        updater.check()
+        val installer = updater.download { _, _ -> }
+        assertNotNull(installer)
+        updater.install(installer)
+        // NOT Installing: the OS installer is up but this process lives on, and a page stuck on
+        // Installing disables its CTA forever (the G1 review's MAJOR).
+        assertEquals(UpdatePhase.Available, updater.status.value.phase)
+        assertFalse(updater.status.value.busy)
+    }
+
+    @Test
+    fun `an install with nothing newer settles on up to date`() = runTest {
+        val updater = FakeAppUpdater(release = release())
+        updater.check()
+        val installer = updater.download { _, _ -> }
+        assertNotNull(installer)
+        // The release stops being newer between download and install (a re-check elsewhere).
+        updater.release = release(available = false)
+        updater.check()
+        updater.install(installer)
+        assertEquals(UpdatePhase.UpToDate, updater.status.value.phase)
+    }
+
+    @Test
+    fun `a finished download leaves the phase usable, not Downloading`() = runTest {
+        val updater = FakeAppUpdater(release = release())
+        updater.check()
+        updater.download { _, _ -> }
+        assertEquals(UpdatePhase.Available, updater.status.value.phase)
+        assertFalse(updater.status.value.busy)
+    }
+
+    @Test
+    fun `a cancelled download does not strand the phase`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val updater = FakeAppUpdater(release = release(), midDownload = gate)
+        updater.check()
+        val job = launch { updater.download { _, _ -> } }
+        // Let the first tick arrive, then cancel the way navigating away does.
+        while (updater.status.value.phase != UpdatePhase.Downloading) yield()
+        job.cancelAndJoin()
+        assertEquals(UpdatePhase.Available, updater.status.value.phase)
+        assertFalse(updater.status.value.busy)
+    }
+
+    @Test
+    fun `check does not clobber a live download`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val updater = FakeAppUpdater(release = release(), midDownload = gate)
+        updater.check()
+        val job = launch { updater.download { _, _ -> } }
+        while (updater.status.value.phase != UpdatePhase.Downloading) yield()
+        // The page and the banner BOTH check on open; opening one mid-download must not throw the
+        // progress away or re-enable the CTA (the G1 review's second MAJOR).
+        val seen = updater.check()
+        assertEquals(UpdatePhase.Downloading, seen.phase)
+        assertEquals(50L, seen.bytesReceived)
+        assertTrue(seen.busy)
+        gate.complete(Unit)
+        job.join()
+        // …and once it settles, a check works again.
+        assertEquals(UpdatePhase.Available, updater.check().phase)
+    }
+
+    @Test
+    fun `the installing phase is busy, so a check leaves it alone too`() = runTest {
+        assertTrue(UpdateStatus(phase = UpdatePhase.Installing).busy)
+        val updater = FakeAppUpdater(release = release())
+        updater.check()
+        val installer = updater.download { _, _ -> }
+        assertNotNull(installer)
+        updater.install(installer)
+        assertEquals(UpdatePhase.Available, updater.check().phase)
     }
 }

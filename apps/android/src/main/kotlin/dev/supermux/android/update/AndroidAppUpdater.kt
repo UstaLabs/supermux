@@ -12,9 +12,11 @@ import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.DownloadedInstaller
 import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.platform.UpdateStatus
+import dev.supermux.ui.platform.settled
 import dev.supermux.update.ClientUpdateChecker
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +48,10 @@ class AndroidAppUpdater(
     override val currentVersionCode: Int? get() = AppUpdate.currentVersionCode(appContext)
 
     override suspend fun check(): UpdateStatus {
+        // A live download/install owns the phase: the banner and the page BOTH check on open, and
+        // opening one mid-download must not flip Downloading → Checking (losing the progress, the
+        // "Downloading 42%…" label and the disabled CTA). Poll again when it settles.
+        if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
         val result = runCatching { AppUpdate.check(http, appContext) }
         val next = result.fold(
@@ -88,6 +94,7 @@ class AndroidAppUpdater(
             bytesReceived = 0L,
             contentLength = null,
         )
+        try {
         AppUpdateNotifier.ensureChannels(appContext)
         AppUpdateNotifier.showProgress(appContext, 0L, null)
         emit(onProgress, 0L, null)
@@ -110,6 +117,11 @@ class AndroidAppUpdater(
                     emit(onProgress, received, total)
                 }
             }
+        } catch (e: CancellationException) {
+            // Not a failure: the CALLER went away (navigating off the page). Let it propagate so
+            // the `finally` settles the phase instead of leaving a spurious "Download failed"
+            // alert under a frozen percentage and a disabled CTA.
+            throw e
         } catch (e: Throwable) {
             val msg = e.message ?: "Download failed"
             AppUpdateNotifier.showError(appContext, msg)
@@ -132,6 +144,11 @@ class AndroidAppUpdater(
             return@withContext null
         }
         DownloadedInstaller(location = apk.absolutePath, kind = "apk")
+        } finally {
+            // Navigating away cancels this coroutine mid-transfer; without this the phase would
+            // stay Downloading forever and both CTAs stay disabled behind a frozen percentage.
+            if (state.value.phase == UpdatePhase.Downloading) state.value = state.value.settled()
+        }
     }
 
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.Main) {
@@ -149,6 +166,10 @@ class AndroidAppUpdater(
             }
             appContext.startActivity(intent)
             AppUpdateNotifier.showInstalling(appContext)
+            // The system installer is up; this process keeps running until the APK replaces it, so
+            // the page settles back to a usable state (the old `installing = false`) instead of
+            // sitting in Installing with every CTA disabled.
+            state.value = state.value.settled()
             null
         } catch (e: Throwable) {
             val msg = e.message ?: "Could not open installer"
@@ -180,5 +201,26 @@ class AndroidAppUpdater(
     companion object {
         /** The exact refusal text the screen and the status-bar alert have always shown. */
         const val NEEDS_PERMISSION_TEXT = "Allow installing apps from this source, then try again."
+
+        @Volatile
+        private var instance: AndroidAppUpdater? = null
+
+        /**
+         * The one updater for the PROCESS, built on the application context.
+         *
+         * `AndroidPlatform` is rebuilt per activity, and an updater per activity would drop an
+         * in-flight download's status on every rotation and leak its `HttpClient` — the same reason
+         * desktop's updater is a singleton and the TTS engine is a process-wide holder.
+         */
+        fun shared(context: Context): AndroidAppUpdater =
+            instance ?: synchronized(this) {
+                instance ?: AndroidAppUpdater(context.applicationContext).also { instance = it }
+            }
+
+        /** Release the shared updater's HTTP client (the app is going away). */
+        fun shutdown() = synchronized(this) {
+            instance?.http?.close()
+            instance = null
+        }
     }
 }

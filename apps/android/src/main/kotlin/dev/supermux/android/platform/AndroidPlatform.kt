@@ -92,8 +92,9 @@ class AndroidPlatform(
     /** MediaCodec H.264, so a scrcpy display decodes in hardware here (desktop returns null). */
     override fun videoDecoder(): VideoSurfaceFactory = AndroidVideoSurfaceFactory
 
-    /** APK self-update. Built once per platform instance so an in-flight download keeps its state. */
-    override val updates: AppUpdater = AndroidAppUpdater(context)
+    /** APK self-update. PROCESS-wide (application context): this platform is rebuilt per activity,
+     *  and a per-activity updater would drop an in-flight download on rotation and leak its client. */
+    override val updates: AppUpdater = AndroidAppUpdater.shared(context)
 
     /**
      * Nothing local: an agent reply reaches this device as an FCM push already

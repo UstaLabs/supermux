@@ -685,13 +685,15 @@ fun AppShell(
     }
     val currentTearOutTab by rememberUpdatedState(tearOutTabHere)
     val currentTearOutCanvas by rememberUpdatedState(tearOutCanvasHere)
+    // Only the tear-out verbs come and go with the shell; `release` is bound by `Main.kt`, which
+    // owns the windows and outlives this composition (an extra window can still be open after the
+    // last host is forgotten, and closing it must still unclaim).
     DisposableEffect(ui) {
-        DesktopWindowHostController.bind(
+        DesktopWindowHostController.bindTearOut(
             tearOutTab = { currentTearOutTab(it) },
             tearOutCanvas = { currentTearOutCanvas() },
-            release = { hostId -> ui.windowHosts.unclaim(hostId) },
         )
-        onDispose { DesktopWindowHostController.unbind() }
+        onDispose { DesktopWindowHostController.unbindTearOut() }
     }
     val onTearOutTab: (String) -> Unit = { viewId -> windowHostController?.tearOutTab(viewId) }
     val onTearOutWorkspace: () -> Unit = { windowHostController?.tearOutCanvas() }

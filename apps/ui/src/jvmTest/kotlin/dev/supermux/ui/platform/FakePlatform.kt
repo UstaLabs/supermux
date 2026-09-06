@@ -15,8 +15,12 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
+import androidx.compose.runtime.remember
 import dev.supermux.ui.terminal.PredictionSink
+import dev.supermux.ui.terminal.TerminalKeySink
+import dev.supermux.ui.terminal.TerminalSurface
 import dev.supermux.ui.terminal.TerminalViewFactory
+import dev.supermux.ui.terminal.rememberTerminalKeySink
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import kotlinx.coroutines.flow.Flow
@@ -112,19 +116,29 @@ internal class FakeTerminalViewFactory(
     val mounts = mutableListOf<String>()
     var lastActive: Boolean? = null
     val predictions = FakePredictionSink()
+    /** Bytes the surface's key sink wrote to the pty, in press order. */
+    val sent = mutableListOf<String>()
+    /** The surfaces handed out, so a test can assert each pane got its OWN sink. */
+    val surfaces = mutableListOf<TerminalSurface>()
 
     @Composable
-    override fun TerminalView(
-        connect: () -> TerminalClient,
-        modifier: Modifier,
-        active: Boolean,
-        onExit: (() -> Unit)?,
-    ) {
-        lastActive = active
+    override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface {
+        val keys = rememberTerminalKeySink { bytes -> sent.add(bytes.decodeToString()) }
+        return remember(keys) { FakeTerminalSurface(this, keys).also { surfaces.add(it) } }
+    }
+}
+
+internal class FakeTerminalSurface(
+    private val factory: FakeTerminalViewFactory,
+    override val keys: TerminalKeySink,
+) : TerminalSurface {
+    @Composable
+    override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) {
+        factory.lastActive = active
         DisposableEffect(Unit) {
-            mounted.add("terminal")
-            mounts.add("terminal")
-            onDispose { mounted.remove("terminal") }
+            factory.mounted.add("terminal")
+            factory.mounts.add("terminal")
+            onDispose { factory.mounted.remove("terminal") }
         }
         Box(modifier.fillMaxSize().testTag("fake_terminal")) { Text("terminal") }
     }

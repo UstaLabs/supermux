@@ -13,10 +13,14 @@ import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.net.CursorPos
 import dev.supermux.net.DrawDim
 import dev.supermux.net.HideCaret
+import dev.supermux.net.Mods
+import dev.supermux.net.SpecialKey
+import dev.supermux.net.specialKeySequence
 import dev.supermux.ui.platform.FakePredictionSink
 import dev.supermux.ui.platform.FakeTerminalViewFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -88,5 +92,99 @@ class TerminalViewFactoryTest {
     @Test
     fun an_unavailable_sink_is_what_a_pipeline_skips_prediction_on() {
         assertFalse(FakePredictionSink(available = false).available)
+    }
+
+    // ── the key sink (cluster G3's shared TerminalKeyBar drives exactly this) ───────────────────
+
+    @Test
+    fun a_surface_hands_out_a_sink_before_it_is_ever_drawn() = runComposeUiTest {
+        val factory = FakeTerminalViewFactory()
+        var keys: dev.supermux.ui.terminal.TerminalKeySink? = null
+        setContent {
+            // No Content() call at all: a key bar can be composed before/without the grid.
+            keys = factory.rememberTerminalSurface { connect() }.keys
+        }
+        val sink = assertNotNull(keys)
+        sink.press(TerminalKey.Printable('a'))
+        assertEquals(listOf("a"), factory.sent)
+        assertTrue(factory.mounted.isEmpty())
+    }
+
+    @Test
+    fun a_modifier_cycles_off_once_locked_and_arms_the_next_key() = runComposeUiTest {
+        val factory = FakeTerminalViewFactory()
+        var keys: dev.supermux.ui.terminal.TerminalKeySink? = null
+        setContent { keys = factory.rememberTerminalSurface { connect() }.keys }
+        val sink = assertNotNull(keys)
+
+        sink.press(TerminalKey.Mod(TerminalModKey.CTRL))
+        assertEquals(TerminalModState.ONCE, sink.ctrl)
+        assertTrue(sink.armed)
+        assertTrue(factory.sent.isEmpty(), "a modifier press sends nothing on its own")
+
+        sink.press(TerminalKey.Printable('c'))
+        assertEquals(listOf("\u0003"), factory.sent)
+        // `once` is consumed by the key it modified; `locked` would stay.
+        assertEquals(TerminalModState.OFF, sink.ctrl)
+
+        sink.press(TerminalKey.Mod(TerminalModKey.CTRL))
+        sink.press(TerminalKey.Mod(TerminalModKey.CTRL))
+        assertEquals(TerminalModState.LOCKED, sink.ctrl)
+        sink.press(TerminalKey.Printable('c'))
+        assertEquals(TerminalModState.LOCKED, sink.ctrl)
+        sink.press(TerminalKey.Mod(TerminalModKey.CTRL))
+        assertEquals(TerminalModState.OFF, sink.ctrl)
+    }
+
+    @Test
+    fun a_special_key_is_encoded_with_the_armed_modifiers() = runComposeUiTest {
+        val factory = FakeTerminalViewFactory()
+        var keys: dev.supermux.ui.terminal.TerminalKeySink? = null
+        setContent { keys = factory.rememberTerminalSurface { connect() }.keys }
+        val sink = assertNotNull(keys)
+        sink.press(TerminalKey.Special(SpecialKey.ArrowUp))
+        assertEquals(specialKeySequence(SpecialKey.ArrowUp, Mods(ctrl = false, alt = false), appCursor = false), factory.sent.last())
+        sink.press(TerminalKey.Mod(TerminalModKey.ALT))
+        sink.press(TerminalKey.Special(SpecialKey.ArrowUp))
+        assertEquals(specialKeySequence(SpecialKey.ArrowUp, Mods(ctrl = false, alt = true), appCursor = false), factory.sent.last())
+        assertEquals(TerminalModState.OFF, sink.alt)
+    }
+
+    @Test
+    fun the_real_keyboard_consumes_an_armed_once_modifier() = runComposeUiTest {
+        val factory = FakeTerminalViewFactory()
+        var keys: dev.supermux.ui.terminal.TerminalKeySink? = null
+        setContent { keys = factory.rememberTerminalSurface { connect() }.keys }
+        val sink = assertNotNull(keys)
+        sink.press(TerminalKey.Mod(TerminalModKey.CTRL))
+        // What a surface does when its OWN grid sent the modified keystroke.
+        assertEquals(Mods(ctrl = true, alt = false), sink.mods)
+        sink.consumeOnce()
+        assertEquals(TerminalModState.OFF, sink.ctrl)
+        assertFalse(sink.armed)
+    }
+
+    @Test
+    fun each_pane_gets_its_own_sink() = runComposeUiTest {
+        val factory = FakeTerminalViewFactory()
+        setContent {
+            factory.rememberTerminalSurface { connect() }
+            factory.rememberTerminalSurface { connect() }
+        }
+        assertEquals(2, factory.surfaces.size)
+        val (a, b) = factory.surfaces
+        a.keys.press(TerminalKey.Mod(TerminalModKey.CTRL))
+        // A background pane's armed Ctrl must not leak into the foreground one.
+        assertEquals(TerminalModState.ONCE, a.keys.ctrl)
+        assertEquals(TerminalModState.OFF, b.keys.ctrl)
+    }
+
+    @Test
+    fun a_host_with_no_engine_has_a_sink_that_goes_nowhere() = runComposeUiTest {
+        var keys: dev.supermux.ui.terminal.TerminalKeySink? = null
+        setContent { keys = UnavailableTerminalViewFactory.rememberTerminalSurface { connect() }.keys }
+        val sink = assertNotNull(keys)
+        sink.press(TerminalKey.Printable('a'))
+        assertEquals(TerminalModState.OFF, sink.ctrl)
     }
 }

@@ -17,21 +17,27 @@ object DesktopWindowHostController : WindowHostController {
     private var tearOutCanvas: (() -> Unit)? = null
     private var release: ((String) -> Unit)? = null
 
-    /** Install the live shell's implementations; pass nulls (or call [unbind]) on teardown. */
-    fun bind(
-        tearOutTab: (String) -> Unit,
-        tearOutCanvas: () -> Unit,
-        release: (String) -> Unit,
-    ) {
+    /**
+     * Install the tear-out verbs. Only the composed shell can resolve "the calling window" into a
+     * `panesBind`, so these come and go with it — [unbindTearOut] on teardown.
+     */
+    fun bindTearOut(tearOutTab: (String) -> Unit, tearOutCanvas: () -> Unit) {
         this.tearOutTab = tearOutTab
         this.tearOutCanvas = tearOutCanvas
-        this.release = release
     }
 
-    fun unbind() {
+    fun unbindTearOut() {
         tearOutTab = null
         tearOutCanvas = null
-        release = null
+    }
+
+    /**
+     * Install the release verb — bound by whoever OWNS the windows (`Main.kt`), not by the shell:
+     * an extra window can outlive a composed `AppShell` (the last host is forgotten while a
+     * detached window is still open), and closing it must still unclaim its views.
+     */
+    fun bindRelease(release: (String) -> Unit) {
+        this.release = release
     }
 
     override fun tearOutTab(viewId: String) {

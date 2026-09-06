@@ -4,11 +4,8 @@ import dev.supermux.update.ClientPlatform
 import dev.supermux.update.ClientUpdateChecker
 import dev.supermux.update.ClientUpdateStatus
 import io.ktor.client.HttpClient
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.io.File
-import java.nio.file.Files
 import java.util.Locale
 import java.util.prefs.Preferences
 
@@ -40,34 +37,6 @@ object AppUpdate {
             platform = platform(),
             currentVersion = currentVersion,
         )
-    }
-
-    /**
-     * Download the installer and open it with the system handler (Software Install /
-     * MSI wizard / DiskImageMounter). Returns an error string, or null on success.
-     */
-    suspend fun downloadAndOpen(
-        http: HttpClient,
-        downloadUrl: String,
-    ): String? = withContext(Dispatchers.IO) {
-        val bytes = try {
-            ClientUpdateChecker(http).download(downloadUrl)
-        } catch (e: Throwable) {
-            return@withContext e.message ?: "Download failed"
-        }
-        val ext = installerExtension()
-        val file = try {
-            val dir = Files.createTempDirectory("supermux-update").toFile()
-            File(dir, "supermux-update.$ext").also { it.writeBytes(bytes) }
-        } catch (e: Throwable) {
-            return@withContext e.message ?: "Could not write installer"
-        }
-        try {
-            openInstaller(file)
-            null
-        } catch (e: Throwable) {
-            e.message ?: "Could not open installer"
-        }
     }
 
     /** Hand a downloaded installer to the OS. Public since G1: [DesktopAppUpdater] splits the old

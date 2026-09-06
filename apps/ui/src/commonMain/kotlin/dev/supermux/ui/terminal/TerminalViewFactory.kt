@@ -1,10 +1,12 @@
-// Cluster G1: the terminal engine seam. `:ui` names NEITHER com.jediterm NOR org.connectbot — a
-// shared terminal screen (cluster G3's TerminalTabs) asks Platform.terminalView() for a surface and
-// the host binds its own engine behind it.
+// Cluster G1: the terminal engine seam. `:ui` names NEITHER terminal library — a shared terminal
+// screen (cluster G3's TerminalTabs) asks Platform.terminalView() for a surface and the host binds
+// its own engine behind it. (Neither library's package is spelled here on purpose: the purity grep
+// that guards this module matches those literals anywhere in the file, comments included.)
 package dev.supermux.ui.terminal
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.supermux.net.CursorPos
 import dev.supermux.net.DisplayOp
@@ -45,9 +47,22 @@ interface TerminalViewFactory {
     val available: Boolean
 
     /**
-     * Mount a live terminal on [connect]'s client. Called ONCE per surface: `connect` is
-     * deliberately un-keyed inside, so a caller that rebinds a pane to another session must wrap
-     * this in `key(...)` exactly as the host panels always did.
+     * Build one terminal surface on [connect]'s client, WITHOUT drawing it yet.
+     *
+     * The split exists for the key bar (cluster G3): a shared bar pinned above the soft keyboard is
+     * drawn OUTSIDE the surface's own subtree, so it needs the surface's [TerminalSurface.keys]
+     * before — and independently of — [TerminalSurface.Content]. A caller that needs no bar can use
+     * [TerminalView] and never see the handle.
+     *
+     * `connect` is invoked ONCE and un-keyed inside, so a caller rebinding a pane to another
+     * session must wrap this in `key(...)` exactly as the host panels always did.
+     */
+    @Composable
+    fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface
+
+    /**
+     * Mount a live terminal on [connect]'s client — [rememberTerminalSurface] plus its
+     * [TerminalSurface.Content], for the panes that never draw a key bar of their own.
      *
      * [onExit] fires when the pty ends server-side (desktop: the broker's `exit` frame; Android:
      * the CONNECTED→DISCONNECTED latch) — never on a transient reconnect. Null = no-op.
@@ -58,7 +73,26 @@ interface TerminalViewFactory {
         modifier: Modifier,
         active: Boolean,
         onExit: (() -> Unit)?,
-    )
+    ) {
+        rememberTerminalSurface(connect).Content(modifier, active, onExit)
+    }
+}
+
+/**
+ * One live terminal: its grid, and the keys that reach the pty from outside the grid.
+ *
+ * [keys] is stable for the life of the surface and usable BEFORE [Content] is composed, which is
+ * what lets a bar live somewhere else in the tree (and keeps a background pane's armed Ctrl from
+ * leaking into the foreground one — each pane has its own sink).
+ */
+@Stable
+interface TerminalSurface {
+    /** The accessory-key route into this pane's pty, and the modifier state a bar renders. */
+    val keys: TerminalKeySink
+
+    /** Draw the grid. Same contract as [TerminalViewFactory.TerminalView]. */
+    @Composable
+    fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?)
 }
 
 /**
@@ -84,10 +118,23 @@ object UnavailableTerminalViewFactory : TerminalViewFactory {
     override val available: Boolean = false
 
     @Composable
+    override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface =
+        remember { UnavailableTerminalSurface }
+
+    @Composable
     override fun TerminalView(
         connect: () -> TerminalClient,
         modifier: Modifier,
         active: Boolean,
         onExit: (() -> Unit)?,
     ) = UnavailableTerminalHint(modifier)
+}
+
+/** The surface of a host with no engine: a hint, and a sink whose keys go nowhere. */
+private object UnavailableTerminalSurface : TerminalSurface {
+    override val keys: TerminalKeySink = TerminalKeySink { }
+
+    @Composable
+    override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) =
+        UnavailableTerminalHint(modifier)
 }

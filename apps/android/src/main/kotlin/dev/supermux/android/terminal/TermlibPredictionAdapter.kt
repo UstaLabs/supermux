@@ -18,8 +18,8 @@ import org.connectbot.terminal.TerminalEmulator
  * Renders the shared `PredictionEngine`'s Step-2 [DisplayOp]s against the ConnectBot
  * termlib emulator. The engine (shared Kotlin, imported DIRECTLY - no SKIE bridging)
  * owns ALL reconcile logic and cursor math; this adapter is the thin, mechanical
- * translator - the Android twin of the web `xterm-adapter.ts` and iOS
- * `TermlibPredictionAdapter.swift`.
+ * translator - the Android twin of the web `xterm-adapter.ts`, iOS
+ * `PredictionAdapter.swift` and desktop's `JediTermPredictionAdapter`.
  *
  * ## Rendering: escape-feed (SPIKE-verified)
  * termlib 0.0.35 wraps **libvterm** (the same C VT engine Neovim uses) via JNI, so

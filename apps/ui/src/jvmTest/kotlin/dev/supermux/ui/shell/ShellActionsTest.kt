@@ -1,6 +1,9 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.ui.chat.testHostStore
@@ -57,6 +60,9 @@ class ShellActionsTest {
         actions.kickoffFinish("s1", "merge", null, null, null) { accepted = it }
         assertEquals(false, accepted)
         assertTrue(actions.lspStatus.value.isEmpty())
+        assertTrue(actions.sessions.value.isEmpty())
+        assertTrue(actions.finishJobs.value.isEmpty())
+        assertTrue(actions.displays.value.isEmpty())
     }
 
     @Test
@@ -72,6 +78,47 @@ class ShellActionsTest {
         val built = assertNotNull(actions)
         assertSame(store.lspStatus, built.lspStatus)
         assertSame(store.lspRpc, built.lspRpc)
+    }
+
+    /**
+     * The view host does not only CALL the store, it COLLECTS it: a chat/terminal view resolves its
+     * session, the chat panel reads its finish job, the display pane its stream. Those three flows
+     * are part of the holder or a shared view host would have to be handed a store anyway.
+     */
+    @Test
+    fun `the single-host builder carries the flows the view host collects`() = runComposeUiTest {
+        val store = testHostStore()
+        var actions: ShellActions? = null
+        setContent {
+            CompositionLocalProvider(LocalPlatform provides FakePlatform(caps = NO_CAPS)) {
+                actions = rememberShellActions(store)
+            }
+        }
+        waitForIdle()
+        val built = assertNotNull(actions)
+        assertSame(store.sessions, built.sessions)
+        assertSame(store.finishJobs, built.finishJobs)
+        assertSame(store.displays, built.displays)
+    }
+
+    @Test
+    fun `a changed session router does not rebuild the bundle`() = runComposeUiTest {
+        val store = testHostStore()
+        val built = mutableListOf<ShellActions>()
+        var nonce by mutableStateOf(0)
+        setContent {
+            CompositionLocalProvider(LocalPlatform provides FakePlatform(caps = NO_CAPS)) {
+                // A caller that captures shell state hands a FRESH lambda every recomposition;
+                // keying the bundle on it would rebuild all ~35 lambdas each frame.
+                val n = nonce
+                built.add(rememberShellActions(store, appForSession = { _ -> store.also { n } }))
+            }
+        }
+        waitForIdle()
+        nonce = 1
+        waitForIdle()
+        assertTrue(built.size >= 2, "expected a recomposition")
+        assertSame(built.first(), built.last())
     }
 
     @Test

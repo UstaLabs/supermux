@@ -55,11 +55,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import dev.supermux.ui.terminal.TerminalKeySink
+import dev.supermux.ui.terminal.rememberTerminalKeySink
 import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.net.DEFAULT_CONFIG
-import dev.supermux.net.Mods
 import dev.supermux.net.PredictionEngine
 import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalSummary
@@ -67,7 +68,6 @@ import dev.supermux.net.TerminalStatus
 import dev.supermux.net.decodeInput
 import dev.supermux.net.linesFromPixels
 import dev.supermux.net.printableSequence
-import dev.supermux.net.specialKeySequence
 import dev.supermux.net.wheelEventsFromLines
 import kotlin.math.abs
 import java.util.UUID
@@ -251,6 +251,11 @@ fun TerminalPanel(
     // Fires once when the session ends (CONNECTED → DISCONNECTED). The agent-PTY ("Native")
     // tab uses this to fall back to Chat on agent exit (iOS onExit parity). Null = no-op.
     onExit: (() -> Unit)? = null,
+    // The surface's shared accessory-key sink (cluster G1). Non-null when this panel was mounted
+    // through `Platform.terminalView()`, so a key bar drawn OUTSIDE this pane (cluster G3's shared
+    // one) types into this pty and shares one modifier state with the in-panel bar below. Null =
+    // the panel owns a sink of its own, which is exactly what it always did.
+    keys: TerminalKeySink? = null,
 ) {
     val c = LocalPanes.current
     val scope = rememberCoroutineScope()
@@ -283,8 +288,8 @@ fun TerminalPanel(
     // modifier transforms the NEXT real-keyboard keystroke too (Ctrl then `c` = Ctrl-C), matching
     // the web PWA (TerminalPane.vue). Mutations here are on the main thread — termlib posts
     // onKeyboardInput to the main looper — so touching Compose state is safe.
-    var ctrlState by remember(client) { mutableStateOf(ModState.OFF) }
-    var altState by remember(client) { mutableStateOf(ModState.OFF) }
+    val ownKeys = rememberTerminalKeySink { bytes -> client.sendInput(bytes) }
+    val sink = keys ?: ownKeys
 
     val emulator: TerminalEmulator = remember(client) {
         TerminalEmulatorFactory.create(
@@ -294,14 +299,11 @@ fun TerminalPanel(
             defaultBackground = Color(c.terminal),
             onKeyboardInput = { data ->
                 val ch = singlePrintableChar(data)
-                val armed = ctrlState != ModState.OFF || altState != ModState.OFF
-                if (armed && ch != null) {
+                if (sink.armed && ch != null) {
                     // Apply the armed modifier to this keystroke and send it directly. Control codes
                     // aren't printable, so skip predictive echo (web parity). Consume `once`.
-                    val bytes = printableSequence(ch, Mods(ctrl = ctrlState != ModState.OFF, alt = altState != ModState.OFF))
-                        .encodeToByteArray()
-                    if (ctrlState == ModState.ONCE) ctrlState = ModState.OFF
-                    if (altState == ModState.ONCE) altState = ModState.OFF
+                    val bytes = printableSequence(ch, sink.mods).encodeToByteArray()
+                    sink.consumeOnce()
                     scope.launch { client.sendInput(bytes) }
                 } else {
                     pred.handleInput(data) // predictive echo BEFORE the send (web/iOS parity)
@@ -366,36 +368,6 @@ fun TerminalPanel(
     LaunchedEffect(imeVisible) {
         if (imeVisible) imeWasVisible = true
         else if (imeWasVisible) { imeWasVisible = false; wantKeyboard = false }
-    }
-
-    // Key-bar press handler: modifier keys cycle their tri-state; every other key builds its byte
-    // sequence with the current modifiers (appCursor=false — termlib doesn't expose DECCKM) and
-    // sends it, then consumes any `once` modifier. Mirrors TerminalPane.vue's onKeyPress.
-    fun onKeyPress(press: KeyPress) {
-        when (press) {
-            is KeyPress.Mod -> {
-                fun next(s: ModState) = when (s) {
-                    ModState.OFF -> ModState.ONCE
-                    ModState.ONCE -> ModState.LOCKED
-                    ModState.LOCKED -> ModState.OFF
-                }
-                if (press.key == ModKey.CTRL) ctrlState = next(ctrlState) else altState = next(altState)
-                return
-            }
-            is KeyPress.Special -> {
-                val mods = Mods(ctrl = ctrlState != ModState.OFF, alt = altState != ModState.OFF)
-                val seq = specialKeySequence(press.key, mods, appCursor = false)
-                if (seq.isNotEmpty()) { val b = seq.encodeToByteArray(); scope.launch { client.sendInput(b) } }
-            }
-            is KeyPress.Printable -> {
-                val mods = Mods(ctrl = ctrlState != ModState.OFF, alt = altState != ModState.OFF)
-                val b = printableSequence(press.ch, mods).encodeToByteArray()
-                scope.launch { client.sendInput(b) }
-            }
-        }
-        // Consume `once` modifiers after they've modified a key (leave `locked` armed).
-        if (ctrlState == ModState.ONCE) ctrlState = ModState.OFF
-        if (altState == ModState.ONCE) altState = ModState.OFF
     }
 
     // Shrink the terminal above the soft keyboard (and nav bar) under edge-to-edge — mirrors the
@@ -527,9 +499,9 @@ fun TerminalPanel(
         // background terminal must not show it. (Android is always touch, so no pointer gate.)
         if (active) {
             TerminalKeyBar(
-                ctrl = ctrlState,
-                alt = altState,
-                onPress = { onKeyPress(it) },
+                ctrl = sink.ctrl,
+                alt = sink.alt,
+                onPress = { sink.press(it) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }

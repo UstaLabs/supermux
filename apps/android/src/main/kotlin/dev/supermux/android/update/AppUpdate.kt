@@ -6,15 +6,11 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import androidx.core.content.FileProvider
 import dev.supermux.update.ClientPlatform
 import dev.supermux.update.ClientUpdateChecker
 import dev.supermux.update.ClientUpdateStatus
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Android app self-update: polls versions.json / GitHub latest, downloads the
@@ -67,107 +63,6 @@ object AppUpdate {
             currentVersion = currentVersionName(context),
             currentVersionCode = currentVersionCode(context),
         )
-    }
-
-    /**
-     * Download the APK and launch the system installer. Returns an error string,
-     * or null on success (install UI shown). May return "need-permission" when
-     * unknown-sources install is blocked — caller should open [openInstallPermissionSettings].
-     *
-     * [onProgress] receives `(bytesReceived, contentLength?)` on the main dispatcher
-     * (throttled to whole-percent changes when length is known).
-     */
-    suspend fun downloadAndInstall(
-        http: HttpClient,
-        context: Context,
-        downloadUrl: String,
-        onProgress: ((bytesReceived: Long, contentLength: Long?) -> Unit)? = null,
-    ): String? = withContext(Dispatchers.IO) {
-        val appCtx = context.applicationContext
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !appCtx.packageManager.canRequestPackageInstalls()
-        ) {
-            AppUpdateNotifier.showError(
-                appCtx,
-                "Allow installing apps from this source, then try again.",
-            )
-            return@withContext "need-permission"
-        }
-
-        AppUpdateNotifier.ensureChannels(appCtx)
-        AppUpdateNotifier.showProgress(appCtx, 0L, null)
-        emitProgress(onProgress, 0L, null)
-
-        var lastReportedPct = -1
-        var lastReportedBytes = -1L
-        val bytes = try {
-            ClientUpdateChecker(http).download(downloadUrl) { received, total ->
-                val pct = AppUpdateNotifier.progressPercent(received, total)
-                // Throttle status-bar + UI updates: every whole percent, or every
-                // 256 KiB when Content-Length is unknown.
-                val shouldEmit = when {
-                    pct != null -> pct != lastReportedPct
-                    else -> received - lastReportedBytes >= 256 * 1024 || lastReportedBytes < 0
-                }
-                if (shouldEmit) {
-                    if (pct != null) lastReportedPct = pct
-                    lastReportedBytes = received
-                    AppUpdateNotifier.showProgress(appCtx, received, total)
-                    emitProgress(onProgress, received, total)
-                }
-            }
-        } catch (e: Throwable) {
-            val msg = e.message ?: "Download failed"
-            AppUpdateNotifier.showError(appCtx, msg)
-            return@withContext msg
-        }
-
-        // Final 100% tick when length was known (or a last size tick when not).
-        AppUpdateNotifier.showProgress(appCtx, bytes.size.toLong(), bytes.size.toLong())
-        emitProgress(onProgress, bytes.size.toLong(), bytes.size.toLong())
-
-        val dir = File(appCtx.cacheDir, "updates").apply { mkdirs() }
-        val apk = File(dir, "supermux-update.apk")
-        try {
-            apk.writeBytes(bytes)
-        } catch (e: Throwable) {
-            val msg = e.message ?: "Could not write APK"
-            AppUpdateNotifier.showError(appCtx, msg)
-            return@withContext msg
-        }
-
-        withContext(Dispatchers.Main) {
-            try {
-                val uri = FileProvider.getUriForFile(
-                    appCtx,
-                    "${appCtx.packageName}.fileprovider",
-                    apk,
-                )
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                appCtx.startActivity(intent)
-                AppUpdateNotifier.showInstalling(appCtx)
-                null
-            } catch (e: Throwable) {
-                val msg = e.message ?: "Could not open installer"
-                AppUpdateNotifier.showError(appCtx, msg)
-                msg
-            }
-        }
-    }
-
-    private suspend fun emitProgress(
-        onProgress: ((bytesReceived: Long, contentLength: Long?) -> Unit)?,
-        bytesReceived: Long,
-        contentLength: Long?,
-    ) {
-        if (onProgress == null) return
-        withContext(Dispatchers.Main.immediate) {
-            onProgress(bytesReceived, contentLength)
-        }
     }
 
     fun openInstallPermissionSettings(context: Context) {

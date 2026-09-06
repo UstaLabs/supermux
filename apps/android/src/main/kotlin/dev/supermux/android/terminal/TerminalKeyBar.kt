@@ -27,19 +27,18 @@ import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.net.SpecialKey
+import dev.supermux.ui.terminal.TerminalKey
+import dev.supermux.ui.terminal.TerminalModKey
+import dev.supermux.ui.terminal.TerminalModState
 
-/** Tri-state of a sticky bar modifier (like iOS Shift): off → armed-for-one-key → locked. */
-enum class ModState { OFF, ONCE, LOCKED }
+// Cluster G1: the three key-bar types are the SHARED ones now (`ui/terminal/TerminalKeySink.kt`),
+// which own the tri-state machine this bar renders and the panel used to run by hand. Kept as
+// aliases so this file (and cluster G3's move of it into `:ui`) reads unchanged.
+typealias ModState = TerminalModState
 
-enum class ModKey { CTRL, ALT }
+typealias ModKey = TerminalModKey
 
-/** A press reported by the key bar up to [TerminalPanel]. (Named [Mod] not `Modifier`
- *  to avoid colliding with Compose's `Modifier`.) */
-sealed interface KeyPress {
-    data class Mod(val key: ModKey) : KeyPress
-    data class Special(val key: SpecialKey) : KeyPress
-    data class Printable(val ch: Char) : KeyPress
-}
+typealias KeyPress = TerminalKey
 
 // On-screen key layout. Gaps render as thin dividers between logical groups.
 private sealed interface BarKey {
@@ -113,20 +112,20 @@ fun TerminalKeyBar(
                         mono = false,
                     ) {
                         haptic.perform(HapticKind.Tick)
-                        onPress(KeyPress.Mod(key.key))
+                        onPress(TerminalKey.Mod(key.key))
                     }
                 }
 
                 is BarKey.Special ->
                     KeyButton(label = key.label, active = false, locked = false, mono = false) {
                         haptic.perform(HapticKind.Tick)
-                        onPress(KeyPress.Special(key.key))
+                        onPress(TerminalKey.Special(key.key))
                     }
 
                 is BarKey.Printable ->
                     KeyButton(label = key.ch.toString(), active = false, locked = false, mono = true) {
                         haptic.perform(HapticKind.Tick)
-                        onPress(KeyPress.Printable(key.ch))
+                        onPress(TerminalKey.Printable(key.ch))
                     }
             }
         }

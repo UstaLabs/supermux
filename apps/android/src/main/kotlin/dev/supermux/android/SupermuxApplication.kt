@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Build
 import android.os.Bundle
+import dev.supermux.android.update.AndroidAppUpdater
 import android.webkit.WebView
 import dev.supermux.android.platform.AndroidTts
 
@@ -34,7 +35,11 @@ class SupermuxApplication : Application() {
                 activities--
                 // Zero live activities AND not on the way to being re-created: the app is going
                 // away, so the process-wide engine's service connection goes back.
-                if (activities <= 0 && !activity.isChangingConfigurations) AndroidTts.shutdown()
+                if (activities <= 0 && !activity.isChangingConfigurations) {
+                    AndroidTts.shutdown()
+                    // Same rule for the process-wide self-updater's HTTP client (cluster G1).
+                    AndroidAppUpdater.shutdown()
+                }
             }
 
             override fun onActivityStarted(activity: Activity) = Unit

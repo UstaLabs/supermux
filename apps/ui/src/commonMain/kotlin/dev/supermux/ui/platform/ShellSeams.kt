@@ -71,6 +71,18 @@ data class UpdateStatus(
         }
 }
 
+/**
+ * The phase an updater returns to once a download or install stops owning it — the last check's
+ * answer.
+ *
+ * Every implementation calls this rather than inventing its own reset: an install that leaves the
+ * phase at [UpdatePhase.Installing] (this process keeps running until the new build replaces it)
+ * or a cancelled download that leaves it at [UpdatePhase.Downloading] disables every CTA forever,
+ * which is exactly what the pre-seam screens avoided with their `installing = false`.
+ */
+fun UpdateStatus.settled(): UpdateStatus =
+    copy(phase = if (release?.updateAvailable == true) UpdatePhase.Available else UpdatePhase.UpToDate)
+
 /** An installer already on disk. Opaque to shared code — only ever handed back to [AppUpdater.install]. */
 @Immutable
 data class DownloadedInstaller(

@@ -1,12 +1,16 @@
 // Cluster G1: desktop's actual behind `Platform.terminalView()`. The engine binding itself is
 // [DesktopTerminalPanel] (jediterm in a SwingPanel) — this is only the seam that lets a SHARED
-// screen mount it without naming `com.jediterm`.
+// screen mount it without naming the library.
 package dev.supermux.desktop.terminal
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.supermux.net.TerminalClient
+import dev.supermux.ui.terminal.TerminalKeySink
+import dev.supermux.ui.terminal.TerminalSurface
 import dev.supermux.ui.terminal.TerminalViewFactory
+import dev.supermux.ui.terminal.rememberTerminalKeySink
 
 /**
  * JediTerm as a [TerminalViewFactory].
@@ -16,15 +20,36 @@ import dev.supermux.ui.terminal.TerminalViewFactory
  * pane against shrinking the remote pty), focus follows `active && windowFocused`, dispose stops
  * the client and closes the widget, and predictions run through [JediTermPredictionAdapter] behind
  * [PredictionPipeline].
+ *
+ * Accessory keys are translated the same way every other client translates them: the shared
+ * [TerminalKeySink] encodes the press with `:shared`'s `specialKeySequence`/`printableSequence` and
+ * writes the bytes to the pty, whose echo the emulator renders — there is no second input path to
+ * keep in sync with the grid's own key handling.
  */
 object JediTermTerminalViewFactory : TerminalViewFactory {
     override val available: Boolean = true
 
     @Composable
-    override fun TerminalView(
-        connect: () -> TerminalClient,
-        modifier: Modifier,
-        active: Boolean,
-        onExit: (() -> Unit)?,
-    ) = DesktopTerminalPanel(connect = connect, modifier = modifier, active = active, onExit = onExit)
+    override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface {
+        val client = remember { connect() }
+        // `sendInput` queues (it is not suspending), so the bar's bytes join the SAME ordered input
+        // queue the widget's own keystrokes use, in press order.
+        val keys = rememberTerminalKeySink { bytes -> client.sendInput(bytes) }
+        return remember(client, keys) { JediTermSurface(client, keys) }
+    }
+}
+
+private class JediTermSurface(
+    private val client: TerminalClient,
+    override val keys: TerminalKeySink,
+) : TerminalSurface {
+    @Composable
+    override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) =
+        DesktopTerminalPanel(
+            // Already built by the factory; the panel's own `remember { connect() }` just adopts it.
+            connect = { client },
+            modifier = modifier,
+            active = active,
+            onExit = onExit,
+        )
 }

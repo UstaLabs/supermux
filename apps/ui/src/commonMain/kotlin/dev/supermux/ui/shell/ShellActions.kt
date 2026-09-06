@@ -9,13 +9,16 @@
 //
 // Members are keyed by SESSION id or WORKSPACE id, never by a `SessionInfo` — the fleet builder
 // cannot resolve a `SessionInfo` a caller happens to hold to the right host, and every desktop call
-// site already had the id. The two `Flow`s are here rather than collected separately because the
-// editor panes take them as parameters: they are stable references, so the bundle stays immutable.
+// site already had the id. The `Flow`s are here rather than collected separately because the panes
+// take them as parameters and the view host COLLECTS `sessions`/`finishJobs`/`displays` to resolve
+// a view's subject: they are stable references, so the bundle stays immutable.
 package dev.supermux.ui.shell
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
@@ -31,6 +34,7 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.Walkthrough
+import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.state.FleetStore
@@ -50,6 +54,14 @@ import kotlinx.coroutines.flow.emptyFlow
  */
 @Immutable
 class ShellActions(
+    // ── the store state the view host reads (collected, not called) ───────────────────────────
+    /** Every session this shell can draw — a chat/terminal view resolves its own subject here. */
+    val sessions: StateFlow<List<SessionInfo>> = MutableStateFlow(emptyList()),
+    /** The last/in-flight finish job per session id, for the chat panel's finish card. */
+    val finishJobs: StateFlow<Map<String, FinishJobDto>> = MutableStateFlow(emptyMap()),
+    /** Live display streams, kept current by `display_added`/`display_removed` frames. */
+    val displays: StateFlow<List<DisplayStream>> = MutableStateFlow(emptyList()),
+
     // ── chat + session controls (the header overflow and the composer's mute row) ──────────────
     val sendMessage: (sessionId: String, text: String) -> Unit = { _, _ -> },
     val rename: (sessionId: String, name: String) -> Unit = { _, _ -> },
@@ -143,11 +155,17 @@ fun rememberShellActions(
     appForSession: (String) -> HostStore = { app },
 ): ShellActions {
     val walkthroughCap = LocalPlatform.current.caps.walkthrough
-    return remember(app, appForSession, walkthroughCap) {
+    // The router is a CALLBACK, not state: keying the bundle on it would rebuild every lambda
+    // whenever the caller passed a fresh one (the F1 rule for nav callbacks).
+    val routeToHost by rememberUpdatedState(appForSession)
+    return remember(app, walkthroughCap) {
         // A session-keyed suspend call needs the SessionInfo the store's review/LSP API takes;
         // resolving it from the store's live list is what every desktop call site did inline.
         fun session(id: String): SessionInfo? = app.sessions.value.firstOrNull { it.id == id }
         ShellActions(
+            sessions = app.sessions,
+            finishJobs = app.finishJobs,
+            displays = app.displays,
             sendMessage = { id, text -> app.sendMessage(id, text) },
             rename = { id, name -> app.rename(id, name) },
             kill = { id -> app.kill(id) },
@@ -184,11 +202,11 @@ fun rememberShellActions(
             reviewResolve = { id, commentId -> session(id)?.let { app.reviewResolve(it, commentId) } == true },
             reviewSubmit = { id -> session(id)?.let { app.reviewSubmit(it) } },
             getWalkthrough = { id ->
-                val owner = appForSession(id)
+                val owner = routeToHost(id)
                 owner.sessions.value.firstOrNull { it.id == id }?.let { owner.getWalkthrough(it) }
             },
             walkthroughState = { id ->
-                if (walkthroughCap) appForSession(id).walkthroughState<WalkthroughState>(id) else null
+                if (walkthroughCap) routeToHost(id).walkthroughState<WalkthroughState>(id) else null
             },
             listDisplays = { app.listDisplays() },
         )
@@ -201,6 +219,11 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
     val walkthroughCap = LocalPlatform.current.caps.walkthrough
     return remember(fleet, walkthroughCap) {
         ShellActions(
+            // The fleet's merged views: sessions across every paired host, and the per-session maps
+            // its own hosts publish (each already routed to the owning host inside the store).
+            sessions = fleet.sessions,
+            finishJobs = fleet.finishJobs,
+            displays = fleet.displays,
             sendMessage = { id, text -> fleet.sendMessage(id, text) },
             rename = { id, name -> fleet.rename(id, name) },
             kill = { id -> fleet.kill(id) },

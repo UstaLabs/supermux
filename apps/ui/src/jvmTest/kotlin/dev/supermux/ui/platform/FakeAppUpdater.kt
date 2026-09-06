@@ -1,6 +1,7 @@
 package dev.supermux.ui.platform
 
 import dev.supermux.update.ClientUpdateStatus
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,11 @@ internal class FakeAppUpdater(
     var refuseInstall: Boolean = false,
     /** Non-null makes [install] fail with this text. */
     var installError: String? = null,
+    /**
+     * Held open by a test that needs to observe a download MID-FLIGHT (the phase guard, a
+     * cancellation): [download] awaits it after its first tick. Null = run straight through.
+     */
+    var midDownload: CompletableDeferred<Unit>? = null,
 ) : AppUpdater {
     private val state = MutableStateFlow(UpdateStatus())
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
@@ -35,6 +41,8 @@ internal class FakeAppUpdater(
     var permissionSettingsOpened = 0
 
     override suspend fun check(): UpdateStatus {
+        // Contract: a live download/install owns the phase (both host updaters do this).
+        if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
         val found = release
         state.value = if (found == null) {
@@ -66,15 +74,25 @@ internal class FakeAppUpdater(
             bytesReceived = 0L,
             contentLength = null,
         )
-        for ((received, total) in ticks) {
-            state.value = state.value.copy(bytesReceived = received, contentLength = total)
-            onProgress(received, total)
+        try {
+            var first = true
+            for ((received, total) in ticks) {
+                state.value = state.value.copy(bytesReceived = received, contentLength = total)
+                onProgress(received, total)
+                if (first) {
+                    first = false
+                    midDownload?.await()
+                }
+            }
+            downloadError?.let {
+                state.value = state.value.copy(phase = UpdatePhase.Failed, error = it)
+                return null
+            }
+            return DownloadedInstaller(location = "/tmp/$url", kind = "apk")
+        } finally {
+            // Contract: a cancelled transfer must not strand the phase at Downloading.
+            if (state.value.phase == UpdatePhase.Downloading) state.value = state.value.settled()
         }
-        downloadError?.let {
-            state.value = state.value.copy(phase = UpdatePhase.Failed, error = it)
-            return null
-        }
-        return DownloadedInstaller(location = "/tmp/$url", kind = "apk")
     }
 
     override suspend fun install(installer: DownloadedInstaller): String? {
@@ -83,8 +101,12 @@ internal class FakeAppUpdater(
             state.value = state.value.copy(phase = UpdatePhase.Failed, error = it)
             return it
         }
+        // Contract: the OS installer is up but this process lives on, so the phase settles back to
+        // a usable state instead of leaving every CTA disabled.
+        state.value = state.value.settled()
         return null
     }
+
 
     override fun openReleaseNotes() {
         if (state.value.release?.notesUrl != null) notesOpened++

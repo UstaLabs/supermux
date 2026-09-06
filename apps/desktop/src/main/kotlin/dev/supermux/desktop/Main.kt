@@ -368,6 +368,13 @@ fun main() {
                 pendingWindowHosts = persistedUi.windows
             }
         }
+        // Releasing an extra window's claim is bound HERE, not in `AppShell`: the windows are owned
+        // by this scope and can outlive a composed shell (unpair with a detached window still open).
+        DisposableEffect(ui) {
+            DesktopWindowHostController.bindRelease { hostId -> ui.windowHosts.unclaim(hostId) }
+            onDispose { }
+        }
+
         // ...and mirrored from here on, so a change made in Settings repaints the shell.
         LaunchedEffect(Unit) {
             desktopUiPrefs.appearance(AppearanceMode.DARK).collect { ui.appearance = it }
