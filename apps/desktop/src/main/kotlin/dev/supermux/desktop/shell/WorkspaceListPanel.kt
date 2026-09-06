@@ -18,12 +18,8 @@
 // footer rail, Settled fold, context menus, drag-reorder) is intentional parity.
 package dev.supermux.desktop.shell
 
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.ContextMenuArea
-import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,8 +69,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,13 +82,10 @@ import dev.supermux.desktop.session.NewSessionListRow
 import dev.supermux.desktop.session.PathGroupHeader
 import dev.supermux.desktop.session.SessionRow
 import dev.supermux.ui.session.SessionStatusRail
-import dev.supermux.desktop.session.relTime
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.theme.LocalPanes
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
-import dev.supermux.ui.theme.softElevation
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.SessionInfo
@@ -105,11 +96,9 @@ import dev.supermux.session.inferHomeDir
 import dev.supermux.session.projectLabel
 import dev.supermux.session.sectionKey
 import dev.supermux.session.sessionsByUserOrder
-import dev.supermux.workspace.WorkspaceActivity
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.groupArchivedWorkspaces
 import dev.supermux.workspace.groupWorkspaces
-import dev.supermux.workspace.isMultiAgent
 import dev.supermux.ui.session.ReorderableItem
 import dev.supermux.ui.session.ReorderableListState
 import dev.supermux.ui.session.WorkspaceListTestIds

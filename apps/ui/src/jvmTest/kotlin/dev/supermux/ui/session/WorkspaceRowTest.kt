@@ -73,11 +73,16 @@ class WorkspaceRowTest {
         preview: LogEntry? = null,
         mute: Boolean = false,
         interactionSource: MutableInteractionSource? = null,
+        contextMenu: Boolean = true,
         onKill: () -> Unit = {},
         onToggleMute: () -> Unit = {},
         onNewChat: () -> Unit = {},
+        onRename: () -> Unit = {},
     ) {
-        CompositionLocalProvider(LocalInputMode provides mode) {
+        CompositionLocalProvider(
+            LocalInputMode provides mode,
+            LocalContextMenuAvailable provides contextMenu,
+        ) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
                 Column {
                     WorkspaceRow(
@@ -87,6 +92,7 @@ class WorkspaceRowTest {
                         mute = mute,
                         interactionSource = interactionSource,
                         onClick = {},
+                        onRename = onRename,
                         onKill = onKill,
                         onToggleMute = onToggleMute,
                         onNewChat = onNewChat,
@@ -142,6 +148,8 @@ class WorkspaceRowTest {
             )
         }
         onNodeWithText("hello there").assertIsDisplayed()
+        // With a real context menu the row carries no visible overflow — right-click owns it.
+        onNodeWithContentDescription("More").assertDoesNotExist()
         onNodeWithTag(WorkspaceListTestIds.row("w1")).performTouchInput { swipeRight() }
         waitForIdle()
         // No swipe layer under Pointer: nothing is revealed and nothing fires.
@@ -162,6 +170,43 @@ class WorkspaceRowTest {
             interactions.any { it is HoverInteraction.Enter },
             "the pointer row must report hover: $interactions",
         )
+    }
+
+    @Test fun pointerRow_withoutAContextMenuFallsBackToAnOverflowWithEveryAction() = runComposeUiTest {
+        // Android in Pointer mode (DeX, Chromebook, docked tablet, keyboard case): the lean row is
+        // the one that renders, and its right-click menu is inert — the actions must still be there.
+        var renamed = 0
+        var newChats = 0
+        var muted = 0
+        var killed = 0
+        setContent {
+            Row(
+                InputMode.Pointer, contextMenu = false,
+                onKill = { killed++ }, onToggleMute = { muted++ },
+                onNewChat = { newChats++ }, onRename = { renamed++ },
+            )
+        }
+        onNodeWithContentDescription("More").performClick()
+        waitForIdle()
+        onNodeWithTag(WorkspaceListTestIds.ROW_NEW_CHAT, useUnmergedTree = true).assertExists()
+        for (label in listOf("Rename", "New chat here", "Mute", "Archive")) {
+            onNodeWithText(label).assertIsDisplayed()
+        }
+        onNodeWithText("Rename").performClick(); waitForIdle()
+        onNodeWithContentDescription("More").performClick(); waitForIdle()
+        onNodeWithText("New chat here").performClick(); waitForIdle()
+        onNodeWithContentDescription("More").performClick(); waitForIdle()
+        onNodeWithText("Mute").performClick(); waitForIdle()
+        onNodeWithContentDescription("More").performClick(); waitForIdle()
+        onNodeWithText("Archive").performClick(); waitForIdle()
+        assertEquals(listOf(1, 1, 1, 1), listOf(renamed, newChats, muted, killed))
+    }
+
+    @Test fun pointerRow_withoutAContextMenuShowsUnmuteWhenMuted() = runComposeUiTest {
+        setContent { Row(InputMode.Pointer, contextMenu = false, mute = true) }
+        onNodeWithContentDescription("More").performClick()
+        waitForIdle()
+        onNodeWithText("Unmute").assertIsDisplayed()
     }
 
     @Test fun pointerRow_rightClickMenuOffersRenameMuteArchive() {
@@ -211,6 +256,29 @@ class WorkspaceRowTest {
         // Desktop's archived row is name-only; path and the overflow menu are the phone's.
         onNodeWithText("…/projects/app").assertDoesNotExist()
         onNodeWithContentDescription("More").assertDoesNotExist()
+    }
+
+    @Test fun archivedRow_pointerWithoutAContextMenuKeepsRestore() = runComposeUiTest {
+        var restored = 0
+        setContent {
+            val m = deriveArchivedWorkspaceRow(
+                workspaceDto(id = "a1", name = "Old", status = "archived", archivedAt = "2026-08-02T00:00:00Z"),
+                home = "/home/u",
+            )
+            CompositionLocalProvider(
+                LocalInputMode provides InputMode.Pointer,
+                LocalContextMenuAvailable provides false,
+            ) {
+                SupermuxTheme(appearance = AppearanceMode.DARK) {
+                    ArchivedWorkspaceRow(model = m, onSelect = {}, onRestore = { restored++ })
+                }
+            }
+        }
+        onNodeWithContentDescription("More").performClick()
+        waitForIdle()
+        onNodeWithText("Restore").performClick()
+        waitForIdle()
+        assertEquals(1, restored)
     }
 
     @Test fun archivedFoldButton_labelFlipsWithTheFold() = runComposeUiTest {

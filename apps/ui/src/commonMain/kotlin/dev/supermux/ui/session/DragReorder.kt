@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -297,16 +298,27 @@ class ReorderableListState internal constructor(
      */
     private var lastMoveLayout: Any? = null
 
+    /**
+     * Where the pointer is, in viewport coordinates. Seeded from the dragged row's centre and moved
+     * by the raw gesture deltas only — never by [draggingOffset], which the list's own scrolling and
+     * accepted moves also adjust. Edge auto-scroll asks THIS, so it keeps the right direction even
+     * when the row itself has been carried out of `visibleItemsInfo`.
+     */
+    private var pointerY = 0f
+
     internal fun onDragStart(key: Any) {
         draggingKey = key
         draggingOffset = 0f
         lastMoveLayout = null
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+        pointerY = if (item != null) item.offset + item.size / 2f else 0f
         startEdgeScroll()
     }
 
     internal fun onDrag(deltaY: Float) {
         if (draggingKey == null) return
         draggingOffset += deltaY
+        pointerY += deltaY
         settleMoves()
     }
 
@@ -338,27 +350,16 @@ class ReorderableListState internal constructor(
     private fun startEdgeScroll() {
         scrollJob?.cancel()
         scrollJob = scope.launch {
-            // Direction of the last edge pull. A fast drag can carry the row out of
-            // `visibleItemsInfo` entirely (it is only translated, its slot stays behind); stopping
-            // there would strand the list mid-scroll with the row pinned off-screen, so we keep
-            // pulling the same way until the row is laid out again or the gesture ends.
-            var lastDelta = 0f
             while (isActive && draggingKey != null) {
                 val info = listState.layoutInfo
-                val dragged = info.visibleItemsInfo.firstOrNull { it.key == draggingKey }
-                val delta = if (dragged != null) {
-                    val center = dragged.offset + draggingOffset + dragged.size / 2f
-                    when {
-                        center < info.viewportStartOffset + EDGE_SCROLL_ZONE_PX ->
-                            -EDGE_SCROLL_STEP_PX
-                        center > info.viewportEndOffset - EDGE_SCROLL_ZONE_PX ->
-                            EDGE_SCROLL_STEP_PX
-                        else -> 0f
-                    }
-                } else {
-                    lastDelta
+                // Asked of the POINTER, not of the row: a fast drag carries the row out of
+                // `visibleItemsInfo` (it is only translated, its slot stays behind), and stopping
+                // there would strand the list mid-scroll with the row pinned off-screen.
+                val delta = when {
+                    pointerY < info.viewportStartOffset + EDGE_SCROLL_ZONE_PX -> -EDGE_SCROLL_STEP_PX
+                    pointerY > info.viewportEndOffset - EDGE_SCROLL_ZONE_PX -> EDGE_SCROLL_STEP_PX
+                    else -> 0f
                 }
-                lastDelta = delta
                 if (delta != 0f) {
                     // The list moved under a finger that did not: keep the visual offset.
                     draggingOffset += listState.scrollBy(delta)
@@ -488,19 +489,24 @@ fun LazyItemScope.ReorderableItem(
     // during composition (not in an effect) so the frame the drag ends already renders the settle
     // instead of one snapped-to-zero frame.
     val settle = remember(key) { Animatable(0f) }
-    var settleFrom by remember(key) { mutableFloatStateOf(0f) }
+    // Plain (non-snapshot) holder: the drag offset is sampled here every frame, and observing it in
+    // composition would recompose the whole row per frame. Drag frames stay draw-only — the only
+    // composition read of the offset is inside the graphicsLayer lambda below.
+    val settleFrom = remember(key) { floatArrayOf(0f) }
     var settling by remember(key) { mutableStateOf(false) }
     var wasDragging by remember(key) { mutableStateOf(false) }
-    if (dragging) settleFrom = state.draggingOffset
+    LaunchedEffect(dragging) {
+        if (dragging) snapshotFlow { state.draggingOffset }.collect { settleFrom[0] = it }
+    }
     if (dragging != wasDragging) {
         wasDragging = dragging
-        if (!dragging && settleFrom != 0f) settling = true
+        if (!dragging && settleFrom[0] != 0f) settling = true
     }
     LaunchedEffect(settling) {
         if (settling) {
-            settle.snapTo(settleFrom)
+            settle.snapTo(settleFrom[0])
             settle.animateTo(0f, tween(DROP_SETTLE_MS))
-            settleFrom = 0f
+            settleFrom[0] = 0f
             settling = false
         }
     }
@@ -513,7 +519,7 @@ fun LazyItemScope.ReorderableItem(
                     dragging -> Modifier.graphicsLayer { translationY = state.draggingOffset }
                     settling -> Modifier.graphicsLayer {
                         // Before the first frame of the animation lands, hold the drop position.
-                        translationY = if (settle.isRunning) settle.value else settleFrom
+                        translationY = if (settle.isRunning) settle.value else settleFrom[0]
                     }
                     else -> Modifier.animateItem()
                 },

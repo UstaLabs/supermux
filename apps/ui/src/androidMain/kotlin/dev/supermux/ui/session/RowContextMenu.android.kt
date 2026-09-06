@@ -10,3 +10,6 @@ actual fun RowContextMenu(
 ) {
     content()
 }
+
+/** No right-click menu on Android: rows must carry their actions visibly. */
+actual val platformContextMenuAvailable: Boolean = false

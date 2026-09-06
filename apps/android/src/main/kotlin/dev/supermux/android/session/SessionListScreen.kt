@@ -1541,6 +1541,18 @@ private fun LazyItemScope.WorkspaceReorderableRow(
             model = model,
             active = isActive,
             host = if (showRowHostBadge) hostByRecord[sessionHost[openSid ?: ""]] else null,
+            // Pointer-branch inputs (DeX / Chromebook / docked tablet / keyboard case): the lean
+            // row shows a preview + time + lifecycle badge instead of the phone card's path label.
+            preview = model.primarySessionId?.let { lastBySession[it] },
+            lastReadAt = model.primarySessionId?.let { lastRead[it] },
+            sessionStatus = primary?.status,
+            projectTag = if (grouped) null else projectLabel(
+                primary ?: SessionInfo(
+                    id = w.id, name = w.name, workdir = w.workdir, agent = "claude",
+                    repo_root = w.repoRoot,
+                ),
+                wsHome,
+            ),
             isDragging = isDragging,
             interactionSource = rowInteraction,
             dragModifier = Modifier.reorderDragHandle(

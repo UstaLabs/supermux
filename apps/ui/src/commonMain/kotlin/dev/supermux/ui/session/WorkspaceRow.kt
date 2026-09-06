@@ -7,8 +7,14 @@
 //
 // The split is LocalInputMode — the same rule cluster E set for drag/swipe (and NOT
 // LocalPointerAvailable, which is the hover/hit-target question). A docked tablet with a mouse
-// therefore gets desktop's lean row and its right-click menu; a touchscreen laptop keeps the
-// pointer row because a mouse is the primary input there.
+// therefore gets the lean pointer row; a touchscreen laptop keeps it too, because a mouse is the
+// primary input there.
+//
+// The pointer row's actions live in a right-click menu, which exists only where
+// LocalContextMenuAvailable is true. Android is Pointer whenever a keyboard or mouse is attached
+// (DeX, Chromebook, docked tablet, phone in a keyboard case) and has NO context menu, so the
+// pointer row falls back to a visible overflow there — otherwise rename / new chat / mute /
+// archive (and Restore on an archived row) would be unreachable on those devices.
 package dev.supermux.ui.session
 
 import androidx.compose.animation.core.animateDpAsState
@@ -189,6 +195,7 @@ fun WorkspaceRow(
             isDragging = isDragging,
             onClick = onClick,
             onRename = onRename,
+            onNewChat = onNewChat,
             onKill = onKill,
             onToggleMute = onToggleMute,
         )
@@ -214,6 +221,7 @@ private fun PointerWorkspaceRow(
     isDragging: Boolean,
     onClick: () -> Unit,
     onRename: () -> Unit,
+    onNewChat: () -> Unit,
     onKill: () -> Unit,
     onToggleMute: () -> Unit,
 ) {
@@ -337,6 +345,20 @@ private fun PointerWorkspaceRow(
                             color = cs.onSurfaceVariant,
                             fontFamily = MonoFontFamily,
                             fontSize = 10.sp,
+                        )
+                    }
+                    // Where the right-click menu is inert (Android in Pointer mode), the row's
+                    // actions need somewhere to live — the phone row's overflow, same entries.
+                    if (!LocalContextMenuAvailable.current) {
+                        Spacer(Modifier.width(Space.xs))
+                        RowOverflowMenu(
+                            entries = buildList {
+                                add(RowContextMenuEntry("Rename", onRename))
+                                add(RowContextMenuEntry("New chat here", onNewChat))
+                                add(RowContextMenuEntry(if (mute) "Unmute" else "Mute", onToggleMute))
+                                add(RowContextMenuEntry("Archive", onKill))
+                            },
+                            newChatTag = WorkspaceListTestIds.ROW_NEW_CHAT,
                         )
                     }
                 }
@@ -717,7 +739,49 @@ fun ArchivedWorkspaceRow(
                 color = cs.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
+            if (!LocalContextMenuAvailable.current) {
+                Spacer(Modifier.width(Space.xs))
+                RowOverflowMenu(entries = listOf(RowContextMenuEntry("Restore", onRestore)))
+            }
+        }
+    }
+}
+
+/**
+ * The `⋮` overflow: the phone row's action menu, reused by the Pointer row wherever
+ * [LocalContextMenuAvailable] is false (Android with a keyboard or mouse attached).
+ */
+@Composable
+private fun RowOverflowMenu(
+    entries: List<RowContextMenuEntry>,
+    newChatTag: String? = null,
+) {
+    val cs = MaterialTheme.colorScheme
+    Box {
+        var menu by remember { mutableStateOf(false) }
+        Icon(
+            imageVector = Icons.Filled.MoreVert,
+            contentDescription = "More",
+            tint = cs.onSurfaceVariant,
+            modifier = Modifier.size(20.dp).clickable { menu = true },
+        )
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            for (entry in entries) {
+                DropdownMenuItem(
+                    text = { Text(entry.label) },
+                    modifier = if (newChatTag != null && entry.label == "New chat here") {
+                        Modifier.testTag(newChatTag)
+                    } else {
+                        Modifier
+                    },
+                    onClick = {
+                        menu = false
+                        entry.onClick()
+                    },
+                )
+            }
         }
     }
 }

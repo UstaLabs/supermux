@@ -14,3 +14,5 @@ actual fun RowContextMenu(
         content = content,
     )
 }
+
+actual val platformContextMenuAvailable: Boolean = true
