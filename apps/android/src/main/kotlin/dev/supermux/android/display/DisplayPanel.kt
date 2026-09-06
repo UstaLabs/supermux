@@ -1,13 +1,11 @@
 package dev.supermux.android.display
 
-import android.graphics.SurfaceTexture
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.TextureView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,6 +51,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.IntSize
+import dev.supermux.ui.display.VncFramebuffer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.foundation.text.KeyboardActions
@@ -210,7 +215,7 @@ fun VncStatus.toDisplayState(): DisplayState = when (this) {
  * Resolves the session's newest running display from the live [displays] StateFlow
  * (kept current by `display_added`/`display_removed`; seeded once via [listDisplays]),
  * then routes by transport: h264 → MediaCodec decode to a SurfaceView ([ScrcpyView]);
- * vnc → software framebuffer blit to a TextureView ([VncView]). Both forward touch +
+ * vnc → software framebuffer painted as a Compose Image ([VncView]). Both forward touch +
  * keyboard. When there's no display, offers to start one ([onStartDisplay]).
  */
 @Composable
@@ -436,18 +441,21 @@ internal fun ScrcpyView(
 /**
  * Live VNC framebuffer + pointer/keyboard surface for a single display [streamId].
  *
- * Runs the [VncClient], blits decoded BGRA rects into a [VncFramebuffer] (drawn aspect-fit
- * to a TextureView's Surface), and forwards pointer (button mask 1 on DOWN/MOVE, 0 on UP —
+ * Runs the [VncClient], blits decoded BGRA rects into the shared [VncFramebuffer] and paints its
+ * frame aspect-fit with a plain Compose [Image] (`ContentScale.Fit` does the letterbox — the same
+ * formula [VncInput.mapToRemote] maps a touch with), and forwards pointer (button mask 1 on DOWN/MOVE, 0 on UP —
  * matching iOS) + keyboard (RFB keysyms). A macOS Screen-Sharing password sheet appears
  * when the RFB handshake reports NEEDS_PASSWORD.
  *
- * Uses a TextureView (not SurfaceView) so it re-parents cleanly under keepAlivePanel's
- * alpha/zIndex hidden state.
+ * A Compose [Image] rather than the pre-G2 TextureView: the framebuffer is now the shared
+ * expect/actual class, whose output is an ImageBitmap. It re-parents under keepAlivePanel's
+ * alpha/zIndex hidden state at least as cleanly as the TextureView did.
  */
 @Composable
 private fun VncView(streamId: String, connectVnc: (String) -> VncClient, provider: String) {
     val client = remember(streamId) { connectVnc(streamId) }
     val fb = remember(streamId) { VncFramebuffer() }
+    val frame by fb.bitmap
     val status by client.status.collectAsState()
     val size by client.size.collectAsState()
     val scope = rememberCoroutineScope()
@@ -464,40 +472,45 @@ private fun VncView(streamId: String, connectVnc: (String) -> VncClient, provide
     val focusRequester = remember { FocusRequester() }
     var keyboardActive by remember { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize().testTag("vnc_surface"),
-            factory = { ctx ->
-                TextureView(ctx).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                            fb.setSurface(Surface(st), w, h)
-                        }
+    // The Box's own on-screen pixel size (NOT the remote framebuffer size, which is `size`):
+    // mapToRemote's viewW/viewH must be the painted canvas' pixel dimensions in the SAME coordinate
+    // space `change.position` arrives in, so the touch map matches the letterbox ContentScale.Fit drew.
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
+    val viewSizeRef by rememberUpdatedState(viewSize)
 
-                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
-                            fb.onSizeChanged(w, h)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .testTag("vnc_surface")
+            .onSizeChanged { viewSize = it }
+            .pointerInput(streamId) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: continue
+                        val mask = when (event.type) {
+                            PointerEventType.Press, PointerEventType.Move -> 1   // left button down
+                            PointerEventType.Release -> 0                        // release
+                            else -> continue
                         }
-
-                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                            fb.setSurface(null, 0, 0); return true
-                        }
-
-                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                    }
-                    setOnTouchListener { v, e ->
-                        val mask = when (e.actionMasked) {
-                            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> 1   // left button down
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> 0   // release
-                            else -> return@setOnTouchListener true
-                        }
-                        val sz = sizeRef ?: return@setOnTouchListener true
-                        val (rx, ry) = VncInput.mapToRemote(e.x, e.y, v.width, v.height, sz.first, sz.second)
+                        val sz = sizeRef ?: continue
+                        val vs = viewSizeRef
+                        val (rx, ry) = VncInput.mapToRemote(
+                            change.position.x, change.position.y, vs.width, vs.height, sz.first, sz.second,
+                        )
                         scope.launch { client.sendPointer(rx, ry, mask) }
-                        true
                     }
                 }
             },
-        )
+    ) {
+        if (frame != null) {
+            Image(
+                bitmap = frame!!,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        }
 
         DisplayStatusChip(
             state = status.toDisplayState(),

@@ -54,8 +54,9 @@ interface TerminalViewFactory {
      * before — and independently of — [TerminalSurface.Content]. A caller that needs no bar can use
      * [TerminalView] and never see the handle.
      *
-     * `connect` is invoked ONCE and un-keyed inside, so a caller rebinding a pane to another
-     * session must wrap this in `key(...)` exactly as the host panels always did.
+     * `connect` is invoked ONCE, LAZILY (see [LazyTerminalClient]) and un-keyed inside, so a
+     * caller rebinding a pane to another session must wrap this in `key(...)` exactly as the host
+     * panels always did.
      */
     @Composable
     fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface
@@ -94,6 +95,34 @@ interface TerminalSurface {
     @Composable
     fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?)
 }
+
+/**
+ * The client of one terminal surface, built on first USE rather than on `rememberTerminalSurface`.
+ *
+ * A surface hands out its [TerminalSurface.keys] before anything is drawn, so a caller may compose
+ * one and never mount [TerminalSurface.Content] (a key bar for a pane that stays hidden, a screen
+ * that measures before it draws). Connecting eagerly there would open a pty nobody ever runs and
+ * nobody ever disposes — the client is created by the first `Content` composition or the first
+ * `keys.press`, whichever comes first, and both host actuals build theirs through this.
+ *
+ * Compose-thread confined, like every other piece of surface state: `Content` composes there and a
+ * key bar's press arrives there too.
+ */
+@Stable
+class LazyTerminalClient(private val connect: () -> TerminalClient) {
+    private var client: TerminalClient? = null
+
+    /** Whether the client has been built yet — for tests, and for a dispose that must not connect. */
+    val created: Boolean get() = client != null
+
+    /** The client, building it on the first call. */
+    fun get(): TerminalClient = client ?: connect().also { client = it }
+}
+
+/** Remember one [LazyTerminalClient] for the life of the surface. */
+@Composable
+fun rememberLazyTerminalClient(connect: () -> TerminalClient): LazyTerminalClient =
+    remember { LazyTerminalClient(connect) }
 
 /**
  * Renders the shared `PredictionEngine`'s display ops against one engine's screen — the typed shape

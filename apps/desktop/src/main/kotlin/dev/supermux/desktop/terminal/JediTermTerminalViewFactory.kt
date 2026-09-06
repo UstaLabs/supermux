@@ -7,9 +7,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import dev.supermux.net.TerminalClient
+import dev.supermux.ui.terminal.LazyTerminalClient
 import dev.supermux.ui.terminal.TerminalKeySink
 import dev.supermux.ui.terminal.TerminalSurface
 import dev.supermux.ui.terminal.TerminalViewFactory
+import dev.supermux.ui.terminal.rememberLazyTerminalClient
 import dev.supermux.ui.terminal.rememberTerminalKeySink
 
 /**
@@ -31,23 +33,25 @@ object JediTermTerminalViewFactory : TerminalViewFactory {
 
     @Composable
     override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface {
-        val client = remember { connect() }
+        // Lazy: a surface whose Content is never composed must not open a pty (the sink builds the
+        // client on the first press, Content on the first composition).
+        val client = rememberLazyTerminalClient(connect)
         // `sendInput` queues (it is not suspending), so the bar's bytes join the SAME ordered input
         // queue the widget's own keystrokes use, in press order.
-        val keys = rememberTerminalKeySink { bytes -> client.sendInput(bytes) }
+        val keys = rememberTerminalKeySink { bytes -> client.get().sendInput(bytes) }
         return remember(client, keys) { JediTermSurface(client, keys) }
     }
 }
 
 private class JediTermSurface(
-    private val client: TerminalClient,
+    private val client: LazyTerminalClient,
     override val keys: TerminalKeySink,
 ) : TerminalSurface {
     @Composable
     override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) =
         DesktopTerminalPanel(
-            // Already built by the factory; the panel's own `remember { connect() }` just adopts it.
-            connect = { client },
+            // Built once by the lazy holder; the panel's own `remember { connect() }` just adopts it.
+            connect = { client.get() },
             modifier = modifier,
             active = active,
             onExit = onExit,

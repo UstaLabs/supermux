@@ -1,5 +1,5 @@
 // Desktop VNC display panel (M5-2): connects a session's running display stream, paints its
-// framebuffer via the Skia-backed VncFramebuffer (VncFramebuffer.kt), and forwards mouse +
+// framebuffer via the Skia-backed VncFramebuffer (the shared expect/actual class), and forwards mouse +
 // keyboard to the remote. h264/scrcpy transports are NOT handled — see this milestone's Goal;
 // a stream with transport != "vnc" shows a plain "unsupported" message rather than crashing.
 package dev.supermux.desktop.display
@@ -59,6 +59,7 @@ import dev.supermux.net.VncStatus
 import dev.supermux.proto.SessionInfo
 import kotlinx.coroutines.launch
 import dev.supermux.display.VncInput
+import dev.supermux.ui.display.VncFramebuffer
 
 /**
  * Display pane for a session's running VNC stream. Resolves the newest running [DisplayStream]
@@ -147,7 +148,7 @@ private fun awtSpecialKey(keyCode: Int): VncInput.SpecialKey? = when (keyCode) {
 
 /**
  * Live VNC framebuffer + pointer/keyboard surface for a single display [streamId]. Runs the
- * [VncClient], blits decoded rects into a [DesktopVncFramebuffer], paints it aspect-fit via a
+ * [VncClient], blits decoded rects into a [VncFramebuffer], paints it aspect-fit via a
  * plain Compose [Image] (`ContentScale.Fit` does the letterbox — no manual Canvas math needed),
  * and forwards clicks (button-mask 1 on Press/Move, 0 on Release — matches Android's VncView) +
  * keyboard (AWT keyChar/keyCode → [VncInput]'s X11 keysym tables) to the remote. Not unit tested
@@ -156,7 +157,7 @@ private fun awtSpecialKey(keyCode: Int): VncInput.SpecialKey? = when (keyCode) {
 @Composable
 private fun VncCanvas(streamId: String, provider: String, connectVnc: (String) -> VncClient) {
     val client = remember(streamId) { connectVnc(streamId) }
-    val fb = remember(streamId) { DesktopVncFramebuffer() }
+    val fb = remember(streamId) { VncFramebuffer() }
     val status by client.status.collectAsState()
     val size by client.size.collectAsState()
     val bitmap by fb.bitmap

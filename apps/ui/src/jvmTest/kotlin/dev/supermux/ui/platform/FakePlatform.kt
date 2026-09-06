@@ -16,10 +16,12 @@ import dev.supermux.ui.display.VideoSurfaceFactory
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.ui.editor.engine.UnavailableEditorEngineFactory
 import androidx.compose.runtime.remember
+import dev.supermux.ui.terminal.LazyTerminalClient
 import dev.supermux.ui.terminal.PredictionSink
 import dev.supermux.ui.terminal.TerminalKeySink
 import dev.supermux.ui.terminal.TerminalSurface
 import dev.supermux.ui.terminal.TerminalViewFactory
+import dev.supermux.ui.terminal.rememberLazyTerminalClient
 import dev.supermux.ui.terminal.rememberTerminalKeySink
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
@@ -120,21 +122,30 @@ internal class FakeTerminalViewFactory(
     val sent = mutableListOf<String>()
     /** The surfaces handed out, so a test can assert each pane got its OWN sink. */
     val surfaces = mutableListOf<TerminalSurface>()
+    /** One entry per client the seam actually built — the surface connects LAZILY. */
+    val connects = mutableListOf<String>()
 
     @Composable
     override fun rememberTerminalSurface(connect: () -> TerminalClient): TerminalSurface {
-        val keys = rememberTerminalKeySink { bytes -> sent.add(bytes.decodeToString()) }
-        return remember(keys) { FakeTerminalSurface(this, keys).also { surfaces.add(it) } }
+        val client = rememberLazyTerminalClient { connects.add("client"); connect() }
+        val keys = rememberTerminalKeySink { bytes ->
+            client.get()
+            sent.add(bytes.decodeToString())
+        }
+        return remember(client, keys) { FakeTerminalSurface(this, client, keys).also { surfaces.add(it) } }
     }
 }
 
 internal class FakeTerminalSurface(
     private val factory: FakeTerminalViewFactory,
+    private val client: LazyTerminalClient,
     override val keys: TerminalKeySink,
 ) : TerminalSurface {
     @Composable
     override fun Content(modifier: Modifier, active: Boolean, onExit: (() -> Unit)?) {
         factory.lastActive = active
+        // Drawing the grid is the other thing that builds the client.
+        remember { client.get() }
         DisposableEffect(Unit) {
             factory.mounted.add("terminal")
             factory.mounts.add("terminal")

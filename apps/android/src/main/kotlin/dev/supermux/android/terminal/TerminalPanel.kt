@@ -288,8 +288,8 @@ fun TerminalPanel(
     // modifier transforms the NEXT real-keyboard keystroke too (Ctrl then `c` = Ctrl-C), matching
     // the web PWA (TerminalPane.vue). Mutations here are on the main thread — termlib posts
     // onKeyboardInput to the main looper — so touching Compose state is safe.
-    val ownKeys = rememberTerminalKeySink { bytes -> client.sendInput(bytes) }
-    val sink = keys ?: ownKeys
+    // Only allocated when the caller brought no sink of its own (the factory surface always does).
+    val sink = keys ?: rememberTerminalKeySink { bytes -> client.sendInput(bytes) }
 
     val emulator: TerminalEmulator = remember(client) {
         TerminalEmulatorFactory.create(
