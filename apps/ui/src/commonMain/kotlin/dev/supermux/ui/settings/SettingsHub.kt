@@ -109,8 +109,8 @@ enum class SettingsExtra(val label: String, val desc: String) {
  * @property onDirtyChange the section reports unsaved edits; while true the hub confirms before a
  *   section switch or a close (desktop's PA identity guard, now available to every section).
  * @property topBarShown true when the hub already painted a `TopAppBar` for this detail — a slot
- *   that carries its own `Scaffold`/`TopAppBar` (Android's pages until E2–E6 replace them) should
- *   only draw it when this is false.
+ *   that could carry its own `Scaffold`/`TopAppBar` (every settings screen can, because Android's
+ *   standalone routes still need one) must only draw it when this is false.
  */
 @Immutable
 class SettingsSlotScope internal constructor(
@@ -138,10 +138,8 @@ private sealed interface Target {
  *   that honors the dirty guard, and restores a plain [onBack] on dispose.
  * @param hostKey the active host id. The compact push stack is scoped to it: switching hosts
  *   returns to the index rather than leaving a stale detail of the previous host on screen.
- * @param compactTopBar whether the hub paints the pushed detail's `TopAppBar`. False while a host
- *   still passes slots that carry their own `Scaffold` (Android in E1).
  * @param extraContent renders a [SettingsExtra] page. Only reached for extras the caps allow.
- * @param content renders one section. THE slot E2–E6 swap host screens through.
+ * @param content renders one section — each host's `*SettingsSections.kt` wiring.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -151,7 +149,6 @@ fun SettingsHub(
     onBack: () -> Unit,
     onRegisterCloseHandler: ((() -> Unit) -> Unit)? = null,
     hostKey: String? = null,
-    compactTopBar: Boolean = true,
     extraContent: @Composable (SettingsExtra, SettingsSlotScope) -> Unit = { _, _ -> },
     content: @Composable (SettingsSection, SettingsSlotScope) -> Unit,
 ) {
@@ -234,11 +231,11 @@ fun SettingsHub(
     // `rememberUpdatedState` so the remembered scope always runs the CURRENT `leave()`.
     val leaveNow = rememberUpdatedState<() -> Unit> { leave() }
     val dirtyNow = rememberUpdatedState<(Boolean) -> Unit> { identityDirty = it }
-    val scope = remember(compact, compactTopBar) {
+    val scope = remember(compact) {
         SettingsSlotScope(
             onClose = { leaveNow.value() },
             onDirtyChange = { dirtyNow.value(it) },
-            topBarShown = compact && compactTopBar,
+            topBarShown = compact,
         )
     }
 
@@ -255,7 +252,6 @@ fun SettingsHub(
             } else {
                 CompactDetail(
                     title = target.label(),
-                    showTopBar = compactTopBar,
                     onBack = { leave() },
                 ) {
                     Box(Modifier.fillMaxSize().testTag("settings_hub_detail")) {
@@ -421,19 +417,18 @@ private fun SettingsIndex(
     }
 }
 
-/** The pushed detail's chrome. [showTopBar] false leaves it to a slot that carries its own. */
+/**
+ * The pushed detail's chrome. The hub ALWAYS paints it: since cluster E7 every section and extra
+ * is a screen that reads `SettingsSlotScope.topBarShown` and draws no bar of its own, so a phone
+ * gets exactly one bar per page and the hub's `BackHandler` is the only Back owner.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CompactDetail(
     title: String,
-    showTopBar: Boolean,
     onBack: () -> Unit,
     body: @Composable () -> Unit,
 ) {
-    if (!showTopBar) {
-        body()
-        return
-    }
     val cs = MaterialTheme.colorScheme
     Scaffold(
         topBar = {

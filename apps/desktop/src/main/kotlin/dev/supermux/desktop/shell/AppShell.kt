@@ -102,6 +102,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.proto.stateString
 import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
@@ -750,7 +751,9 @@ fun AppShell(
             PersistedUiState(
                 layout = ui.snapshot(),
                 selectedId = ui.selectedId,
-                appearance = ui.appearance.name,
+                // `appearance` is deliberately NOT written any more (cluster E7): it moved to the
+                // shared settings store, and writing a second copy here would let the two drift.
+                // Main.kt still READS the old field once, to seed the store on first launch.
                 windows = mergePersistedWindowHosts(ui.pendingWindowHosts, ui.windowHosts.extras()),
             )
         }
@@ -1324,6 +1327,11 @@ fun AppShell(
                                             onBack = { ui.goBack() },
                                             onRegisterCloseHandler = { settingsTryClose = it },
                                             hostKey = activeHostId,
+                                            // E7: desktop's caps now allow both extra rows —
+                                            // Appearance (the shared screen) and the updater.
+                                            extraContent = { extra, scope ->
+                                                DesktopSettingsExtra(extra, scope)
+                                            },
                                         ) { section, scope ->
                                             DesktopSettingsSection(section, scope, hostApp)
                                         }

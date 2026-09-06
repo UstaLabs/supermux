@@ -234,6 +234,9 @@ val ANDROID_CAPS = Caps(
     walkthrough = true,
     // Theme / Material You / text scale live in the app, and the APK updates itself.
     appearanceControls = true,
+    // Material You is an Android 12+ OS feature, so the row is only OFFERED there — the setting
+    // itself has been a colour no-op since the brand palette became the only palette.
+    dynamicColor = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
     appUpdate = true,
 )
 

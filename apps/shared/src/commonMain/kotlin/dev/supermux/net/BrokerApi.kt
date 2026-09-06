@@ -1155,11 +1155,14 @@ class BrokerApi(
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
     //
     // coerceInputValues=true (cluster E6): an explicit `null` on a non-nullable field falls back to
-    // that field's DEFAULT instead of throwing. Every DTO in this file declares defaults, so this
-    // only ever turns "one null field aborts the whole decode" into "that field reads as its
-    // default" — the per-field leniency Android's hand-written usage parser had, and which the
-    // typed decode has to keep now that it replaced it (a broker sending `"plan": null` must not
-    // blank the entire Usage screen). It does not loosen type mismatches.
+    // that field's DEFAULT instead of throwing — the per-field leniency Android's hand-written
+    // usage parser had, and which the typed decode has to keep now that it replaced it (a broker
+    // sending `"plan": null` must not blank the entire Usage screen). It does not loosen type
+    // mismatches, and — the limit worth knowing — it can only rescue a property that HAS a
+    // default. Plenty of DTOs here deliberately declare none for the fields that IDENTIFY the row
+    // (`DeviceDto.name`, `ArchivedDto.id`/`name`, `ProxyDto.domain`, `DiffFile.path`, …, from
+    // `:120` onwards), because a record without them means nothing; an explicit null on one of
+    // those still fails that decode, which is the behaviour we want.
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false

@@ -1,6 +1,5 @@
 package dev.supermux.android
 
-import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -97,7 +96,10 @@ import dev.supermux.android.workspace.workspaceShortcuts
 import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.android.display.DisplaysScreen
-import dev.supermux.android.settings.AppearanceSettingsPage
+import dev.supermux.android.settings.AndroidSettingsExtra
+import dev.supermux.android.settings.AndroidSettingsSection
+import dev.supermux.android.settings.migrateAppearancePrefs
+import dev.supermux.android.settings.readLegacyAppearancePrefs
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.rememberArchivedActions
 import dev.supermux.ui.settings.DevicesSettingsScreen
@@ -106,7 +108,9 @@ import dev.supermux.ui.settings.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberPersonalAssistantsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
-import dev.supermux.android.settings.SettingsScreen
+import dev.supermux.ui.settings.AppearanceSettingsScreen
+import dev.supermux.ui.settings.SettingsHub
+import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.update.AppUpdateNotifier
 import dev.supermux.ui.usage.UsageScreen
@@ -115,7 +119,6 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.android.theme.AndroidTheme
-import dev.supermux.ui.ThemeDefaults
 import dev.supermux.android.DevConfig
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.OnboardingFlow
@@ -133,6 +136,7 @@ import dev.supermux.proto.SlashCommand
 import dev.supermux.state.SidebarReorderKind
 import dev.supermux.state.sidebarReorderKind
 import dev.supermux.ui.nav.Route
+import dev.supermux.ui.prefs.TEXT_SCALE_DEFAULT
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.android.settings.AndroidSettingsStore
 
@@ -181,25 +185,23 @@ class MainActivity : ComponentActivity() {
         intentState.value = intent
         enableEdgeToEdge()
         setContent {
-            val prefs = remember {
-                applicationContext.getSharedPreferences("cmux-editor-settings", Context.MODE_PRIVATE)
-            }
-            var appearance by remember {
-                mutableStateOf(
-                    runCatching {
-                        AppearanceMode.valueOf(prefs.getString("appearance", "SYSTEM") ?: "SYSTEM")
-                    }.getOrDefault(AppearanceMode.SYSTEM)
-                )
-            }
-            // Kept for the Settings → Appearance switch only: dynamic color (Material You) is a no-op
-            // now — the brand palette is the only palette (see AndroidTheme).
-            var dynamicColor by remember { mutableStateOf(prefs.getBoolean("dynamicColor", ThemeDefaults.DYNAMIC_COLOR_ENABLED)) }
-            var textScale by remember { mutableStateOf(prefs.getFloat("textScale", 1f)) }
             // The theme's persisted UI preferences. Built here — NOT from the AppViewModel —
             // because the VM must stay below the pairing gate (see the invariant there), and
             // `AndroidSettingsStore(context)` is a process-wide DataStore delegate: this instance
             // and `vm.uiPrefs` read and write exactly the same data.
-            val themeUiPrefs = remember { UiPrefs(AndroidSettingsStore(applicationContext)) }
+            //
+            // Since cluster E7 the appearance values live in that store too (SettingsKeys.APPEARANCE
+            // / DYNAMIC_COLOR / TEXT_SCALE) rather than in this activity's SharedPreferences, so the
+            // SHARED Appearance screen can write them on either platform. The old file is drained
+            // into the store once — see `AppearancePrefsMigration` — before anything reads it.
+            val settingsStore = remember { AndroidSettingsStore(applicationContext) }
+            val themeUiPrefs = remember { UiPrefs(settingsStore) }
+            LaunchedEffect(settingsStore) {
+                migrateAppearancePrefs(settingsStore, readLegacyAppearancePrefs(applicationContext))
+            }
+            val appearance by themeUiPrefs.appearance(AppearanceMode.SYSTEM)
+                .collectAsState(AppearanceMode.SYSTEM)
+            val textScale by themeUiPrefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
             AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = themeUiPrefs) {
                 val store = remember { SecureTokenStore() }
                 // Debug-only: seed token+baseUrl on debuggable builds so the already-paired
@@ -821,54 +823,27 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable<Route.Settings> {
-                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { SettingsScreen(
-                            onBack = { navController.popBackStack() },
-                            // Personal assistants
-                            paActions = rememberPersonalAssistantsActions(vm.fleet),
-                            // Assistant
-                            assistantActions = rememberAssistantSettingsActions(vm.fleet),
-                            // Agents
-                            agentActions = rememberAgentSettingsActions(vm.fleet),
-                            // Curator
-                            curatorActions = rememberCuratorSettingsActions(vm.fleet),
-                            // Voice
-                            voiceActions = rememberVoiceSettingsActions(vm.fleet),
-                            // Editor / LSP
-                            lspLoad = { vm.fleet.lspLoad() },
-                            lspToggle = { id, enabled -> vm.fleet.lspToggle(id, enabled) },
-                            lspInstall = { vm.fleet.lspInstall(it) },
-                            lspInstallLog = vm.fleet.lspInstallLog,
-                            lspInstallDone = vm.fleet.lspInstallDone,
-                            lspAddCustom = { vm.fleet.lspAddCustom(it.id, it.label, it.command, it.extensions, it.args, it.languageId, it.installCmd) },
-                            lspRemoveCustom = { vm.fleet.lspRemoveCustom(it) },
-                            // Git hosting
-                            gitHostingActions = rememberGitHostingActions(vm.fleet),
-                            // System
-                            systemActions = rememberSystemSettingsActions(vm.fleet),
-                            // Devices + Proxies are hub sections too (same screens as their routes).
-                            devicesActions = rememberDevicesSettingsActions(vm.fleet),
-                            proxiesActions = rememberProxiesSettingsActions(vm.fleet),
-                            appearanceContent = { back ->
-                                AppearanceSettingsPage(
-                                    appearance = appearance,
-                                    dynamicColor = dynamicColor,
-                                    textScale = textScale,
-                                    onAppearanceChange = {
-                                        appearance = it
-                                        prefs.edit().putString("appearance", it.name).apply()
-                                    },
-                                    onDynamicChange = {
-                                        dynamicColor = it
-                                        prefs.edit().putBoolean("dynamicColor", it).apply()
-                                    },
-                                    onTextScaleChange = {
-                                        textScale = it
-                                        prefs.edit().putFloat("textScale", it).apply()
-                                    },
-                                    onBack = back,
-                                )
-                            },
-                        ) } }
+                        // The shared hub owns everything now: the index + push on a phone, the
+                        // rail + detail on a tablet, the pushed detail's chrome (every Android
+                        // settings page became a shared screen in E7, so none paints its own) and
+                        // the system-back that pops a pushed detail before leaving Settings.
+                        // `AndroidSettingsSections.kt` is the only wiring left.
+                        HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) {
+                            // `Route.Settings.section` is deliberately NOT read here: Android has
+                            // always opened its hub on Personal assistants (the index's first row),
+                            // and nothing on this app navigates with a section. Desktop, which
+                            // does, keeps the section on its route instead.
+                            var section by remember { mutableStateOf(SettingsSection.PersonalAssistants) }
+                            SettingsHub(
+                                section = section,
+                                onSectionChange = { section = it },
+                                onBack = { navController.popBackStack() },
+                                // Already inside `key(activeHost)` above, so the hub's own host
+                                // scoping has nothing left to reset — one owner of that behaviour.
+                                hostKey = null,
+                                extraContent = { extra, scope -> AndroidSettingsExtra(extra, scope) },
+                            ) { s, scope -> AndroidSettingsSection(s, scope, vm.fleet) }
+                        } }
                     }
                     composable<Route.Usage> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { UsageScreen(
@@ -917,23 +892,13 @@ class MainActivity : ComponentActivity() {
                         } }
                     }
                     composable<Route.Appearance> {
-                        AppearanceSettingsPage(
-                            appearance = appearance,
-                            dynamicColor = dynamicColor,
-                            textScale = textScale,
-                            onAppearanceChange = {
-                                appearance = it
-                                prefs.edit().putString("appearance", it.name).apply()
-                            },
-                            onDynamicChange = {
-                                dynamicColor = it
-                                prefs.edit().putBoolean("dynamicColor", it).apply()
-                            },
-                            onTextScaleChange = {
-                                textScale = it
-                                prefs.edit().putFloat("textScale", it).apply()
-                            },
+                        // Standalone destination (deep link / the sidebar shortcut): the shared
+                        // screen paints its own title and Back at every width. It reads and writes
+                        // the same SettingsKeys the theme above collects, so a change here
+                        // repaints the app live with nothing threaded through this file.
+                        AppearanceSettingsScreen(
                             onBack = { navController.popBackStack() },
+                            standalone = true,
                         )
                     }
                 }

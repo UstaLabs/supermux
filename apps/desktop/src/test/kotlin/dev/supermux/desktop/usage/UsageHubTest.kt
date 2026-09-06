@@ -64,19 +64,36 @@ class UsageHubTest {
         tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
     }
 
+    /** GETs of /usage this engine has served — how the post-redeem re-fetch is pinned. */
+    private var usageGets = 0
+
     /**
      * A [HostStore] whose HTTP serves GET /usage + POST /usage/codex/reset.
      *
      * GET /usage is STATEFUL since cluster E6: the screen re-fetches after a successful redeem
      * (`UsageActions.load`, restoring Android's post-redeem refresh for the providers the in-place
-     * Codex swap does not touch), so the second GET has to answer with the redeemed numbers the
-     * way a real broker would — otherwise the test would be asserting that a redeem is undone.
+     * Codex swap does not touch), so the second GET answers with the redeemed numbers the way a
+     * real broker would.
+     *
+     * [failUsageAfterRedeem] serves that second GET as a 500 instead. `HostStore.usage()` leaves
+     * the held snapshot alone when the call fails, so the card can only be showing the redeemed
+     * numbers because `UsageActions.redeem` swapped them in — which is what the in-place test
+     * needs to assert, and what a stateful GET serving those same numbers cannot distinguish.
      */
-    private fun appForUsage(initialResetCredits: Int = 3, redeemedResetCredits: Int = 2): HostStore {
+    private fun appForUsage(
+        initialResetCredits: Int = 3,
+        redeemedResetCredits: Int = 2,
+        failUsageAfterRedeem: Boolean = false,
+    ): HostStore {
         var redeemed = false
+        usageGets = 0
         val engine = MockEngine { req ->
+            if (req.method == HttpMethod.Get && req.url.encodedPath == "/usage") usageGets++
             val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
             when {
+                req.method == HttpMethod.Get && req.url.encodedPath == "/usage" &&
+                    redeemed && failUsageAfterRedeem ->
+                    respond(ByteReadChannel("boom"), HttpStatusCode.InternalServerError)
                 req.method == HttpMethod.Get && req.url.encodedPath == "/usage" && redeemed -> respond(
                     """
                     {
@@ -201,7 +218,13 @@ class UsageHubTest {
 
     @Test fun a_successful_redeem_updates_the_codex_card_in_place() = runComposeUiTest {
         val ui = ShellUiState().apply { openUsage() }
-        val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
+        // The post-redeem GET fails, so nothing but `UsageActions.redeem`'s in-place swap can
+        // explain the new numbers below (a GET serving them too would prove nothing).
+        val app = appForUsage(
+            initialResetCredits = 3,
+            redeemedResetCredits = 2,
+            failUsageAfterRedeem = true,
+        )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
                 AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
@@ -221,5 +244,30 @@ class UsageHubTest {
         onNodeWithText("2").assertIsDisplayed()
         onNodeWithText("30% used").assertDoesNotExist()
         onNodeWithText("✓ Reset — cleared 1 window").assertIsDisplayed()
+    }
+
+    /**
+     * The other half of the same wiring: the redeem is followed by a fresh GET /usage, so the
+     * providers the Codex swap does not touch (Claude, Cursor) are not left stale. Asserted on the
+     * request count rather than on numbers, which the swap could also explain.
+     */
+    @Test fun a_successful_redeem_refetches_usage_for_the_other_providers() = runComposeUiTest {
+        val ui = ShellUiState().apply { openUsage() }
+        val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
+        setContent {
+            DesktopTheme(appearance = AppearanceMode.DARK) {
+                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+            }
+        }
+        waitForIdle()
+        val before = usageGets
+        assertTrue(before >= 1, "the screen should have loaded usage once")
+        onNodeWithTag("codex_redeem_button").performClick()
+        waitForIdle()
+        onNodeWithTag("codex_redeem_confirm").performClick()
+        waitForIdle()
+        assertTrue(usageGets > before, "redeem should re-fetch /usage (was $before, now $usageGets)")
+        // ...and the refreshed body is what is on screen.
+        onNodeWithText("0% used").assertIsDisplayed()
     }
 }

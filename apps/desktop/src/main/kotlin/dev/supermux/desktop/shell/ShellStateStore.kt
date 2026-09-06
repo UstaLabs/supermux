@@ -51,8 +51,11 @@ data class PersistedUiState(
     val layout: SidebarSnapshot? = null,
     val selectedId: String? = null,
     /**
-     * AppearanceMode name (`DARK` / `LIGHT` / `SYSTEM`). Local-only — not a broker setting.
-     * Null on files written before this field existed; hydrate as DARK.
+     * AppearanceMode name (`DARK` / `LIGHT` / `SYSTEM`). LEGACY since cluster E7: the value now
+     * lives in the shared settings store under `SettingsKeys.APPEARANCE`, which is what both the
+     * sidebar theme toggle and the shared Appearance screen write. Nothing writes this field any
+     * more; `Main.kt` reads it once to seed the store for users upgrading, and it stays declared so
+     * an existing ui-state.json still decodes.
      */
     val appearance: String? = null,
     /** Detached extra windows. Missing on older ui-state.json → empty list. */

@@ -7,15 +7,22 @@
 // `SettingsKeys.EDITOR_*` / `CHAT_DETAIL_*` keys, so a screen moved into `:ui` reads its own
 // preferences without knowing which platform it is on.
 //
-// NO MIGRATION by design (spec): the old stores are orphaned and every value below falls back to
-// its default once, on first launch after the upgrade.
+// NO MIGRATION by design (spec) for the editor/chat values: the old stores are orphaned and each
+// falls back to its default once, on first launch after the upgrade. The APPEARANCE values added
+// in cluster E7 are the exception — losing someone's theme is visible on every screen, so each app
+// seeds the key from its old store once (Android `AppearancePrefsMigration`, desktop's
+// `ui-state.json` `appearance` field) when nothing is stored here yet.
 package dev.supermux.ui.prefs
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.state.SettingsKeys
 import dev.supermux.state.SettingsStore
 import dev.supermux.ui.ChatDetailLevel
+import dev.supermux.ui.ThemeDefaults
 import dev.supermux.ui.sanitizeSetLevel
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.TEXT_SCALE_MAX
+import dev.supermux.ui.theme.TEXT_SCALE_MIN
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -27,6 +34,9 @@ const val EDITOR_FONT_DEFAULT = 13
 
 /** Soft wrap is on by default (both apps agreed). */
 const val EDITOR_LINE_WRAP_DEFAULT = true
+
+/** Neutral text size — the Appearance slider's centre. */
+const val TEXT_SCALE_DEFAULT = 1f
 
 /** Desktop Changes pane starts as a nested folder tree. */
 const val EDITOR_DIFF_TREE_VIEW_DEFAULT = true
@@ -74,6 +84,54 @@ class UiPrefs(private val settings: SettingsStore) {
         val next = sanitizeSetLevel(level) ?: return
         settings.putString(SettingsKeys.CHAT_DETAIL_LEVEL, next.wire)
     }
+
+    // ── Appearance (cluster E7) ────────────────────────────────────────────────────────────────
+    // One stored value per setting for BOTH apps: the shared Appearance screen writes it, each
+    // app's root theme reads it. Desktop's sidebar theme toggle writes the same [appearance] key,
+    // so "one source of truth" holds across the two ways to change it.
+
+    /**
+     * The chosen theme mode, or `null` when the user has never chosen one.
+     *
+     * Null is meaningful because the two apps disagree about the fallback (Android follows the
+     * system, desktop opens dark), so the DEFAULT belongs to the caller — see [appearance].
+     */
+    val appearanceMode: Flow<AppearanceMode?> =
+        settings.string(SettingsKeys.APPEARANCE).map { raw ->
+            raw?.let { name -> AppearanceMode.entries.firstOrNull { it.name == name } }
+        }
+
+    /** [appearanceMode] with the caller's platform default substituted for "never chosen". */
+    fun appearance(default: AppearanceMode): Flow<AppearanceMode> =
+        appearanceMode.map { it ?: default }
+
+    suspend fun putAppearance(mode: AppearanceMode) =
+        settings.putString(SettingsKeys.APPEARANCE, mode.name)
+
+    /**
+     * Material You opt-in. A NO-OP as far as colour goes — the brand OKLCH palette is the only
+     * palette on every platform (`ThemeDefaults.DYNAMIC_COLOR_ENABLED`) — but still stored so a
+     * user who turned it on does not silently lose the preference.
+     */
+    val dynamicColor: Flow<Boolean> =
+        settings.string(SettingsKeys.DYNAMIC_COLOR).map {
+            ThemeDefaults.dynamicColorEnabled(it?.toBooleanStrictOrNull())
+        }
+
+    suspend fun putDynamicColor(value: Boolean) =
+        settings.putString(SettingsKeys.DYNAMIC_COLOR, value.toString())
+
+    /** App-wide text multiplier, always clamped into [TEXT_SCALE_MIN]..[TEXT_SCALE_MAX]. */
+    val textScale: Flow<Float> =
+        settings.string(SettingsKeys.TEXT_SCALE).map { raw ->
+            (raw?.toFloatOrNull() ?: TEXT_SCALE_DEFAULT).coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX)
+        }
+
+    suspend fun putTextScale(value: Float) =
+        settings.putString(
+            SettingsKeys.TEXT_SCALE,
+            value.coerceIn(TEXT_SCALE_MIN, TEXT_SCALE_MAX).toString(),
+        )
 }
 
 /**

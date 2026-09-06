@@ -50,6 +50,13 @@ class DesktopPlatform : Platform {
         saveAs = !GraphicsEnvironment.isHeadless(),
         // DesktopWalkthroughSeam is installed on every HostStore this app builds (Main.kt).
         walkthrough = true,
+        // E7: the desktop app owns its own look too — the shared Appearance screen writes the same
+        // `SettingsKeys.APPEARANCE` the sidebar's theme toggle does, so the hub offers the row.
+        appearanceControls = true,
+        // No wallpaper-derived scheme off Android: the Material You row would be an inert switch.
+        dynamicColor = false,
+        // The app updates ITSELF here as well (Route.AppUpdate → `update/AppUpdateUi.kt`).
+        appUpdate = true,
     )
 
     /** The direct-JCEF browser that hosts CodeMirror; one per app, wrapping the process-global

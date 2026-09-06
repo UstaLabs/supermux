@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
@@ -273,7 +274,12 @@ class SettingsHubTest {
         onNodeWithTag("section_curator").assertDoesNotExist()
     }
 
-    @Test fun a_host_that_paints_its_own_page_chrome_gets_no_hub_top_bar() = runComposeUiTest {
+    /**
+     * Cluster E7 removed the `compactTopBar` escape hatch: every section and extra is a shared
+     * screen that reads `scope.topBarShown`, so the hub paints the pushed detail's bar for ALL of
+     * them and a phone sees exactly one — never a page's own bar under the hub's.
+     */
+    @Test fun the_hub_paints_exactly_one_bar_for_every_compact_detail() = runComposeUiTest {
         setPlatformContent(
             pointer = false,
             widthClass = WindowWidthClass.Compact,
@@ -283,15 +289,41 @@ class SettingsHubTest {
                 section = SettingsSection.Agents,
                 onSectionChange = {},
                 onBack = {},
-                compactTopBar = false,
-                content = sectionStub(),
+                content = { s, scope ->
+                    // A real screen's contract: draw a bar only when the hub did not.
+                    if (!scope.topBarShown) {
+                        Text("own bar", modifier = Modifier.testTag("page_own_bar"))
+                    }
+                    Text("body", modifier = Modifier.testTag("section_${s.name.lowercase()}"))
+                },
             )
         }
         onNodeWithTag("settings_row_system").performClick()
         waitForIdle()
         onNodeWithTag("section_system").assertExists()
+        onNodeWithTag("settings_detail_title").assertIsDisplayed()
+        onNodeWithTag("settings_detail_back").assertIsDisplayed()
+        onNodeWithTag("page_own_bar").assertDoesNotExist()
+    }
+
+    /** The wide rail is the mirror image: the hub paints no detail bar, so the page must. */
+    @Test fun a_wide_detail_pane_leaves_the_bar_to_the_page() = runComposeUiTest {
+        setPlatformContent(widthClass = WindowWidthClass.Expanded) {
+            SettingsHub(
+                section = SettingsSection.System,
+                onSectionChange = {},
+                onBack = {},
+                content = { _, scope ->
+                    Text(
+                        if (scope.topBarShown) "hub" else "page",
+                        modifier = Modifier.testTag("bar_owner"),
+                    )
+                },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("bar_owner").assertTextEquals("page")
         onNodeWithTag("settings_detail_title").assertDoesNotExist()
-        onNodeWithTag("settings_detail_back").assertDoesNotExist()
     }
 
     @Test fun a_dirty_section_blocks_the_compact_back_until_discarded() = runComposeUiTest {

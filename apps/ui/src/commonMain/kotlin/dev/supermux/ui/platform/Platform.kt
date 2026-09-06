@@ -135,6 +135,10 @@ const val DEFAULT_REQUESTER: String = "default"
  *   no save dialog at all (a headless desktop), where [FileAccess.saveAs] returns false.
  * @property appearanceControls the app owns its own look — theme mode, Material You, text scale —
  *   so the Settings hub offers the Appearance row (Android today; desktop in cluster E7).
+ * @property dynamicColor the OS can supply a wallpaper-derived colour scheme (Android 12+), so
+ *   the Appearance screen offers the Material You row at all. False everywhere else — the row
+ *   would be an inert switch. NOTE the setting is a no-op for COLOUR on every platform (the brand
+ *   palette is the only palette); this gates whether the choice is even offered.
  * @property appUpdate the app can update ITSELF (not the broker), so the hub offers the
  *   "Check for updates" row routing to the host's updater screen (cluster G owns that screen).
  * @property walkthrough the app builds its `HostStore` with a `WalkthroughSeam`, so the diff pane
@@ -154,6 +158,7 @@ data class Caps(
     val saveAs: Boolean = false,
     val walkthrough: Boolean = false,
     val appearanceControls: Boolean = false,
+    val dynamicColor: Boolean = false,
     val appUpdate: Boolean = false,
 )
 

@@ -36,6 +36,7 @@ class AndroidPlatformTest {
                 saveAs = true,
                 walkthrough = true,
                 appearanceControls = true,
+                dynamicColor = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
                 appUpdate = true,
             ),
             ANDROID_CAPS,

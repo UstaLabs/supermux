@@ -684,8 +684,6 @@ class VoiceSettingsScreenTest {
                         section = SettingsSection.Voice,
                         onSectionChange = {},
                         onBack = { closed++ },
-                        // Android's hub today: the page paints its own compact chrome.
-                        compactTopBar = false,
                     ) { _, scope ->
                         VoiceSettingsScreen(
                             actions = actions(),

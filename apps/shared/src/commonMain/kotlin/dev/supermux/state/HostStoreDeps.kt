@@ -29,6 +29,21 @@ object SettingsKeys {
     const val EDITOR_DIFF_TREE_VIEW = "editor:diffTreeView"
     /** `ChatDetailLevel.wire` ("low"/"medium"/"high"). Default "medium". */
     const val CHAT_DETAIL_LEVEL = "chatDetail:level"
+
+    // Appearance (cluster E7) — the ONE source of truth for the app's own look on every platform.
+    // The shared `ui/settings/AppearanceSettingsScreen.kt` writes these; each app's theme wrapper
+    // reads them (Android's MainActivity, desktop's Main + the sidebar theme toggle), so a change
+    // made in Settings and a change made by desktop's toggle are the same stored value.
+    //
+    // Unlike the EDITOR_* keys above these DO migrate: Android's `cmux-editor-settings`
+    // SharedPreferences (`AppearancePrefsMigration`) and desktop's `ui-state.json` `appearance`
+    // field are read once, on first launch after the upgrade, when the key here is still unset.
+    /** `AppearanceMode.name` ("SYSTEM"/"LIGHT"/"DARK"). Unset = the app's own default. */
+    const val APPEARANCE = "appearance:mode"
+    /** "true"/"false" — Material You opt-in. Persisted everywhere, honoured nowhere (brand palette). */
+    const val DYNAMIC_COLOR = "appearance:dynamicColor"
+    /** App-wide text-size multiplier, clamped 0.9..1.3. Default 1.0. */
+    const val TEXT_SCALE = "appearance:textScale"
     const val VOICE_STT = "voice:stt"
     const val VOICE_CLEANUP = "voice:cleanup"
     const val VOICE_TTS = "voice:tts"

@@ -49,10 +49,14 @@ import kotlinx.coroutines.launch
 /**
  * Settings → Check for updates. Polls supermux.dev/versions.json (GitHub fallback)
  * for a newer Android APK and offers one-click download + install.
+ *
+ * @param topBarShown the Settings hub already painted this page's title + Back (cluster E7: every
+ *   settings page is shared now, so the hub owns the compact chrome). The page then drops its own
+ *   `TopAppBar` and `BackHandler` — one bar, one Back owner — and keeps Recheck as a body action.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppUpdatePage(onBack: () -> Unit) {
+fun AppUpdatePage(onBack: () -> Unit, topBarShown: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -78,24 +82,26 @@ fun AppUpdatePage(onBack: () -> Unit) {
         loading = false
     }
 
-    BackHandler { onBack() }
+    if (!topBarShown) BackHandler { onBack() }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Check for updates", color = cs.onSurface) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = cs.onSurface)
-                    }
-                },
-                actions = {
-                    TextButton(onClick = { refresh() }, enabled = !loading && !installing) {
-                        Text("Recheck")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
-            )
+            if (!topBarShown) {
+                TopAppBar(
+                    title = { Text("Check for updates", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = cs.onSurface)
+                        }
+                    },
+                    actions = {
+                        TextButton(onClick = { refresh() }, enabled = !loading && !installing) {
+                            Text("Recheck")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                )
+            }
         },
         containerColor = cs.background,
     ) { padding ->
@@ -111,6 +117,14 @@ fun AppUpdatePage(onBack: () -> Unit) {
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                // The hub's bar has no room for actions, so Recheck rides in the body there.
+                if (topBarShown) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { refresh() }, enabled = !loading && !installing) {
+                            Text("Recheck")
+                        }
+                    }
+                }
                 SettingsSectionHeader("APP")
                 val s = status
                 val current = s?.currentVersion ?: AppUpdate.currentVersionName(context)

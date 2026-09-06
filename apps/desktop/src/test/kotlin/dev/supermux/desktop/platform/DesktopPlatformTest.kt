@@ -38,6 +38,11 @@ class DesktopPlatformTest {
                 clipboardImages = !GraphicsEnvironment.isHeadless(),
                 saveAs = !GraphicsEnvironment.isHeadless(),
                 walkthrough = true,
+                // E7: the Settings hub offers Appearance and Check-for-updates here too.
+                // Material You needs an OS that derives a scheme from the wallpaper — not this one.
+                appearanceControls = true,
+                dynamicColor = false,
+                appUpdate = true,
             ),
             DesktopPlatform().caps,
         )

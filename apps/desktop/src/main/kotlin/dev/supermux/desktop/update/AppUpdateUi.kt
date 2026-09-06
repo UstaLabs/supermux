@@ -45,7 +45,7 @@ import kotlinx.coroutines.launch
 
 /** Full-pane "Check for updates" screen (File ▸ Check for Updates…). */
 @Composable
-fun AppUpdateScreen(onBack: () -> Unit) {
+fun AppUpdateScreen(onBack: () -> Unit, topBarShown: Boolean = false) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val http = remember { HttpClient(CIO) }
@@ -77,10 +77,20 @@ fun AppUpdateScreen(onBack: () -> Unit) {
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                // [topBarShown]: the Settings hub already painted this page's title and Back
+                // (its compact detail chrome), so only Recheck is left to draw.
+                if (topBarShown) {
+                    Spacer(Modifier.weight(1f))
+                } else {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Text(
+                        "Check for updates",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                Text("Check for updates", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 TextButton(onClick = { refresh() }, enabled = !loading && !installing) {
                     Text("Recheck")
                 }

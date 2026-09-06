@@ -16,7 +16,8 @@ import dev.supermux.ui.settings.PersonalAssistantsScreen
 import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.AssistantSettingsScreen
 import dev.supermux.ui.settings.GitHostingScreen
-import dev.supermux.ui.settings.LspSettingsScreen
+import dev.supermux.ui.settings.AppearanceSettingsScreen
+import dev.supermux.ui.settings.EditorSettingsScreen
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.VoiceSettingsScreen
 import dev.supermux.ui.settings.rememberAgentSettingsActions
@@ -28,7 +29,10 @@ import dev.supermux.ui.settings.rememberAssistantSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.ui.settings.rememberVoiceSettingsActions
+import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsSlotScope
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.desktop.update.AppUpdateScreen
 
 /** Renders [section]'s desktop screen against [host]. Called from the hub's `content` slot. */
 @Composable
@@ -74,7 +78,11 @@ fun DesktopSettingsSection(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsSection.EditorLsp -> LspSettingsScreen(
+        // E7: the section is the shared Editor page, which is the wrap/font steppers ABOVE the
+        // same `LspSettingsScreen` desktop used to reach bare here. The steppers write the
+        // `SettingsKeys.EDITOR_*` values `WebCodeEditor`/`DiffView` already read, so desktop's
+        // editor behaviour is unchanged — it just gained a way to change them from Settings.
+        SettingsSection.EditorLsp -> EditorSettingsScreen(
             lspLoad = { host.lspLoad() },
             lspToggle = { id, enabled -> host.lspToggle(id, enabled) },
             lspInstall = { id -> host.lspInstall(id) },
@@ -88,7 +96,7 @@ fun DesktopSettingsSection(
             },
             lspRemoveCustom = { id -> host.lspRemoveCustom(id) },
             onBack = scope.onClose,
-            showTopBar = false,
+            topBarShown = scope.topBarShown,
         )
         SettingsSection.PersonalAssistants -> PersonalAssistantsScreen(
             actions = rememberPersonalAssistantsActions(host),
@@ -97,6 +105,28 @@ fun DesktopSettingsSection(
         )
         SettingsSection.GitHosting -> GitHostingScreen(
             actions = rememberGitHostingActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
+    }
+}
+
+/**
+ * Renders one host-local [SettingsExtra] row's page (cluster E7 — desktop shows both rows now).
+ *
+ * Appearance is the shared screen, reading and writing the same `SettingsKeys.APPEARANCE` the
+ * sidebar's theme toggle does. The updater stays desktop's own screen (cluster G owns it).
+ */
+@Composable
+fun DesktopSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
+    when (extra) {
+        SettingsExtra.Appearance -> AppearanceSettingsScreen(
+            // Desktop opens dark when nobody has chosen — the same fallback `Main.kt` applies.
+            defaultAppearance = AppearanceMode.DARK,
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
+        SettingsExtra.AppUpdate -> AppUpdateScreen(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )

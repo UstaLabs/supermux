@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +28,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,6 +94,7 @@ import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
+import dev.supermux.ui.prefs.TEXT_SCALE_DEFAULT
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.WalkthroughSeam
@@ -114,7 +117,7 @@ private val desktopDeps: HostStoreDeps by lazy {
     )
 }
 
-/** Editor + chat-detail preferences, on the same store as drafts / launcher prefs. */
+/** Editor + chat-detail + APPEARANCE preferences, on the same store as drafts / launcher prefs. */
 private val desktopUiPrefs: UiPrefs by lazy { UiPrefs(desktopDeps.settings) }
 
 private val desktopBindTts: (
@@ -339,12 +342,25 @@ fun main() {
             ShellUiState().apply {
                 persistedUi.layout?.let { restore(it) }
                 selectedId = persistedUi.selectedId
-                appearance = persistedUi.appearance
-                    ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
-                    ?: AppearanceMode.DARK
                 pendingWindowHosts = persistedUi.windows
             }
         }
+        // Appearance is NOT in ui-state.json any more (cluster E7): it lives in the shared
+        // settings store under `SettingsKeys.APPEARANCE`, which is also what the shared Appearance
+        // screen writes — so the sidebar's theme toggle and Settings are one value, not two.
+        // `ui.appearance` stays the in-memory copy every composable reads, mirrored from the store.
+        // An existing ui-state.json is drained into the store once, when nothing is stored there.
+        LaunchedEffect(Unit) {
+            val stored = desktopUiPrefs.appearanceMode.first()
+            if (stored == null) {
+                val legacy = persistedUi.appearance
+                    ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
+                if (legacy != null) desktopUiPrefs.putAppearance(legacy)
+            }
+            desktopUiPrefs.appearance(AppearanceMode.DARK).collect { ui.appearance = it }
+        }
+        val appTextScale by desktopUiPrefs.textScale.collectAsState(TEXT_SCALE_DEFAULT)
+        val themeScope = rememberCoroutineScope()
         val notificationController = remember {
             NotificationController(TrayNotificationManager(trayState))
         }
@@ -501,7 +517,7 @@ fun main() {
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
             ProvideDesktopAdaptiveLocals {
-            DesktopTheme(appearance = ui.appearance, uiPrefs = desktopUiPrefs) {
+            DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
@@ -1419,12 +1435,17 @@ fun main() {
                             notificationController,
                             fleet = fleet,
                             appearance = ui.appearance,
+                            // The toggle writes the SAME stored value the Appearance screen does
+                            // (the collector above mirrors it back onto `ui.appearance`), so the
+                            // two never drift apart.
                             onToggleTheme = {
-                                ui.appearance = if (ui.appearance == AppearanceMode.DARK) {
+                                val next = if (ui.appearance == AppearanceMode.DARK) {
                                     AppearanceMode.LIGHT
                                 } else {
                                     AppearanceMode.DARK
                                 }
+                                ui.appearance = next
+                                themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },
                         )
                     }
@@ -1530,7 +1551,7 @@ fun main() {
                     val extraModal = remember { ModalPresence() }
                     CompositionLocalProvider(LocalModalPresence provides extraModal) {
                         ProvideDesktopAdaptiveLocals {
-                            DesktopTheme(appearance = ui.appearance, uiPrefs = desktopUiPrefs) {
+                            DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
                                 if (extraBind != null) {
                                     DetachedWorkspaceWindow(host, extraBind, ui)
                                 }
