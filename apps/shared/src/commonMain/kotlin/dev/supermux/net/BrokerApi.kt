@@ -1771,12 +1771,6 @@ class BrokerApi(
         })
     }
 
-    /** GET /usage → raw JSON string */
-    suspend fun usageRaw(): String =
-        http.get("$httpBase/usage") {
-            header("Authorization", bearerHeader())
-        }.bodyAsText()
-
     /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode / grok) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
 

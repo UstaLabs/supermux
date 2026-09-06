@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ViewAgenda
+import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -943,7 +944,7 @@ private fun SidebarFooter(
             Box {
                 FooterIcon(Icons.Filled.DataUsage, "Usage", "sidebar_footer_usage", onUsage)
                 if (usageContent != null) {
-                    dev.supermux.desktop.usage.UsagePopover(
+                    UsagePopover(
                         expanded = usageOpen,
                         onDismissRequest = onUsageDismiss,
                         content = usageContent,

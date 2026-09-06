@@ -1956,9 +1956,6 @@ class HostStore(
     suspend fun spawnRequest(request: SpawnRequest): String? =
         resolveSpawnId(api.spawn(request), _state.value.sessions)
 
-    /** GET /usage as raw JSON — the Android usage sheet renders the body verbatim. Null on failure. */
-    suspend fun usageRaw(): String? = runApi("usageRaw") { api.usageRaw() }
-
     /** On-device-STT path: JSON draft → cleaned text (long-timeout dictation client). */
     suspend fun transcribeDraft(sessionId: String?, draft: String): TranscribeResponse? =
         runApi("transcribeDraft") { apiDictate.transcribeDraft(sessionId, draft) }

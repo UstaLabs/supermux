@@ -1,30 +1,19 @@
-// The desktop Usage panel — a port of apps/android/.../settings/MoreScreens.kt's `UsageScreen` +
-// its provider cards (ClaudeUsageCard/CodexUsageCard/CursorUsageCard) + UsageWindowRow/
-// UsageFooterRow/UsageCard/formatReset/money/dollars/codexResetNote. Hosted inside
-// [UsagePopover] (icon-anchored Popup above the sidebar footer Usage glyph — not a centered
-// modal). File ▸ "Usage…", footer, and session ⋮ all call [ShellUiState.openUsage].
+// The one Usage screen for both apps (cluster E6).
 //
-// Desktop deltas from Android:
-//   - Consumes the TYPED `BrokerApi.usage()` (`UsageResponse`) instead of Android's `usageRaw()` +
-//     org.json `parseUsage(JSONObject)` path — the shared kotlinx.serialization DTOs
-//     (ClaudeUsage/CodexUsage/CursorUsage/...) already carry every field Android's private parsed
-//     data classes had, so there is nothing to re-parse.
-//   - `resetsAt` is typed per-provider at the source (BrokerApi.kt): Claude's `ClaudeWindow` and
-//     Cursor's `billingCycleEnd` are ISO-8601 Strings; Codex's `CodexWindow` is a Double of epoch
-//     SECONDS. Two formatter entry points below match that split — no stringify-then-reparse.
-//   - Datetime-library deviation: the M4f plan text says "use the shared multiplatform datetime
-//     dep", but no module in this repo depends on one (checked shared/build.gradle.kts and
-//     desktop/build.gradle.kts) — and Android's own `formatReset` uses `java.time`, despite the
-//     plan's framing. The desktop module already uses
-//     `java.time.Instant` elsewhere (chat/Timeline.kt's gutter timestamps), and this task's ground
-//     rules restrict changes to `apps/desktop/src` (no build.gradle.kts edits to add a dependency).
-//     So [formatResetIso]/[formatResetEpochSeconds] inject a `java.time.Instant now` instead —
-//     same determinism property the plan asked for, just the type actually on the classpath.
-//   - TopAppBar → card header ("Usage" + close). Full-pane route → centered Surface card in AppShell.
-//   - Redeem: `onRedeem` updates the codex card in place at the AppShell level (the popover
-//     owns `usageData` and replaces `.codex` with the refreshed value on `code == "reset"`) rather
-//     than Android's `onRefresh` re-fetching the whole usage payload.
-package dev.supermux.desktop.usage
+// Base = desktop's `usage/UsageScreen.kt`: the typed `UsageResponse` DTOs, the per-provider
+// "as of …" caption, the per-provider refreshing spinner, the opencode card, the clamped
+// percentage, and the redeem confirm whose note survives the card's numbers changing under it.
+// Android's `MoreScreens.kt` Usage section contributes the Compact branch — its `TopAppBar` with
+// Back + Refresh — and, with this task, LOSES its hand-written JSON parser: Android's `parseUsage`,
+// its nine private data classes and the `usageRaw()` wrapper that fed them are gone; the shared
+// typed DTOs already carry every field they had. Android's post-redeem re-fetch survives as [UsageActions.refresh] being
+// re-run by the stateful overload.
+//
+// Time: `java.time` cannot come into `:ui` commonMain, so the formatters take epoch millis and the
+// only calendar step — "Jul 14" in the user's zone — is `:shared`'s [shortMonthDayLabel], which is
+// the same civil-date maths chat timestamps already use. Number formatting is likewise pure
+// (`String.format(Locale.US, …)` is a JVM call).
+package dev.supermux.ui.usage
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,13 +27,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
-import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -52,9 +42,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,13 +60,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.ui.theme.LocalSemantics
-import dev.supermux.ui.theme.Radii
-import dev.supermux.ui.theme.Space
 import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
@@ -77,12 +72,23 @@ import dev.supermux.net.CursorUsage
 import dev.supermux.net.GrokUsage
 import dev.supermux.net.OpenCodeUsage
 import dev.supermux.net.UsageResponse
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.chat.parseChatTs
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.theme.LocalSemantics
+import dev.supermux.ui.theme.Radii
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.util.shortMonthDayLabel
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.TextStyle
-import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.round
 import kotlin.math.roundToInt
+import kotlin.time.Clock
 
 // ─── Reset formatting (pure) ────────────────────────────────────────────────────────────────────
 
@@ -90,19 +96,24 @@ private const val MS_PER_MINUTE = 60_000L
 private const val MS_PER_HOUR = 3_600_000L
 private const val MS_PER_DAY = 24 * MS_PER_HOUR
 
+/** Material's minimum touch target, applied to the header actions when there is no pointer. */
+private val TouchTargetMin = 48.dp
+
+private fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()
+
 /**
  * Claude windows (`ClaudeWindow.resetsAt`) + Cursor's `billingCycleEnd`: an ISO-8601 string
- * (Android also falls back to a numeric epoch-millis string first). `now` is injected for
- * deterministic tests (see the file header on the java.time choice).
+ * (both apps also fall back to a numeric epoch-millis string first). [now] is epoch millis,
+ * injected for deterministic tests.
  */
-fun formatResetIso(resetsAt: String?, now: Instant = Instant.now()): String {
+fun formatResetIso(resetsAt: String?, now: Long = nowMs()): String {
     val s = resetsAt?.takeIf { it.isNotBlank() } ?: return ""
-    val ms = s.toLongOrNull() ?: runCatching { Instant.parse(s).toEpochMilli() }.getOrElse { return "" }
+    val ms = s.toLongOrNull() ?: parseIsoMillis(s) ?: return ""
     return formatResetFromEpochMillis(ms, now)
 }
 
 /** Codex windows (`CodexWindow.resetsAt`): a Double of epoch SECONDS. */
-fun formatResetEpochSeconds(resetsAt: Double?, now: Instant = Instant.now()): String {
+fun formatResetEpochSeconds(resetsAt: Double?, now: Long = nowMs()): String {
     val secs = resetsAt ?: return ""
     return formatResetFromEpochMillis((secs * 1000.0).toLong(), now)
 }
@@ -110,12 +121,11 @@ fun formatResetEpochSeconds(resetsAt: Double?, now: Instant = Instant.now()): St
 /**
  * Per-provider "as of <relative>" caption from [UsageResponse.fetchedAt] (ISO-8601, or a
  * numeric epoch-millis string). Blank when missing/unparseable — the card then omits the line.
- * [now] is injected for deterministic tests (same java.time Instant as [formatResetIso]).
  */
-fun formatFetchedAt(fetchedAt: String?, now: Instant = Instant.now()): String {
+fun formatFetchedAt(fetchedAt: String?, now: Long = nowMs()): String {
     val s = fetchedAt?.takeIf { it.isNotBlank() } ?: return ""
-    val ms = s.toLongOrNull() ?: runCatching { Instant.parse(s).toEpochMilli() }.getOrElse { return "" }
-    val diffSec = ((now.toEpochMilli() - ms) / 1000L).coerceAtLeast(0L)
+    val ms = s.toLongOrNull() ?: parseIsoMillis(s) ?: return ""
+    val diffSec = ((now - ms) / 1000L).coerceAtLeast(0L)
     return when {
         diffSec < 60L -> "as of just now"
         diffSec < 3600L -> "as of ${diffSec / 60}m ago"
@@ -124,34 +134,56 @@ fun formatFetchedAt(fetchedAt: String?, now: Instant = Instant.now()): String {
     }
 }
 
-private fun formatResetFromEpochMillis(ms: Long, now: Instant): String {
-    val diff = ms - now.toEpochMilli()
+/**
+ * ISO-8601 → epoch millis, the shared parser both apps' chat timestamps use. `java.time`'s
+ * `Instant.parse` is not available here; [parseChatTs] accepts the same shapes (and, additionally,
+ * a bare epoch — harmless, since the callers try `toLongOrNull()` first anyway).
+ */
+private fun parseIsoMillis(s: String): Long? = parseChatTs(s)
+
+private fun formatResetFromEpochMillis(ms: Long, now: Long): String {
+    val diff = ms - now
     if (diff <= 0) return "resets soon"
     if (diff < MS_PER_DAY) {
         val h = (diff / MS_PER_HOUR).toInt()
         val m = ((diff % MS_PER_HOUR) / MS_PER_MINUTE).toInt()
         return if (h > 0) "resets in ${h}h ${m}m" else "resets in ${m}m"
     }
-    val date = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
-    val month = date.month.getDisplayName(TextStyle.SHORT, Locale.US)
-    return "resets $month ${date.dayOfMonth}"
+    val label = shortMonthDayLabel(ms)
+    return if (label.isEmpty()) "" else "resets $label"
 }
 
 private fun clampPct(v: Double): Double = v.coerceIn(0.0, 100.0)
 
-private fun money(cents: Double): String = "$" + String.format(Locale.US, "%.2f", cents / 100.0)
-private fun dollars(v: Double): String = "$" + String.format(Locale.US, "%.2f", v)
+/**
+ * `"%.<decimals>f"` without `java.util.Formatter`: half-away-from-zero on the scaled magnitude,
+ * which is what `String.format(Locale.US, "%.2f", …)` produced for every value these cards show.
+ */
+internal fun fixed(v: Double, decimals: Int): String {
+    if (v.isNaN() || v.isInfinite()) return v.toString()
+    var scale = 1L
+    repeat(decimals) { scale *= 10L }
+    val scaled = round(abs(v) * scale).toLong()
+    val whole = scaled / scale
+    val frac = scaled % scale
+    val sign = if (v < 0 && scaled != 0L) "-" else ""
+    if (decimals == 0) return "$sign$whole"
+    return "$sign$whole." + frac.toString().padStart(decimals, '0')
+}
+
+private fun money(cents: Double): String = "$" + fixed(cents / 100.0, 2)
+private fun dollars(v: Double): String = "$" + fixed(v, 2)
 
 /** 1.2M / 34.5K / 912 — mirrors the web UsageView's formatTokens. */
 private fun tokens(n: Long): String = when {
-    n >= 1_000_000 -> String.format(Locale.US, "%.1fM", n / 1_000_000.0)
-    n >= 1_000 -> String.format(Locale.US, "%.1fK", n / 1_000.0)
+    n >= 1_000_000 -> fixed(n / 1_000_000.0, 1) + "M"
+    n >= 1_000 -> fixed(n / 1_000.0, 1) + "K"
     else -> n.toString()
 }
 
-/** Bar colour by percentage: >=85 red, >=60 amber, else primary — ports Android's `barColor`. */
+/** Bar colour by percentage: >=85 red, >=60 amber, else primary — both apps' `barColor`. */
 @Composable
-private fun barColor(pct: Double): androidx.compose.ui.graphics.Color {
+private fun barColor(pct: Double): Color {
     val cs = MaterialTheme.colorScheme
     val semantics = LocalSemantics.current
     return when {
@@ -268,6 +300,7 @@ fun ClaudeUsageCard(
     error: String?,
     asOf: String? = null,
     refreshing: Boolean = false,
+    now: Long = nowMs(),
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
@@ -283,10 +316,10 @@ fun ClaudeUsageCard(
         if (claude == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
-            UsageWindowRow("5-hour window", claude.fiveHour.used, formatResetIso(claude.fiveHour.resetsAt))
-            UsageWindowRow("7-day window", claude.sevenDay.used, formatResetIso(claude.sevenDay.resetsAt))
-            claude.sevenDaySonnet?.let { UsageWindowRow("7-day Sonnet", it.used, formatResetIso(it.resetsAt)) }
-            claude.sevenDayFable?.let { UsageWindowRow("7-day Fable", it.used, formatResetIso(it.resetsAt)) }
+            UsageWindowRow("5-hour window", claude.fiveHour.used, formatResetIso(claude.fiveHour.resetsAt, now))
+            UsageWindowRow("7-day window", claude.sevenDay.used, formatResetIso(claude.sevenDay.resetsAt, now))
+            claude.sevenDaySonnet?.let { UsageWindowRow("7-day Sonnet", it.used, formatResetIso(it.resetsAt, now)) }
+            claude.sevenDayFable?.let { UsageWindowRow("7-day Fable", it.used, formatResetIso(it.resetsAt, now)) }
             claude.extraUsage?.takeIf { it.enabled }?.let { e ->
                 UsageFooterRow("Extra usage", "${dollars(e.usedCredits)} / ${dollars(e.monthlyLimit)}")
             }
@@ -295,12 +328,11 @@ fun ClaudeUsageCard(
 }
 
 /**
- * `onRedeem` — null hides the "Use a reset" affordance entirely (kept optional, mirroring
- * Android, though [UsageScreen] always supplies one). On confirm: spends 1 banked reset via
- * [onRedeem], shows the resulting [codexResetNote] inline. The CALLER (AppShell) is
- * responsible for swapping in the refreshed `CodexUsage` on `code == "reset"` — this card only
- * renders whatever `codex` it's given, so a parent-level re-composition after a successful redeem
- * is what makes the numbers move (see [UsageScreen]'s KDoc + the AppShell wiring).
+ * `onRedeem` — null hides the "Use a reset" affordance entirely (kept optional, mirroring both
+ * originals, though [UsageScreen] always supplies one). On confirm: spends 1 banked reset via
+ * [onRedeem], shows the resulting [codexResetNote] inline, then calls [onRedeemed] so the caller
+ * can pull fresh numbers (desktop swaps `.codex` in place; Android re-fetched the whole payload —
+ * the stateful [UsageScreen] overload does both through [UsageActions]).
  */
 @Composable
 fun CodexUsageCard(
@@ -309,13 +341,15 @@ fun CodexUsageCard(
     onRedeem: (suspend () -> CodexResetResult?)? = null,
     asOf: String? = null,
     refreshing: Boolean = false,
+    now: Long = nowMs(),
+    onRedeemed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     // NOT keyed to `codex`: a successful redeem swaps the caller's `codex` for a refreshed value
     // (see UsageScreen's KDoc) — the note must survive that swap so "✓ Reset — cleared N window(s)"
-    // stays visible under the now-updated numbers, matching Android (whose `note`/`redeeming` are
-    // similarly un-keyed local state that outlives its own `reloadKey` re-fetch).
+    // stays visible under the now-updated numbers, matching both originals (whose `note`/`redeeming`
+    // are similarly un-keyed local state that outlives the re-fetch).
     var redeeming by remember { mutableStateOf(false) }
     var showDialog by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
@@ -348,7 +382,7 @@ fun CodexUsageCard(
                 UsageWindowRow(
                     window.label,
                     window.used,
-                    formatResetEpochSeconds(window.resetsAt),
+                    formatResetEpochSeconds(window.resetsAt, now),
                 )
             }
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
@@ -388,6 +422,7 @@ fun CodexUsageCard(
                             val r = onRedeem?.invoke()
                             note = codexResetNote(r)
                             redeeming = false
+                            onRedeemed()
                         }
                     },
                     modifier = Modifier.testTag("codex_redeem_confirm"),
@@ -403,7 +438,7 @@ fun CodexUsageCard(
     }
 }
 
-/** Ports Android's `codexResetNote` — the transient inline status line after a redeem attempt. */
+/** Both apps' `codexResetNote` — the transient inline status line after a redeem attempt. */
 fun codexResetNote(r: CodexResetResult?): String {
     if (r == null) return "Reset failed"
     return when (r.code) {
@@ -421,6 +456,7 @@ fun CursorUsageCard(
     error: String?,
     asOf: String? = null,
     refreshing: Boolean = false,
+    now: Long = nowMs(),
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
@@ -436,7 +472,7 @@ fun CursorUsageCard(
         if (cursor == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
-            UsageWindowRow("Usage", cursor.totalPercentUsed, formatResetIso(cursor.billingCycleEnd))
+            UsageWindowRow("Usage", cursor.totalPercentUsed, formatResetIso(cursor.billingCycleEnd, now))
             if (cursor.spendAvailable) {
                 UsageFooterRow("Spend", "${money(cursor.totalSpendCents)} / ${money(cursor.includedCents)} included")
             }
@@ -483,6 +519,7 @@ fun GrokUsageCard(
     error: String?,
     asOf: String? = null,
     refreshing: Boolean = false,
+    now: Long = nowMs(),
 ) {
     val cs = MaterialTheme.colorScheme
     UsageCard(
@@ -498,7 +535,7 @@ fun GrokUsageCard(
         if (grok == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
-            UsageWindowRow("Monthly credits", grok.percentUsed, formatResetIso(grok.billingPeriodEnd))
+            UsageWindowRow("Monthly credits", grok.percentUsed, formatResetIso(grok.billingPeriodEnd, now))
             if (grok.monthlyLimit > 0) {
                 UsageFooterRow("Credits", "${grok.used.toLong()} / ${grok.monthlyLimit.toLong()}")
             }
@@ -512,18 +549,114 @@ fun GrokUsageCard(
     }
 }
 
+// ─── Actions holder ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Everything the Usage screen needs from a store: the held snapshot it paints immediately, the two
+ * fetches, and the Codex redeem. Both builders below keep the SAME rule desktop's AppShell had —
+ * a successful redeem swaps the refreshed `codex` into the held snapshot in place, so the card's
+ * numbers move under the note it just showed.
+ */
+@Immutable
+class UsageActions(
+    val snapshot: StateFlow<UsageResponse?>,
+    /** GET /usage — fills gaps / picks up the broker's current snapshot. Null on failure. */
+    val load: suspend () -> UsageResponse?,
+    /** POST /usage/refresh — force a live re-fetch. Null on failure. */
+    val refresh: suspend () -> UsageResponse?,
+    val redeem: suspend () -> CodexResetResult?,
+)
+
+/** [UsageActions] against one paired host — desktop's wiring. */
+@Composable
+fun rememberUsageActions(app: HostStore): UsageActions = remember(app) {
+    UsageActions(
+        snapshot = app.usageSnapshot,
+        load = { app.usage() },
+        refresh = { app.refreshUsage() },
+        redeem = {
+            val r = app.redeemCodexReset()
+            if (r?.code == "reset" && r.codex != null) {
+                app.usageSnapshot.value?.copy(codex = r.codex)?.let { app.applyUsage(it) }
+            }
+            r
+        },
+    )
+}
+
+/** [UsageActions] against the fleet's ACTIVE host — Android's wiring. */
+@Composable
+fun rememberUsageActions(fleet: FleetStore): UsageActions = remember(fleet) {
+    UsageActions(
+        snapshot = fleet.usageSnapshot,
+        load = { fleet.usage() },
+        refresh = { fleet.refreshUsage() },
+        redeem = {
+            val r = fleet.redeemCodexReset()
+            if (r?.code == "reset" && r.codex != null) {
+                fleet.usageSnapshot.value?.copy(codex = r.codex)?.let { fleet.applyUsage(it) }
+            }
+            r
+        },
+    )
+}
+
 // ─── UsageScreen ────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Usage card body: title row + close, then either a spinner (still loading), "Unable to load
- * usage data." (resolved to null), or the provider cards fed from [usage]. [loading] and
- * [usage] are both owned by the caller (AppShell fetches `app.usage()` once per open) — this
- * composable renders whatever point-in-time snapshot it's given. [onRedeem] is threaded straight
- * to [CodexUsageCard]; the caller is responsible for swapping in the refreshed codex usage on
- * `code == "reset"` (see AppShell's `usageData = usageData?.copy(codex = r.codex)`).
+ * Usage over a store: paints [UsageActions.snapshot] immediately (never blanks on re-open) and
+ * runs [UsageActions.load] once per host, exactly as desktop's AppShell did around the popover.
  *
- * Hosted inside [UsagePopover] (anchored to the footer Usage icon), not as a full-pane route.
+ * @param onBack close the popover (desktop) / pop the route (Android).
+ * @param topBarShown something above already painted a `TopAppBar` for this screen.
+ * @param standalone this is its own route rather than an anchored popover, so it needs a title and
+ *   Back at EVERY width (a phone in landscape is Medium, not Compact) — Android's `Route.Usage`.
  */
+@Composable
+fun UsageScreen(
+    actions: UsageActions,
+    modifier: Modifier = Modifier,
+    onBack: () -> Unit = {},
+    topBarShown: Boolean = false,
+    standalone: Boolean = false,
+    now: Long = nowMs(),
+) {
+    val usage by actions.snapshot.collectAsState()
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(actions) {
+        loading = actions.snapshot.value == null
+        actions.load()
+        loading = false
+    }
+    UsageScreen(
+        usage = usage,
+        loading = loading,
+        onBack = onBack,
+        onRedeem = actions.redeem,
+        onRefresh = {
+            loading = actions.snapshot.value == null
+            actions.refresh()
+            loading = false
+        },
+        now = now,
+        modifier = modifier,
+        topBarShown = topBarShown,
+        standalone = standalone,
+    )
+}
+
+/**
+ * Usage card body: title row + close, then either a spinner (still loading), "Unable to load
+ * usage data." (resolved to null), or the provider cards fed from [usage]. [loading] and [usage]
+ * are both owned by the caller — this composable renders whatever point-in-time snapshot it is
+ * given. [onRedeem] is threaded straight to [CodexUsageCard].
+ *
+ * Chrome: desktop hosts this inside [UsagePopover], where the card's own header row IS the title
+ * bar (a close ✕ and the refresh ⟳). A phone route, or any width when [standalone], gets Android's
+ * `TopAppBar` with Back + Refresh instead — unless [topBarShown] says something above already
+ * painted one.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UsageScreen(
     usage: UsageResponse?,
@@ -531,105 +664,175 @@ fun UsageScreen(
     onBack: () -> Unit,
     onRedeem: suspend () -> CodexResetResult?,
     onRefresh: (suspend () -> Unit)? = null,
-    now: Instant = Instant.now(),
+    now: Long = nowMs(),
+    modifier: Modifier = Modifier,
+    topBarShown: Boolean = false,
+    standalone: Boolean = false,
+    onRedeemed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    Column(
-        Modifier
-            .fillMaxSize()
-            .testTag("usage_screen"),
+    val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+    val barOwned = (standalone || compact) && !topBarShown
+
+    if (barOwned) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Usage", color = cs.onSurface) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = cs.onSurface,
+                            )
+                        }
+                    },
+                    actions = {
+                        if (onRefresh != null) {
+                            IconButton(
+                                onClick = { if (!loading) scope.launch { onRefresh() } },
+                                enabled = !loading,
+                                modifier = Modifier.testTag("usage_refresh"),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Refresh,
+                                    contentDescription = "Refresh",
+                                    tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.surfaceContainerHigh),
+                )
+            },
+            containerColor = cs.background,
+            modifier = Modifier.testTag("usage_screen"),
+        ) { padding ->
+            UsageBody(usage, loading, onRedeem, now, onRedeemed, modifier.padding(padding))
+        }
+    } else {
+        Column(modifier.fillMaxSize().testTag("usage_screen")) {
+            UsageHeaderRow(loading, onBack, onRefresh)
+            HorizontalDivider(color = cs.outlineVariant)
+            UsageBody(usage, loading, onRedeem, now, onRedeemed, Modifier)
+        }
+    }
+}
+
+/** Desktop's in-card header: title, refresh, close. Only painted when no top bar owns them. */
+@Composable
+private fun UsageHeaderRow(loading: Boolean, onBack: () -> Unit, onRefresh: (suspend () -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val touch = !LocalPointerAvailable.current
+    val actionSize = if (touch) Modifier.sizeIn(minWidth = TouchTargetMin, minHeight = TouchTargetMin) else Modifier
+    Row(
+        Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.sm, bottom = Space.sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = Space.lg, end = Space.sm, top = Space.sm, bottom = Space.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Usage",
-                color = cs.onSurface,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
-            if (onRefresh != null) {
-                IconButton(
-                    onClick = { if (!loading) scope.launch { onRefresh() } },
-                    enabled = !loading,
-                    modifier = Modifier.testTag("usage_refresh"),
-                ) {
-                    Icon(
-                        Icons.Filled.Refresh,
-                        contentDescription = "Refresh",
-                        tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-            IconButton(onClick = onBack, modifier = Modifier.testTag("usage_back")) {
+        Text(
+            "Usage",
+            color = cs.onSurface,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        if (onRefresh != null) {
+            IconButton(
+                onClick = { if (!loading) scope.launch { onRefresh() } },
+                enabled = !loading,
+                modifier = actionSize.testTag("usage_refresh"),
+            ) {
                 Icon(
-                    Icons.Filled.Close,
-                    contentDescription = "Close",
-                    tint = cs.onSurfaceVariant,
+                    Icons.Filled.Refresh,
+                    contentDescription = "Refresh",
+                    tint = if (loading) cs.onSurfaceVariant else cs.onSurface,
                     modifier = Modifier.size(18.dp),
                 )
             }
         }
-        HorizontalDivider(color = cs.outlineVariant)
-        Box(Modifier.fillMaxSize()) {
-            when {
-                loading && usage == null -> {
-                    CircularProgressIndicator(
-                        color = cs.primary,
-                        modifier = Modifier.align(Alignment.Center).testTag("usage_spinner"),
+        IconButton(onClick = onBack, modifier = actionSize.testTag("usage_back")) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Close",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun UsageBody(
+    usage: UsageResponse?,
+    loading: Boolean,
+    onRedeem: suspend () -> CodexResetResult?,
+    now: Long,
+    onRedeemed: () -> Unit,
+    modifier: Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    Box(modifier.fillMaxSize().testTag("usage_body")) {
+        when {
+            loading && usage == null -> {
+                CircularProgressIndicator(
+                    color = cs.primary,
+                    modifier = Modifier.align(Alignment.Center).testTag("usage_spinner"),
+                )
+            }
+            usage == null && !loading -> {
+                Text(
+                    "Unable to load usage data.",
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center).padding(Space.lg),
+                )
+            }
+            else -> {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(Space.lg),
+                    verticalArrangement = Arrangement.spacedBy(Space.md),
+                ) {
+                    ClaudeUsageCard(
+                        usage?.claude,
+                        usage?.errors?.get("claude"),
+                        asOf = formatFetchedAt(usage?.fetchedAt?.get("claude"), now),
+                        refreshing = usage?.refreshing?.contains("claude") == true,
+                        now = now,
                     )
-                }
-                usage == null && !loading -> {
-                    Text(
-                        "Unable to load usage data.",
-                        color = cs.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center).padding(Space.lg),
+                    CodexUsageCard(
+                        usage?.codex,
+                        usage?.errors?.get("codex"),
+                        onRedeem = onRedeem,
+                        asOf = formatFetchedAt(usage?.fetchedAt?.get("codex"), now),
+                        refreshing = usage?.refreshing?.contains("codex") == true,
+                        now = now,
+                        onRedeemed = onRedeemed,
                     )
-                }
-                else -> {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(Space.lg),
-                        verticalArrangement = Arrangement.spacedBy(Space.md),
-                    ) {
-                        ClaudeUsageCard(
-                            usage?.claude,
-                            usage?.errors?.get("claude"),
-                            asOf = formatFetchedAt(usage?.fetchedAt?.get("claude"), now),
-                            refreshing = usage?.refreshing?.contains("claude") == true,
-                        )
-                        CodexUsageCard(
-                            usage?.codex,
-                            usage?.errors?.get("codex"),
-                            onRedeem = onRedeem,
-                            asOf = formatFetchedAt(usage?.fetchedAt?.get("codex"), now),
-                            refreshing = usage?.refreshing?.contains("codex") == true,
-                        )
-                        CursorUsageCard(
-                            usage?.cursor,
-                            usage?.errors?.get("cursor"),
-                            asOf = formatFetchedAt(usage?.fetchedAt?.get("cursor"), now),
-                            refreshing = usage?.refreshing?.contains("cursor") == true,
-                        )
-                        OpenCodeUsageCard(
-                            usage?.opencode,
-                            usage?.errors?.get("opencode"),
-                            asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
-                            refreshing = usage?.refreshing?.contains("opencode") == true,
-                        )
-                        GrokUsageCard(
-                            usage?.grok,
-                            usage?.errors?.get("grok"),
-                            asOf = formatFetchedAt(usage?.fetchedAt?.get("grok"), now),
-                            refreshing = usage?.refreshing?.contains("grok") == true,
-                        )
-                    }
+                    CursorUsageCard(
+                        usage?.cursor,
+                        usage?.errors?.get("cursor"),
+                        asOf = formatFetchedAt(usage?.fetchedAt?.get("cursor"), now),
+                        refreshing = usage?.refreshing?.contains("cursor") == true,
+                        now = now,
+                    )
+                    OpenCodeUsageCard(
+                        usage?.opencode,
+                        usage?.errors?.get("opencode"),
+                        asOf = formatFetchedAt(usage?.fetchedAt?.get("opencode"), now),
+                        refreshing = usage?.refreshing?.contains("opencode") == true,
+                    )
+                    GrokUsageCard(
+                        usage?.grok,
+                        usage?.errors?.get("grok"),
+                        asOf = formatFetchedAt(usage?.fetchedAt?.get("grok"), now),
+                        refreshing = usage?.refreshing?.contains("grok") == true,
+                        now = now,
+                    )
                 }
             }
         }

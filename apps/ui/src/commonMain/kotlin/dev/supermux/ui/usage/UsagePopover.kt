@@ -1,7 +1,15 @@
-// Anchored Usage popover — sits above the sidebar footer Usage icon (not a centered modal).
-// Parent must be the icon's Box so Popup measures against that anchor. ModalOpen hides
-// JediTerm/JCEF while open (Compose cannot paint over heavyweight AWT children).
-package dev.supermux.desktop.usage
+// The anchored Usage container (cluster E6) — desktop's `usage/UsagePopover.kt`, moved as-is.
+//
+// It sits above the sidebar footer Usage icon, not in the window centre, so the parent must be
+// that icon's Box: `Popup` measures against its anchor. POINTER-ONLY on purpose — a popover
+// anchored to a 28dp rail icon is a mouse affordance; a touch device gets the full
+// [dev.supermux.ui.usage.UsageScreen] as its own route instead (Android's `Route.Usage`), which is
+// why this composable renders nothing without a pointer.
+//
+// The AWT interop shield stays a desktop concern: on desktop Compose cannot paint over a
+// heavyweight child (JediTerm/JCEF), so the popover announces itself through [ModalHost] and
+// `DesktopTheme`'s host does the retain/release that `ModalOpen()` used to do here directly.
+package dev.supermux.ui.usage
 
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.heightIn
@@ -28,11 +36,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import dev.supermux.desktop.ui.ModalOpen
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.widgets.ModalHost
 
 /**
- * Icon-anchored Usage card. Prefer placing this as a sibling of the Usage [IconButton]
- * inside a [Box] so the popup sits on top of that icon, not in the window center.
+ * Icon-anchored Usage card. Prefer placing this as a sibling of the Usage `IconButton`
+ * inside a `Box` so the popup sits on top of that icon, not in the window center.
  */
 @Composable
 fun UsagePopover(
@@ -41,7 +50,9 @@ fun UsagePopover(
     content: @Composable () -> Unit,
 ) {
     if (!expanded) return
-    ModalOpen()
+    // No mouse or touchpad → no anchored popover (the host routes to the full screen instead).
+    if (!LocalPointerAvailable.current) return
+    ModalHost {}
     val positionProvider = remember {
         object : PopupPositionProvider {
             override fun calculatePosition(

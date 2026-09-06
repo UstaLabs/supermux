@@ -98,7 +98,8 @@ import dev.supermux.workspace.openSingletonView
 import dev.supermux.workspace.toDomainOrNull
 import dev.supermux.android.display.DisplaysScreen
 import dev.supermux.android.settings.AppearanceSettingsPage
-import dev.supermux.android.settings.ArchivedScreen
+import dev.supermux.ui.session.ArchivedScreen
+import dev.supermux.ui.session.rememberArchivedActions
 import dev.supermux.ui.settings.DevicesSettingsScreen
 import dev.supermux.ui.settings.ProxiesSettingsScreen
 import dev.supermux.ui.settings.rememberCuratorSettingsActions
@@ -108,7 +109,8 @@ import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.android.settings.SettingsScreen
 import dev.supermux.android.update.AppUpdateBanner
 import dev.supermux.android.update.AppUpdateNotifier
-import dev.supermux.android.settings.UsageScreen
+import dev.supermux.ui.usage.UsageScreen
+import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.theme.AppearanceMode
@@ -870,9 +872,11 @@ class MainActivity : ComponentActivity() {
                     }
                     composable<Route.Usage> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { UsageScreen(
+                            actions = rememberUsageActions(vm.fleet),
                             onBack = { navController.popBackStack() },
-                            onLoad = { vm.fleet.usageRaw() },
-                            onRedeem = { vm.fleet.redeemCodexReset() },
+                            // Its own destination, not desktop's anchored popover: it paints the
+                            // title and Back at every width (a phone in landscape is Medium).
+                            standalone = true,
                         ) } }
                     }
                     composable<Route.Devices> {
@@ -886,14 +890,10 @@ class MainActivity : ComponentActivity() {
                     }
                     composable<Route.Archived> {
                         HostScopedPage(hostViews, activeHost, vm.fleet::setActiveHost) { key(activeHost) { ArchivedScreen(
-                            onBack = { navController.popBackStack() },
-                            workspaces = archivedWorkspaces,
-                            onRestore = { vm.fleet.restoreWorkspace(it) },
+                            actions = rememberArchivedActions(vm.fleet),
                             home = DevConfig.HOME,
-                            useWorkspaces = workspaces.isNotEmpty(),
-                            loadArchivedSessions = { vm.fleet.archived() },
-                            onResumeSession = { vm.fleet.resume(it) },
-                            loadLogs = { vm.fleet.archivedLogs(it) },
+                            onBack = { navController.popBackStack() },
+                            standalone = true,
                         ) } }
                     }
                     composable<Route.Proxies> {

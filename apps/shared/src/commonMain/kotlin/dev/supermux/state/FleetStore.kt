@@ -157,6 +157,7 @@ class FleetStore(
     private val agentByHost = HashMap<String, Map<String, AgentStatus>>()
     private val lastReadByHost = HashMap<String, Map<String, String>>()
     private val archivedByHost = HashMap<String, List<ArchivedDto>>()
+    private val usageByHost = HashMap<String, UsageResponse?>()
     private val onlineHosts = HashMap<String, Boolean>()
     private var lastViewingHost: String? = null
     private var viewingSnapshot: WorkspaceViewingSnapshot? = null
@@ -171,6 +172,8 @@ class FleetStore(
 
     private fun publishApps() {
         hostApps.value = conns.values.map { it.app }
+        // The active host's usage snapshot is keyed on the connection set too (E6).
+        recomputeUsage()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -245,6 +248,20 @@ class FleetStore(
     private val _activeHost = MutableStateFlow<String?>(null)
     val activeHost: StateFlow<String?> = _activeHost.asStateFlow()
 
+    /**
+     * The ACTIVE host's last `GET /usage` snapshot (cluster E6). Not a merge: usage is per-broker
+     * and the screen is host-scoped, so this republishes whichever host [activeHost] currently
+     * points at (with `activeApp`'s same first-host fallback), and follows that host's own
+     * snapshot — a `usage_updated` frame reaches the open screen without a fetch.
+     *
+     * Folded per host through [onHostUsage] like every other cross-host projection above, rather
+     * than assembled with `combine`/`flatMapLatest`: the fold is what the rest of this class does,
+     * and it keeps working under a switch that happens before that host has ever fetched.
+     */
+    private val _usageSnapshot = MutableStateFlow<UsageResponse?>(null)
+    val usageSnapshot: StateFlow<UsageResponse?> = _usageSnapshot.asStateFlow()
+
+
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.
     private val _agentReplies = MutableSharedFlow<AgentReplyEvent>(
@@ -299,6 +316,7 @@ class FleetStore(
         conn.jobs += fleetScope.launch { app.lastRead.collect { onHostLastRead(recordId, it) } }
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
         conn.jobs += fleetScope.launch { app.archivedSessions.collect { onHostArchived(recordId, it) } }
+        conn.jobs += fleetScope.launch { app.usageSnapshot.collect { onHostUsage(recordId, it) } }
         conns[recordId] = conn
         publishApps()
     }
@@ -422,6 +440,32 @@ class FleetStore(
         _lastRead.value = out
     }
 
+    private fun onHostUsage(recordId: String, usage: UsageResponse?) = synchronized(lock) {
+        usageByHost[recordId] = usage
+        recomputeUsage()
+    }
+
+    /** The recordId [activeApp] resolves to, or null when nothing is connected. */
+    private fun activeRecordId(): String? =
+        _activeHost.value?.takeIf { conns.containsKey(it) } ?: conns.keys.firstOrNull()
+
+    /** Republish the active host's usage snapshot. Callers hold [lock]. */
+    private fun recomputeUsage() {
+        _usageSnapshot.value = activeRecordId()?.let { usageByHost[it] }
+    }
+
+    /**
+     * Record a snapshot the CALLER just obtained for the active host. The per-host collector in
+     * [open] already carries `usage_updated` frames here, but it resumes on whichever thread the
+     * HTTP call completed on — so a fetch publishes its own result too, and `usage()` returning is
+     * the point at which [usageSnapshot] is up to date.
+     */
+    private fun publishUsage(usage: UsageResponse?) = synchronized(lock) {
+        val active = activeRecordId() ?: return@synchronized
+        usageByHost[active] = usage
+        recomputeUsage()
+    }
+
     private fun onHostArchived(recordId: String, archived: List<ArchivedDto>) = synchronized(lock) {
         archivedByHost[recordId] = archived
         recomputeArchived()
@@ -452,7 +496,10 @@ class FleetStore(
     fun activeApp(): HostStore? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
 
     /** Route host-global operations to a chosen host — the launcher's host picker + opening a chat. */
-    fun setActiveHost(recordId: String) { _activeHost.value = recordId }
+    fun setActiveHost(recordId: String) {
+        _activeHost.value = recordId
+        synchronized(lock) { recomputeUsage() }
+    }
 
     /**
      * Report the foreground chat (`null` = the list) + visibility to the OWNING host, making that
@@ -461,7 +508,10 @@ class FleetStore(
      */
     fun updateViewing(sessionId: String?, visible: Boolean) {
         val owner = sessionId?.let { _sessionHost.value[it] }
-        if (owner != null) _activeHost.value = owner
+        if (owner != null) {
+            _activeHost.value = owner
+            synchronized(lock) { recomputeUsage() }
+        }
         val prev = lastViewingHost
         if (prev != null && prev != owner) conns[prev]?.app?.updateViewing(null, visible)
         (owner?.let { conns[it]?.app } ?: activeApp())?.updateViewing(sessionId, visible)
@@ -620,9 +670,11 @@ class FleetStore(
             agentByHost.remove(recordId)
             lastReadByHost.remove(recordId)
             archivedByHost.remove(recordId)
+            usageByHost.remove(recordId)
             onlineHosts.remove(recordId)
             snapshots?.remove(recordId)
             if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
+            recomputeUsage()
         }
         onHostsChanged()
         synchronized(lock) { recomputeAll() }
@@ -1002,9 +1054,15 @@ class FleetStore(
     }
 
     suspend fun appConfig(): AppConfigDto? = activeApp()?.appConfig()
-    suspend fun usageRaw(): String? = activeApp()?.usageRaw()
-    suspend fun usage(): UsageResponse? = activeApp()?.usage()
+    suspend fun usage(): UsageResponse? = activeApp()?.usage()?.also { publishUsage(it) }
+    /** POST /usage/refresh on the active host — the snapshot comes back with `refreshing` set. */
+    suspend fun refreshUsage(): UsageResponse? = activeApp()?.refreshUsage()?.also { publishUsage(it) }
     suspend fun redeemCodexReset(): CodexResetResult? = activeApp()?.redeemCodexReset()
+    /** Replace the active host's held snapshot (the Codex redeem updates one provider in place). */
+    fun applyUsage(usage: UsageResponse) {
+        activeApp()?.applyUsage(usage)
+        publishUsage(usage)
+    }
     /** Null = the load FAILED (or no active host); empty = a real, empty glossary (cluster E5). */
     suspend fun fetchGlossary(): List<String>? = activeApp()?.fetchGlossary()
     suspend fun updateGlossary(terms: List<String>): List<String>? = activeApp()?.updateGlossary(terms)

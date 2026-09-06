@@ -1,8 +1,7 @@
-package dev.supermux.desktop.usage
+package dev.supermux.ui.usage
 
-import dev.supermux.desktop.testDeps
-
-import androidx.compose.ui.input.key.Key
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -10,18 +9,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.test.withKeyDown
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.state.HostStore
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.net.BrokerApi
+import androidx.compose.ui.unit.dp
 import dev.supermux.net.ClaudeExtraUsage
 import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.ClaudeWindow
@@ -31,33 +20,45 @@ import dev.supermux.net.CodexUsage
 import dev.supermux.net.CodexWindow
 import dev.supermux.net.CursorUsage
 import dev.supermux.net.UsageResponse
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.respond
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpMethod
-import io.ktor.http.HttpStatusCode
-import io.ktor.http.headersOf
-import io.ktor.utils.io.ByteReadChannel
-import java.nio.file.Files
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.setPlatformContent
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.SupermuxTheme
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlin.test.AfterTest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * M4f Task 2 — the UsageScreen overlay, its three provider cards (ClaudeUsageCard/CodexUsageCard/
- * CursorUsageCard) fed from a typed `UsageResponse`, the Codex banked-reset redeem flow, and the
- * overlay wiring into AppShell (`ui.usageOpen`). Pure reset-formatter tests live in
- * [UsageResetFormatTest]; this file exercises the composables + the overlay via [runComposeUiTest],
- * mirroring [dev.supermux.desktop.session.ArchivedScreenTest]'s two-layer shape.
+ * The shared [UsageScreen] (cluster E6) — desktop's suite, moved by name.
+ *
+ * Covers the provider cards fed from a typed `UsageResponse`, the per-provider "as of"/refreshing
+ * captions, and the Codex banked-reset redeem flow. Pure reset-formatter tests live in
+ * [UsageResetFormatTest]; the AppShell popover wiring stays in `:desktop` (`UsageHubTest`).
+ *
+ * New here: the Compact branch Android contributed — the `TopAppBar` with Back + Refresh that a
+ * phone route paints for itself, the `standalone` gate that keeps it at every width, and the
+ * stateful `UsageActions` overload that owns the snapshot and the fetches.
  */
 @OptIn(ExperimentalTestApi::class, ExperimentalCoroutinesApi::class)
 class UsageScreenTest {
+
+    private fun ComposeUiTest.usageContent(
+        pointer: Boolean = true,
+        widthClass: WindowWidthClass = WindowWidthClass.Expanded,
+        content: @Composable () -> Unit,
+    ) = setPlatformContent(
+        platform = FakePlatform(),
+        pointer = pointer,
+        widthClass = widthClass,
+        inputMode = if (pointer) InputMode.Pointer else InputMode.Touch,
+    ) {
+        content()
+    }
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
     // `resetsAt` values deliberately kept out of the reset-formatter's tested branches (or null) —
@@ -101,8 +102,8 @@ class UsageScreenTest {
     // ── (1) UsageScreen: loading / unable-to-load / the three cards ─────────────────────────────────
 
     @Test fun loading_and_usage_null_shows_a_spinner_not_the_unable_to_load_text() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = null, loading = true, onBack = {}, onRedeem = { null })
             }
         }
@@ -112,8 +113,8 @@ class UsageScreenTest {
     }
 
     @Test fun usage_null_and_not_loading_shows_the_unable_to_load_text() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = null, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -123,8 +124,8 @@ class UsageScreenTest {
     }
 
     @Test fun renders_all_three_provider_cards_from_a_representative_usage_response() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -155,8 +156,8 @@ class UsageScreenTest {
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {
         var backCalled = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(), loading = false, onBack = { backCalled = true }, onRedeem = { null })
             }
         }
@@ -173,8 +174,8 @@ class UsageScreenTest {
             label = "7-day window",
             windowSeconds = 604_800.0,
         )
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(codexWindows = listOf(currentWindow)),
                     loading = false,
@@ -193,8 +194,8 @@ class UsageScreenTest {
     @Test fun cursor_hides_spend_when_the_provider_does_not_return_it() = runComposeUiTest {
         val fixture = fixtureUsage()
         val usage = fixture.copy(cursor = requireNotNull(fixture.cursor).copy(spendAvailable = false))
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -206,8 +207,8 @@ class UsageScreenTest {
     // ── (2) null sevenDayFable hides the row; a present one shows it ────────────────────────────────
 
     @Test fun null_seven_day_fable_hides_that_row() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(sevenDayFable = null), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -218,8 +219,8 @@ class UsageScreenTest {
     }
 
     @Test fun present_seven_day_fable_shows_the_row() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(sevenDayFable = ClaudeWindow(used = 5.0, resetsAt = null)),
                     loading = false, onBack = {}, onRedeem = { null },
@@ -247,8 +248,8 @@ class UsageScreenTest {
                 "grok" to "no credits",
             ),
         )
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -261,8 +262,8 @@ class UsageScreenTest {
 
     @Test fun a_provider_absent_from_usage_and_errors_falls_back_to_not_available() = runComposeUiTest {
         val usage = UsageResponse(claude = null, codex = null, cursor = null, errors = emptyMap())
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -274,12 +275,12 @@ class UsageScreenTest {
     }
 
     @Test fun fetched_at_renders_a_per_provider_as_of_caption() = runComposeUiTest {
-        val now = java.time.Instant.parse("2026-07-09T12:00:00Z")
+        val now = java.time.Instant.parse("2026-07-09T12:00:00Z").toEpochMilli()
         val usage = fixtureUsage().copy(
             fetchedAt = mapOf("claude" to "2026-07-09T11:55:00Z", "codex" to "2026-07-09T10:00:00Z"),
         )
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null }, now = now)
             }
         }
@@ -293,8 +294,8 @@ class UsageScreenTest {
 
     @Test fun refreshing_providers_show_a_progress_indicator() = runComposeUiTest {
         val usage = fixtureUsage().copy(refreshing = listOf("claude", "cursor"))
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = usage, loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -306,8 +307,8 @@ class UsageScreenTest {
 
     @Test fun refresh_button_calls_on_refresh() = runComposeUiTest {
         var refreshed = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(),
                     loading = false,
@@ -326,8 +327,8 @@ class UsageScreenTest {
     // ── (4) the Codex "Use a reset" button + confirm dialog ─────────────────────────────────────────
 
     @Test fun redeem_button_shown_only_when_reset_credits_positive() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(codexResetCredits = 3), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -336,8 +337,8 @@ class UsageScreenTest {
     }
 
     @Test fun redeem_button_hidden_when_reset_credits_is_zero() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(usage = fixtureUsage(codexResetCredits = 0), loading = false, onBack = {}, onRedeem = { null })
             }
         }
@@ -347,8 +348,8 @@ class UsageScreenTest {
 
     @Test fun firing_the_redeem_button_confirms_then_calls_on_redeem() = runComposeUiTest {
         var redeemCalled = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(codexResetCredits = 3),
                     loading = false,
@@ -371,8 +372,8 @@ class UsageScreenTest {
 
     @Test fun canceling_the_redeem_dialog_does_not_call_on_redeem() = runComposeUiTest {
         var redeemCalled = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
                 UsageScreen(
                     usage = fixtureUsage(codexResetCredits = 3),
                     loading = false,
@@ -402,148 +403,148 @@ class UsageScreenTest {
         assertEquals("Reset request completed", codexResetNote(CodexResetResult(code = "something_else")))
     }
 
-    // ── (6) overlay wiring into AppShell ───────────────────────────────────────────────────────
+    // ── (6) NEW: the Compact / standalone chrome Android contributed ────────────────────────────
 
-    private val tempFiles = mutableListOf<java.nio.file.Path>()
-
-    private fun tempPath(name: String): java.nio.file.Path {
-        val f = Files.createTempFile("usage_screen_test_$name", ".json")
-        Files.deleteIfExists(f)
-        tempFiles.add(f)
-        return f
-    }
-
-    @AfterTest fun cleanup() {
-        tempFiles.forEach { runCatching { Files.deleteIfExists(it) } }
-    }
-
-    /** A [HostStore] whose HTTP serves GET /usage + POST /usage/codex/reset. */
-    private fun appForUsage(initialResetCredits: Int = 3, redeemedResetCredits: Int = 2): HostStore {
-        val engine = MockEngine { req ->
-            val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
-            when {
-                req.method == HttpMethod.Get && req.url.encodedPath == "/usage" -> respond(
-                    """
-                    {
-                      "claude": {"fiveHour": {"used": 12.0}, "sevenDay": {"used": 40.0}},
-                      "codex": {
-                        "plan": "pro",
-                        "windows": [
-                          {"used": 30.0, "label": "5-hour window", "windowSeconds": 18000.0},
-                          {"used": 60.0, "label": "7-day window", "windowSeconds": 604800.0}
-                        ],
-                        "limitReached": false,
-                        "resetCredits": $initialResetCredits
-                      },
-                      "cursor": {"totalPercentUsed": 20.0, "totalSpendCents": 500.0, "includedCents": 2000.0, "limitCents": 2500.0, "spendAvailable": true}
-                    }
-                    """.trimIndent(),
-                    HttpStatusCode.OK, jsonHeaders,
+    @Test fun compact_paints_a_top_bar_with_back_and_refresh() = runComposeUiTest {
+        var backCalled = false
+        var refreshed = false
+        usageContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(),
+                    loading = false,
+                    onBack = { backCalled = true },
+                    onRedeem = { null },
+                    onRefresh = { refreshed = true },
                 )
-                req.method == HttpMethod.Post && req.url.encodedPath == "/usage/codex/reset" -> respond(
-                    """
-                    {
-                      "code": "reset",
-                      "windowsReset": 1,
-                      "codex": {
-                        "plan": "pro",
-                        "windows": [
-                          {"used": 0.0, "label": "5-hour window", "windowSeconds": 18000.0},
-                          {"used": 1.0, "label": "7-day window", "windowSeconds": 604800.0}
-                        ],
-                        "limitReached": false,
-                        "resetCredits": $redeemedResetCredits
-                      }
-                    }
-                    """.trimIndent(),
-                    HttpStatusCode.OK, jsonHeaders,
-                )
-                else -> respond(ByteReadChannel("{}"), HttpStatusCode.OK, jsonHeaders)
             }
         }
-        val api = BrokerApi("ws://test:9898", "t", HttpClient(engine))
-        return HostStore(
-            baseUrl = "ws://test:9898",
-            token = "t",
-            scope = TestScope(UnconfinedTestDispatcher()),
-            deps = testDeps(),
-            connectOnInit = false,
-            sendFrameOverride = { },
-            apiOverride = api,
+        waitForIdle()
+        onNodeWithTag("usage_screen").assertExists()
+        // The bar's title says "Usage" — and so does Cursor's window row, so match on the tags.
+        onNodeWithTag("usage_refresh").performClick()
+        waitForIdle()
+        assertTrue(refreshed)
+        onNodeWithTag("usage_back").performClick()
+        assertTrue(backCalled)
+    }
+
+    @Test fun compact_renders_every_provider_card() = runComposeUiTest {
+        usageContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("usage_card_claude").assertExists()
+        onNodeWithTag("usage_card_codex").assertExists()
+        onNodeWithTag("usage_card_cursor").assertExists()
+        onNodeWithTag("usage_card_opencode").assertExists()
+        onNodeWithTag("usage_card_grok").assertExists()
+    }
+
+    @Test fun standalone_keeps_the_top_bar_above_compact() = runComposeUiTest {
+        usageContent(pointer = false, widthClass = WindowWidthClass.Medium) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null },
+                    standalone = true,
+                )
+            }
+        }
+        waitForIdle()
+        // The bar's Back exists at Medium — the popover's in-card close row would not have been
+        // painted here, since this width is not Compact.
+        onNodeWithTag("usage_back").assertExists()
+        onNodeWithTag("usage_screen").assertExists()
+    }
+
+    @Test fun a_bar_painted_above_suppresses_this_screens_own() = runComposeUiTest {
+        usageContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(
+                    usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null },
+                    topBarShown = true,
+                )
+            }
+        }
+        waitForIdle()
+        // Falls back to the in-card header row (which still carries close + refresh tags).
+        onNodeWithTag("usage_screen").assertExists()
+        onNodeWithTag("usage_back").assertExists()
+    }
+
+    @Test fun touch_header_actions_are_at_least_48dp() = runComposeUiTest {
+        usageContent(pointer = false) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(usage = fixtureUsage(), loading = false, onBack = {}, onRedeem = { null })
+            }
+        }
+        waitForIdle()
+        val h = onNodeWithTag("usage_back").fetchSemanticsNode().size.height
+        val minPx = with(density) { 48.dp.toPx() }
+        assertTrue(h >= minPx, "touch close target was ${h}px, want >= ${minPx}px")
+    }
+
+    // ── (7) NEW: the stateful UsageActions overload ─────────────────────────────────────────────
+
+    @Test fun the_actions_overload_paints_the_held_snapshot_and_loads_once() = runComposeUiTest {
+        val snapshot = MutableStateFlow<UsageResponse?>(fixtureUsage())
+        var loads = 0
+        val actions = UsageActions(
+            snapshot = snapshot,
+            load = { loads++; snapshot.value },
+            refresh = { snapshot.value },
+            redeem = { null },
         )
-    }
-
-    @Test fun overlay_opens_from_ui_usage_open_and_loads_the_usage_data() = runComposeUiTest {
-        val ui = ShellUiState().apply { openUsage() }
-        val app = appForUsage()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(actions = actions, onBack = {})
             }
         }
         waitForIdle()
-        onNodeWithTag("usage_overlay").assertIsDisplayed()
-        onNodeWithTag("usage_screen").assertIsDisplayed()
-        onNodeWithTag("usage_card_codex").assertIsDisplayed()
-        onNodeWithText("30% used").assertIsDisplayed()
-        onNodeWithText("🎟️ Resets banked").assertIsDisplayed()
-        onNodeWithText("3").assertIsDisplayed()
+        // The held snapshot painted without waiting for the fetch, and the fetch ran exactly once.
+        onNodeWithTag("usage_card_codex").assertExists()
+        onNodeWithTag("usage_spinner").assertDoesNotExist()
+        assertEquals(1, loads)
     }
 
-    @Test fun escape_closes_the_usage_overlay() = runComposeUiTest {
-        val ui = ShellUiState().apply { openUsage() }
-        val app = appForUsage()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+    @Test fun the_actions_overload_shows_a_spinner_until_the_first_snapshot_lands() = runComposeUiTest {
+        val snapshot = MutableStateFlow<UsageResponse?>(null)
+        val actions = UsageActions(
+            snapshot = snapshot,
+            load = { snapshot.value = fixtureUsage(); snapshot.value },
+            refresh = { snapshot.value },
+            redeem = { null },
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(actions = actions, onBack = {})
             }
         }
         waitForIdle()
-        onNodeWithTag("usage_overlay").performKeyInput { pressKey(Key.Escape) }
-        waitForIdle()
-        assertFalse(ui.usageOpen)
-        onNodeWithTag("usage_overlay").assertDoesNotExist()
+        // Resolved: the load filled the snapshot, so the cards replaced the spinner.
+        onNodeWithTag("usage_spinner").assertDoesNotExist()
+        onNodeWithTag("usage_card_claude").assertExists()
     }
 
-    @Test fun workspace_shortcuts_are_gated_off_while_the_usage_overlay_is_up() = runComposeUiTest {
-        val ui = ShellUiState().apply { openUsage() } // sidebarCollapsed defaults false
-        val app = appForUsage()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
+    @Test fun the_actions_overload_refresh_button_calls_refresh() = runComposeUiTest {
+        val snapshot = MutableStateFlow<UsageResponse?>(fixtureUsage())
+        var refreshes = 0
+        val actions = UsageActions(
+            snapshot = snapshot,
+            load = { snapshot.value },
+            refresh = { refreshes++; snapshot.value },
+            redeem = { null },
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                UsageScreen(actions = actions, onBack = {})
             }
         }
         waitForIdle()
-        assertFalse(ui.sidebarCollapsed)
-        onNodeWithTag("usage_screen").performKeyInput {
-            withKeyDown(Key.CtrlLeft) { pressKey(Key.B) }
-        }
+        onNodeWithTag("usage_refresh").performClick()
         waitForIdle()
-        assertFalse(ui.sidebarCollapsed) // NOT toggled — the chord never reached the layout
-        assertTrue(ui.usageOpen)                // ...and the popover stayed up
-    }
-
-    @Test fun a_successful_redeem_updates_the_codex_card_in_place() = runComposeUiTest {
-        val ui = ShellUiState().apply { openUsage() }
-        val app = appForUsage(initialResetCredits = 3, redeemedResetCredits = 2)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(app, ui, ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")))
-            }
-        }
-        waitForIdle()
-        // Before redeeming: the fetched snapshot's resetCredits (3) and first window used% (30%).
-        onNodeWithText("30% used").assertIsDisplayed()
-        onNodeWithTag("codex_redeem_button").performClick()
-        waitForIdle()
-        onNodeWithTag("codex_redeem_confirm").performClick()
-        waitForIdle()
-        // After a code=="reset" redeem: AppShell swapped in the refreshed CodexUsage — the
-        // window resets to 0% used and the banked-reset count drops from 3 to 2, all WITHOUT a
-        // second GET /usage (the card updated "in place"). The inline note survives the swap too.
-        onNodeWithText("0% used").assertIsDisplayed()
-        onNodeWithText("2").assertIsDisplayed()
-        onNodeWithText("30% used").assertDoesNotExist()
-        onNodeWithText("✓ Reset — cleared 1 window").assertIsDisplayed()
+        assertEquals(1, refreshes)
     }
 }

@@ -1,25 +1,24 @@
-package dev.supermux.desktop.usage
+package dev.supermux.ui.usage
 
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * M4f Task 2 (pure, TDD-first): [formatResetIso] (Claude windows + Cursor `billingCycleEnd`, an
+ * The pure usage reset/fetched-at formatters (cluster E6 — moved to `:ui` by name): [formatResetIso] (Claude windows + Cursor `billingCycleEnd`, an
  * ISO-8601 string) and [formatResetEpochSeconds] (Codex windows, a `Double` of epoch SECONDS).
  * Ports Android MoreScreens.kt:998-1021's `formatReset` semantics as two typed entry points.
  *
- * Deviation from the M4f plan text: the plan says "use the shared multiplatform datetime dep" but
- * no module in this repo (desktop OR shared) depends on such a library — Android's own
- * `formatReset` uses `java.time` (see MoreScreens.kt's imports), and the desktop module already
- * uses `java.time.Instant` elsewhere (chat/Timeline.kt's gutter timestamps). Adding a new Gradle
- * dependency would also mean touching build.gradle.kts, outside this task's "only apps/desktop/src"
- * ground rule. So both formatters take a `now: Instant` (java.time) injection instead — same
- * determinism property the plan asked for, just the JDK type that's actually on the classpath.
+ * Time deviation, updated for `:ui`: `java.time` cannot come into commonMain, so both formatters
+ * take `now` as epoch MILLIS and the one calendar step ("resets Jul 14") goes through `:shared`'s
+ * `shortMonthDayLabel`, which is the civil-date maths chat timestamps already use. The tests still
+ * build their fixtures with `java.time` — this source set is the JVM one.
  */
 class UsageResetFormatTest {
 
-    private val now = Instant.parse("2026-07-09T12:00:00Z")
+    // Epoch millis, not `java.time.Instant`: the formatters are commonMain now (cluster E6), so
+    // `now` is a Long. The fixtures still build their instants with java.time — this is jvmTest.
+    private val now = Instant.parse("2026-07-09T12:00:00Z").toEpochMilli()
 
     // ── formatResetIso: null / blank ─────────────────────────────────────────────────────────────
 
@@ -59,7 +58,7 @@ class UsageResetFormatTest {
 
     @Test fun format_reset_iso_epoch_millis_numeric_string_fallback() {
         // Numeric-string epoch-millis path (Android tries this before ISO parse).
-        val millis = now.plusSeconds(3600).toEpochMilli() // 1h out
+        val millis = now + 3_600_000L // 1h out
         assertEquals("resets in 1h 0m", formatResetIso(millis.toString(), now))
     }
 
@@ -85,19 +84,19 @@ class UsageResetFormatTest {
     // ── formatResetEpochSeconds: diff <= 0 ───────────────────────────────────────────────────────
 
     @Test fun format_reset_epoch_seconds_in_the_past_resets_soon() {
-        val secs = now.minusSeconds(60).epochSecond.toDouble()
+        val secs = (now - 60_000L) / 1000.0
         assertEquals("resets soon", formatResetEpochSeconds(secs, now))
     }
 
     // ── formatResetEpochSeconds: < 24h ───────────────────────────────────────────────────────────
 
     @Test fun format_reset_epoch_seconds_hours_and_minutes_out() {
-        val secs = now.plusSeconds(3600 * 5 + 60 * 40).epochSecond.toDouble() // 5h40m
+        val secs = (now + (3600L * 5 + 60 * 40) * 1000L) / 1000.0 // 5h40m
         assertEquals("resets in 5h 40m", formatResetEpochSeconds(secs, now))
     }
 
     @Test fun format_reset_epoch_seconds_under_an_hour_omits_the_hours_part() {
-        val secs = now.plusSeconds(60 * 12).epochSecond.toDouble() // 12m
+        val secs = (now + 12 * 60_000L) / 1000.0 // 12m
         assertEquals("resets in 12m", formatResetEpochSeconds(secs, now))
     }
 

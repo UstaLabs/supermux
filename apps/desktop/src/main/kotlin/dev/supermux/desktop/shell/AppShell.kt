@@ -94,7 +94,7 @@ import dev.supermux.ui.host.HostDot
 import dev.supermux.ui.host.HostScopePicker
 import dev.supermux.desktop.notify.NoopNotificationManager
 import dev.supermux.desktop.notify.NotificationController
-import dev.supermux.desktop.session.ArchivedScreen
+import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.desktop.session.SessionLauncherScreen
 import dev.supermux.desktop.session.SessionListPanel
@@ -107,8 +107,9 @@ import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.desktop.update.AppUpdateBanner
 import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.state.HostStore
-import dev.supermux.desktop.usage.UsagePopover
-import dev.supermux.desktop.usage.UsageScreen
+import dev.supermux.ui.usage.UsagePopover
+import dev.supermux.ui.usage.UsageScreen
+import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.net.ArchivedDto
 import dev.supermux.session.inferHomeDir
 import androidx.navigation3.runtime.entryProvider
@@ -801,40 +802,16 @@ fun AppShell(
                     archivedLoading = false
                 }
             }
-            val usageSnapshot by hostApp.usageSnapshot.collectAsState()
-            var usageLoading by remember { mutableStateOf(false) }
-            LaunchedEffect(ui.usageOpen, activeHostId) {
-                if (ui.usageOpen) {
-                    // Paint the last held snapshot immediately; GET /usage only fills gaps /
-                    // picks up the broker's current snapshot (never blanks the popover).
-                    usageLoading = hostApp.usageSnapshot.value == null
-                    hostApp.usage()
-                    usageLoading = false
-                } else {
-                    usageLoading = false
-                }
-            }
+            // Since cluster E6 the screen owns the snapshot + the two fetches through
+            // `UsageActions`: it paints the held snapshot immediately and runs GET /usage once per
+            // host, which is exactly what this block used to do around it — and the popover's
+            // content only composes while it is open, so "load on open" is unchanged.
+            val usageActions = rememberUsageActions(hostApp)
             // Body shared by the footer-anchored popover and the collapsed-rail fallback.
             val usagePopoverBody: @Composable () -> Unit = {
                 Column(Modifier.fillMaxWidth()) {
                     HostScopePicker(hostViews, activeHostId, onSelect = { fleet?.setActiveHost(it) })
-                    UsageScreen(
-                        usage = usageSnapshot,
-                        loading = usageLoading,
-                        onBack = { ui.closeUsage() },
-                        onRedeem = {
-                            val r = hostApp.redeemCodexReset()
-                            if (r?.code == "reset" && r.codex != null) {
-                                hostApp.usageSnapshot.value?.copy(codex = r.codex)?.let { hostApp.applyUsage(it) }
-                            }
-                            r
-                        },
-                        onRefresh = {
-                            usageLoading = hostApp.usageSnapshot.value == null
-                            hostApp.refreshUsage()
-                            usageLoading = false
-                        },
-                    )
+                    UsageScreen(actions = usageActions, onBack = { ui.closeUsage() })
                 }
             }
 
