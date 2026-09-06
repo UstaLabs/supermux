@@ -7,11 +7,15 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.navigationevent.NavigationEvent
 import androidx.navigationevent.NavigationEventDispatcher
@@ -810,9 +814,19 @@ class VoiceSettingsScreenTest {
 
     /** Swipe-to-delete is Android's, and it is a finger affordance: no pointer, no swipe box. */
     @Test fun glossary_rows_swipe_to_delete_only_without_a_pointer() = runComposeUiTest {
+        val saved = AtomicReference(listOf("Supermux", "BrokerApi"))
         voiceContent(pointer = false, widthClass = WindowWidthClass.Compact) {
             SupermuxTheme(appearance = AppearanceMode.DARK) {
-                VoiceSettingsScreen(actions = actions(), topBarShown = true)
+                VoiceSettingsScreen(
+                    actions = actions(
+                        glossaryLoad = { saved.get() },
+                        glossarySave = {
+                            saved.set(it)
+                            it
+                        },
+                    ),
+                    topBarShown = true,
+                )
             }
         }
         waitForIdle()
@@ -829,8 +843,9 @@ class VoiceSettingsScreenTest {
         onNodeWithTag("voice_glossary_swipe_Supermux").assertIsDisplayed()
         // Someone else owns the chrome here, so the sub-page carries Back in its own body.
         onNodeWithTag("voice_glossary_back").assertIsDisplayed()
-        // The Remove button survives for TalkBack, and still removes.
-        onNodeWithTag("voice_glossary_remove_Supermux").performClick()
+
+        // A real swipe, not just the presence of the box: the gesture itself has to delete.
+        onNodeWithTag("voice_glossary_swipe_Supermux").performTouchInput { swipeLeft() }
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("voice_glossary_term_Supermux").assertDoesNotExist()
@@ -839,6 +854,67 @@ class VoiceSettingsScreenTest {
                 false
             }
         }
+        assertEquals(listOf("BrokerApi"), saved.get())
+
+        // The Remove button survives for TalkBack, and still removes.
+        onNodeWithTag("voice_glossary_remove_BrokerApi").performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_glossary_empty").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertEquals(emptyList<String>(), saved.get())
+    }
+
+    /**
+     * The pushed sub-page is the only scroll container on a phone: a glossary longer than the
+     * screen must still reach its last row (Android's page was a `LazyColumn`).
+     */
+    @Test fun a_long_pushed_glossary_scrolls_to_its_last_row() = runComposeUiTest {
+        val many = (1..40).map { "Term$it" }
+        val saved = AtomicReference(many)
+        voiceContent(pointer = false, widthClass = WindowWidthClass.Compact) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                VoiceSettingsScreen(
+                    actions = actions(
+                        glossaryLoad = { saved.get() },
+                        glossarySave = {
+                            saved.set(it)
+                            it
+                        },
+                    ),
+                    topBarShown = false,
+                )
+            }
+        }
+        waitForIdle()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_glossary_link").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        onNodeWithTag("voice_glossary_link").performClick()
+        waitForIdle()
+        onNodeWithTag("voice_glossary_page").assertIsDisplayed()
+        // Off-screen before the scroll, reachable after it — and still operable once there.
+        onNodeWithTag("voice_glossary_term_Term40").assertIsNotDisplayed()
+        onNodeWithTag("voice_glossary_term_Term40").performScrollTo().assertIsDisplayed()
+        onNodeWithTag("voice_glossary_remove_Term40").performScrollTo().performClick()
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("voice_glossary_term_Term40").assertDoesNotExist()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+        assertTrue(!saved.get().contains("Term40"))
     }
 
     @Test fun glossary_rows_have_no_swipe_box_with_a_pointer() = runComposeUiTest {

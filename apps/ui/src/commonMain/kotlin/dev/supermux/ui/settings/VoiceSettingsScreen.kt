@@ -297,6 +297,10 @@ private fun VoiceSettingsBody(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
+    // Remembered ABOVE the sub-page's early return: the engine saves launch into this scope, and a
+    // scope remembered after the return would be disposed the moment the glossary is pushed —
+    // cancelling a save that is still in flight.
+    val scope = rememberCoroutineScope()
 
     // The pushed sub-page REPLACES the voice page (Android's behaviour): coming back reloads the
     // config, exactly as re-entering `VoiceSettingsPage` did.
@@ -305,13 +309,17 @@ private fun VoiceSettingsBody(
             modifier
                 .fillMaxSize()
                 .background(cs.background)
-                .testTag("voice_settings_screen"),
+                .testTag("voice_glossary_page"),
             contentAlignment = Alignment.TopCenter,
         ) {
             Column(
                 Modifier
                     .widthIn(max = SettingsDetailMaxWidth)
-                    .fillMaxSize(),
+                    .fillMaxWidth()
+                    .fillMaxSize()
+                    // A glossary longer than the phone screen has to be reachable: Android's page
+                    // was a LazyColumn, and the sub-page is the only scroll container here.
+                    .verticalScroll(rememberScrollState()),
             ) {
                 if (subPageBackInBody) {
                     TextButton(
@@ -337,7 +345,7 @@ private fun VoiceSettingsBody(
                 VoiceGlossarySection(
                     load = actions.glossaryLoad,
                     save = actions.glossarySave,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -345,7 +353,6 @@ private fun VoiceSettingsBody(
     }
 
     val previewTts = LocalPlatform.current.tts
-    val scope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var sttEngine by remember { mutableStateOf(DEFAULT_STT_ENGINE) }
     var ttsEngine by remember { mutableStateOf(DEFAULT_TTS_ENGINE) }
