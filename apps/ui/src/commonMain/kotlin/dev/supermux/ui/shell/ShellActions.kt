@@ -20,12 +20,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import dev.supermux.net.AddCommentBody
-import dev.supermux.net.DisplayStream
 import dev.supermux.net.FinishReadiness
 import dev.supermux.net.FsDiffResult
 import dev.supermux.net.FsEntry
 import dev.supermux.net.FsRefsResult
 import dev.supermux.net.FsSearchResult
+import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.ReviewComment
@@ -39,6 +39,8 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.ui.display.DisplayActions
+import dev.supermux.ui.display.rememberDisplayActions
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.coroutines.flow.Flow
@@ -59,8 +61,12 @@ class ShellActions(
     val sessions: StateFlow<List<SessionInfo>> = MutableStateFlow(emptyList()),
     /** The last/in-flight finish job per session id, for the chat panel's finish card. */
     val finishJobs: StateFlow<Map<String, FinishJobDto>> = MutableStateFlow(emptyMap()),
-    /** Live display streams, kept current by `display_added`/`display_removed` frames. */
-    val displays: StateFlow<List<DisplayStream>> = MutableStateFlow(emptyList()),
+    /**
+     * The display seam (G4's own holder), which already carries the live stream list, the
+     * start/stop calls and the two transports. The view host resolves a `display` view's subject
+     * from [DisplayActions.displays] and hands the whole thing to `DisplayPanel`.
+     */
+    val display: DisplayActions = DisplayActions(),
 
     // ── chat + session controls (the header overflow and the composer's mute row) ──────────────
     val sendMessage: (sessionId: String, text: String) -> Unit = { _, _ -> },
@@ -79,6 +85,17 @@ class ShellActions(
     val launcherAgents: suspend () -> List<String> = { emptyList() },
     val launcherModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
     val launcherReasoning: suspend (agent: String, model: String?) -> ReasoningResponse? = { _, _ -> null },
+
+    // ── git ops (the header menus' Fetch / Pull / Push / Publish) ─────────────────────────────
+    /**
+     * Each returns the broker's [GitOpResult], or null when the op failed / no host owns the
+     * session. The menus turn that into a label ([dev.supermux.chat.gitOpResultLabel] inline on a
+     * pointer, [gitOpResultText] through `Platform.notices` under touch) — never into a throw.
+     */
+    val gitFetch: suspend (sessionId: String) -> GitOpResult? = { null },
+    val gitPull: suspend (sessionId: String) -> GitOpResult? = { null },
+    val gitPush: suspend (sessionId: String) -> GitOpResult? = { null },
+    val gitPublish: suspend (sessionId: String) -> GitOpResult? = { null },
 
     // ── finish flow ───────────────────────────────────────────────────────────────────────────
     val finishReadiness: suspend (sessionId: String) -> FinishReadiness? = { null },
@@ -139,9 +156,6 @@ class ShellActions(
      * once and every call site just sees null).
      */
     val walkthroughState: (sessionId: String) -> WalkthroughState? = { null },
-
-    // ── displays ──────────────────────────────────────────────────────────────────────────────
-    val listDisplays: suspend () -> List<DisplayStream> = { emptyList() },
 )
 
 /** [ShellActions] against ONE paired host — desktop's wiring. */
@@ -155,17 +169,18 @@ fun rememberShellActions(
     appForSession: (String) -> HostStore = { app },
 ): ShellActions {
     val walkthroughCap = LocalPlatform.current.caps.walkthrough
+    val displayActions = rememberDisplayActions(app)
     // The router is a CALLBACK, not state: keying the bundle on it would rebuild every lambda
     // whenever the caller passed a fresh one (the F1 rule for nav callbacks).
     val routeToHost by rememberUpdatedState(appForSession)
-    return remember(app, walkthroughCap) {
+    return remember(app, walkthroughCap, displayActions) {
         // A session-keyed suspend call needs the SessionInfo the store's review/LSP API takes;
         // resolving it from the store's live list is what every desktop call site did inline.
         fun session(id: String): SessionInfo? = app.sessions.value.firstOrNull { it.id == id }
         ShellActions(
             sessions = app.sessions,
             finishJobs = app.finishJobs,
-            displays = app.displays,
+            display = displayActions,
             sendMessage = { id, text -> app.sendMessage(id, text) },
             rename = { id, name -> app.rename(id, name) },
             kill = { id -> app.kill(id) },
@@ -176,6 +191,10 @@ fun rememberShellActions(
             launcherAgents = { app.launcherAgents() },
             launcherModels = { app.launcherModels(it) },
             launcherReasoning = { agent, model -> app.launcherReasoning(agent, model) },
+            gitFetch = { app.gitFetch(it) },
+            gitPull = { app.gitPull(it) },
+            gitPush = { app.gitPush(it) },
+            gitPublish = { app.gitPublish(it) },
             finishReadiness = { app.finishReadiness(it) },
             kickoffFinish = { id, action, skipVerify, commitFirst, commitMessage, onKickoff ->
                 app.kickoffFinish(id, action, skipVerify, commitFirst, commitMessage, onKickoff)
@@ -208,8 +227,7 @@ fun rememberShellActions(
             walkthroughState = { id ->
                 if (walkthroughCap) routeToHost(id).walkthroughState<WalkthroughState>(id) else null
             },
-            listDisplays = { app.listDisplays() },
-        )
+)
     }
 }
 
@@ -217,13 +235,14 @@ fun rememberShellActions(
 @Composable
 fun rememberShellActions(fleet: FleetStore): ShellActions {
     val walkthroughCap = LocalPlatform.current.caps.walkthrough
-    return remember(fleet, walkthroughCap) {
+    val displayActions = rememberDisplayActions(fleet)
+    return remember(fleet, walkthroughCap, displayActions) {
         ShellActions(
             // The fleet's merged views: sessions across every paired host, and the per-session maps
             // its own hosts publish (each already routed to the owning host inside the store).
             sessions = fleet.sessions,
             finishJobs = fleet.finishJobs,
-            displays = fleet.displays,
+            display = displayActions,
             sendMessage = { id, text -> fleet.sendMessage(id, text) },
             rename = { id, name -> fleet.rename(id, name) },
             kill = { id -> fleet.kill(id) },
@@ -234,6 +253,10 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             launcherAgents = { fleet.agentStatuses().orEmpty().filter { it.installed }.map { it.kind } },
             launcherModels = { fleet.launcherModels(it) },
             launcherReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
+            gitFetch = { fleet.gitFetch(it) },
+            gitPull = { fleet.gitPull(it) },
+            gitPush = { fleet.gitPush(it) },
+            gitPublish = { fleet.gitPublish(it) },
             finishReadiness = { fleet.finishReadiness(it) },
             kickoffFinish = { id, action, skipVerify, commitFirst, commitMessage, onKickoff ->
                 fleet.finish(id, action, skipVerify, commitFirst, commitMessage, onKickoff = onKickoff)
@@ -263,7 +286,6 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             walkthroughState = { id ->
                 if (walkthroughCap) fleet.walkthroughState<WalkthroughState>(id) else null
             },
-            listDisplays = { fleet.listDisplays() },
-        )
+)
     }
 }

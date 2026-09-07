@@ -52,7 +52,7 @@ class ShellActionsTest {
         assertNull(actions.reviewSubmit("s1"))
         assertNull(actions.getWalkthrough("s1"))
         assertNull(actions.walkthroughState("s1"))
-        assertTrue(actions.listDisplays().isEmpty())
+        assertTrue(actions.display.listDisplays().isEmpty())
         assertTrue(actions.launcherAgents().isEmpty())
         assertNull(actions.finishReadiness("s1"))
         // The finish kickoff must report a REFUSAL rather than silently claiming acceptance.
@@ -62,7 +62,7 @@ class ShellActionsTest {
         assertTrue(actions.lspStatus.value.isEmpty())
         assertTrue(actions.sessions.value.isEmpty())
         assertTrue(actions.finishJobs.value.isEmpty())
-        assertTrue(actions.displays.value.isEmpty())
+        assertTrue(actions.display.displays.value.isEmpty())
     }
 
     @Test
@@ -98,7 +98,7 @@ class ShellActionsTest {
         val built = assertNotNull(actions)
         assertSame(store.sessions, built.sessions)
         assertSame(store.finishJobs, built.finishJobs)
-        assertSame(store.displays, built.displays)
+        assertSame(store.displays, built.display.displays)
     }
 
     @Test

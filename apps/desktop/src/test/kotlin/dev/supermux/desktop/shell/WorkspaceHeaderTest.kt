@@ -12,6 +12,7 @@ import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.GitLiteStatusDto
 import dev.supermux.proto.SessionInfo
+import dev.supermux.ui.shell.GitMenuForceOp
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

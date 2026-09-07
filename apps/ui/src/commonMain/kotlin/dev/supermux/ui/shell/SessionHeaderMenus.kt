@@ -1,46 +1,44 @@
-// Ported from apps/android/.../shell/SessionShellDetail.kt — three header affordances: the
-// git-badge count menu (Fetch/Pull/Publish-or-Push), the session-links (proxies) menu, and the ⋮
-// overflow (Rename/Mute/Kill). Android threads these through SessionShellDetail's params + an
-// onGitOp(op) string; desktop splits them into three focused, individually runComposeUiTest-able
-// composables.
+// Cluster G7: the ONE set of session-header affordances, for both hosts.
 //
-// They no longer share one header. The old single-session shell drew all three in its own bar; that
-// shell is gone, and each affordance followed what it actually belongs to:
-//   • GitBadgeMenu   → [WorkspaceHeader], because the work tree is the WORKSPACE's.
-//   • SessionLinksMenu, OverflowMenu → the chat view's own header (ChatPanel), because a proxy and
-//     a rename/mute/kill belong to ONE session, which is what a chat view is.
+// Desktop's `shell/SessionHeaderMenus.kt` is the base — the git-badge count menu
+// (Fetch/Pull/Publish-or-Push), the session-links (proxies) menu and the ⋮ overflow
+// (Detail/Continue/Rename/Mute/Kill), each a focused, individually runComposeUiTest-able
+// composable rather than one header with a dozen parameters. Android's `workspace/ChatViewChrome.kt`
+// is folded in as the Compact/Touch branch: [ChatViewHeader] (the tablet chat pane's own bar),
+// [PhoneTabChatOverflow] (the phone tab strip's trailing slot), the git rows inside [OverflowMenu],
+// and [gitOpResultText] — whose result now reaches the user through `Platform.notices` (a toast on
+// Android, a snackbar on desktop) instead of naming `Toast` here.
 //
-// Differences from Android worth noting:
-//   • Git ops: Android fires onGitOp("fetch") and the AppViewModel shows a snackbar/toast with the
-//     result. Desktop has NO snackbar host yet (same gap the launcher/finish flows noted), so the
-//     GitBadgeMenu awaits the op's GitOpResult directly and shows a small transient inline label next
-//     to the badge (cleared on the next menu-open). A proper snackbar host is a documented M4-polish
-//     follow-up.
-//   • Management nav: overflow "Usage" → openUsage(); File ▸ Archived… → openArchived();
-//     Settings hub sections via File menu / sidebar footer. Overflow keeps session-scoped
-//     Rename/Mute/Kill (parity with the session list right-click menu).
-//   • Link opening: Android uses LocalUriHandler.openUri; desktop opens via the shared
-//     ui.openInBrowser (java.awt.Desktop.browse on a daemon thread) — injected as onOpenUrl so tests
-//     can capture the URL without spawning a browser.
+// Where they differed, and what won:
+//   • Git ops. Desktop awaits the op and shows a small transient inline label next to the badge
+//     ([GitBadgeMenu], tag `git_op_result`); Android fires it and toasts. BOTH survive: the badge
+//     menu keeps its inline label, and the overflow's git rows (Android's shape) report through
+//     `notices`. The ops themselves come from ONE holder ([ShellActions.gitFetch] …), so neither
+//     host reaches for a store here.
+//   • Link opening. Desktop opened through AWT's desktop browse, Android via `LocalUriHandler`.
+//     Both are `Platform.openUrl` now; [SessionLinksMenu] keeps the injectable `onOpenUrl` so a
+//     test can capture the URL without spawning a browser, and gains Android's external-link
+//     leading icon.
+//   • Icons. Android's `R.drawable.ic_*` become Material icons (the G5 precedent).
+//   • Tags. Every tag from both files is kept. The overflow's two are CALLER-CHOSEN
+//     ([OverflowMenu]'s `buttonTag`/`detailTag`) because desktop's chat header and Android's
+//     workspace chrome address the very same menu by two different names, and both suites (plus
+//     device automation) must keep working.
 //
-// Headless verification (M4c Task 3): there is no xdotool/input-injection under Xvfb, so the git
-// and links menus take an optional one-shot force-open param (ShellUiState.forceGitMenuFor /
-// forceLinksMenuFor, set by the off-by-default SM_GIT_MENU/SM_LINKS_MENU env hooks in Main.kt) that
-// expands its DropdownMenu exactly the way a real click would. GitBadgeMenu's hook additionally
-// accepts [GitMenuForceOp.FETCH]/[PULL] to fire that op live through the SAME `run(...)` path a
-// click uses — see that enum's KDoc for why Push/Publish are structurally excluded from ever being
-// auto-fired. SessionLinksMenu is open-ONLY: opening a URL from a hook is left to a real user.
-// OverflowMenu keeps its `forceOpen` param but has no env hook driving it any more (SM_OVERFLOW_MENU
-// went with the shell whose header it opened).
-package dev.supermux.desktop.shell
+// Right-click (the F3 `RowContextMenu` precedent): the overflow is wrapped in a [RowContextMenu]
+// carrying Rename/Mute/Kill, so a pointer host can reach them without opening the menu. On a host
+// whose context menu is INERT (`LocalContextMenuAvailable == false` — Android) that wrapper is a
+// passthrough, which is exactly why the ⋮ button itself is never gated on it: an inert-menu host
+// must still have a visible affordance for every action.
+//
+// Headless verification (M4c Task 3): there is no input injection under Xvfb, so the git and links
+// menus take an optional one-shot force-open param (`ShellUiState.forceGitMenuFor` /
+// `forceLinksMenuFor`, set by the off-by-default SM_GIT_MENU/SM_LINKS_MENU env hooks in Main.kt)
+// that expands its DropdownMenu exactly the way a real click would. [GitMenuForceOp] additionally
+// accepts FETCH/PULL to fire that op through the SAME `run(...)` path a click uses — see its KDoc
+// for why Push/Publish are structurally excluded. [SessionLinksMenu] is open-ONLY.
+package dev.supermux.ui.shell
 
-import dev.supermux.state.ContinueHandoff
-import dev.supermux.ui.chat.ContinueConversationFlow
-import dev.supermux.ui.chat.ContinueMenuItem
-import dev.supermux.chat.gitOpResultLabel
-import dev.supermux.chat.shouldPublish
-
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -54,11 +52,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CallMerge
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Public
-import dev.supermux.ui.widgets.AlertDialog
-import dev.supermux.ui.widgets.DropdownMenu
-import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,34 +75,66 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.theme.Space
-import dev.supermux.desktop.platform.openInBrowser
+import dev.supermux.chat.gitOpResultLabel
+import dev.supermux.chat.shouldPublish
 import dev.supermux.net.GitOpResult
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
-import dev.supermux.proto.GitLiteStatusDto
+import dev.supermux.proto.GitBadgeKind
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
-import dev.supermux.ui.session.headerGitBadgeLabel
+import dev.supermux.state.ContinueHandoff
 import dev.supermux.ui.ChatDetailLevel
-import dev.supermux.util.proxyDisplayUrl
-import dev.supermux.util.proxyUrl
-import kotlinx.coroutines.launch
+import dev.supermux.ui.chat.ContinueConversationFlow
+import dev.supermux.ui.chat.ContinueMenuItem
+import dev.supermux.ui.chat.FinishBindings
+import dev.supermux.ui.chat.FinishHeaderButton
+import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.prefs.LocalUiPrefs
+import dev.supermux.ui.session.RowContextMenu
+import dev.supermux.ui.session.RowContextMenuEntry
+import dev.supermux.ui.session.SessionStatusRail
+import dev.supermux.ui.session.headerGitBadgeLabel
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
+import kotlinx.coroutines.launch
 
 // ── Pure, testable bits (no Compose) ──────────────────────────────────────────────────
 
 /** The exposed proxies belonging to [session] — the broker returns ALL proxies, so the links menu
- *  filters by session name client-side (Android threads a pre-filtered list; desktop filters here). */
+ *  filters by session name client-side (Android threaded a pre-filtered list; this filters here). */
 fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto> =
     proxies.filter { it.sessionName == session.name }
+
+/**
+ * Android's user-facing wording for a completed git op — the text that goes to `Platform.notices`.
+ *
+ * Distinct from `:shared`'s [gitOpResultLabel], which is the COMPACT inline form desktop shows next
+ * to the badge; this one spells the failure modes out ("Push rejected — pull first") because a
+ * toast is all the user gets.
+ */
+fun gitOpResultText(r: GitOpResult?): String = when (r?.status) {
+    null -> "Failed"
+    "pushed" -> "Pushed"
+    "up_to_date" -> "Up to date"
+    "clean" -> "Pulled"
+    "rejected_non_ff" -> "Push rejected — pull first"
+    "conflict" -> "Conflict in ${r.files.size} file(s)"
+    "dirty" -> "Uncommitted changes block the pull"
+    "auth_failed" -> "Auth failed"
+    "error" -> r.message ?: "Error"
+    else -> r.status
+}
 
 /**
  * The restricted force-op set the headless `SM_GIT_MENU` hook (Main.kt) may drive against
@@ -113,6 +145,31 @@ fun sessionProxies(proxies: List<ProxyDto>, session: SessionInfo): List<ProxyDto
  */
 enum class GitMenuForceOp { OPEN, FETCH, PULL }
 
+/**
+ * Fire one of a session's git ops and report the outcome through `Platform.notices` — Android's
+ * `toastGitOp`, minus the `Toast`. Returns nothing: the notice IS the feedback.
+ */
+@Composable
+fun rememberGitOpRunner(sessionId: String, actions: ShellActions): (String) -> Unit {
+    val notices = LocalPlatform.current.notices
+    val scope = rememberCoroutineScope()
+    return remember(sessionId, actions, notices, scope) {
+        { op: String ->
+            scope.launch {
+                val result = when (op) {
+                    "fetch" -> actions.gitFetch(sessionId)
+                    "pull" -> actions.gitPull(sessionId)
+                    "push" -> actions.gitPush(sessionId)
+                    "publish" -> actions.gitPublish(sessionId)
+                    else -> null
+                }
+                notices.show(gitOpResultText(result))
+            }
+            Unit
+        }
+    }
+}
+
 // ── GitBadgeMenu ───────────────────────────────────────────────────────────────────────
 
 /**
@@ -120,9 +177,10 @@ enum class GitMenuForceOp { OPEN, FETCH, PULL }
  * pill that drops a menu of Fetch / Pull / Publish-or-Push. Renders NOTHING when `session.git` is
  * null (non-repo session) — the whole affordance is gated on a badge existing.
  *
- * Each op callback is a `suspend () -> GitOpResult?` (the HostStore git wrappers); the menu
- * awaits it and shows a small transient result label (tag `git_op_result`) next to the badge,
- * cleared the next time the menu opens. No snackbar host yet — see the file header.
+ * Each op callback is a `suspend () -> GitOpResult?`; the menu awaits it and shows a small
+ * transient result label (tag `git_op_result`) next to the badge, cleared the next time the menu
+ * opens. That inline label is desktop's shape and stays desktop's: the touch branch reports through
+ * `Platform.notices` from [OverflowMenu]'s git rows instead.
  */
 @Composable
 fun GitBadgeMenu(
@@ -243,15 +301,16 @@ fun GitBadgeMenu(
 // ── SessionLinksMenu ─────────────────────────────────────────────────────────────────────
 
 /**
- * A globe [IconButton] dropping a menu of this session's exposed proxy URLs (Android's
- * sessionLinksMenu parity). Renders NOTHING when the session has no proxies. Each row shows
- * [proxyDisplayUrl] and opens [proxyUrl] via [onOpenUrl] (defaults to the OS browser).
+ * A globe [IconButton] dropping a menu of this session's exposed proxy URLs. Renders NOTHING when
+ * the session has no proxies. Each row shows [dev.supermux.util.proxyDisplayUrl] with Android's
+ * external-link leading icon and opens [dev.supermux.util.proxyUrl] via [onOpenUrl] — the
+ * platform's own browser handoff by default.
  */
 @Composable
 fun SessionLinksMenu(
     session: SessionInfo,
     proxies: List<ProxyDto>,
-    onOpenUrl: (String) -> Unit = ::openInBrowser,
+    onOpenUrl: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
     // Off-by-default headless hook (SM_LINKS_MENU, Main.kt) delivery: force-expands the dropdown
     // (no click on a row — opening a URL is left to a real user). No-op when the session has no
@@ -263,6 +322,8 @@ fun SessionLinksMenu(
     val links = sessionProxies(proxies, session)
     if (links.isEmpty()) return
     val cs = MaterialTheme.colorScheme
+    val platform = LocalPlatform.current
+    val open = onOpenUrl ?: { url -> platform.openUrl(url) }
     var expanded by remember { mutableStateOf(false) }
     // Close on a session switch so the menu never stays open bound to the new session.
     LaunchedEffect(session.id) { expanded = false }
@@ -279,8 +340,15 @@ fun SessionLinksMenu(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             links.forEach { p ->
                 DropdownMenuItem(
-                    text = { Text(proxyDisplayUrl(p)) },
-                    onClick = { expanded = false; onOpenUrl(proxyUrl(p)) },
+                    text = { Text(dev.supermux.util.proxyDisplayUrl(p)) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Outlined.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                    onClick = { expanded = false; open(dev.supermux.util.proxyUrl(p)) },
                 )
             }
         }
@@ -292,9 +360,11 @@ fun SessionLinksMenu(
 /**
  * The ⋮ overflow on the chat/session header:
  *  - Detail (tool-call level: Low / Medium / High)
- *  - Continue in new conversation (the shared [ContinueConversationFlow] — cluster D4 moved the
- *    ~390 lines of picker/dialog that used to be inlined here into `:ui`, where the compact branch
- *    is Android's bottom sheet and the pointer branch is this dialog)
+ *  - Continue in new conversation (the shared [ContinueConversationFlow] — compact gets the bottom
+ *    sheet, a pointer gets the dialog)
+ *  - Git: Fetch / Pull / Publish-or-Push (Android's rows; shown only when [onGitOp] is non-null AND
+ *    the session is a repo). This is the touch branch's git affordance — a pointer host normally
+ *    has [GitBadgeMenu] in its workspace header instead and passes null here.
  *  - Rename / Mute / Kill
  *  - Usage / Editor-LSP management rows (optional)
  *
@@ -302,6 +372,10 @@ fun SessionLinksMenu(
  * [onContinue] when non-null shows the continue item; receives [ContinueHandoff] (message +
  * agent/model/thinking, web/iOS parity) and returns the new session id (or null).
  * [onContinued] is called with that id so the shell can select it.
+ *
+ * [buttonTag]/[detailTag] exist because the same menu is addressed by two names: desktop's chat
+ * header calls it `shell_overflow`/`overflow_detail`, Android's workspace chrome
+ * `workspace_overflow`/`workspace_overflow_detail`. Both suites keep their nodes.
  */
 @Composable
 fun OverflowMenu(
@@ -311,6 +385,8 @@ fun OverflowMenu(
     onKill: () -> Unit,
     onUsage: () -> Unit = {},
     onLspSettings: () -> Unit = {},
+    /** Fires "fetch"/"pull"/"push"/"publish"; null hides the git rows entirely. */
+    onGitOp: ((String) -> Unit)? = null,
     /** When non-null, show "Continue in new conversation" and run this to spawn + send handoff. */
     onContinue: (suspend (ContinueHandoff) -> String?)? = null,
     loadContinueAgents: suspend () -> List<String> = { emptyList() },
@@ -319,7 +395,12 @@ fun OverflowMenu(
     onContinued: (String) -> Unit = {},
     /** Hide shell-management rows (Usage / LSP) when this is a slim chat-header menu. */
     showManagementRows: Boolean = true,
+    /** Hide the session-management rows (Rename / Mute / Kill) — Android's workspace chrome, where
+     *  they live on the session list instead and the overflow is a git + detail menu. */
+    showSessionRows: Boolean = true,
     modifier: Modifier = Modifier,
+    buttonTag: String = "shell_overflow",
+    detailTag: String = "overflow_detail",
     forceOpen: Boolean = false,
     onForceOpenConsumed: () -> Unit = {},
 ) {
@@ -339,8 +420,20 @@ fun OverflowMenu(
     }
     LaunchedEffect(forceOpen) { if (forceOpen) { expanded = true; onForceOpenConsumed() } }
 
+    // Right-click parity (F3's RowContextMenu): a pointer host reaches the three session actions
+    // without opening the menu. Inert on Android — which is why the ⋮ button below is NOT gated on
+    // it: an inert-menu host must still carry every action visibly.
+    val contextEntries: () -> List<RowContextMenuEntry> = {
+        if (!showSessionRows) emptyList() else listOf(
+            RowContextMenuEntry("Rename") { renameText = session.name; showRename = true },
+            RowContextMenuEntry(if (muted) "Unmute" else "Mute") { onToggleMute(!muted) },
+            RowContextMenuEntry("Kill") { showKill = true },
+        )
+    }
+
+    RowContextMenu(items = contextEntries) {
     Box(modifier) {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("shell_overflow")) {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag(buttonTag)) {
             Icon(
                 Icons.Outlined.MoreVert,
                 contentDescription = "More",
@@ -362,13 +455,30 @@ fun OverflowMenu(
                         Text(chatDetail.label, color = cs.onSurfaceVariant)
                     }
                 },
-                modifier = Modifier.testTag("overflow_detail"),
+                modifier = Modifier.testTag(detailTag),
                 onClick = { detailSubmenu = true },
             )
             if (onContinue != null) {
                 ContinueMenuItem {
                     expanded = false
                     showContinue = true
+                }
+            }
+            if (onGitOp != null && session.git != null) {
+                GitRow("Fetch", Icons.Outlined.Download, "overflow_git_fetch") {
+                    expanded = false; onGitOp("fetch")
+                }
+                GitRow("Pull", Icons.Outlined.CallMerge, "overflow_git_pull") {
+                    expanded = false; onGitOp("pull")
+                }
+                if (shouldPublish(session.git)) {
+                    GitRow("Publish", Icons.Outlined.CloudOff, "overflow_git_publish") {
+                        expanded = false; onGitOp("publish")
+                    }
+                } else {
+                    GitRow("Push", Icons.Outlined.CloudUpload, "overflow_git_push") {
+                        expanded = false; onGitOp("push")
+                    }
                 }
             }
             if (showManagementRows) {
@@ -383,21 +493,23 @@ fun OverflowMenu(
                     onClick = { expanded = false; onLspSettings() },
                 )
             }
-            DropdownMenuItem(
-                text = { Text("Rename") },
-                modifier = Modifier.testTag("overflow_rename"),
-                onClick = { expanded = false; renameText = session.name; showRename = true },
-            )
-            DropdownMenuItem(
-                text = { Text(if (muted) "Unmute" else "Mute") },
-                modifier = Modifier.testTag("overflow_mute"),
-                onClick = { expanded = false; onToggleMute(!muted) },
-            )
-            DropdownMenuItem(
-                text = { Text("Kill", color = cs.error) },
-                modifier = Modifier.testTag("overflow_kill"),
-                onClick = { expanded = false; showKill = true },
-            )
+            if (showSessionRows) {
+                DropdownMenuItem(
+                    text = { Text("Rename") },
+                    modifier = Modifier.testTag("overflow_rename"),
+                    onClick = { expanded = false; renameText = session.name; showRename = true },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (muted) "Unmute" else "Mute") },
+                    modifier = Modifier.testTag("overflow_mute"),
+                    onClick = { expanded = false; onToggleMute(!muted) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Kill", color = cs.error) },
+                    modifier = Modifier.testTag("overflow_kill"),
+                    onClick = { expanded = false; showKill = true },
+                )
+            }
         }
         DropdownMenu(
             expanded = detailSubmenu,
@@ -428,6 +540,7 @@ fun OverflowMenu(
                 )
             }
         }
+    }
     }
 
     if (showRename) {
@@ -478,4 +591,141 @@ fun OverflowMenu(
             onDismiss = { showContinue = false },
         )
     }
+}
+
+/** One git row of [OverflowMenu] — Android's shape (label + leading glyph), Material icons. */
+@Composable
+private fun GitRow(label: String, icon: ImageVector, tag: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    DropdownMenuItem(
+        text = { Text(label) },
+        modifier = Modifier.testTag(tag),
+        leadingIcon = {
+            Icon(icon, contentDescription = null, tint = cs.onSurface, modifier = Modifier.size(18.dp))
+        },
+        onClick = onClick,
+    )
+}
+
+// ── ChatViewHeader (the Compact/Touch branch) ─────────────────────────────────────────────
+
+/**
+ * The chat pane's OWN bar, drawn above a [dev.supermux.ui.chat.ChatPanel] whose `showHeader` is
+ * false: git rail, name + badge, links, Chat⇄Native, Finish, overflow. Android's tablet workspace
+ * shape, verbatim — a pointer host draws the panel's own one-line header with its slots instead
+ * (see `ViewHost`'s [ChatHeaderMode]).
+ *
+ * Settings/Usage/Devices stay on the session-list overflow (they have no chat home), hence
+ * `showManagementRows = false` below.
+ */
+@Composable
+fun ChatViewHeader(
+    session: SessionInfo,
+    working: Boolean,
+    nativeView: Boolean,
+    onSetNative: (Boolean) -> Unit,
+    sessionLinks: List<ProxyDto>,
+    finish: FinishBindings,
+    onGitOp: (String) -> Unit,
+    onContinue: (suspend (ContinueHandoff) -> String?)? = null,
+    loadContinueAgents: suspend () -> List<String> = { emptyList() },
+    loadContinueModels: suspend (String) -> List<ModelInfo> = { emptyList() },
+    loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
+    onContinued: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SessionStatusRail(git = session.git, working = working)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                session.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = cs.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            gitBadge(session.git)?.let { badge ->
+                val label = if (badge.kind == GitBadgeKind.BASE && badge.compareRef.isNotEmpty())
+                    "${badge.compareRef} ${badge.text}" else badge.text
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = cs.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        SessionLinksMenu(session = session, proxies = sessionLinks)
+        if (session.agent == "claude") {
+            AgentViewToggle(
+                nativeView = nativeView,
+                onSetNative = onSetNative,
+                modifier = Modifier.testTag("toggle_native"),
+            )
+        }
+        FinishHeaderButton(session = session, bindings = finish)
+        OverflowMenu(
+            session = session,
+            onRename = {},
+            onToggleMute = {},
+            onKill = {},
+            onGitOp = onGitOp,
+            onContinue = onContinue,
+            loadContinueAgents = loadContinueAgents,
+            loadContinueModels = loadContinueModels,
+            loadContinueReasoning = loadContinueReasoning,
+            onContinued = onContinued,
+            showManagementRows = false,
+            showSessionRows = false,
+            buttonTag = "workspace_overflow",
+            detailTag = "workspace_overflow_detail",
+        )
+    }
+}
+
+/**
+ * The phone workspace's tab-strip trailing slot: those chat panes skip [ChatViewHeader] (no
+ * duplicate chrome under the tab row), so Continue + the git ops live here instead.
+ */
+@Composable
+fun PhoneTabChatOverflow(
+    sessionId: String,
+    actions: ShellActions,
+    onSelectSession: (String) -> Unit,
+) {
+    val sessions by actions.sessions.collectAsState()
+    val session = sessions.firstOrNull { it.id == sessionId } ?: return
+    val gitOp = rememberGitOpRunner(sessionId, actions)
+    OverflowMenu(
+        session = session,
+        onRename = {},
+        onToggleMute = {},
+        onKill = {},
+        onGitOp = gitOp,
+        onContinue = { handoff ->
+            actions.continueConversation(
+                session,
+                handoff.message,
+                handoff.agent,
+                handoff.model,
+                handoff.reasoningLevel,
+            )
+        },
+        loadContinueAgents = { actions.launcherAgents() },
+        loadContinueModels = { actions.launcherModels(it) },
+        loadContinueReasoning = { agent, model -> actions.launcherReasoning(agent, model) },
+        onContinued = onSelectSession,
+        showManagementRows = false,
+        showSessionRows = false,
+        buttonTag = "workspace_overflow",
+        detailTag = "workspace_overflow_detail",
+    )
 }

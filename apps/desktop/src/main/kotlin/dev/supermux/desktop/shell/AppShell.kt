@@ -82,6 +82,8 @@ import dev.supermux.net.AddViewBody
 import dev.supermux.proto.chatSessionId
 
 import dev.supermux.proto.ViewDto
+import dev.supermux.ui.shell.GitMenuForceOp
+import dev.supermux.ui.shell.workspaceOpenPath
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.firstGroupId

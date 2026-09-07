@@ -22,10 +22,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -37,6 +39,14 @@ import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneHost
+import dev.supermux.ui.chat.rememberChatActions
+import dev.supermux.ui.chat.rememberChatState
+import dev.supermux.ui.shell.ChatHeaderMode
+import dev.supermux.ui.shell.PhoneTabChatOverflow
+import dev.supermux.ui.shell.ShellActions
+import dev.supermux.ui.shell.UnknownViewHint
+import dev.supermux.ui.shell.ViewHost
+import dev.supermux.ui.shell.rememberShellActions
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
@@ -65,10 +75,14 @@ fun WorkspaceScreen(
     val scope = rememberCoroutineScope()
     val newId = remember { { UUID.randomUUID().toString() } }
     val session = rememberWorkspaceSession(workspace, vm, wide, scope, newId)
+    // The ONE holder every pane reaches the broker through (cluster G1), and the workspace's chat
+    // drafts — hoisted here so a tab switch (and the phone⇄tablet swap) keeps what was typed.
+    val shell = rememberShellActions(vm.fleet)
+    val drafts = remember { mutableStateMapOf<String, String>() }
     if (wide) {
-        TabletWorkspace(workspace, session, vm, newId, modifier, onSelectSession)
+        TabletWorkspace(workspace, session, vm, shell, drafts, newId, modifier, onSelectSession)
     } else {
-        PhoneWorkspace(workspace, session, vm, newId, modifier, onSelectSession)
+        PhoneWorkspace(workspace, session, vm, shell, drafts, newId, modifier, onSelectSession)
     }
 }
 
@@ -78,6 +92,8 @@ private fun PhoneWorkspace(
     workspace: WorkspaceDto,
     session: WorkspaceSession,
     vm: AppViewModel,
+    shell: ShellActions,
+    drafts: SnapshotStateMap<String, String>,
     newId: () -> String,
     modifier: Modifier,
     onSelectSession: (String) -> Unit,
@@ -127,7 +143,7 @@ private fun PhoneWorkspace(
                     )
                 }
                 viewsById[tabs.selectedId]?.chatSessionId()?.let { sid ->
-                    PhoneTabChatOverflow(sid, vm, onSelectSession)
+                    PhoneTabChatOverflow(sid, shell, onSelectSession)
                 }
             }
         }
@@ -145,12 +161,20 @@ private fun PhoneWorkspace(
                     val view = viewsById[id] ?: return@forEach
                     key(view.id) {
                         Box(Modifier.keepAlivePanel(id == tabs.selectedId)) {
-                            AndroidViewHost(
-                                workspace = workspace,
+                            ViewHost(
                                 view = view,
-                                session = session,
-                                vm = vm,
-                                wide = false,
+                                workspaceId = workspace.id,
+                                workdir = workspace.workdir,
+                                actions = shell,
+                                drafts = drafts,
+                                documents = session.documents,
+                                primarySessionId = workspace.primarySessionId,
+                                onOpenFile = { p, _, _ -> session.fileOpener.open(p) },
+                                // No chrome under the tab row: its trailing slot holds the
+                                // overflow (PhoneTabChatOverflow above).
+                                chatHeaderMode = ChatHeaderMode.NONE,
+                                chatState = { sid -> rememberChatState(vm.fleet, sid) },
+                                chatActions = { s -> rememberChatActions(vm.fleet, s.id) },
                                 modifier = Modifier.fillMaxSize(),
                                 onSelectSession = onSelectSession,
                             )
@@ -216,6 +240,8 @@ private fun TabletWorkspace(
     workspace: WorkspaceDto,
     session: WorkspaceSession,
     vm: AppViewModel,
+    shell: ShellActions,
+    drafts: SnapshotStateMap<String, String>,
     newId: () -> String,
     modifier: Modifier,
     onSelectSession: (String) -> Unit,
@@ -265,9 +291,21 @@ private fun TabletWorkspace(
             val view = viewsById[viewId]
             if (view == null) UnknownViewHint("view")
             else key(view.id) {
-                AndroidViewHost(
-                    workspace, view, session, vm, Modifier.fillMaxSize(),
-                    wide = true, onSelectSession = onSelectSession,
+                ViewHost(
+                    view = view,
+                    workspaceId = workspace.id,
+                    workdir = workspace.workdir,
+                    actions = shell,
+                    drafts = drafts,
+                    documents = session.documents,
+                    primarySessionId = workspace.primarySessionId,
+                    onOpenFile = { p, _, _ -> session.fileOpener.open(p) },
+                    // The tablet chat pane carries its own bar (ChatViewHeader).
+                    chatHeaderMode = ChatHeaderMode.BAR,
+                    chatState = { sid -> rememberChatState(vm.fleet, sid) },
+                    chatActions = { s -> rememberChatActions(vm.fleet, s.id) },
+                    modifier = Modifier.fillMaxSize(),
+                    onSelectSession = onSelectSession,
                 )
             }
         },

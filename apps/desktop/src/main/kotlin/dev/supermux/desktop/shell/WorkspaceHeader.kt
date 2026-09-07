@@ -31,6 +31,8 @@ import dev.supermux.ui.theme.Space
 import dev.supermux.net.GitOpResult
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
+import dev.supermux.ui.shell.GitBadgeMenu
+import dev.supermux.ui.shell.GitMenuForceOp
 
 /**
  * The workspace header strip. Renders NOTHING when [gitSession] is null (no chat session to read

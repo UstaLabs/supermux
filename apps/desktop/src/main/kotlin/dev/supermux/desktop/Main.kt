@@ -963,7 +963,7 @@ fun main() {
                     // per the M4c live-verification ground rules), so the inline `git_op_result`
                     // label can be screenshot too. There is NO `:push`/`:publish` suffix — those
                     // mutate a real remote, so this hook cannot ever auto-fire them (see
-                    // GitMenuForceOp's KDoc in SessionHeaderMenus.kt). Harmless in production (unset
+                    // GitMenuForceOp's KDoc in ui/shell/SessionHeaderMenus.kt). Harmless in production (unset
                     // by default).
                     val gitMenuTest = System.getenv("SM_GIT_MENU")?.takeIf { it.isNotBlank() }
                     if (gitMenuTest != null) {
@@ -971,12 +971,12 @@ fun main() {
                             val parts = gitMenuTest.split(":", limit = 2)
                             val name = parts[0]
                             val op = when (parts.getOrNull(1)?.trim()?.lowercase()) {
-                                "fetch" -> dev.supermux.desktop.shell.GitMenuForceOp.FETCH
-                                "pull" -> dev.supermux.desktop.shell.GitMenuForceOp.PULL
-                                null, "" -> dev.supermux.desktop.shell.GitMenuForceOp.OPEN
+                                "fetch" -> dev.supermux.ui.shell.GitMenuForceOp.FETCH
+                                "pull" -> dev.supermux.ui.shell.GitMenuForceOp.PULL
+                                null, "" -> dev.supermux.ui.shell.GitMenuForceOp.OPEN
                                 else -> {
                                     println("[gitmenu] unknown SM_GIT_MENU suffix '${parts[1]}' — falling back to open-only")
-                                    dev.supermux.desktop.shell.GitMenuForceOp.OPEN
+                                    dev.supermux.ui.shell.GitMenuForceOp.OPEN
                                 }
                             }
                             // Wait (≤30s) for the snapshot to carry the named session.

@@ -32,6 +32,10 @@ import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.NewViewPlacement
 import dev.supermux.workspace.openSingletonView
+import dev.supermux.ui.chat.rememberChatActions
+import dev.supermux.ui.chat.rememberChatState
+import dev.supermux.ui.shell.ViewHost
+import dev.supermux.ui.shell.rememberShellActions
 import dev.supermux.workspace.viewTitle
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
@@ -319,13 +323,16 @@ internal fun WorkspacePanes(
             )
         } else if (v != null) {
             key(hostId, viewId) {
+                // The store this VIEW belongs to (its chat session's host, else the workspace's).
+                val viewApp = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: "")
                 ViewHost(
                     previewModeFor = { previewModes[it] == true },
                     view = v,
                     workspaceId = current.id,
                     workdir = current.workdir,
-                    app = appFor(v.chatSessionId() ?: current.primarySessionId ?: session?.id ?: ""),
-                    appForSession = appFor,
+                    actions = rememberShellActions(viewApp, appFor),
+                    chatState = { sid -> rememberChatState(viewApp, sid) },
+                    chatActions = { s -> rememberChatActions(viewApp, s) },
                     drafts = drafts,
                     documents = documents,
                     onOpenFile = { p, line, endLine ->

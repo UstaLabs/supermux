@@ -1,6 +1,6 @@
 package dev.supermux.android.session
 
-import dev.supermux.android.workspace.WorkspaceChatPaneTestIds
+import dev.supermux.ui.shell.WorkspaceChatPaneTestIds
 import dev.supermux.ui.TestIds
 import kotlin.test.Test
 import kotlin.test.assertEquals

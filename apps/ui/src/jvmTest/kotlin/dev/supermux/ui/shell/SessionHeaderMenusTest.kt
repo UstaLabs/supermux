@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.shell
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -11,8 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.theme.DesktopTheme
+import androidx.compose.runtime.Composable
+import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -28,8 +28,12 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.gitBadge
 import dev.supermux.state.ContinueHandoff
 import dev.supermux.chat.gitOpResultLabel
+import dev.supermux.ui.platform.FakePlatform
+import dev.supermux.ui.platform.NO_CAPS
+import dev.supermux.ui.session.LocalContextMenuAvailable
 import dev.supermux.chat.shouldPublish
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -37,9 +41,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Unit + runComposeUiTest coverage for the three header menus (GitBadgeMenu / SessionLinksMenu /
- * OverflowMenu). The composables take pure callbacks + state, so no HostStore / network is
- * needed. The pure decision bits (Publish-vs-Push, the proxy filter, the badge label, the op-result
+ * Unit + runComposeUiTest coverage for the shared header menus (GitBadgeMenu / SessionLinksMenu /
+ * OverflowMenu). Moved from `:desktop` with its case names in cluster G7. The composables take pure
+ * callbacks + state, so no HostStore / network is needed. The pure decision bits (Publish-vs-Push, the proxy filter, the badge label, the op-result
  * label) are asserted directly.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -96,8 +100,8 @@ class SessionHeaderMenusTest {
     @Test
     fun gitBadgeRendersCountsAndOpensMenuWithPushWhenPublished() = runComposeUiTest {
         var pushed = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = remotePublished,
                     onFetch = { GitOpResult() },
@@ -126,8 +130,8 @@ class SessionHeaderMenusTest {
     @Test
     fun gitMenuShowsPublishWhenUnpublishedAndFiresPublish() = runComposeUiTest {
         var published = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = remoteUnpublished,
                     onFetch = { GitOpResult() },
@@ -150,8 +154,8 @@ class SessionHeaderMenusTest {
     fun gitMenuFetchAndPullFireTheirCallbacks() = runComposeUiTest {
         var fetched = false
         var pulled = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { fetched = true; GitOpResult() },
@@ -180,8 +184,8 @@ class SessionHeaderMenusTest {
         // the late Fetch is stale and must not clobber it.
         val gateFetch = CompletableDeferred<GitOpResult?>()
         val gatePull = CompletableDeferred<GitOpResult?>()
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { gateFetch.await() },
@@ -214,8 +218,8 @@ class SessionHeaderMenusTest {
         var pulled = false
         var consumed = 0
         var force by mutableStateOf<GitMenuForceOp?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { fetched = true; GitOpResult() },
@@ -242,8 +246,8 @@ class SessionHeaderMenusTest {
         var fetched = false
         var consumed = 0
         var force by mutableStateOf<GitMenuForceOp?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { fetched = true; GitOpResult(status = "fetched") },
@@ -267,8 +271,8 @@ class SessionHeaderMenusTest {
     fun forcePullFiresTheRealRunPathAndSurfacesTheResultLabel() = runComposeUiTest {
         var pulled = false
         var force by mutableStateOf<GitMenuForceOp?>(null)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = baseSession,
                     onFetch = { error("fetch not expected from a PULL force-op") },
@@ -296,8 +300,8 @@ class SessionHeaderMenusTest {
 
     @Test
     fun gitBadgeHiddenWhenGitNull() = runComposeUiTest {
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 GitBadgeMenu(
                     session = nonRepo,
                     onFetch = { GitOpResult() },
@@ -317,8 +321,8 @@ class SessionHeaderMenusTest {
         val mine = ProxyDto(domain = "mine.example", sessionName = "demo", port = 3000, url = "https://mine.example/")
         val other = ProxyDto(domain = "other.example", sessionName = "elsewhere", port = 4000, url = "https://other.example/")
         var opened: String? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 SessionLinksMenu(
                     session = baseSession,
                     proxies = listOf(mine, other),
@@ -343,8 +347,8 @@ class SessionHeaderMenusTest {
         var opened: String? = null
         var consumed = 0
         var force by mutableStateOf(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 SessionLinksMenu(
                     session = baseSession,
                     proxies = listOf(mine),
@@ -365,8 +369,8 @@ class SessionHeaderMenusTest {
     @Test
     fun linksMenuHiddenWhenNoProxiesForThisSession() = runComposeUiTest {
         val other = ProxyDto(domain = "other.example", sessionName = "elsewhere", port = 4000)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 SessionLinksMenu(session = baseSession, proxies = listOf(other), onOpenUrl = {})
             }
         }
@@ -378,8 +382,8 @@ class SessionHeaderMenusTest {
     @Test
     fun overflowUsageRowFiresOnUsage() = runComposeUiTest {
         var usageOpened = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession,
                     onRename = {},
@@ -398,8 +402,8 @@ class SessionHeaderMenusTest {
     @Test
     fun overflow_lsp_settings_row_fires_on_lsp_settings() = runComposeUiTest {
         var opened = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession,
                     onRename = {},
@@ -418,8 +422,8 @@ class SessionHeaderMenusTest {
     @Test
     fun overflowRenameOpensDialogAndFiresOnRename() = runComposeUiTest {
         var renamed: String? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession,
                     onRename = { renamed = it },
@@ -441,8 +445,8 @@ class SessionHeaderMenusTest {
     @Test
     fun overflowMuteTogglesToDesiredState() = runComposeUiTest {
         var next: Boolean? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession, // mute == null → treated as not muted
                     onRename = {},
@@ -461,8 +465,8 @@ class SessionHeaderMenusTest {
     @Test
     fun overflowMuteShowsUnmuteWhenMuted() = runComposeUiTest {
         var next: Boolean? = null
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession.copy(mute = true),
                     onRename = {},
@@ -480,8 +484,8 @@ class SessionHeaderMenusTest {
     @Test
     fun overflowKillConfirmFiresOnKill() = runComposeUiTest {
         var killed = false
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession,
                     onRename = {},
@@ -500,7 +504,7 @@ class SessionHeaderMenusTest {
     @Test
     fun overflowContinuePassesAgentModelAndReasoning() = runComposeUiTest {
         var received: ContinueHandoff? = null
-        setContent {
+        setPlatformContent {
             // Pin the two locals the shared ContinueConversationFlow branches on rather than
             // leaning on DesktopTheme's defaults: an Expanded window + a pointer is the DIALOG
             // shape with the per-option dropdown rows this case drives (a Compact/touch host gets
@@ -509,7 +513,7 @@ class SessionHeaderMenusTest {
                 LocalWindowWidthClass provides WindowWidthClass.Expanded,
                 LocalPointerAvailable provides true,
             ) {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession.copy(agent = "claude", model = "sonnet", reasoningLevel = "high"),
                     onRename = {},
@@ -575,8 +579,8 @@ class SessionHeaderMenusTest {
         var killed = false
         var consumed = 0
         var force by mutableStateOf(false)
-        setContent {
-            DesktopTheme(appearance = AppearanceMode.DARK) {
+        setPlatformContent {
+            MenuHost {
                 OverflowMenu(
                     session = baseSession,
                     onRename = { renamed = it },
@@ -603,4 +607,156 @@ class SessionHeaderMenusTest {
     fun badgeLabelNullForNonRepoSession() {
         assertNull(gitBadge(nonRepo.git))
     }
+
+    // ── NEW (G7): the touch branch's git rows, the notice, and an inert context menu ─────────
+
+    /**
+     * Android's overflow git rows, now on the shared menu. They appear only when the caller passes
+     * an [onGitOp] AND the session is a repo — a pointer host normally has [GitBadgeMenu] instead.
+     */
+    @Test
+    fun overflowGitRowsShowPushOrPublishAndFireTheOp() = runComposeUiTest {
+        val fired = mutableListOf<String>()
+        setPlatformContent(pointer = false) {
+            MenuHost {
+                OverflowMenu(
+                    session = remoteUnpublished,
+                    onRename = {},
+                    onToggleMute = {},
+                    onKill = {},
+                    onGitOp = { fired.add(it) },
+                    buttonTag = "workspace_overflow",
+                    detailTag = "workspace_overflow_detail",
+                    showManagementRows = false,
+                    showSessionRows = false,
+                )
+            }
+        }
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("workspace_overflow_detail").assertIsDisplayed()
+        onNodeWithTag("overflow_git_publish").assertIsDisplayed()
+        onNodeWithTag("overflow_git_push").assertDoesNotExist()
+        // The session rows are hidden on this branch — they live on the session list.
+        onNodeWithTag("overflow_rename").assertDoesNotExist()
+        onNodeWithTag("overflow_git_fetch").performClick()
+        assertEquals(listOf("fetch"), fired)
+    }
+
+    @Test
+    fun overflowGitRowsAreAbsentForANonRepoSessionOrWithNoHandler() = runComposeUiTest {
+        setPlatformContent(pointer = false) {
+            MenuHost {
+                OverflowMenu(
+                    session = nonRepo,
+                    onRename = {},
+                    onToggleMute = {},
+                    onKill = {},
+                    onGitOp = { },
+                    buttonTag = "workspace_overflow",
+                )
+            }
+        }
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("overflow_git_fetch").assertDoesNotExist()
+    }
+
+    /**
+     * A host whose right-click menu is INERT (Android's `RowContextMenu` passthrough) must still
+     * reach every session action — which is why the ⋮ button is never gated on
+     * `LocalContextMenuAvailable`.
+     */
+    @Test
+    fun anInertContextMenuHostStillGetsTheOverflowRows() = runComposeUiTest {
+        var killed = false
+        setPlatformContent(pointer = false) {
+            CompositionLocalProvider(LocalContextMenuAvailable provides false) {
+                MenuHost {
+                    OverflowMenu(
+                        session = baseSession,
+                        onRename = {},
+                        onToggleMute = {},
+                        onKill = { killed = true },
+                    )
+                }
+            }
+        }
+        onNodeWithTag("shell_overflow").assertIsDisplayed()
+        onNodeWithTag("shell_overflow").performClick()
+        onNodeWithTag("overflow_rename").assertIsDisplayed()
+        onNodeWithTag("overflow_mute").assertIsDisplayed()
+        onNodeWithTag("overflow_kill").performClick()
+        onNodeWithTag("overflow_kill_confirm").performClick()
+        assertTrue(killed)
+    }
+
+    /**
+     * The touch branch's git feedback path end to end: the phone tab strip's overflow fires the op
+     * through the holder and the OUTCOME reaches the user through `Platform.notices` — Android's
+     * toast, desktop's snackbar, neither named here.
+     */
+    @Test
+    fun aGitOpFromThePhoneOverflowReportsThroughTheNoticeChannel() = runComposeUiTest {
+        val platform = FakePlatform(caps = NO_CAPS)
+        val actions = ShellActions(
+            sessions = MutableStateFlow(listOf(baseSession)),
+            gitFetch = { GitOpResult(status = "up_to_date") },
+        )
+        setPlatformContent(platform, pointer = false) {
+            MenuHost { PhoneTabChatOverflow(baseSession.id, actions) {} }
+        }
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("overflow_git_fetch").performClick()
+        waitForIdle()
+        assertEquals(listOf("Up to date"), platform.notices.shown.toList())
+    }
+
+    /** A failed op is still reported — silence would look like nothing happened. */
+    @Test
+    fun aFailedGitOpAlsoReportsThroughTheNoticeChannel() = runComposeUiTest {
+        val platform = FakePlatform(caps = NO_CAPS)
+        val actions = ShellActions(
+            sessions = MutableStateFlow(listOf(baseSession)),
+            gitPull = { null },
+        )
+        setPlatformContent(platform, pointer = false) {
+            MenuHost { PhoneTabChatOverflow(baseSession.id, actions) {} }
+        }
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("overflow_git_pull").performClick()
+        waitForIdle()
+        assertEquals(listOf("Failed"), platform.notices.shown.toList())
+    }
+
+    // ── gitOpResultText (the notice wording) ────────────────────────────────────────────────
+
+    @Test
+    fun gitOpResultTextSpellsOutEveryBrokerStatus() {
+        assertEquals("Failed", gitOpResultText(null))
+        assertEquals("Pushed", gitOpResultText(GitOpResult(status = "pushed")))
+        assertEquals("Up to date", gitOpResultText(GitOpResult(status = "up_to_date")))
+        assertEquals("Pulled", gitOpResultText(GitOpResult(status = "clean")))
+        assertEquals("Push rejected — pull first", gitOpResultText(GitOpResult(status = "rejected_non_ff")))
+        assertEquals("Uncommitted changes block the pull", gitOpResultText(GitOpResult(status = "dirty")))
+        assertEquals("Auth failed", gitOpResultText(GitOpResult(status = "auth_failed")))
+        assertEquals("boom", gitOpResultText(GitOpResult(status = "error", message = "boom")))
+        assertEquals("Error", gitOpResultText(GitOpResult(status = "error")))
+        assertEquals("weird", gitOpResultText(GitOpResult(status = "weird")))
+    }
+
+    @Test
+    fun gitOpResultTextCountsConflictedFiles() {
+        assertEquals(
+            "Conflict in 2 file(s)",
+            gitOpResultText(GitOpResult(status = "conflict", files = listOf("a", "b"))),
+        )
+    }
+}
+
+/**
+ * The menus read `LocalPlatform` (link opening) and `LocalUiPrefs` (the detail level), which
+ * [setPlatformContent] provides; this only marks where the app's theme sits in production.
+ */
+@Composable
+private fun MenuHost(content: @Composable () -> Unit) {
+    content()
 }
