@@ -21,9 +21,8 @@ import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 
 internal fun testPairedHostStore(): PairedHostStore = PairedHostStore(
     object : HostPersistence {
@@ -44,17 +43,15 @@ internal fun testPairedHostStore(): PairedHostStore = PairedHostStore(
 /**
  * A one-record [FleetStore] whose only host IS [app].
  *
- * UNCONFINED, deliberately: `FleetStore` holds its own `lock` while a merged `StateFlow.setValue`
- * resumes whoever is collecting it, and under `runComposeUiTest` that resume takes Compose's
- * `FlushCoroutineDispatcher` monitor — a monitor the composition itself holds while calling back
- * into the store. On a real dispatcher the two orders interleave and the suite deadlocks;
- * unconfined keeps the fan-out on the caller's thread, which is what every other fleet-driven
- * suite here already does.
+ * A REAL dispatcher, deliberately: `FleetStore` used to assign its merged `StateFlow`s while
+ * holding its own lock, and under `runComposeUiTest` that resumed a collector into Compose's
+ * `FlushCoroutineDispatcher` monitor while the composition held that monitor and wanted the
+ * store's lock — this suite deadlocked on it. The store publishes outside its lock now
+ * (`FleetStoreLockingTest`), so the fold can run off-thread the way it does in production.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
 internal fun testFleet(app: HostStore): FleetStore = FleetStore(
     store = testPairedHostStore(),
-    scope = TestScope(UnconfinedTestDispatcher()),
+    scope = CoroutineScope(Dispatchers.Default),
     deps = testDeps(),
     appFactory = { _, _, _ -> app },
 )

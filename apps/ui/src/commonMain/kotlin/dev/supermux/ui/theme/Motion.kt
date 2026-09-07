@@ -1,6 +1,6 @@
 // The shared UI module the desktop and Android copies of this file were both waiting for
-// (spec 2026-07-09, Decision 1). apps/android/.../theme/Motion.kt is still a copy — delete it and
-// depend on this one when :ui grows an Android target.
+// (spec 2026-07-09, Decision 1). Both copies are gone: Android's went with cluster G8, when the
+// widened duplicate-basename guardrail caught it (it had no callers left).
 package dev.supermux.ui.theme
 
 import androidx.compose.animation.core.FiniteAnimationSpec

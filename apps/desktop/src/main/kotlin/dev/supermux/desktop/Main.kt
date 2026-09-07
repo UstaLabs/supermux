@@ -104,6 +104,8 @@ import dev.supermux.desktop.shell.MacTitleBarHeight
 import dev.supermux.desktop.shell.macTitleBarDragRegion
 import dev.supermux.desktop.shell.PersistedUiState
 import dev.supermux.ui.prefs.seedShellState
+import dev.supermux.ui.prefs.ShellStateSeed
+import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
@@ -414,20 +416,31 @@ fun main() {
         // file is drained ONCE here and then only carries the window bounds. Synchronous for the
         // same reason the appearance seed above is: an asynchronous read would paint the first
         // frames with the sidebar at the wrong width and no session selected.
-        val seededShell = remember {
-            runBlocking {
-                desktopUiPrefs.seedShellState(
-                    legacySidebarCollapsed = persistedUi.layout?.sidebarCollapsed,
-                    legacySidebarWidthDp = persistedUi.layout?.sidebarWidthDp,
-                    legacySelectedSession = persistedUi.selectedId,
-                )
-            }
+        val shellSeed = remember {
+            runCatching {
+                runBlocking {
+                    desktopUiPrefs.seedShellState(
+                        legacySidebarCollapsed = persistedUi.layout?.sidebarCollapsed,
+                        legacySidebarWidthDp = persistedUi.layout?.sidebarWidthDp,
+                        legacySelectedSession = persistedUi.selectedId,
+                    )
+                }
+            }.onFailure { println("[Main] shell-state seed failed (keeping ui-state.json): $it") }
+        }
+        // A THROWN seed leaves the legacy file as the only copy, so fall back to its values in
+        // memory and keep writing them through (see the `ui-state.json` writer below).
+        val seededShell = shellSeed.getOrElse {
+            ShellStateSeed(
+                sidebarCollapsed = persistedUi.layout?.sidebarCollapsed ?: false,
+                sidebarWidthDp = persistedUi.layout?.sidebarWidthDp ?: SIDEBAR_WIDTH_DEFAULT,
+                selectedSession = persistedUi.selectedId,
+            )
         }
         // The launcher pair and the collapsed project groups (cluster F1), drained from this host's
         // old files before anything reads them — the seed must win the race against the launcher's
         // first `loadPrefs()` and the sidebar's first frame.
         val launcherStoreForSeed = remember { dev.supermux.desktop.session.LauncherStore() }
-        val seededCollapsedPaths = remember {
+        val collapsedSeed = remember {
             runBlocking {
                 runCatching {
                     desktopUiPrefs.seedLauncher(
@@ -439,9 +452,14 @@ fun main() {
                     desktopUiPrefs.seedCollapsedProjectPaths(
                         persistedUi.layout?.collapsedProjectPaths?.toSet().orEmpty(),
                     )
-                }.getOrDefault(emptySet())
+                }
             }
         }
+        val seededCollapsedPaths = collapsedSeed.getOrElse {
+            persistedUi.layout?.collapsedProjectPaths?.toSet().orEmpty()
+        }
+        /** True once BOTH one-way drains actually landed — see the writer below. */
+        val legacyDrained = remember { shellSeed.isSuccess && collapsedSeed.isSuccess }
         val ui = remember {
             ShellUiState().apply {
                 windows = desktopWindows
@@ -456,12 +474,22 @@ fun main() {
         // Debounced `ui-state.json` write — the DETACHED WINDOW BOUNDS only; every other field it
         // used to carry now lives in the shared settings store (see `seedShellState` above), which
         // the shell itself writes.
-        LaunchedEffect(uiStore) {
+        //
+        // ...UNLESS a drain THREW, in which case this file is still the only copy of the user's
+        // sidebar, selection and collapsed groups: carry those fields forward UNTOUCHED rather than
+        // erasing them on the first window move. Same rule cluster F1 used for the collapsed paths.
+        LaunchedEffect(uiStore, legacyDrained) {
             snapshotFlow { desktopWindows.persistedExtras() }
                 .collectLatest { extras ->
                     delay(500)
                     withContext(Dispatchers.IO) {
-                        uiStore.save(PersistedUiState(windows = extras))
+                        uiStore.save(
+                            if (legacyDrained) {
+                                PersistedUiState(windows = extras)
+                            } else {
+                                persistedUi.copy(windows = extras)
+                            },
+                        )
                     }
                 }
         }

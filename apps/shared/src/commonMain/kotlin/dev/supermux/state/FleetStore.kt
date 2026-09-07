@@ -161,6 +161,18 @@ class FleetStore(
     private var lastViewingHost: String? = null
     private var viewingSnapshot: WorkspaceViewingSnapshot? = null
 
+    /**
+     * sessionId → the record the launcher's first message was ARMED on.
+     *
+     * The composer consumes it from the chat that opens, and until `session_added` has landed
+     * `_sessionHost` does not know the new id yet — so [appFor]'s "the active host" fallback would
+     * ask the WRONG broker, get null, and the `LaunchedEffect(sessionKey)` behind it never runs
+     * again: the message the user typed into the launcher would be silently dropped. Consuming
+     * through the ARMING host removes the guess. Entries are one-shot (dropped on consume) and
+     * pruned when the host is forgotten.
+     */
+    private val pendingFirstHost = HashMap<String, String>()
+
 
     // ── Merged per-host projections (Android AppViewModel parity) ───────────────────
     // Everything the screens read off ONE object. Session/workspace/view ids are globally unique
@@ -169,13 +181,62 @@ class FleetStore(
     /** Live [HostStore]s, republished whenever [conns] changes — the driver for the folds below. */
     private val hostApps = MutableStateFlow<List<HostStore>>(emptyList())
 
-    // Takes [lock] (reentrantly — `sync`/`close`/`closeAll` may already hold it): the usage
-    // recompute below reads `conns` and `usageByHost`, and `close(recordId)` reaches here without
-    // the lock of its own.
-    private fun publishApps() = synchronized(lock) {
-        hostApps.value = conns.values.map { it.app }
+    // ── Snapshot-then-publish ────────────────────────────────────────────────────────────────
+    // Assigning a `MutableStateFlow` RESUMES its collectors inline, on the assigning thread. A
+    // collector can take a lock of its own on the way — Compose's frame dispatcher does — while the
+    // thread holding THAT lock is calling back into this store and wants [lock]. Publishing under
+    // [lock] closes that cycle. So every fold now COMPUTES its new values under the lock into a
+    // [Publication] and the caller assigns them once the lock is released. Same values, same order;
+    // only the moment of the assignment moves.
+
+    /** New values for the merged flows, staged under [lock] and assigned by [emit] after it. */
+    private class Publication {
+        var sessions: List<SessionInfo>? = null
+        var sessionHost: Map<String, String>? = null
+        var messages: Map<String, List<LogEntry>>? = null
+        var agent: Map<String, AgentStatus>? = null
+        var lastRead: Map<String, String>? = null
+        var archived: List<ArchivedDto>? = null
+        var hostViews: List<HostView>? = null
+        var apps: List<HostStore>? = null
+        /** Nullable value → a flag, so "publish null usage" is distinguishable from "not staged". */
+        var usageStaged: Boolean = false
+        var usage: UsageResponse? = null
+        var activeHostStaged: Boolean = false
+        var activeHost: String? = null
+    }
+
+    private fun Publication.emit() {
+        activeHost.let { if (activeHostStaged) _activeHost.value = it }
+        apps?.let { hostApps.value = it }
+        sessions?.let { _sessions.value = it }
+        sessionHost?.let { _sessionHost.value = it }
+        messages?.let { _messages.value = it }
+        agent?.let { _agentState.value = it }
+        lastRead?.let { _lastRead.value = it }
+        archived?.let { _archivedSessions.value = it }
+        hostViews?.let { _hostViews.value = it }
+        if (usageStaged) _usageSnapshot.value = usage
+    }
+
+    /**
+     * Run [block] under [lock], then publish whatever it staged OUTSIDE the lock.
+     *
+     * Use it at the OUTERMOST entry point only — a nested call would emit while the outer lock is
+     * still held, which is the very thing this exists to prevent. Inner helpers take the
+     * [Publication] and stay lock-only (`stage*`).
+     */
+    private inline fun publishing(block: (Publication) -> Unit) {
+        val pub = Publication()
+        synchronized(lock) { block(pub) }
+        pub.emit()
+    }
+
+    /** Stage the live app list. Callers hold [lock]. */
+    private fun stageApps(pub: Publication) {
+        pub.apps = conns.values.map { it.app }
         // The active host's usage snapshot is keyed on the connection set too (E6).
-        recomputeUsage()
+        stageUsage(pub)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -273,8 +334,8 @@ class FleetStore(
     val agentReplies: SharedFlow<AgentReplyEvent> = _agentReplies.asSharedFlow()
 
     init {
-        synchronized(lock) {
-            _activeHost.value = store.list().firstOrNull()?.recordId
+        _activeHost.value = store.list().firstOrNull()?.recordId
+        publishing { pub ->
             // Seed from the offline cache BEFORE dialing: an offline host shows its last-known
             // sessions rather than nothing. Prune caches for hosts forgotten while the app was dead.
             snapshots?.let { cache ->
@@ -283,31 +344,47 @@ class FleetStore(
                     if (snap.sessions.isNotEmpty()) sessionsByHost[snap.recordId] = snap.sessions
                 }
             }
-            sync(store.list())
-            recomputeAll()
+            stageAll(pub)
         }
+        sync(store.list())
     }
 
     // ── Connection lifecycle (mirror of Android HostConnections.sync) ────────────────
 
-    /** Reconcile live connections against [hosts]: open one [HostStore] per newly-added host,
-     *  close the one for each removed host, rebuild a host whose effective URL or token changed.
-     *  Idempotent. Hosts with a blank token or no reachable URL are kept in the store but not dialed. */
-    private fun sync(hosts: List<PairedHost>) = synchronized(lock) {
-        val wanted = hosts.mapNotNull { h -> effectiveUrl(h)?.let { url -> Triple(h.recordId, url, h.token) } }
-            .filter { it.third.isNotBlank() }
-        val wantedIds = wanted.map { it.first }.toSet()
-        (conns.keys - wantedIds).toList().forEach { close(it) }
-        for ((recordId, url, token) in wanted) {
-            val existing = conns[recordId]
-            if (existing == null) {
-                open(recordId, url, token)
-            } else if (existing.app.baseUrl != url) {
-                close(recordId); open(recordId, url, token)
-            }
+    /** What [sync] decided to do, computed under [lock] and carried out without it. */
+    private class SyncPlan(
+        val close: List<String>,
+        val open: List<Triple<String, String, String>>,
+    )
+
+    /**
+     * Reconcile live connections against [hosts]: open one [HostStore] per newly-added host, close
+     * the one for each removed host, rebuild a host whose effective URL or token changed.
+     * Idempotent. Hosts with a blank token or no reachable URL are kept in the store but not dialed.
+     *
+     * The DECISION is made under [lock]; building a `HostStore` (which dials) and tearing a socket
+     * down are alien, blocking calls and run outside it. Holding a lock across either is how a
+     * caller of this store ends up waiting on a broker.
+     */
+    private fun sync(hosts: List<PairedHost>) {
+        val plan = synchronized(lock) {
+            val wanted = hosts.mapNotNull { h -> effectiveUrl(h)?.let { url -> Triple(h.recordId, url, h.token) } }
+                .filter { it.third.isNotBlank() }
+            val wantedIds = wanted.map { it.first }.toSet()
+            val stale = (conns.keys - wantedIds).toList() +
+                wanted.filter { (id, url, _) -> conns[id]?.app?.baseUrl?.let { it != url } == true }
+                    .map { it.first }
+            SyncPlan(
+                close = stale,
+                open = wanted.filter { (id, _, _) -> id in stale || conns[id] == null },
+            )
         }
+        if (plan.close.isEmpty() && plan.open.isEmpty()) return
+        plan.close.forEach { close(it) }
+        plan.open.forEach { (recordId, url, token) -> open(recordId, url, token) }
     }
 
+    /** Dial [url] and fold it in. Blocking work (the factory) runs BEFORE [lock] is taken. */
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
         val conn = HostConn(app)
@@ -319,56 +396,64 @@ class FleetStore(
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
         conn.jobs += fleetScope.launch { app.archivedSessions.collect { onHostArchived(recordId, it) } }
         conn.jobs += fleetScope.launch { app.usageSnapshot.collect { onHostUsage(recordId, it) } }
-        conns[recordId] = conn
-        publishApps()
+        publishing { pub ->
+            conns[recordId] = conn
+            stageApps(pub)
+        }
     }
 
+    /** Detach [recordId]'s connection. The socket teardown runs OUTSIDE [lock]. */
     fun close(recordId: String) {
-        val c = conns.remove(recordId) ?: return
+        val c = synchronized(lock) {
+            conns.remove(recordId)?.also { onlineHosts[recordId] = false }
+        } ?: return
         c.jobs.forEach { it.cancel() }
         c.app.close()
-        onlineHosts[recordId] = false
-        // Only when the record is really gone — a URL/token rebuild closes and reopens the same host.
-        if (store.list().none { it.recordId == recordId }) snapshots?.remove(recordId)
-        publishApps()
+        publishing { pub ->
+            // Only when the record is really gone — a URL/token rebuild closes and reopens the same host.
+            if (store.list().none { it.recordId == recordId }) snapshots?.remove(recordId)
+            stageApps(pub)
+        }
     }
 
     // ── Per-host fold callbacks ──────────────────────────────────────────────────────
 
-    private fun onHostSessions(recordId: String, sessions: List<SessionInfo>) = synchronized(lock) {
+    private fun onHostSessions(recordId: String, sessions: List<SessionInfo>) = publishing { pub ->
         // A freshly opened HostStore emits an empty list before its first Snapshot; that must not
         // wipe a bucket seeded from the offline cache. Once the host is online its list is
         // authoritative, empty included.
         val seedHolds = sessions.isEmpty() &&
             onlineHosts[recordId] != true &&
             sessionsByHost[recordId]?.isNotEmpty() == true
-        if (seedHolds) return@synchronized
+        if (seedHolds) return@publishing
         sessionsByHost[recordId] = sessions
-        recomputeSessions()
+        stageSessions(pub)
     }
 
-    private fun onHostMessages(recordId: String, messages: Map<String, List<LogEntry>>) = synchronized(lock) {
+    private fun onHostMessages(recordId: String, messages: Map<String, List<LogEntry>>) = publishing { pub ->
         messagesByHost[recordId] = messages
-        recomputeMessages()
+        stageMessages(pub)
     }
 
-    private fun onHostAgent(recordId: String, agent: Map<String, AgentStatus>) = synchronized(lock) {
+    private fun onHostAgent(recordId: String, agent: Map<String, AgentStatus>) = publishing { pub ->
         agentByHost[recordId] = agent
-        recomputeAgent()
+        stageAgent(pub)
     }
 
-    private fun onHostLastRead(recordId: String, reads: Map<String, String>) = synchronized(lock) {
+    private fun onHostLastRead(recordId: String, reads: Map<String, String>) = publishing { pub ->
         lastReadByHost[recordId] = reads
-        recomputeLastRead()
+        stageLastRead(pub)
     }
 
     /** Socket connect/disconnect for a host — drives the offline/greyed chip (spec §5) and stamps
      *  lastSeen on connect. The session bucket is retained on disconnect so its last snapshot stays
      *  visible. */
-    private fun onConnState(recordId: String, online: Boolean) = synchronized(lock) {
-        onlineHosts[recordId] = online
-        if (online) store.updateSeen(recordId, nowMs())
-        rebuildHostViews()
+    private fun onConnState(recordId: String, online: Boolean) {
+        publishing { pub ->
+            onlineHosts[recordId] = online
+            if (online) store.updateSeen(recordId, nowMs())
+            stageHostViews(pub)
+        }
         if (online) backfillHostIdentity(recordId)
     }
 
@@ -400,7 +485,7 @@ class FleetStore(
             }
             // A duplicate collapsed into this record → reconcile connections (close the removed one).
             if (merged.isNotEmpty()) onHostsChanged()
-            synchronized(lock) { recomputeAll() }
+            publishing { stageAll(it) }
         }
     }
 
@@ -410,50 +495,58 @@ class FleetStore(
             normalized.startsWith("http://localhost:")
     }
 
-    private fun recomputeAll() {
-        recomputeSessions(); recomputeMessages(); recomputeAgent(); recomputeLastRead(); recomputeArchived(); rebuildHostViews()
+    /** Every projection at once. Callers hold [lock]. */
+    private fun stageAll(pub: Publication) {
+        stageSessions(pub); stageMessages(pub); stageAgent(pub); stageLastRead(pub)
+        stageArchived(pub); stageHostViews(pub)
     }
 
-    private fun recomputeSessions() {
+    private fun stageSessions(pub: Publication) {
         val merged = mergeSessions(store.list().map { it.recordId }, sessionsByHost)
-        _sessions.value = merged.sessions
-        _sessionHost.value = merged.sessionHost
+        pub.sessions = merged.sessions
+        pub.sessionHost = merged.sessionHost
     }
 
-    private fun recomputeMessages() {
+    private fun stageMessages(pub: Publication) {
         // Ids are globally unique across hosts → a straight union in store order.
         val out = LinkedHashMap<String, List<LogEntry>>()
         store.list().forEach { h -> messagesByHost[h.recordId]?.let { out.putAll(it) } }
         messagesByHost.forEach { (rid, m) -> if (store.list().none { it.recordId == rid }) out.putAll(m) }
-        _messages.value = out
+        pub.messages = out
     }
 
-    private fun recomputeAgent() {
+    private fun stageAgent(pub: Publication) {
         val out = LinkedHashMap<String, AgentStatus>()
         store.list().forEach { h -> agentByHost[h.recordId]?.let { out.putAll(it) } }
         agentByHost.forEach { (rid, a) -> if (store.list().none { it.recordId == rid }) out.putAll(a) }
-        _agentState.value = out
+        pub.agent = out
     }
 
-    private fun recomputeLastRead() {
+    private fun stageLastRead(pub: Publication) {
         val out = LinkedHashMap<String, String>()
         store.list().forEach { h -> lastReadByHost[h.recordId]?.let { out.putAll(it) } }
         lastReadByHost.forEach { (rid, m) -> if (store.list().none { it.recordId == rid }) out.putAll(m) }
-        _lastRead.value = out
+        pub.lastRead = out
     }
 
-    private fun onHostUsage(recordId: String, usage: UsageResponse?) = synchronized(lock) {
+    private fun onHostUsage(recordId: String, usage: UsageResponse?) = publishing { pub ->
         usageByHost[recordId] = usage
-        recomputeUsage()
+        stageUsage(pub)
     }
 
     /** The recordId [activeApp] resolves to, or null when nothing is connected. */
     private fun activeRecordId(): String? =
         _activeHost.value?.takeIf { conns.containsKey(it) } ?: conns.keys.firstOrNull()
 
-    /** Republish the active host's usage snapshot. Callers hold [lock]. */
-    private fun recomputeUsage() {
-        _usageSnapshot.value = activeRecordId()?.let { usageByHost[it] }
+    /** Stage the active host's usage snapshot. Callers hold [lock]. */
+    private fun stageUsage(pub: Publication) {
+        val active = if (pub.activeHostStaged) {
+            pub.activeHost?.takeIf { conns.containsKey(it) } ?: conns.keys.firstOrNull()
+        } else {
+            activeRecordId()
+        }
+        pub.usageStaged = true
+        pub.usage = active?.let { usageByHost[it] }
     }
 
     /**
@@ -465,26 +558,26 @@ class FleetStore(
      * on whichever thread the HTTP call completed on, so a fetch publishes its own result too and
      * `usage()` returning is the point at which [usageSnapshot] is up to date.
      */
-    private fun publishUsage(recordId: String?, usage: UsageResponse?) = synchronized(lock) {
-        val target = recordId ?: return@synchronized
+    private fun publishUsage(recordId: String?, usage: UsageResponse?) = publishing { pub ->
+        val target = recordId ?: return@publishing
         usageByHost[target] = usage
-        recomputeUsage()
+        stageUsage(pub)
     }
 
-    private fun onHostArchived(recordId: String, archived: List<ArchivedDto>) = synchronized(lock) {
+    private fun onHostArchived(recordId: String, archived: List<ArchivedDto>) = publishing { pub ->
         archivedByHost[recordId] = archived
-        recomputeArchived()
+        stageArchived(pub)
     }
 
-    private fun recomputeArchived() {
+    private fun stageArchived(pub: Publication) {
         val out = ArrayList<ArchivedDto>()
         store.list().forEach { h -> archivedByHost[h.recordId]?.let { out.addAll(it) } }
         archivedByHost.forEach { (rid, list) -> if (store.list().none { it.recordId == rid }) out.addAll(list) }
-        _archivedSessions.value = out
+        pub.archived = out
     }
 
-    private fun rebuildHostViews() {
-        _hostViews.value = hostViewsFrom(store.list(), onlineHosts)
+    private fun stageHostViews(pub: Publication) {
+        pub.hostViews = hostViewsFrom(store.list(), onlineHosts)
     }
 
     // ── Routing ──────────────────────────────────────────────────────────────────────
@@ -497,13 +590,22 @@ class FleetStore(
     /** The [HostStore] for a host recordId, or null if it isn't connected/known. */
     fun appForRecord(recordId: String?): HostStore? = recordId?.let { conns[it]?.app }
 
+    /**
+     * Where a spawn goes, as a (recordId, store) PAIR — the id matters as much as the store,
+     * because the first message is armed against it (see [armPendingFirst]).
+     */
+    private fun spawnTarget(recordId: String?): Pair<String, HostStore>? = synchronized(lock) {
+        val id = recordId?.takeIf { conns.containsKey(it) } ?: activeRecordId() ?: return@synchronized null
+        conns[id]?.app?.let { id to it }
+    }
+
     /** The active host's app (host-global ops), falling back to the first connected host. */
     fun activeApp(): HostStore? = conns[_activeHost.value]?.app ?: conns.values.firstOrNull()?.app
 
     /** Route host-global operations to a chosen host — the launcher's host picker + opening a chat. */
     fun setActiveHost(recordId: String) {
         _activeHost.value = recordId
-        synchronized(lock) { recomputeUsage() }
+        publishing { stageUsage(it) }
     }
 
     /**
@@ -515,7 +617,7 @@ class FleetStore(
         val owner = sessionId?.let { _sessionHost.value[it] }
         if (owner != null) {
             _activeHost.value = owner
-            synchronized(lock) { recomputeUsage() }
+            publishing { stageUsage(it) }
         }
         val prev = lastViewingHost
         if (prev != null && prev != owner) conns[prev]?.app?.updateViewing(null, visible)
@@ -576,7 +678,7 @@ class FleetStore(
         val trimmed = name.trim()
         if (trimmed.isBlank()) return
         store.rename(recordId, trimmed)
-        rebuildHostViews()
+        publishing { stageHostViews(it) }
     }
 
     /** True when a typed add-host URL is plain HTTP to a non-loopback host. */
@@ -668,7 +770,7 @@ class FleetStore(
     /** Forget a host: drop its record/token, close its socket, and prune its cached sessions from
      *  the merged list. */
     fun forgetHost(recordId: String) {
-        synchronized(lock) {
+        publishing { pub ->
             store.remove(recordId)
             sessionsByHost.remove(recordId)
             messagesByHost.remove(recordId)
@@ -678,17 +780,26 @@ class FleetStore(
             usageByHost.remove(recordId)
             onlineHosts.remove(recordId)
             snapshots?.remove(recordId)
-            if (_activeHost.value == recordId) _activeHost.value = store.list().firstOrNull()?.recordId
-            recomputeUsage()
+            pendingFirstHost.entries.removeAll { it.value == recordId }
+            if (_activeHost.value == recordId) {
+                pub.activeHostStaged = true
+                pub.activeHost = store.list().firstOrNull()?.recordId
+            }
+            stageUsage(pub)
         }
         onHostsChanged()
-        synchronized(lock) { recomputeAll() }
+        publishing { stageAll(it) }
     }
 
-    private fun onHostsChanged() = synchronized(lock) {
+    private fun onHostsChanged() {
         sync(store.list())
-        if (_activeHost.value == null) _activeHost.value = store.list().firstOrNull()?.recordId
-        rebuildHostViews()
+        publishing { pub ->
+            if (_activeHost.value == null) {
+                pub.activeHostStaged = true
+                pub.activeHost = store.list().firstOrNull()?.recordId
+            }
+            stageHostViews(pub)
+        }
     }
 
     private suspend fun claim(url: String, secret: String, deviceName: String): PairClaimResult? {
@@ -704,7 +815,12 @@ class FleetStore(
     /** Stop every host's connection + fold, and release the throwaway claim/probe HttpClient. */
     fun close() {
         fleetScope.cancel()
-        synchronized(lock) { conns.values.toList().forEach { it.app.close() }; conns.clear(); publishApps() }
+        // Detach first, then tear the sockets down WITHOUT [lock]: `HostStore.close()` cancels
+        // scopes and releases HTTP clients, and a caller waiting on this store must not wait on
+        // that too.
+        val live = synchronized(lock) { conns.values.toList().also { conns.clear(); pendingFirstHost.clear() } }
+        live.forEach { it.app.close() }
+        publishing { stageApps(it) }
         http.close()
     }
 
@@ -750,8 +866,20 @@ class FleetStore(
     fun setPendingFirst(sessionId: String, message: HostStore.PendingFirstMessage) {
         appFor(sessionId)?.setPendingFirst(sessionId, message)
     }
-    fun consumePendingFirst(sessionId: String): HostStore.PendingFirstMessage? =
-        appFor(sessionId)?.consumePendingFirst(sessionId)
+    /**
+     * The launcher's first message, from the host it was ARMED on.
+     *
+     * NOT `appFor(sessionId)`: that falls back to the active host while `_sessionHost` is still
+     * catching up with `session_added`, and the composer asks exactly once — a wrong answer there
+     * drops the message for good. [pendingFirstHost] remembers the arming record until it is
+     * consumed.
+     */
+    fun consumePendingFirst(sessionId: String): HostStore.PendingFirstMessage? {
+        val armed = synchronized(lock) { pendingFirstHost[sessionId]?.let { conns[it]?.app } }
+        val app = armed ?: appFor(sessionId) ?: return null
+        return app.consumePendingFirst(sessionId)
+            ?.also { synchronized(lock) { pendingFirstHost.remove(sessionId) } }
+    }
     fun ensureMessagesLoaded(sessionId: String) { appFor(sessionId)?.ensureMessagesLoaded(sessionId) }
     // Settings writes go straight to [HostStoreDeps.settings] — the same place the reads below come
     // from — so a draft typed while every host is offline is still persisted.
@@ -764,8 +892,11 @@ class FleetStore(
     fun clearFinishJob(id: String) { appFor(id)?.clearFinishJob(id) }
     fun ackFinish(id: String, startedAt: Double) { appFor(id)?.ackFinish(id, startedAt) }
     fun isFinishAcked(id: String, startedAt: Double): Boolean = appFor(id)?.isFinishAcked(id, startedAt) == true
-    fun consumeFirstUploads(sessionId: String): List<String> =
-        appFor(sessionId)?.consumeFirstUploads(sessionId).orEmpty()
+    /** Same host affinity as [consumePendingFirst] — the uploads were staged where the spawn ran. */
+    fun consumeFirstUploads(sessionId: String): List<String> {
+        val armed = synchronized(lock) { pendingFirstHost[sessionId]?.let { conns[it]?.app } }
+        return (armed ?: appFor(sessionId))?.consumeFirstUploads(sessionId).orEmpty()
+    }
 
     fun connectTerminal(sessionId: String, terminalId: String = "main"): TerminalClient =
         requireHost(appFor(sessionId)).connectTerminal(sessionId, terminalId)
@@ -1199,12 +1330,12 @@ class FleetStore(
         firstMessage: String? = null,
         hostRecordId: String? = null,
     ): String? {
-        val app = appForRecord(hostRecordId) ?: activeApp() ?: return null
+        val (recordId, app) = spawnTarget(hostRecordId) ?: return null
         val newId = app.createSessionWithFirstMessage(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
             replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
         ) ?: return null
-        armPendingFirst(app, newId, text, firstMessage)
+        armPendingFirst(recordId, app, newId, text, firstMessage)
         return newId
     }
 
@@ -1228,12 +1359,13 @@ class FleetStore(
         firstMessage: String? = null,
         hostRecordId: String? = null,
     ): String {
-        val app = appForRecord(hostRecordId) ?: activeApp() ?: throw IllegalStateException("No host connected")
+        val (recordId, app) = spawnTarget(hostRecordId)
+            ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
             replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
         )
-        armPendingFirst(app, newId, text, firstMessage)
+        armPendingFirst(recordId, app, newId, text, firstMessage)
         return newId
     }
 
@@ -1242,12 +1374,20 @@ class FleetStore(
      * open. Skipped when [firstMessage] is set: the BROKER delivers that one after spawn, and a
      * client Send would duplicate it.
      */
-    private fun armPendingFirst(app: HostStore, sessionId: String, text: String, firstMessage: String?) {
+    private fun armPendingFirst(
+        recordId: String?,
+        app: HostStore,
+        sessionId: String,
+        text: String,
+        firstMessage: String?,
+    ) {
         if (!firstMessage.isNullOrBlank()) return
         app.setPendingFirst(
             sessionId,
             HostStore.PendingFirstMessage(text, app.consumeFirstUploads(sessionId)),
         )
+        // Remember WHERE, so [consumePendingFirst] never has to guess (see its KDoc).
+        if (recordId != null) synchronized(lock) { pendingFirstHost[sessionId] = recordId }
     }
 
     /**

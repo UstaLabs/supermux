@@ -1,8 +1,8 @@
 // Shared Chat ⇄ Native main-view switch (UI cluster B, task B3): one implementation for both apps.
 // The signature was already identical on both sides; only the geometry differed, so it branches on
 // [LocalPointerAvailable] — no mouse/touchpad keeps Android's filled 28dp thumb pill, a real
-// pointer keeps desktop's bordered 24dp one. Icons are Material (`Outlined.AutoAwesome` / `Outlined.Terminal`, replacing Android's
-// bundled `ic_sparkle` / `ic_terminal`); the `pointerHoverIcon(Hand)` is harmless on touch.
+// pointer keeps desktop's bordered 24dp one. Icons are Material (`Outlined.AutoAwesome` /
+// `Outlined.Terminal`); the `pointerHoverIcon(Hand)` is harmless on touch.
 package dev.supermux.ui.shell
 
 import androidx.compose.foundation.background

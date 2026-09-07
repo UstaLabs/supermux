@@ -1376,7 +1376,11 @@ private fun WorkspacePanel(
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
+    // `tablet_pane_host` is Android's name for "the TREE renderer is mounted, not the phone tab
+    // strip"; `workspace_layout_host` (on the `PaneHost` itself, below) is desktop's name for the
+    // tree. Both survive the merge because they sit on different nodes — Compose's `TestTag` merge
+    // policy keeps the outermost value, so stacking them on one node would silently drop one.
+    Column(Modifier.fillMaxSize().testTag("tablet_pane_host")) {
         val hostedLayout = ui.windows.layoutFor(ui.windows.mainHostId, localLayout)
         WorkspacePanes(
             hostId = ui.windows.mainHostId,

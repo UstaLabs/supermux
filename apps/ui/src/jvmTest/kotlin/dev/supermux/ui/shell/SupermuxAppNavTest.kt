@@ -165,6 +165,10 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
         onNodeWithTag("workspace-layer-w1").assertIsDisplayed()
+        // Both hosts' names for the wide tree renderer resolve (Android's + desktop's).
+        onNodeWithTag("tablet_pane_host").assertIsDisplayed()
+        onNodeWithTag("workspace_layout_host").assertIsDisplayed()
+        onNodeWithTag("phone_workspace_tabs").assertDoesNotExist()
 
         ui.navigate(Route.Displays)
         waitForIdle()

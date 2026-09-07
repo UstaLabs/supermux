@@ -69,6 +69,13 @@ internal fun testPairedHostStore(recordId: String = "h1"): PairedHostStore = Pai
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun testFleet(
     app: HostStore,
+    /**
+     * UNCONFINED: the fleet's per-host collectors are launched here, and a suite that pushes a
+     * frame into the store one line after building it (the agent-reply notification cases) needs
+     * them attached already. Not a deadlock workaround — the store publishes outside its lock
+     * (`:shared`'s `FleetStoreLockingTest`), so a real dispatcher is safe too, just racy for those
+     * two cases.
+     */
     scope: CoroutineScope = TestScope(UnconfinedTestDispatcher()),
     settings: SettingsStore = ShellFakeSettings(),
 ): FleetStore = FleetStore(

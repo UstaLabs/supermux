@@ -5,8 +5,8 @@
 // broker rejects the delete, Enter/Space on the advanced toggle and every test tag. Android's page
 // contributes the Compact branch: its own `TopAppBar` (with the "+" add action) when the hub did
 // not paint one, the add form as a `ModalBottomSheet` instead of a dialog, touch-sized connection
-// rows keyed on `LocalPointerAvailable`, and the GitLab-orange forge icon (its `ForgeIconBox` /
-// `R.drawable.ic_network` are Material icons here).
+// rows keyed on `LocalPointerAvailable`, and the GitLab-orange forge icon (its `ForgeIconBox` is a
+// Material icon here).
 package dev.supermux.ui.settings
 
 import androidx.compose.foundation.background

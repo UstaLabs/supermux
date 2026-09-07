@@ -1,6 +1,5 @@
 // The one session-status rail. Git/cloud glyphs come from compose.materialIconsExtended, which
-// both apps already ship — Android's bundled `R.drawable.ic_check`/`ic_git_branch`/`ic_cloud_*`
-// vectors are no longer used here.
+// both apps already ship.
 package dev.supermux.ui.session
 
 import androidx.compose.foundation.background
