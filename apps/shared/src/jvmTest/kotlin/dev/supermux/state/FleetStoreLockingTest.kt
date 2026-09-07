@@ -17,7 +17,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -185,6 +187,67 @@ class FleetStoreLockingTest {
             assertNotNull(pending, "the first message must come back from the ARMING host")
             assertEquals("first turn", pending.text)
             assertEquals(null, f.consumePendingFirst(id), "consuming stays one-shot")
+            f.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /**
+     * Two overlapping `sync()` runs must leave exactly ONE connection per record.
+     *
+     * `sync` stopped being atomic when the dial moved out from under [FleetStore]'s lock (holding it
+     * across a blocking `appFactory` is what deadlocked callers), so both runs can plan the same
+     * record. The insert settles it: the first wins, the second is closed. Without that,
+     * `conns[recordId] = conn` overwrote a live `HostStore` and leaked its socket.
+     */
+    @Test fun twoConcurrentSyncsOpenExactlyOneConnectionPerHost() {
+        val scope = CoroutineScope(Dispatchers.Default + Job())
+        try {
+            // Start with NO records so construction dials nothing; add one, then race two syncs.
+            val hostStore = store()
+            val bothDialing = CountDownLatch(2)
+            val release = CountDownLatch(1)
+            val dials = CopyOnWriteArrayList<Pair<HostStore, CopyOnWriteArrayList<HttpClient>>>()
+            val f = FleetStore(
+                store = hostStore,
+                scope = scope,
+                deps = testDeps(),
+                appFactory = { url, token, onConn ->
+                    val clients = CopyOnWriteArrayList<HttpClient>()
+                    val deps = HostStoreDeps(
+                        httpFactory = {
+                            HttpClient(MockEngine { respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) })
+                                .also { clients += it }
+                        },
+                        settings = testDeps().settings,
+                    )
+                    // Hold BOTH dials open at once so the two syncs really overlap.
+                    bothDialing.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "the second dial never started" }
+                    HostStore(url, token, scope, deps, connectOnInit = false, onConnectionChange = onConn)
+                        .also { dials += it to clients }
+                },
+            )
+            hostStore.add(displayName = "h1", token = "t", directUrl = "http://h1")
+
+            val a = Thread { f.sync(hostStore.list()) }
+            val b = Thread { f.sync(hostStore.list()) }
+            a.start(); b.start()
+            assertTrue(bothDialing.await(10, TimeUnit.SECONDS), "both syncs should have dialled")
+            release.countDown()
+            a.join(10_000); b.join(10_000)
+
+            assertEquals(2, dials.size, "both syncs dialled — that is the race being tested")
+            val live = f.activeApp()
+            assertNotNull(live, "one connection must survive")
+            val loser = dials.single { it.first !== live }
+            assertTrue(
+                loser.second.isNotEmpty() && loser.second.none { it.isActive },
+                "the losing dial must be CLOSED, not dropped with its socket open",
+            )
+            val winner = dials.single { it.first === live }
+            assertTrue(winner.second.any { it.isActive }, "the surviving connection must stay open")
             f.close()
         } finally {
             scope.cancel()

@@ -365,8 +365,13 @@ class FleetStore(
      * The DECISION is made under [lock]; building a `HostStore` (which dials) and tearing a socket
      * down are alien, blocking calls and run outside it. Holding a lock across either is how a
      * caller of this store ends up waiting on a broker.
+     *
+     * Two runs can therefore overlap and both plan the same record — [open] settles that race when
+     * it inserts, so a loser is CLOSED rather than silently overwritten.
+     *
+     * `internal` only so `FleetStoreLockingTest` can drive two of them concurrently.
      */
-    private fun sync(hosts: List<PairedHost>) {
+    internal fun sync(hosts: List<PairedHost>) {
         val plan = synchronized(lock) {
             val wanted = hosts.mapNotNull { h -> effectiveUrl(h)?.let { url -> Triple(h.recordId, url, h.token) } }
                 .filter { it.third.isNotBlank() }
@@ -384,7 +389,13 @@ class FleetStore(
         plan.open.forEach { (recordId, url, token) -> open(recordId, url, token) }
     }
 
-    /** Dial [url] and fold it in. Blocking work (the factory) runs BEFORE [lock] is taken. */
+    /**
+     * Dial [url] and fold it in. Blocking work (the factory) runs BEFORE [lock] is taken — which
+     * is exactly why the insert below has to re-check: [sync] is no longer atomic, so a second run
+     * can dial the same record while this one is still building its store. The first insert wins
+     * and the loser is torn down here; without that, `conns[recordId] = conn` would drop a live
+     * `HostStore` on the floor with its socket still open.
+     */
     private fun open(recordId: String, url: String, token: String) {
         val app = appFactory(url, token) { online -> onConnState(recordId, online) }
         val conn = HostConn(app)
@@ -396,9 +407,19 @@ class FleetStore(
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
         conn.jobs += fleetScope.launch { app.archivedSessions.collect { onHostArchived(recordId, it) } }
         conn.jobs += fleetScope.launch { app.usageSnapshot.collect { onHostUsage(recordId, it) } }
+        var lost = false
         publishing { pub ->
+            if (conns[recordId] != null) {
+                lost = true
+                return@publishing
+            }
             conns[recordId] = conn
             stageApps(pub)
+        }
+        if (lost) {
+            // Same teardown `close(recordId)` does, minus the registry work — this one was never in.
+            conn.jobs.forEach { it.cancel() }
+            conn.app.close()
         }
     }
 

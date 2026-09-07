@@ -35,6 +35,12 @@ import kotlin.math.abs
 import kotlin.test.assertTrue
 
 private const val ROW_PX = 60
+
+/** Bounds for the hand-driven drag in `anOverwrittenOrderDoesNotWedgeTheRestOfTheGesture`: enough
+ *  slack that a slow frame cannot fail the test, small enough that a genuinely wedged drag still
+ *  reports rather than spinning. */
+private const val MAX_DRAG_STEPS = 8
+private const val MAX_FRAMES_PER_STEP = 8
 private const val LONG_PRESS_MS = 800L
 
 private class RecordingHaptics : Haptics {
@@ -312,21 +318,40 @@ class DragReorderTest {
 
         // Frames are driven BY HAND: the move guard holds the next move until the list has
         // re-measured, so whether one gesture's events happen to straddle a frame decided the
-        // outcome under autoAdvance. One explicit frame pair per move makes that deterministic.
+        // outcome under autoAdvance.
+        //
+        // Neither the step size nor the frame count is hard-coded any more. The step is HALF A
+        // MEASURED ROW, so the test does not depend on the harness's pixel constants, and after
+        // each step frames are advanced until the move guard actually accepts a move (or a bounded
+        // budget runs out) — the previous fixed two-frames-per-move budget was the flake.
+        val rowPx = onNodeWithTag("a").fetchSemanticsNode().size.height.toFloat()
+        assertTrue(rowPx > 0f, "the row measured zero-height; the harness never laid out")
         mainClock.autoAdvance = false
         onNodeWithTag("a").performTouchInput { down(center) }
         mainClock.advanceTimeByFrame()
-        listOf(25f, 55f, 60f, 60f).forEach { dy ->
-            onNodeWithTag("a").performTouchInput { moveBy(Offset(0f, dy)) }
-            mainClock.advanceTimeByFrame()
-            mainClock.advanceTimeByFrame()
+
+        var steps = 0
+        while (moves.size < 2 && steps < MAX_DRAG_STEPS) {
+            steps++
+            val before = moves.size
+            onNodeWithTag("a").performTouchInput { moveBy(Offset(0f, rowPx / 2f)) }
+            var frames = 0
+            while (moves.size == before && frames < MAX_FRAMES_PER_STEP) {
+                mainClock.advanceTimeByFrame()
+                frames++
+            }
         }
         onNodeWithTag("a").performTouchInput { up() }
         mainClock.advanceTimeByFrame()
         mainClock.autoAdvance = true
         waitForIdle()
 
-        assertTrue(moves.size >= 2, "the drag wedged after the order was overwritten: $moves")
+        assertTrue(
+            moves.size >= 2,
+            "the drag wedged after the order was overwritten: $moves " +
+                "(gave it $steps half-row steps of ${rowPx / 2f}px, " +
+                "$MAX_FRAMES_PER_STEP frames each)",
+        )
     }
 
     @Test fun aDroppedRowSettlesInsteadOfSnappingHome() = runComposeUiTest {
