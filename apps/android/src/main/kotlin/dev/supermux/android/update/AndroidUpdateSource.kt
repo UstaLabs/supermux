@@ -10,18 +10,18 @@ import dev.supermux.update.ClientPlatform
 import dev.supermux.update.ClientUpdateChecker
 import dev.supermux.update.ClientUpdateStatus
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
 
 /**
- * Android app self-update: polls versions.json / GitHub latest, downloads the
- * release APK, and hands it to the system package installer.
+ * The OS-bound half of Android's self-update: this build's version name/code, the release-feed
+ * poll, the unknown-sources settings jump, the notes intent and the per-version banner dismissal.
  *
- * Distinct from broker System-settings updates (POST /api/update/run).
+ * Distinct from broker System-settings updates (POST /api/update/run). The state machine over this
+ * is [AndroidAppUpdater]; the status-bar progress/alert is [AppUpdateNotifier].
  *
- * Download/install posts a status-bar notification with progress (and an alert
- * on failure) via [AppUpdateNotifier].
+ * Renamed from `AppUpdate` in cluster G5 — `update/AppUpdate.kt` is the SHARED screen + banner now,
+ * and a basename may exist in only one app module.
  */
-object AppUpdate {
+object AndroidUpdateSource {
     private const val PREFS = "app_update"
     private const val KEY_DISMISSED = "dismissed_latest"
 
@@ -93,15 +93,5 @@ object AppUpdate {
             .edit()
             .putString(KEY_DISMISSED, latestVersion)
             .apply()
-    }
-
-    /** Convenience for one-shot checks (creates + closes its own client). */
-    suspend fun checkOnce(context: Context): ClientUpdateStatus {
-        val http = HttpClient(CIO)
-        return try {
-            check(http, context)
-        } finally {
-            http.close()
-        }
     }
 }

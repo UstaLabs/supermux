@@ -13,7 +13,7 @@
 package dev.supermux.android.settings
 
 import androidx.compose.runtime.Composable
-import dev.supermux.android.update.AppUpdatePage
+import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.settings.AgentSettingsScreen
@@ -115,8 +115,8 @@ fun AndroidSettingsSection(
 }
 
 /**
- * Renders one host-local [SettingsExtra] row's page. Appearance is shared since E7; the in-app
- * updater is still Android's own screen (cluster G owns it), reached only because
+ * Renders one host-local [SettingsExtra] row's page. Appearance is shared since E7 and the in-app
+ * updater since G5; the ROWS are still host-local, so this one is only reached because
  * `Caps.appUpdate` is true here.
  */
 @Composable
@@ -126,7 +126,7 @@ fun AndroidSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )
-        SettingsExtra.AppUpdate -> AppUpdatePage(
+        SettingsExtra.AppUpdate -> AppUpdateScreen(
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )

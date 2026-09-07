@@ -65,7 +65,7 @@ class DesktopPlatform : Platform {
         appearanceControls = true,
         // No wallpaper-derived scheme off Android: the Material You row would be an inert switch.
         dynamicColor = false,
-        // The app updates ITSELF here as well (Route.AppUpdate → `update/AppUpdateUi.kt`).
+        // The app updates ITSELF here as well (Route.AppUpdate → the shared `ui/update/AppUpdate.kt`).
         appUpdate = true,
         // JediTerm is bound (`terminalView()` never returns the unavailable factory here).
         terminal = true,

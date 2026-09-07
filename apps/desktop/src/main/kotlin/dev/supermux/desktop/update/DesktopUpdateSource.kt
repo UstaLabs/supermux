@@ -10,10 +10,13 @@ import java.util.Locale
 import java.util.prefs.Preferences
 
 /**
- * Desktop client self-update against supermux.dev/versions.json (GitHub fallback).
- * Downloads the platform installer (.deb / .msi / .dmg) and opens it with the OS.
+ * The OS-bound half of desktop's self-update: which platform this is, where the release feed lives,
+ * and how to hand a downloaded installer (.deb / .msi / .dmg) or a URL to the desktop environment.
+ *
+ * Renamed from `AppUpdate` in cluster G5 — `update/AppUpdate.kt` is the SHARED screen + banner now,
+ * and a basename may exist in only one app module.
  */
-object AppUpdate {
+object DesktopUpdateSource {
     private val prefs: Preferences = Preferences.userRoot().node("dev/supermux/desktop/app_update")
     private const val KEY_DISMISSED = "dismissed_latest"
 

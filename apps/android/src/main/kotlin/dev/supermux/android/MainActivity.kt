@@ -120,7 +120,7 @@ import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.SettingsHub
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.android.update.AppUpdateBanner
+import dev.supermux.ui.update.AppUpdateBanner
 import dev.supermux.android.update.AppUpdateNotifier
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions

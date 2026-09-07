@@ -1,5 +1,5 @@
 // Cluster G1: desktop's actual behind `Platform.updates`. The release-feed poll, the installer
-// download and the "hand it to the OS" call all still live in [AppUpdate] (java.awt.Desktop,
+// download and the "hand it to the OS" call all still live in [DesktopUpdateSource] (java.awt.Desktop,
 // java.nio, java.util.prefs); this is the state machine over them that a SHARED update screen
 // (cluster G5) drives.
 package dev.supermux.desktop.update
@@ -25,7 +25,7 @@ import java.nio.file.Files
  * The desktop client updating itself against supermux.dev/versions.json (GitHub fallback):
  * downloads the platform installer (.deb / .msi / .dmg) and opens it with the OS.
  *
- * The phases map 1:1 onto what `AppUpdateUi` kept in local `remember`s before the seam existed —
+ * The phases map 1:1 onto what the shared `AppUpdateScreen` kept in local `remember`s before the seam existed —
  * `loading` is [UpdatePhase.Checking], `installing` covers Downloading+Installing, `actionError` is
  * [UpdateStatus.error], and a check that could not produce a status at all leaves
  * [UpdateStatus.release] null, which is desktop's "Couldn't check for updates." case.
@@ -46,13 +46,13 @@ class DesktopAppUpdater(
         // re-enabling the CTA). Poll again when it settles.
         if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
-        val result = runCatching { AppUpdate.check(http, currentVersion) }
+        val result = runCatching { DesktopUpdateSource.check(http, currentVersion) }
         val next = result.fold(
             onSuccess = { s ->
                 UpdateStatus(
                     phase = if (s.updateAvailable) UpdatePhase.Available else UpdatePhase.UpToDate,
                     release = s,
-                    dismissed = s.latestVersion?.let { AppUpdate.isDismissed(it) } == true,
+                    dismissed = s.latestVersion?.let { DesktopUpdateSource.isDismissed(it) } == true,
                 )
             },
             onFailure = { e -> UpdateStatus(phase = UpdatePhase.Failed, error = e.message) },
@@ -88,7 +88,7 @@ class DesktopAppUpdater(
                 state.value = state.value.copy(phase = UpdatePhase.Failed, error = e.message ?: "Download failed")
                 return@withContext null
             }
-            val ext = AppUpdate.installerExtension()
+            val ext = DesktopUpdateSource.installerExtension()
             val file = try {
                 val dir = Files.createTempDirectory("supermux-update").toFile()
                 File(dir, "supermux-update.$ext").also { it.writeBytes(bytes) }
@@ -112,7 +112,7 @@ class DesktopAppUpdater(
     override suspend fun install(installer: DownloadedInstaller): String? = withContext(Dispatchers.IO) {
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
         try {
-            AppUpdate.openInstaller(File(installer.location))
+            DesktopUpdateSource.openInstaller(File(installer.location))
             // The OS installer is up; this process keeps running until it is replaced, so the page
             // must settle back to a usable state (the old `installing = false`) rather than stay
             // Installing with every CTA disabled.
@@ -126,14 +126,14 @@ class DesktopAppUpdater(
     }
 
     override fun openReleaseNotes() {
-        state.value.release?.notesUrl?.let { AppUpdate.openUrl(it) }
+        state.value.release?.notesUrl?.let { DesktopUpdateSource.openUrl(it) }
     }
 
     /** Desktop installs a `.deb`/`.msi`/`.dmg` through the OS; there is no permission to grant. */
     override fun openInstallPermissionSettings() {}
 
     override fun dismiss() {
-        state.value.release?.latestVersion?.let { AppUpdate.dismiss(it) }
+        state.value.release?.latestVersion?.let { DesktopUpdateSource.dismiss(it) }
         state.value = state.value.copy(dismissed = true)
     }
 

@@ -32,7 +32,7 @@ import dev.supermux.ui.settings.rememberVoiceSettingsActions
 import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.desktop.update.AppUpdateScreen
+import dev.supermux.ui.update.AppUpdateScreen
 
 /** Renders [section]'s desktop screen against [host]. Called from the hub's `content` slot. */
 @Composable
@@ -115,7 +115,7 @@ fun DesktopSettingsSection(
  * Renders one host-local [SettingsExtra] row's page (cluster E7 — desktop shows both rows now).
  *
  * Appearance is the shared screen, reading and writing the same `SettingsKeys.APPEARANCE` the
- * sidebar's theme toggle does. The updater stays desktop's own screen (cluster G owns it).
+ * sidebar's theme toggle does. The updater is the shared screen too since cluster G5.
  */
 @Composable
 fun DesktopSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {

@@ -116,9 +116,9 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.ui.settings.SettingsHub
-import dev.supermux.desktop.update.AppUpdateBanner
-import dev.supermux.desktop.update.AppUpdateScreen
 import dev.supermux.state.HostStore
+import dev.supermux.ui.update.AppUpdateBanner
+import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
@@ -1517,7 +1517,10 @@ fun AppShell(
                                     } else false
                                 },
                         ) {
-                            AppUpdateScreen(onBack = { ui.goBack() })
+                            // `standalone`: this is a full-pane ROUTE, not a hub detail, so the
+                            // page paints its own title + Back at every width (the cluster-E gate
+                            // would otherwise hand a wide desktop window a page with no way out).
+                            AppUpdateScreen(onBack = { ui.goBack() }, standalone = true)
                         }
                     }
                 },

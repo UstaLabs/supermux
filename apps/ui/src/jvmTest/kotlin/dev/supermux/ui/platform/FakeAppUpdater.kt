@@ -32,6 +32,11 @@ internal class FakeAppUpdater(
      * cancellation): [download] awaits it after its first tick. Null = run straight through.
      */
     var midDownload: CompletableDeferred<Unit>? = null,
+    /**
+     * Held open by a test that needs to observe a CHECK mid-flight — the screen's "spinner while
+     * the first check runs and there is nothing to show yet" state. Null = answer immediately.
+     */
+    var midCheck: CompletableDeferred<Unit>? = null,
 ) : AppUpdater {
     private val state = MutableStateFlow(UpdateStatus())
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
@@ -40,10 +45,19 @@ internal class FakeAppUpdater(
     var notesOpened = 0
     var permissionSettingsOpened = 0
 
+    /** How many checks actually ran (a check refused by the busy guard does not count). */
+    var checks = 0
+        private set
+
+    /** Every installer handed to [install], in order. */
+    val installed = mutableListOf<DownloadedInstaller>()
+
     override suspend fun check(): UpdateStatus {
         // Contract: a live download/install owns the phase (both host updaters do this).
         if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
+        checks++
+        midCheck?.await()
         val found = release
         state.value = if (found == null) {
             UpdateStatus(phase = UpdatePhase.Failed, error = "Couldn't check for updates.")
@@ -96,6 +110,7 @@ internal class FakeAppUpdater(
     }
 
     override suspend fun install(installer: DownloadedInstaller): String? {
+        installed += installer
         state.value = state.value.copy(phase = UpdatePhase.Installing, error = null)
         installError?.let {
             state.value = state.value.copy(phase = UpdatePhase.Failed, error = it)

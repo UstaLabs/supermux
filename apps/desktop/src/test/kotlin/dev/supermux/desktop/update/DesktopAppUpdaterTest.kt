@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
  * derives `installing`/`loading` from must SETTLE, and a live download must own the phase against
  * the check the page and the banner both fire on open.
  *
- * The OS hand-off itself ([AppUpdate.openInstaller]) is deliberately not driven — launching a real
+ * The OS hand-off itself ([DesktopUpdateSource.openInstaller]) is deliberately not driven — launching a real
  * `xdg-open` from a unit test is not a test — so the install case exercises the FAILURE path, which
  * is the one that must also leave `Installing`.
  */

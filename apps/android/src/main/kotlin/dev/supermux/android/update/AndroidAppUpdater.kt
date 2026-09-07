@@ -1,5 +1,5 @@
 // Cluster G1: Android's actual behind `Platform.updates`. The feed poll, the APK download and the
-// PackageInstaller hand-off still live in [AppUpdate] (FileProvider, ACTION_VIEW, SharedPreferences)
+// PackageInstaller hand-off still live in [AndroidUpdateSource] (FileProvider, ACTION_VIEW, SharedPreferences)
 // and the status-bar progress/alert notifications in [AppUpdateNotifier]; this is the state machine
 // over both that a SHARED update screen (cluster G5) drives.
 package dev.supermux.android.update
@@ -44,8 +44,8 @@ class AndroidAppUpdater(
     private val state = MutableStateFlow(UpdateStatus())
     override val status: StateFlow<UpdateStatus> = state.asStateFlow()
 
-    override val currentVersion: String get() = AppUpdate.currentVersionName(appContext)
-    override val currentVersionCode: Int? get() = AppUpdate.currentVersionCode(appContext)
+    override val currentVersion: String get() = AndroidUpdateSource.currentVersionName(appContext)
+    override val currentVersionCode: Int? get() = AndroidUpdateSource.currentVersionCode(appContext)
 
     override suspend fun check(): UpdateStatus {
         // A live download/install owns the phase: the banner and the page BOTH check on open, and
@@ -53,13 +53,13 @@ class AndroidAppUpdater(
         // "Downloading 42%…" label and the disabled CTA). Poll again when it settles.
         if (state.value.busy) return state.value
         state.value = state.value.copy(phase = UpdatePhase.Checking, error = null)
-        val result = runCatching { AppUpdate.check(http, appContext) }
+        val result = runCatching { AndroidUpdateSource.check(http, appContext) }
         val next = result.fold(
             onSuccess = { s ->
                 UpdateStatus(
                     phase = if (s.updateAvailable) UpdatePhase.Available else UpdatePhase.UpToDate,
                     release = s,
-                    dismissed = s.latestVersion?.let { AppUpdate.isDismissed(appContext, it) } == true,
+                    dismissed = s.latestVersion?.let { AndroidUpdateSource.isDismissed(appContext, it) } == true,
                 )
             },
             onFailure = { e -> UpdateStatus(phase = UpdatePhase.Failed, error = e.message) },
@@ -180,15 +180,15 @@ class AndroidAppUpdater(
     }
 
     override fun openReleaseNotes() {
-        state.value.release?.notesUrl?.let { AppUpdate.openNotes(appContext, it) }
+        state.value.release?.notesUrl?.let { AndroidUpdateSource.openNotes(appContext, it) }
     }
 
     override fun openInstallPermissionSettings() {
-        AppUpdate.openInstallPermissionSettings(appContext)
+        AndroidUpdateSource.openInstallPermissionSettings(appContext)
     }
 
     override fun dismiss() {
-        state.value.release?.latestVersion?.let { AppUpdate.dismiss(appContext, it) }
+        state.value.release?.latestVersion?.let { AndroidUpdateSource.dismiss(appContext, it) }
         state.value = state.value.copy(dismissed = true)
     }
 
