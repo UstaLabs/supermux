@@ -190,6 +190,20 @@ class UiPrefs(private val settings: SettingsStore) {
             prefsJson.encodeToString(ListSerializer(String.serializer()), paths.sorted()),
         )
 
+    // ── First-run intro (cluster G6) ───────────────────────────────────────────────────────────
+
+    /**
+     * The intro version this device has already seen (0 = never). Desktop's `intro-seen` marker
+     * file held the same integer; Android had no flag at all.
+     */
+    val introSeenVersion: Flow<Int> =
+        settings.string(SettingsKeys.INTRO_SEEN).map { it?.trim()?.toIntOrNull() ?: 0 }
+
+    suspend fun putIntroSeen(version: Int) =
+        settings.putString(SettingsKeys.INTRO_SEEN, version.toString())
+
+    internal fun introSeenRaw(): Flow<String?> = settings.string(SettingsKeys.INTRO_SEEN)
+
     // The RAW stored strings. The parsed flows above flatten "never stored" into the defaults,
     // which is exactly what a one-way seed must be able to tell apart.
     internal fun launcherPrefsRaw(): Flow<String?> = settings.string(SettingsKeys.LAUNCHER_PREFS)
@@ -272,4 +286,26 @@ suspend fun UiPrefs.seedAppearance(default: AppearanceMode, legacy: AppearanceMo
     if (legacy == null) return default
     putAppearance(legacy)
     return legacy
+}
+
+
+/**
+ * The first-run intro's "already seen" flag, seeded ONCE from a host's legacy marker and then
+ * READ — synchronously, by both hosts, before the first frame, exactly like
+ * [seedCollapsedProjectPaths]. An asynchronous read here would let the cinematic start playing
+ * over an app the user has been using for months, one frame before the stored value landed.
+ *
+ * One-way, idempotent and non-destructive like [seedAppearance] and [seedLauncher]: a version
+ * already stored here wins, and re-running it every launch is a no-op.
+ *
+ * @param legacyVersion what this host stored before the value moved here — desktop's `intro-seen`
+ *   marker file (its contents parsed as an int), `null` on Android which never had one.
+ * @return true when [introVersion] (or newer) has already been seen.
+ */
+suspend fun UiPrefs.seedIntroSeen(legacyVersion: Int?, introVersion: Int): Boolean {
+    if (introSeenRaw().first() == null && legacyVersion != null && legacyVersion > 0) {
+        putIntroSeen(legacyVersion)
+        return legacyVersion >= introVersion
+    }
+    return introSeenVersion.first() >= introVersion
 }

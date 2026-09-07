@@ -63,14 +63,17 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.cioHttpFactory
 import dev.supermux.desktop.host.HostWizard
-import dev.supermux.desktop.intro.FirstRunIntroOverlay
-import dev.supermux.desktop.intro.IntroStateStore
+import dev.supermux.ui.intro.FirstRunIntroOverlay
+import dev.supermux.ui.intro.INTRO_VERSION
+import dev.supermux.ui.intro.shouldShowIntro
+import dev.supermux.ui.prefs.seedIntroSeen
 import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.shell.DesktopWindowHostController
-import dev.supermux.desktop.pairing.OnboardingScreen
-import dev.supermux.desktop.pairing.PairingState
+import dev.supermux.pairing.PairingState
+import dev.supermux.pairing.PairingTokenStore
+import dev.supermux.ui.intro.OnboardingScreen
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.Space
@@ -121,6 +124,30 @@ private val desktopDeps: HostStoreDeps by lazy {
 
 /** Editor + chat-detail + APPEARANCE preferences, on the same store as drafts / launcher prefs. */
 private val desktopUiPrefs: UiPrefs by lazy { UiPrefs(desktopDeps.settings) }
+
+/**
+ * [DesktopTokenStore] as the shared [PairingTokenStore] the `:shared` `PairingState` writes
+ * through (cluster G6). The four members line up one-to-one; the interface exists only because
+ * Android's store is a different type with the same shape.
+ */
+private fun DesktopTokenStore.asPairingStore(): PairingTokenStore = object : PairingTokenStore {
+    override fun load(): String? = this@asPairingStore.load()
+    override fun save(token: String) = this@asPairingStore.save(token)
+    override fun loadBaseUrl(): String? = this@asPairingStore.loadBaseUrl()
+    override fun saveBaseUrl(url: String) = this@asPairingStore.saveBaseUrl(url)
+}
+
+/**
+ * Desktop's legacy `intro-seen` marker file (contents = the intro version), read ONCE so
+ * `UiPrefs.seedIntroSeen` can drain it into `SettingsKeys.INTRO_SEEN`. Nothing else reads the
+ * file again; a missing/garbage marker is simply "never seen".
+ */
+private fun legacyIntroSeenVersion(): Int? =
+    runCatching {
+        java.nio.file.Files.readString(
+            DesktopTokenStore.defaultPath().parent.resolve("intro-seen"),
+        ).trim().toIntOrNull()
+    }.getOrNull()
 
 private val desktopBindTts: (
     resolveEngine: suspend () -> String,
@@ -576,7 +603,9 @@ fun main() {
                             onConnectInstead = { connectInstead = true },
                         )
                     } else {
-                        val pairing = remember { PairingState(store, scope) }
+                        val pairing = remember {
+                            PairingState(store.asPairingStore(), scope, httpFactory = { cioHttpFactory()(null) })
+                        }
                         DisposableEffect(Unit) { onDispose { pairing.close() } }
                         OnboardingScreen(pairing, onPaired = {
                             // Onboarding persisted the legacy (baseUrl, token) into DesktopTokenStore;
@@ -1506,21 +1535,41 @@ fun main() {
             // SupermuxTheme so it stacks above the already-composed wizard/shell — the exit
             // fade is a real reveal, not a cut. Shown once ever; SM_INTRO/SM_INTRO_FREEZE hooks
             // in the catalog at the top of this file.
-            val introStore = remember { IntroStateStore() }
+            //
+            // The seen flag now lives on `SettingsKeys.INTRO_SEEN` (cluster G6). It is seeded
+            // from the legacy `intro-seen` marker file and read SYNCHRONOUSLY, before the first
+            // frame — an async read would start the cinematic over an app someone has used for
+            // months, one frame before the stored value landed. `DesktopSettingsStore` holds its
+            // map in an eager StateFlow, so this never actually waits on IO.
+            val introSeen = remember {
+                runBlocking { desktopUiPrefs.seedIntroSeen(legacyIntroSeenVersion(), INTRO_VERSION) }
+            }
             var introVisible by remember {
                 mutableStateOf(
-                    IntroStateStore.shouldShow(
+                    shouldShowIntro(
                         envIntro = System.getenv("SM_INTRO"),
                         envPairToken = System.getenv("SM_PAIR_TOKEN"),
-                        store = introStore,
+                        seen = introSeen,
                     ),
                 )
             }
             if (introVisible) {
-                FirstRunIntroOverlay(onFinished = {
-                    introVisible = false
-                    if (System.getenv("SM_INTRO") != "1") runCatching { introStore.markSeen() }
-                })
+                FirstRunIntroOverlay(
+                    onFinished = {
+                        introVisible = false
+                        // A forced (SM_INTRO=1) run never consumes a real user's one viewing.
+                        // Written SYNCHRONOUSLY, exactly as the marker file was: launching it on
+                        // a scope inside this `if` would race the overlay leaving composition
+                        // (the scope is cancelled the moment `introVisible` flips). Neither
+                        // `DesktopSettingsStore.putString` nor the old `Files.writeString`
+                        // actually suspends, so this is the same one small write in the same
+                        // place.
+                        if (System.getenv("SM_INTRO") != "1") {
+                            runCatching { runBlocking { desktopUiPrefs.putIntroSeen(INTRO_VERSION) } }
+                        }
+                    },
+                    freezeAt = System.getenv("SM_INTRO_FREEZE")?.toFloatOrNull(),
+                )
             }
 
             // Headless inline-image layout verification (SM_MD_IMAGE) — see catalogue above.

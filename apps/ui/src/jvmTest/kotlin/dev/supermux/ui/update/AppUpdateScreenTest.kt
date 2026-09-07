@@ -118,7 +118,7 @@ class AppUpdateScreenTest {
         setPlatformContent(platform(updater)) { AppUpdateScreen() }
         waitForIdle()
         onNodeWithTag("app_update_install").assertDoesNotExist()
-        onNodeWithText("Update is available but no APK URL was published for this release.")
+        onNodeWithText("Update is available but no installer file was published for this release.")
             .assertIsDisplayed()
     }
 
@@ -302,5 +302,21 @@ class AppUpdateScreenTest {
         assertEquals("apk", installerKindFrom("https://example.test/supermux.apk#frag"))
         assertNull(installerKindFrom("https://example.test/latest"))
         assertNull(installerKindFrom(null))
+    }
+
+    @Test fun the_install_caption_names_the_file_it_is_about_to_open() {
+        // Only the APK kind gets Android's notification-bar sentence; every other kind names its
+        // own extension, and an unrecognised URL falls back to the generic line — so no desktop
+        // user is ever told about an APK.
+        assertEquals(
+            "One-tap installs the latest release APK over this build. " +
+                "Progress also appears in the notification bar.",
+            installCaption("apk"),
+        )
+        assertEquals("Downloads the latest .deb and opens it.", installCaption("deb"))
+        assertEquals("Downloads the latest .msi and opens it.", installCaption("msi"))
+        assertEquals("Downloads the latest .dmg and opens it.", installCaption("dmg"))
+        assertEquals("Downloads the latest .appimage and opens it.", installCaption("appimage"))
+        assertEquals("Downloads the latest installer and opens it.", installCaption(null))
     }
 }

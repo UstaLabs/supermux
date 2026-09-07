@@ -9,7 +9,8 @@
 //  - the version block gains Android's `versionCode` line, printed only where the platform HAS a
 //    version code (desktop's is null by contract);
 //  - the download CTA gains Android's live "Downloading 42%…" label (desktop showed a bare
-//    "Downloading…") and its "no APK URL was published" branch;
+//    "Downloading…") and its "no installer file was published" branch (Android's wording named
+//    an APK, which is a lie on every other host);
 //  - the unknown-sources refusal becomes a VISIBLE row with its own action rather than only an
 //    instant jump to Settings: the jump is kept (Android's behaviour, verbatim) and the row lets a
 //    user who came back without granting it try again. It is driven by
@@ -127,8 +128,11 @@ fun installerKindFrom(downloadUrl: String?): String? {
     val path = downloadUrl?.substringBefore('?')?.substringBefore('#')?.substringAfterLast('/')
         ?: return null
     val ext = path.substringAfterLast('.', "").lowercase()
-    return ext.takeIf { it in setOf("deb", "msi", "dmg", "apk", "exe", "pkg", "appimage") }
+    return ext.takeIf { it in INSTALLER_EXTENSIONS }
 }
+
+/** Hoisted so the set is built once, not on every recomposition that renders the caption. */
+private val INSTALLER_EXTENSIONS = setOf("deb", "msi", "dmg", "apk", "exe", "pkg", "appimage")
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -161,7 +165,7 @@ fun AppUpdateScreen(
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val ownChrome = (standalone || compact) && !topBarShown
 
-    val refresh: () -> Unit = { scope.launch { updater.check() } }
+    val refresh: () -> Unit = remember(scope, updater) { { scope.launch { updater.check() } } }
 
     // The seam no-ops a check while a download/install owns the phase, so entering the page mid
     // download neither clobbers the progress nor re-enables the CTA.
@@ -359,7 +363,9 @@ private fun AppUpdateBody(
                         SettingsCaption(installCaption(installerKindFrom(s.downloadUrl)))
                     } else {
                         Text(
-                            "Update is available but no APK URL was published for this release.",
+                            // Deliberately installer-agnostic: this branch fires on every host,
+                            // and only one of them ships an APK.
+                            "Update is available but no installer file was published for this release.",
                             color = cs.onSurfaceVariant,
                             fontSize = 12.sp,
                         )
@@ -422,7 +428,7 @@ private fun AppUpdateBody(
     }
 }
 
-private fun installCaption(kind: String?): String = when (kind) {
+fun installCaption(kind: String?): String = when (kind) {
     // Android's wording — the notifier that posts this progress lives behind the seam.
     "apk" -> "One-tap installs the latest release APK over this build. " +
         "Progress also appears in the notification bar."

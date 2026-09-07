@@ -2,17 +2,21 @@ package dev.supermux.ui.update
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.update.ClientUpdateStatus
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.platform.FakeAppUpdater
@@ -175,14 +179,23 @@ class AppUpdateBannerTest {
     // ── both widths ───────────────────────────────────────────────────────────────────────────
 
     @Test fun the_strip_is_the_same_at_compact_and_expanded() = runComposeUiTest {
+        // BOTH widths in one test: the strip has no width branch, and the name only means
+        // something if the Expanded render is actually asserted too.
         val updater = FakeAppUpdater(release = release())
         setPlatformContent(platform(updater), widthClass = WindowWidthClass.Compact) {
-            AppUpdateBanner()
+            Column(Modifier.fillMaxSize()) {
+                CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Compact) {
+                    AppUpdateBanner()
+                }
+                CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Expanded) {
+                    AppUpdateBanner()
+                }
+            }
         }
         waitForIdle()
-        onNodeWithTag("app_update_banner").assertIsDisplayed()
-        onNodeWithTag("app_update_banner_update").assertIsDisplayed()
-        onNodeWithTag("app_update_banner_dismiss").assertIsDisplayed()
+        onAllNodesWithTag("app_update_banner").assertCountEquals(2)
+        onAllNodesWithTag("app_update_banner_update").assertCountEquals(2)
+        onAllNodesWithTag("app_update_banner_dismiss").assertCountEquals(2)
     }
 
     @Test fun one_seam_means_the_banner_and_the_page_agree() = runComposeUiTest {

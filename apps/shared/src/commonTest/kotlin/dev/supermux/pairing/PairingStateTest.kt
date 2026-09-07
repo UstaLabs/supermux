@@ -1,8 +1,6 @@
-package dev.supermux.desktop.pairing
+package dev.supermux.pairing
 
-import dev.supermux.desktop.auth.DesktopTokenStore
 import dev.supermux.net.PairUrl
-import java.nio.file.Files
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -17,11 +15,15 @@ import kotlin.test.assertTrue
  * (mirroring HostStore's `sendFrameOverride`) lets us drive the Validating →
  * Confirm/Error transition deterministically; the `UnconfinedTestDispatcher` runs the
  * launched coroutine synchronously so assertions can read `state.value` immediately.
+ *
+ * Moved from `:desktop` in cluster G6 with the class under test. The temp-file
+ * `DesktopTokenStore` became [InMemoryPairingTokenStore] — the store contract the state
+ * machine actually depends on is the four members of [PairingTokenStore], and each host's
+ * real store has its own tests.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PairingStateTest {
-    private fun tempStore(): DesktopTokenStore =
-        DesktopTokenStore(Files.createTempDirectory("smx-pairing").resolve("auth.json"))
+    private fun tempStore(): PairingTokenStore = InMemoryPairingTokenStore()
 
     private fun state(probe: (suspend (PairUrl) -> String?)? = null) = PairingState(
         store = tempStore(),
@@ -119,8 +121,9 @@ class PairingStateTest {
     }
 
     // ── close() semantics ────────────────────────────────────────────────────────────
-    // close() only releases the internal probe HttpClient (ktor's close() is idempotent);
-    // it does NOT tear down the caller-owned scope or reset the state machine. So:
+    // close() only releases the internal probe HttpClient (built lazily, and ktor's close()
+    // is idempotent); it does NOT tear down the caller-owned scope or reset the state
+    // machine. So:
     //  - calling it twice is safe,
     //  - calling it before any validate is safe,
     //  - validate-after-close still works when the probe seam bypasses the http client

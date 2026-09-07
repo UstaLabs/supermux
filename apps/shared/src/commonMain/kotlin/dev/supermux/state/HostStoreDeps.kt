@@ -52,6 +52,16 @@ object SettingsKeys {
     const val DYNAMIC_COLOR = "appearance:dynamicColor"
     /** App-wide text-size multiplier, clamped 0.9..1.3. Default 1.0. */
     const val TEXT_SCALE = "appearance:textScale"
+    /**
+     * The first-run intro version this device has already seen, as a decimal int ("1"). Absent
+     * = never seen. Read/written through `dev.supermux.ui.prefs.UiPrefs`; bumping
+     * `dev.supermux.ui.intro.INTRO_VERSION` re-shows a redesigned intro to existing users.
+     *
+     * Replaced desktop's `intro-seen` marker file next to `auth.json` (cluster G6), which is
+     * drained once, synchronously, on first launch after the upgrade. Android had no flag at
+     * all — its intro was gated on "not paired yet" — so it starts empty and simply writes one.
+     */
+    const val INTRO_SEEN = "intro:seen"
     const val VOICE_STT = "voice:stt"
     const val VOICE_CLEANUP = "voice:cleanup"
     const val VOICE_TTS = "voice:tts"

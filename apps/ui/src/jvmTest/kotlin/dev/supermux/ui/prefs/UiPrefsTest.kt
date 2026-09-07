@@ -185,4 +185,56 @@ class UiPrefsTest {
         )
         assertEquals(emptyMap(), store.map.value)
     }
+
+    // ── the first-run intro's seen flag (cluster G6) ──────────────────────────────────────────
+    // Read SYNCHRONOUSLY by both entry points before the first frame, so these are the exact
+    // calls `Main.kt` and `MainActivity` make. Desktop's legacy value is the contents of the
+    // `intro-seen` marker file; Android never had one and always passes null.
+
+    @Test
+    fun a_fresh_install_has_not_seen_the_intro_and_nothing_is_written() = runTest {
+        val (store, p) = prefs()
+        assertEquals(false, p.seedIntroSeen(legacyVersion = null, introVersion = 1))
+        assertEquals(emptyMap(), store.map.value)
+    }
+
+    @Test
+    fun the_desktop_marker_file_is_drained_once_into_the_shared_store() = runTest {
+        val (store, p) = prefs()
+        assertEquals(true, p.seedIntroSeen(legacyVersion = 1, introVersion = 1))
+        // Written through, so the old marker file is never consulted again.
+        assertEquals("1", store.map.value[SettingsKeys.INTRO_SEEN])
+    }
+
+    @Test
+    fun a_stored_version_wins_over_the_legacy_marker() = runTest {
+        val (store, p) = prefs()
+        p.putIntroSeen(2)
+        assertEquals(true, p.seedIntroSeen(legacyVersion = 1, introVersion = 2))
+        assertEquals("2", store.map.value[SettingsKeys.INTRO_SEEN])
+    }
+
+    @Test
+    fun a_bumped_intro_version_replays_for_someone_who_saw_the_old_one() = runTest {
+        val (_, p) = prefs()
+        p.putIntroSeen(1)
+        assertEquals(false, p.seedIntroSeen(legacyVersion = null, introVersion = 2))
+        assertEquals(1, p.introSeenVersion.first())
+    }
+
+    @Test
+    fun seeding_the_intro_flag_is_idempotent() = runTest {
+        val (store, p) = prefs()
+        assertEquals(true, p.seedIntroSeen(legacyVersion = 1, introVersion = 1))
+        assertEquals(true, p.seedIntroSeen(legacyVersion = 1, introVersion = 1))
+        assertEquals("1", store.map.value[SettingsKeys.INTRO_SEEN])
+    }
+
+    @Test
+    fun a_missing_or_garbage_marker_reads_as_never_seen() = runTest {
+        val (store, p) = prefs()
+        store.map.value = mapOf(SettingsKeys.INTRO_SEEN to "not-a-number")
+        assertEquals(0, p.introSeenVersion.first())
+        assertEquals(false, p.seedIntroSeen(legacyVersion = 0, introVersion = 1))
+    }
 }
