@@ -67,7 +67,6 @@ import dev.supermux.ui.intro.FirstRunIntroOverlay
 import dev.supermux.ui.intro.INTRO_VERSION
 import dev.supermux.ui.intro.shouldShowIntro
 import dev.supermux.ui.prefs.seedIntroSeen
-import dev.supermux.desktop.notify.NotificationController
 import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.notify.TrayNotificationManager
 import dev.supermux.desktop.shell.DesktopWindowHostController
@@ -85,7 +84,28 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
-import dev.supermux.desktop.shell.AppShell
+import dev.supermux.ui.shell.SupermuxApp
+import dev.supermux.desktop.shell.tearOutTabLive
+import dev.supermux.desktop.shell.tearOutCanvasLive
+import dev.supermux.desktop.settings.DesktopSettingsExtra
+import dev.supermux.desktop.settings.DesktopSettingsSection
+import dev.supermux.ui.prefs.seedLauncher
+import dev.supermux.ui.prefs.seedCollapsedProjectPaths
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.foundation.layout.height
+import dev.supermux.desktop.shell.DesktopShellWindows
+import dev.supermux.desktop.shell.DesktopStripChrome
+import dev.supermux.desktop.shell.MacSidebarToggle
+import dev.supermux.desktop.shell.MacTitleBarHeight
+import dev.supermux.desktop.shell.macTitleBarDragRegion
+import dev.supermux.desktop.shell.PersistedUiState
+import dev.supermux.ui.prefs.seedShellState
+import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.notify.NotificationController
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
 import dev.supermux.desktop.shell.extraWindowTitle
@@ -93,7 +113,7 @@ import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.desktop.shell.WindowBounds
 import dev.supermux.desktop.shell.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
@@ -387,19 +407,93 @@ fun main() {
             }
         }
         val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
+        // The extra OS windows, and the shared shell's view of them (cluster G8).
+        val desktopWindows = remember { DesktopShellWindows() }
+        // Cluster G8: the sidebar chrome + the selection moved out of `ui-state.json` into the
+        // shared settings store (`SettingsKeys.SHELL_*`), which is what Android reads too. The old
+        // file is drained ONCE here and then only carries the window bounds. Synchronous for the
+        // same reason the appearance seed above is: an asynchronous read would paint the first
+        // frames with the sidebar at the wrong width and no session selected.
+        val seededShell = remember {
+            runBlocking {
+                desktopUiPrefs.seedShellState(
+                    legacySidebarCollapsed = persistedUi.layout?.sidebarCollapsed,
+                    legacySidebarWidthDp = persistedUi.layout?.sidebarWidthDp,
+                    legacySelectedSession = persistedUi.selectedId,
+                )
+            }
+        }
+        // The launcher pair and the collapsed project groups (cluster F1), drained from this host's
+        // old files before anything reads them — the seed must win the race against the launcher's
+        // first `loadPrefs()` and the sidebar's first frame.
+        val launcherStoreForSeed = remember { dev.supermux.desktop.session.LauncherStore() }
+        val seededCollapsedPaths = remember {
+            runBlocking {
+                runCatching {
+                    desktopUiPrefs.seedLauncher(
+                        launcherStoreForSeed.loadPrefs(),
+                        launcherStoreForSeed.loadDraft(),
+                    )
+                }
+                runCatching {
+                    desktopUiPrefs.seedCollapsedProjectPaths(
+                        persistedUi.layout?.collapsedProjectPaths?.toSet().orEmpty(),
+                    )
+                }.getOrDefault(emptySet())
+            }
+        }
         val ui = remember {
             ShellUiState().apply {
-                persistedUi.layout?.let { restore(it) }
-                selectedId = persistedUi.selectedId
+                windows = desktopWindows
+                sidebarCollapsed = seededShell.sidebarCollapsed
+                setSidebarWidth(seededShell.sidebarWidthDp.dp)
+                selectedId = seededShell.selectedSession
+                collapsedProjectPaths = seededCollapsedPaths
                 appearance = seededAppearance
-                pendingWindowHosts = persistedUi.windows
             }
+        }
+        LaunchedEffect(Unit) { desktopWindows.pending = persistedUi.windows }
+        // Debounced `ui-state.json` write — the DETACHED WINDOW BOUNDS only; every other field it
+        // used to carry now lives in the shared settings store (see `seedShellState` above), which
+        // the shell itself writes.
+        LaunchedEffect(uiStore) {
+            snapshotFlow { desktopWindows.persistedExtras() }
+                .collectLatest { extras ->
+                    delay(500)
+                    withContext(Dispatchers.IO) {
+                        uiStore.save(PersistedUiState(windows = extras))
+                    }
+                }
         }
         // Releasing an extra window's claim is bound HERE, not in `AppShell`: the windows are owned
         // by this scope and can outlive a composed shell (unpair with a detached window still open).
         DisposableEffect(ui) {
-            DesktopWindowHostController.bindRelease { hostId -> ui.windowHosts.unclaim(hostId) }
+            DesktopWindowHostController.bindRelease { hostId -> desktopWindows.registry.unclaim(hostId) }
             onDispose { }
+        }
+        // Tearing a pane out needs the LIVE `panesBind` (only this scope holds it), so the window
+        // owner binds the verbs into the `Platform.windows` seam. Was `AppShell`'s job until G8
+        // moved the shell into `:ui`, which cannot name a `WindowHostRegistry` at all.
+        DisposableEffect(ui) {
+            DesktopWindowHostController.bindTearOut(
+                tearOutTab = { viewId ->
+                    val bind = ui.panesBind ?: return@bindTearOut
+                    val layoutSync = bind.ws.layoutSync
+                    tearOutTabLive(
+                        desktopWindows.registry, layoutSync.tree, viewId, bind.current.id,
+                    ) { next ->
+                        layoutSync.edit { next }
+                        layoutSync.tree
+                    }
+                    Unit
+                },
+                tearOutCanvas = {
+                    val bind = ui.panesBind ?: return@bindTearOut
+                    tearOutCanvasLive(desktopWindows.registry, bind.current.id)
+                    Unit
+                },
+            )
+            onDispose { DesktopWindowHostController.unbindTearOut() }
         }
 
         // ...and mirrored from here on, so a change made in Settings repaints the shell.
@@ -476,7 +570,6 @@ fun main() {
             // Paired once the fleet holds a host (legacy single-host users were migrated to
             // PairedHost[0] above; onboarding seeds it via the same migration on success).
             var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
-            val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
             // M5-3: publish this pairing's ShellUiState up to the tray icon's onAction
             // handler (declared above, outside Window) so a click can select the last-notified
             // session. Cleared on dispose (unpair / window teardown) so a stale ui never lingers.
@@ -510,7 +603,7 @@ fun main() {
                                 val viewId = collectActiveViewIds(tree).firstOrNull()
                                 val gid = viewId?.let { groupIdOf(tree, it) }
                                 if (gid != null) {
-                                    tearOutGroupLive(ui.windowHosts, tree, gid, bind.current.id)
+                                    tearOutGroupLive(desktopWindows.registry, tree, gid, bind.current.id)
                                 }
                             }
                         }
@@ -943,12 +1036,12 @@ fun main() {
                             )
                             if (id == null) {
                                 println("[launch] createSessionWithFirstMessage returned null (invalid workdir / spawn failed)")
-                                ui.launcherOpen = false
+                                ui.closeLauncher()
                                 return@LaunchedEffect
                             }
                             ui.selectedId = id
                             app.sendMessage(id, message, app.consumeFirstUploads(id))
-                            ui.launcherOpen = false
+                            ui.closeLauncher()
                             println("[launch] spawned session $id in '$workdir' (agent=$agent, staged=${staged.size}); first message sent")
                         }
                     }
@@ -1480,13 +1573,59 @@ fun main() {
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
                     ) {
-                        AppShell(
-                            app,
-                            ui,
-                            uiStore,
-                            launcherStore,
-                            notificationController,
+                        SupermuxApp(
                             fleet = fleet,
+                            ui = ui,
+                            notify = notificationController,
+                            appForeground = LocalWindowInfo.current.isWindowFocused,
+                            // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
+                            // sessions. The one genuine per-host choice left in the shell.
+                            sessionListMode = SessionListMode.Workspaces,
+                            homeFallback = System.getProperty("user.home").orEmpty(),
+                            stripChrome = DesktopStripChrome,
+                            // macOS: no full-window dead strip under the transparent title bar.
+                            // Detail content runs to the top edge; only the sidebar body is padded
+                            // under the traffic-light band.
+                            sidebarTopPad = if (isMacOs()) MacTitleBarHeight else 0.dp,
+                            sidebarChrome = { sidebarWidth, collapsed ->
+                                if (isMacOs() && !collapsed) {
+                                    // Native window-drag handle: the empty sidebar band under the
+                                    // traffic lights. Layout-only Box (draws nothing, no pointer
+                                    // input); the toggle punches itself out.
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopStart)
+                                            .width(sidebarWidth)
+                                            .height(MacTitleBarHeight)
+                                            .macTitleBarDragRegion("sidebar-band"),
+                                    )
+                                    MacSidebarToggle(
+                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
+                                    )
+                                }
+                            },
+                            // Desktop reopens on the session it was last showing.
+                            persistSelection = true,
+                            // Dispose CAN BE the window closing, which cancels the shell's scope
+                            // before a launched write runs. This one blocks until the draft is on
+                            // disk — and swallows a failure (disk full, prefs locked mid-shutdown):
+                            // a dying window must not throw out of onDispose over a lost draft.
+                            onLauncherDraftFlush = { draft ->
+                                runCatching { runBlocking { desktopUiPrefs.putLauncherDraft(draft) } }
+                                Unit
+                            },
+                            autoSelect = System.getenv("SM_AUTOSELECT") == "1",
+                            autoSelectName = System.getenv("SM_SMOKE_SEND")
+                                ?.substringBefore(':')?.takeIf { it.isNotBlank() },
+                            defaultDeviceName = remember {
+                                runCatching { java.net.InetAddress.getLocalHost().hostName }
+                                    .getOrNull()?.ifBlank { null } ?: "Desktop host"
+                            },
+                            settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
+                            settingsSection = { section, scope ->
+                                DesktopSettingsSection(section, scope, fleet.activeApp() ?: app)
+                            },
                             appearance = ui.appearance,
                             // The toggle writes the SAME stored value the Appearance screen does
                             // (the collector above mirrors it back onto `ui.appearance`), so the
@@ -1582,7 +1721,7 @@ fun main() {
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not
         // dispose pop-outs of another workspace.
-        for (host in ui.windowHosts.extras()) {
+        for (host in desktopWindows.registry.extras()) {
             // Always compose the Window while the claim exists. Gating on panesBindFor
             // skipped a frame on workspace switch, Compose disposed the Window, and
             // onCloseRequest unclaimed it — the pop-out stayed gone.
@@ -1598,7 +1737,7 @@ fun main() {
                         extraState.position to extraState.size
                     }.collect { (pos, size) ->
                         if (pos is WindowPosition.Absolute) {
-                            ui.windowHosts.updateBounds(
+                            desktopWindows.registry.updateBounds(
                                 host.id,
                                 WindowBounds(
                                     x = pos.x.value,
@@ -1615,7 +1754,7 @@ fun main() {
                     title = extraBind?.let {
                         extraWindowTitle(
                             it.current.name,
-                            ui.windowHosts.layoutFor(host, it.ws.layoutSync.tree),
+                            ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
                             it.ws.viewsById,
                         )
                     } ?: "supermux",

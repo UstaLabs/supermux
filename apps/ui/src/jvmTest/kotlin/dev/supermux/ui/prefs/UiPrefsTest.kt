@@ -237,4 +237,70 @@ class UiPrefsTest {
         assertEquals(0, p.introSeenVersion.first())
         assertEquals(false, p.seedIntroSeen(legacyVersion = 0, introVersion = 1))
     }
+
+    // ── The shell's screen-level state (cluster G8) ────────────────────────────────────────────
+    // Desktop's `ui-state.json` fields are drained here ONCE; Android had none to drain and simply
+    // reads back what the shell wrote last. Same one-way, idempotent, non-destructive rule as the
+    // launcher / collapsed-paths / intro seeds above.
+
+    @Test
+    fun the_shell_state_seed_drains_a_legacy_ui_state_json_once() = runTest {
+        val (store, p) = prefs()
+        val seed = p.seedShellState(
+            legacySidebarCollapsed = true,
+            legacySidebarWidthDp = 440f,
+            legacySelectedSession = "s1",
+        )
+        assertEquals(true, seed.sidebarCollapsed)
+        assertEquals(440f, seed.sidebarWidthDp)
+        assertEquals("s1", seed.selectedSession)
+        assertEquals("true", store.map.value[SettingsKeys.SHELL_SIDEBAR_COLLAPSED])
+        assertEquals("440.0", store.map.value[SettingsKeys.SHELL_SIDEBAR_WIDTH])
+        assertEquals("s1", store.map.value[SettingsKeys.SHELL_SELECTED_SESSION])
+    }
+
+    @Test
+    fun a_stored_shell_state_wins_over_the_legacy_file() = runTest {
+        val (_, p) = prefs()
+        p.putSidebarCollapsed(false)
+        p.putSidebarWidthDp(300f)
+        p.putSelectedSession("s-new")
+        val seed = p.seedShellState(
+            legacySidebarCollapsed = true,
+            legacySidebarWidthDp = 440f,
+            legacySelectedSession = "s-old",
+        )
+        assertEquals(false, seed.sidebarCollapsed)
+        assertEquals(300f, seed.sidebarWidthDp)
+        assertEquals("s-new", seed.selectedSession)
+    }
+
+    @Test
+    fun seeding_the_shell_state_with_nothing_reads_the_defaults() = runTest {
+        val (store, p) = prefs()
+        val seed = p.seedShellState()
+        assertEquals(false, seed.sidebarCollapsed)
+        assertEquals(SIDEBAR_WIDTH_DEFAULT, seed.sidebarWidthDp)
+        assertEquals(null, seed.selectedSession)
+        // Nothing to drain → nothing written.
+        assertEquals(null, store.map.value[SettingsKeys.SHELL_SIDEBAR_COLLAPSED])
+    }
+
+    @Test
+    fun the_sidebar_width_is_clamped_on_the_way_in_and_out() = runTest {
+        val (store, p) = prefs()
+        p.putSidebarWidthDp(9_999f)
+        assertEquals(SIDEBAR_WIDTH_MAX, p.sidebarWidthDp.first())
+        store.map.value = store.map.value + (SettingsKeys.SHELL_SIDEBAR_WIDTH to "10")
+        assertEquals(SIDEBAR_WIDTH_MIN, p.sidebarWidthDp.first())
+    }
+
+    @Test
+    fun a_blank_selected_session_clears_the_key() = runTest {
+        val (store, p) = prefs()
+        p.putSelectedSession("s1")
+        p.putSelectedSession("")
+        assertEquals(null, store.map.value[SettingsKeys.SHELL_SELECTED_SESSION])
+        assertEquals(null, p.selectedSession.first())
+    }
 }

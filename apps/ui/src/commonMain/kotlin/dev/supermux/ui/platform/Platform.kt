@@ -90,6 +90,15 @@ interface Platform {
      */
     fun pendingPicks(requester: String): Flow<PickedFile>
 
+    /**
+     * QR scans that decoded with nobody left to await them — on Android the activity can be
+     * re-created while the camera is in the foreground, which kills the coroutine inside [scanQr].
+     * The re-created screen collects this and claims exactly as if its own call had returned.
+     * Platforms whose scanner cannot outlive its caller (desktop) emit nothing, which is the
+     * default here.
+     */
+    fun pendingScans(): Flow<String> = kotlinx.coroutines.flow.emptyFlow()
+
     /** Images on the system clipboard, for paste-to-attach. Gated by [Caps.clipboardImages]. */
     val clipboard: ClipboardAccess
 

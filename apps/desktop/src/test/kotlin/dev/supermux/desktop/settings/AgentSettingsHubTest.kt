@@ -13,15 +13,13 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.input.key.Key
 import dev.supermux.state.FleetStore
-import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.desktop.platform.openInBrowserOverride
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.TestAppShell
+import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -147,11 +145,7 @@ class AgentSettingsHubTest {
         val app = appForAgents()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()
@@ -173,11 +167,7 @@ class AgentSettingsHubTest {
         val app = appForAgents()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()
@@ -192,11 +182,7 @@ class AgentSettingsHubTest {
         val app = appForAgents()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()
@@ -247,11 +233,7 @@ class AgentSettingsHubTest {
         )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state2")),
-                    LauncherStore(tempPath("launcher2")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()
@@ -337,12 +319,7 @@ class AgentSettingsHubTest {
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    primary, ui,
-                    ShellStateStore(tempPath("mh-state")),
-                    LauncherStore(tempPath("mh-launcher")),
-                    fleet = fleet,
-                )
+                TestAppShell(primary, ui, fleet = fleet)
             }
         }
         waitForIdle()

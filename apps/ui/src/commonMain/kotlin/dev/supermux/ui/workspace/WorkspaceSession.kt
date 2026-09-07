@@ -27,6 +27,8 @@ class WorkspaceSession(
     val previewModes: SnapshotStateMap<String, Boolean>,
     val viewsById: Map<String, ViewDto>,
     val fileOpener: WorkspaceFileOpener,
+    /** Fresh client-minted view ids (cluster G8: the phone/tablet add-view paths need one too). */
+    val newId: () -> String = { "" },
 )
 
 /**
@@ -121,5 +123,6 @@ fun rememberWorkspaceSession(
         previewModes = previewModes,
         viewsById = viewsById,
         fileOpener = fileOpener,
+        newId = newId,
     )
 }

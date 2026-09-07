@@ -44,9 +44,8 @@ dependencies {
     //  implementation for both hosts, gesture branched on LocalInputMode.)
     // (composemediaplayer moved to :ui commonMain in cluster D1 — it comes in transitively with
     //  the shared timeline, and both apps now use the same player.)
-    // Navigation 3 — user-owned back stack for full-pane workspace overlays (Settings hub,
-    // Archived, AppUpdate). Workspace shell stays outside the stack so chat/editor/term keep state.
-    implementation(libs.jetbrains.navigation3.ui)
+    // (Navigation 3 moved to :ui commonMain in cluster G8 — the shared `SupermuxApp` root drives
+    //  the back stack for BOTH hosts, and it arrives here transitively as an `api` dependency.)
 
     testImplementation(libs.coroutines.test)
     testImplementation(kotlin("test"))

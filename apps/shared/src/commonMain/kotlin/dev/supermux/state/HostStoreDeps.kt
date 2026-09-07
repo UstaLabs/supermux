@@ -62,6 +62,18 @@ object SettingsKeys {
      * all — its intro was gated on "not paired yet" — so it starts empty and simply writes one.
      */
     const val INTRO_SEEN = "intro:seen"
+    // The shell's own screen-level state (cluster G8). It replaced desktop's `ui-state.json`
+    // fields — that file now carries only the detached-window bounds, which are desktop's alone —
+    // and Android's `rememberSaveable`-only sidebar chrome, which never survived a restart.
+    // Desktop drains the old JSON once, on first launch after the upgrade.
+    /** "true"/"false" — the workspace sidebar is collapsed to its avatar rail. Default false. */
+    const val SHELL_SIDEBAR_COLLAPSED = "shell:sidebarCollapsed"
+    /** Sidebar width in dp, clamped 220..560. Default 320. */
+    const val SHELL_SIDEBAR_WIDTH = "shell:sidebarWidthDp"
+    /** The session the shell reopens on. Absent = open on the list. Written only by a host that
+     *  restores its selection (desktop); a phone deliberately opens on the session list. */
+    const val SHELL_SELECTED_SESSION = "shell:selectedSession"
+
     const val VOICE_STT = "voice:stt"
     const val VOICE_CLEANUP = "voice:cleanup"
     const val VOICE_TTS = "voice:tts"

@@ -191,8 +191,9 @@ jobs:
 
       # :shared and :desktop always run together — :desktop depends on :shared,
       # so splitting them buys nothing and pays the Gradle startup cost twice.
-      - name: KMP sharing guardrail (non-blocking until the screens move into :ui)
-        continue-on-error: true
+      # BLOCKING since cluster G8: the screens are in :ui (0 duplicate basenames / 0 conceptual
+      # twins), so a new split screen is a build failure rather than a warning nobody reads.
+      - name: KMP sharing guardrail
         run: bash scripts/check-no-duplicate-kt.sh
 
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)

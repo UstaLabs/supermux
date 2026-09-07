@@ -9,14 +9,12 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.TestAppShell
+import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.net.BrokerApi
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -112,11 +110,7 @@ class VoiceSettingsHubTest {
         val (app, _) = appForVoice()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()

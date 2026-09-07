@@ -6,10 +6,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.TestAppShell
+import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.desktop.testDeps
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.BrokerApi
@@ -78,11 +76,7 @@ class AppearanceHubTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app(), ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(app(), ui)
             }
         }
         waitForIdle()
@@ -100,11 +94,7 @@ class AppearanceHubTest {
         val ui = ShellUiState().apply { openSettings(SettingsSection.Agents) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app(), ui,
-                    ShellStateStore(tempPath("state-upd")),
-                    LauncherStore(tempPath("launcher-upd")),
-                )
+                TestAppShell(app(), ui)
             }
         }
         waitForIdle()

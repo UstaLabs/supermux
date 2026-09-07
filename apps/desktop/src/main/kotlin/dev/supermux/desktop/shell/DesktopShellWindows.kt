@@ -1,0 +1,80 @@
+// Desktop's [ShellWindows]: the shared shell's view of `WindowHostRegistry` (cluster G8).
+//
+// The registry itself — bounds, claims, the tear-out planners, the persisted extras and the real
+// extra `Window {}`s — stays here, because only desktop has more than one window. `ShellUiState`
+// carries this object so the SHARED pane host can hide what another window claimed, claim a newly
+// created view, and re-derive claims when the tree changes; every other host installs
+// `NoShellWindows` and none of it happens.
+package dev.supermux.desktop.shell
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.supermux.ui.shell.ShellWindows
+import dev.supermux.workspace.LayoutNode
+
+class DesktopShellWindows(
+    val registry: WindowHostRegistry = WindowHostRegistry(),
+) : ShellWindows {
+
+    /** Persisted extras not yet claimed (waiting for a matching workspace tree). */
+    var pending by mutableStateOf<List<PersistedWindowHost>>(emptyList())
+
+    override val mainHostId: String get() = registry.main().id
+
+    override fun layoutFor(hostId: String, tree: LayoutNode): LayoutNode {
+        val host = if (hostId == registry.main().id) {
+            registry.main()
+        } else {
+            registry.extras().firstOrNull { it.id == hostId }
+        } ?: return tree
+        return registry.layoutFor(host, tree) ?: emptyHostLayout(tree)
+    }
+
+    override fun expandClaim(hostId: String, addedViewIds: Set<String>, tree: LayoutNode) {
+        registry.expandClaim(hostId, addedViewIds, tree)
+    }
+
+    override fun transfer(viewId: String, toHostId: String, tree: LayoutNode) {
+        registry.transfer(viewId, toHostId, tree)
+    }
+
+    override fun onWorkspaceTree(workspaceId: String, tree: LayoutNode) {
+        registry.rebase(workspaceId, tree)
+        tryRestore(workspaceId, tree)
+    }
+
+    override fun setWorkspaceOnMain(workspaceId: String) {
+        registry.setWorkspaceOnMain(workspaceId)
+    }
+
+    override fun mainWorkspaceId(): String = registry.main().workspaceId
+
+    override fun extraWorkspaceIds(): Set<String> =
+        registry.extras().mapTo(mutableSetOf()) { it.workspaceId }
+
+    /** Hydrate persisted extras once the matching workspace tree is on screen. */
+    fun tryRestore(workspaceId: String, tree: LayoutNode) {
+        if (pending.isEmpty()) return
+        val leftover = mutableListOf<PersistedWindowHost>()
+        for (p in pending) {
+            if (p.workspaceId != workspaceId) {
+                leftover += p
+                continue
+            }
+            if (registry.extras().any { it.id == p.id }) continue
+            val bounds = WindowBounds(p.x, p.y, p.width, p.height)
+            val claimed = if (p.claimedViewIds.isEmpty()) {
+                registry.tryClaimCanvas(p.workspaceId, bounds, p.id)
+            } else {
+                registry.tryClaim(p.workspaceId, p.claimedViewIds.toSet(), bounds, p.id, tree)
+            }
+            if (claimed == null) leftover += p
+        }
+        pending = leftover
+    }
+
+    /** What `ui-state.json` should carry now: unclaimed pending extras plus the live ones. */
+    fun persistedExtras(): List<PersistedWindowHost> =
+        mergePersistedWindowHosts(pending, registry.extras())
+}

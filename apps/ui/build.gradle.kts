@@ -66,6 +66,12 @@ kotlin {
             // MessageTts's generation counter — a plain Int would be a data race between the
             // Compose frame that toggles and the coroutine that streams audio chunks.
             implementation(libs.atomicfu)
+            // Navigation 3 — the ONE navigation renderer for both hosts (cluster G8). Desktop
+            // already drove `NavDisplay` + a back stack; Android's `NavHost`/`composable<Route.X>`
+            // (androidx.navigation:navigation-compose) is gone. `api`, because `ShellUiState`
+            // exposes the Nav3 back stack and `FullPaneOverlaySceneStrategy` is a `SceneStrategy`
+            // in this module's own public signatures.
+            api(libs.jetbrains.navigation3.ui)
             // The ONE QR encoder (widgets/QrCode.kt). Pure-Java ZXing core — NOT the Android
             // `zxing-android-embedded` scanner Android's copy pulled in just to draw a bitmap.
             // Only the module matrix comes from it; the raster is a Compose Canvas, so this stays

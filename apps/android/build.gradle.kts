@@ -106,7 +106,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.splashscreen)
-    implementation(libs.androidx.navigation.compose)
+    // (Navigation 3 replaced navigation-compose in cluster G8: the shared `SupermuxApp` root
+    //  drives one `NavDisplay` back stack on BOTH hosts, and it arrives transitively from :ui.)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.datastore.preferences)

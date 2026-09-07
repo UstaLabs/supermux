@@ -10,16 +10,14 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import dev.supermux.state.FleetStore
-import dev.supermux.desktop.session.LauncherStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.cioHttpFactory
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.TestAppShell
+import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
@@ -215,11 +213,7 @@ class SystemSettingsHubTest {
         val app = appForSystem()
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("state")),
-                    LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()
@@ -266,11 +260,7 @@ class SystemSettingsHubTest {
         )
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    app, ui,
-                    ShellStateStore(tempPath("rail-state")),
-                    LauncherStore(tempPath("rail-launcher")),
-                )
+                TestAppShell(app, ui)
             }
         }
         waitForIdle()
@@ -357,12 +347,7 @@ class SystemSettingsHubTest {
         val primary = fleet.appForRecord("h1")!!
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    primary, ui,
-                    ShellStateStore(tempPath("mh-state")),
-                    LauncherStore(tempPath("mh-launcher")),
-                    fleet = fleet,
-                )
+                TestAppShell(primary, ui, fleet = fleet)
             }
         }
         waitForIdle()

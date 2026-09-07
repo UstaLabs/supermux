@@ -357,16 +357,18 @@ class WindowHostsTest {
 
     @Test
     fun tryRestoreKeepsUnrestoredHostsInPending() {
-        val ui = ShellUiState()
-        ui.pendingWindowHosts = listOf(
+        // Cluster G8: the pending list + the restore live on desktop's own [DesktopShellWindows]
+        // (the shared `ShellUiState` only sees the `ShellWindows` seam), so the case moved with it.
+        val windows = DesktopShellWindows()
+        windows.pending = listOf(
             PersistedWindowHost("a", "ws", listOf("v1", "v2"), 0f, 0f, 100f, 100f),
             PersistedWindowHost("b", "other", listOf("v9"), 1f, 1f, 100f, 100f),
             PersistedWindowHost("bad", "ws", listOf("v2"), 0f, 0f, 100f, 100f),
         )
-        ui.tryRestoreWindowHosts("ws", tree())
-        assertEquals(1, ui.windowHosts.extras("ws").size)
-        assertEquals("a", ui.windowHosts.extras("ws").single().id)
-        assertEquals(setOf("b", "bad"), ui.pendingWindowHosts.map { it.id }.toSet())
+        windows.tryRestore("ws", tree())
+        assertEquals(1, windows.registry.extras("ws").size)
+        assertEquals("a", windows.registry.extras("ws").single().id)
+        assertEquals(setOf("b", "bad"), windows.pending.map { it.id }.toSet())
     }
 
     @Test

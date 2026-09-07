@@ -8,10 +8,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.runComposeUiTest
-import dev.supermux.desktop.session.LauncherStore
-import dev.supermux.desktop.shell.AppShell
-import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
+import dev.supermux.desktop.shell.TestAppShell
+import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.desktop.testDeps
 import dev.supermux.desktop.theme.DesktopTheme
 import dev.supermux.net.BrokerApi
@@ -87,10 +85,7 @@ class DisplaysHubTest {
         val ui = ShellUiState().apply { navigate(Route.Displays) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    appForDisplays(), ui,
-                    ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(appForDisplays(), ui)
             }
         }
         waitForIdle()
@@ -106,10 +101,7 @@ class DisplaysHubTest {
         val ui = ShellUiState().apply { navigate(Route.Displays) }
         setContent {
             DesktopTheme(appearance = AppearanceMode.DARK) {
-                AppShell(
-                    appForDisplays(), ui,
-                    ShellStateStore(tempPath("state")), LauncherStore(tempPath("launcher")),
-                )
+                TestAppShell(appForDisplays(), ui)
             }
         }
         waitForIdle()

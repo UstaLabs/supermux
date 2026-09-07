@@ -44,6 +44,11 @@ const val EDITOR_LINE_WRAP_DEFAULT = true
 /** Neutral text size — the Appearance slider's centre. */
 const val TEXT_SCALE_DEFAULT = 1f
 
+/** Sidebar width bounds, mirrored by `ShellUiState.SIDEBAR_MIN`/`SIDEBAR_MAX`. */
+const val SIDEBAR_WIDTH_MIN = 220f
+const val SIDEBAR_WIDTH_MAX = 560f
+const val SIDEBAR_WIDTH_DEFAULT = 320f
+
 /** Desktop Changes pane starts as a nested folder tree. */
 const val EDITOR_DIFF_TREE_VIEW_DEFAULT = true
 
@@ -190,6 +195,43 @@ class UiPrefs(private val settings: SettingsStore) {
             prefsJson.encodeToString(ListSerializer(String.serializer()), paths.sorted()),
         )
 
+    // ── The shell's screen-level state (cluster G8) ────────────────────────────────────────────
+    // Desktop kept these in `ui-state.json` and Android kept them in `rememberSaveable` only, so a
+    // phone forgot its sidebar every launch and the two hosts could not agree. One owner now; the
+    // detached-window BOUNDS stay in desktop's file, because only desktop has windows to place.
+
+    /** The workspace sidebar collapsed to its avatar rail. */
+    val sidebarCollapsed: Flow<Boolean> =
+        settings.string(SettingsKeys.SHELL_SIDEBAR_COLLAPSED).map { it?.toBooleanStrictOrNull() ?: false }
+
+    suspend fun putSidebarCollapsed(value: Boolean) =
+        settings.putString(SettingsKeys.SHELL_SIDEBAR_COLLAPSED, value.toString())
+
+    /** Sidebar width in dp, always clamped into [SIDEBAR_WIDTH_MIN]..[SIDEBAR_WIDTH_MAX]. */
+    val sidebarWidthDp: Flow<Float> =
+        settings.string(SettingsKeys.SHELL_SIDEBAR_WIDTH).map { raw ->
+            (raw?.toFloatOrNull() ?: SIDEBAR_WIDTH_DEFAULT).coerceIn(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+        }
+
+    suspend fun putSidebarWidthDp(value: Float) =
+        settings.putString(
+            SettingsKeys.SHELL_SIDEBAR_WIDTH,
+            value.coerceIn(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX).toString(),
+        )
+
+    /** The session the shell reopens on, or null when there is none to restore. */
+    val selectedSession: Flow<String?> =
+        settings.string(SettingsKeys.SHELL_SELECTED_SESSION).map { it?.takeIf(String::isNotBlank) }
+
+    suspend fun putSelectedSession(id: String?) =
+        settings.putString(SettingsKeys.SHELL_SELECTED_SESSION, id?.takeIf { it.isNotBlank() })
+
+    internal fun sidebarCollapsedRaw(): Flow<String?> =
+        settings.string(SettingsKeys.SHELL_SIDEBAR_COLLAPSED)
+    internal fun sidebarWidthRaw(): Flow<String?> = settings.string(SettingsKeys.SHELL_SIDEBAR_WIDTH)
+    internal fun selectedSessionRaw(): Flow<String?> =
+        settings.string(SettingsKeys.SHELL_SELECTED_SESSION)
+
     // ── First-run intro (cluster G6) ───────────────────────────────────────────────────────────
 
     /**
@@ -252,6 +294,43 @@ suspend fun UiPrefs.seedCollapsedProjectPaths(legacy: Set<String>?): Set<String>
     }
     return collapsedProjectPaths.first()
 }
+
+/**
+ * The shell's screen-level state, seeded ONCE from a host's legacy store when nothing is stored
+ * here yet, and then READ — synchronously, by both hosts, before the first frame, exactly like
+ * [seedCollapsedProjectPaths]: an asynchronous read would paint the first frames with the sidebar
+ * at the wrong width and no selection.
+ *
+ * One-way, idempotent and non-destructive. Desktop passes what `ui-state.json` held; Android
+ * passes nulls (it never persisted any of this) and simply reads back what the shell wrote last.
+ */
+suspend fun UiPrefs.seedShellState(
+    legacySidebarCollapsed: Boolean? = null,
+    legacySidebarWidthDp: Float? = null,
+    legacySelectedSession: String? = null,
+): ShellStateSeed {
+    if (legacySidebarCollapsed != null && sidebarCollapsedRaw().first() == null) {
+        putSidebarCollapsed(legacySidebarCollapsed)
+    }
+    if (legacySidebarWidthDp != null && sidebarWidthRaw().first() == null) {
+        putSidebarWidthDp(legacySidebarWidthDp)
+    }
+    if (!legacySelectedSession.isNullOrBlank() && selectedSessionRaw().first() == null) {
+        putSelectedSession(legacySelectedSession)
+    }
+    return ShellStateSeed(
+        sidebarCollapsed = sidebarCollapsed.first(),
+        sidebarWidthDp = sidebarWidthDp.first(),
+        selectedSession = selectedSession.first(),
+    )
+}
+
+/** What [seedShellState] read back, for a host to apply to its `ShellUiState` before composing. */
+data class ShellStateSeed(
+    val sidebarCollapsed: Boolean,
+    val sidebarWidthDp: Float,
+    val selectedSession: String?,
+)
 
 /**
  * Process-local [SettingsStore] — for previews, tests and any entry point with no real store.

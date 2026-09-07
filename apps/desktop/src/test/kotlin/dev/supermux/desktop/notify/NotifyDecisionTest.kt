@@ -2,6 +2,9 @@ package dev.supermux.desktop.notify
 
 import dev.supermux.proto.Attachment
 import dev.supermux.proto.LogEntry
+import dev.supermux.ui.notify.NotificationController
+import dev.supermux.ui.notify.NotificationDedup
+import dev.supermux.ui.notify.NotifyDecision
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -210,7 +210,7 @@ class AndroidPlatform(
      * scanner was in the foreground. The re-created add-host screen collects this and claims the
      * host exactly as if its own `scanQr()` had returned, instead of the scan being silently lost.
      */
-    fun pendingScans(): Flow<String> = qrScanHost.unclaimed.filterNotNull().map { decoded ->
+    override fun pendingScans(): Flow<String> = qrScanHost.unclaimed.filterNotNull().map { decoded ->
         qrScanHost.claim(decoded)
         decoded
     }
