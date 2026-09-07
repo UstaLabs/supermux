@@ -122,6 +122,8 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.test)
+    // MockEngine: drive PairingHolder's probe client without a socket (PairingHolderTest).
+    testImplementation(libs.ktor.client.mock)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

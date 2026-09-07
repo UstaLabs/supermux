@@ -130,11 +130,7 @@ import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.android.DevConfig
 import dev.supermux.android.host.HostStores
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.rememberCoroutineScope
-import dev.supermux.pairing.PairingState
-import dev.supermux.pairing.asPairingStore
-import dev.supermux.state.cioHttpFactory
+import dev.supermux.android.pairing.PairingHolder
 import dev.supermux.ui.intro.OnboardingFlow
 import dev.supermux.android.push.AndroidPushRegistrar
 import dev.supermux.android.push.SupermuxMessagingService
@@ -275,17 +271,11 @@ class MainActivity : ComponentActivity() {
                 if (!paired) {
                     // Cluster G6: one shared intro + pairing flow. The state machine is
                     // `:shared`'s PairingState over the same encrypted store the old
-                    // `PairingViewModel` used; it is remembered here (not a ViewModel) so it
-                    // stays below the pairing gate, and its probe client is released on dispose.
-                    val pairingScope = rememberCoroutineScope()
-                    val pairing = remember {
-                        PairingState(
-                            store.asPairingStore(),
-                            pairingScope,
-                            httpFactory = { cioHttpFactory()(null) },
-                        )
-                    }
-                    DisposableEffect(Unit) { onDispose { pairing.close() } }
+                    // `PairingViewModel` used, held by a RETAINED `PairingHolder` — a rotation
+                    // mid-probe must not destroy the machine or dismiss an open TOFU dialog.
+                    // The holder sits below the pairing gate and above nothing else, so the
+                    // AppViewModel ordering invariant below is untouched.
+                    val pairing = viewModel<PairingHolder>().pairing
                     OnboardingFlow(
                         pairing = pairing,
                         onPaired = { paired = true },

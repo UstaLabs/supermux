@@ -264,7 +264,8 @@ fun OnboardingFlow(
     }
 
     // Deep link arrival skips the cinematic too — the user has already decided.
-    var cinematicDone by remember { mutableStateOf(!showCinematic || initialDeepLink != null) }
+    // Saveable: a tablet rotation mid-cinematic must not restart the 4.8s piece from zero.
+    var cinematicDone by rememberSaveable { mutableStateOf(!showCinematic || initialDeepLink != null) }
 
     val state by pairing.state.collectAsState()
     when (val s = state) {
@@ -1416,7 +1417,8 @@ fun FirstRunIntroOverlay(
 
         // --- skip hint ---------------------------------------------------------------------------
         Text(
-            "click anywhere to skip",
+            // A finger taps; only a mouse clicks.
+            if (LocalPointerAvailable.current) "click anywhere to skip" else "tap anywhere to skip",
             fontFamily = MonoFontFamily, fontSize = 11.sp, color = Dim,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
