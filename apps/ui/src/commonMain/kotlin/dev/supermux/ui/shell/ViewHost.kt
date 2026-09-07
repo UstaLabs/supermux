@@ -292,9 +292,10 @@ fun ViewHost(
             }
         }
         "display" -> {
-            val displayId = view.stateString("displayId")
-            if (displayId == null) UnknownViewHint(view.kind, modifier)
-            else DisplayPanelForStream(actions, displayId, modifier)
+            // Not `?: hint`: BOTH hosts mint a Display view with an EMPTY displayId (the stream is
+            // started separately), and `stateString` hands that back as "". A blank id therefore
+            // means "whatever is running here", not "a stream that has gone away".
+            DisplayPanelForStream(actions, view.stateString("displayId").orEmpty(), modifier)
         }
         else -> UnknownViewHint(view.kind, modifier)
     }
@@ -465,6 +466,9 @@ private fun ChatViewPane(
             sessionLinks = sessionLinks,
             finish = finish,
             onGitOp = gitOp,
+            onRename = { name -> actions.rename(sessionId, name) },
+            onToggleMute = { muted -> actions.setMute(sessionId, muted) },
+            onKill = { actions.kill(sessionId) },
             onContinue = { handoff ->
                 actions.continueConversation(
                     session,
@@ -493,6 +497,19 @@ private fun ChatViewPane(
             }
         }
     }
+}
+
+/**
+ * [id] when a live session actually carries it, else null.
+ *
+ * Desktop resolved every session-keyed pane parameter off the store's own list before handing it
+ * down; the holder is keyed by id, so the check lives here.
+ */
+@Composable
+private fun ShellActions.resolvedSessionId(id: String?): String? {
+    if (id == null) return null
+    val live by sessions.collectAsState()
+    return id.takeIf { wanted -> live.any { it.id == wanted } }
 }
 
 /**
@@ -599,6 +616,11 @@ private fun FilePaneForWorkspace(
     engineFactory: EditorEngineFactory?,
     modifier: Modifier,
 ) {
+    // Resolve the id against the LIVE session list: a workspace whose primary session has been
+    // killed still carries its id, and claiming LSP for a session no host owns would light the
+    // pane's status up while every call no-ops. Unresolved -> the quiet "code intelligence is off"
+    // note the pane already draws for a chat-less workspace.
+    val lspSession = actions.resolvedSessionId(lspSessionId)
     // Editor prefs come from the shared SettingsStore (ui/prefs/UiPrefs.kt): the collected values
     // start at the defaults for one frame, then settle on what was persisted.
     val prefs = LocalUiPrefs.current
@@ -612,7 +634,7 @@ private fun FilePaneForWorkspace(
         documents = documents,
         fsRead = { p -> actions.workspaceFsRead(workspaceId, p) },
         workdir = workdir,
-        lspSessionId = lspSessionId,
+        lspSessionId = lspSession,
         lspStatus = actions.lspStatus,
         lspRpc = actions.lspRpc,
         lspStatusQuery = { id, p -> actions.lspStatusQuery(id, p) },
@@ -640,8 +662,10 @@ private fun DiffPaneForWorkspace(
     onOpenFile: (path: String, line: Int?, endLine: Int?) -> Unit,
     modifier: Modifier,
 ) {
-    val reviewSessionId = lspSessionId
-    val selectedWalkthroughId = walkthroughSessionId ?: lspSessionId
+    // Same resolution rule as the file pane: review and walkthrough are session-keyed, and a
+    // stale id would offer comment/submit affordances that can only no-op.
+    val reviewSessionId = actions.resolvedSessionId(lspSessionId)
+    val selectedWalkthroughId = actions.resolvedSessionId(walkthroughSessionId ?: lspSessionId)
     // Per-diff-pane state, seeded from the view's own `diffBase` so a saved row reopens on the
     // base it was looking at.
     val diff = remember(workspaceId, viewId, base) { DiffState().apply { base?.let { diffBase = it } } }
@@ -693,7 +717,11 @@ private fun DisplayPanelForStream(
 ) {
     val live by actions.display.displays.collectAsState()
     LaunchedEffect(displayId) { actions.display.listDisplays() }
-    val stream = live.firstOrNull { it.id == displayId }
+    // A named id resolves to THAT stream; a blank one (a view added before any stream exists —
+    // both hosts create it that way) adopts whichever stream is running.
+    val stream =
+        if (displayId.isNotBlank()) live.firstOrNull { it.id == displayId }
+        else live.firstOrNull { it.status == "running" }
     if (stream == null) {
         Box(
             modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
@@ -701,7 +729,8 @@ private fun DisplayPanelForStream(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "Display $displayId is not running",
+                if (displayId.isBlank()) "No display is running"
+                else "Display $displayId is not running",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
             )

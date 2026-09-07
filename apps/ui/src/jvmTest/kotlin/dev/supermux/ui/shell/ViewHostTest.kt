@@ -15,8 +15,10 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.runComposeUiTest
+import dev.supermux.net.DisplayStream
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -304,6 +306,94 @@ class ViewHostTest {
         assertEquals(listOf(Triple<String, Int?, Int?>("src/main.kt", 42, null)), opened.toList())
     }
 
+    // ── A `display` view is minted with a BLANK id on both hosts ─────────────────────────────
+
+    /**
+     * "Add a Display" creates the view with `displayId = ""` (the stream is started separately),
+     * on Android AND desktop. A blank id must therefore adopt whatever stream is running rather
+     * than hunt for a stream literally named "".
+     */
+    @Test
+    fun aBlankDisplayIdAdoptsTheRunningStream() = runComposeUiTest {
+        val app = fakeApp()
+        app.reduce(
+            ServerFrame.DisplayAdded(
+                DisplayStream(id = "d9", sessionName = "demo", status = "running"),
+            ),
+        )
+        setPlatformContent(platform()) { host(app, view("display", mapOf("displayId" to ""))) }
+        onNodeWithTag("view_display").assertIsDisplayed()
+        onNodeWithTag("view_display_pending").assertDoesNotExist()
+    }
+
+    /** …and says so plainly when there is nothing running yet (no "Display  is not running"). */
+    @Test
+    fun aBlankDisplayIdWithNoRunningStreamSaysNoDisplayIsRunning() = runComposeUiTest {
+        val app = fakeApp()
+        setPlatformContent(platform()) { host(app, view("display", mapOf("displayId" to ""))) }
+        onNodeWithTag("view_display_pending").assertIsDisplayed()
+        onNodeWithText("No display is running").assertIsDisplayed()
+    }
+
+    /** A NAMED id still means that one stream, and nothing else. */
+    @Test
+    fun aNamedDisplayIdNeverAdoptsAnotherRunningStream() = runComposeUiTest {
+        val app = fakeApp()
+        app.reduce(
+            ServerFrame.DisplayAdded(
+                DisplayStream(id = "d9", sessionName = "demo", status = "running"),
+            ),
+        )
+        setPlatformContent(platform()) { host(app, view("display", mapOf("displayId" to "gone"))) }
+        onNodeWithTag("view_display_pending").assertIsDisplayed()
+        onNodeWithText("Display gone is not running").assertIsDisplayed()
+    }
+
+    // ── Session-keyed panes only claim a session that RESOLVES ───────────────────────────────
+
+    /**
+     * A workspace whose primary session has been killed still carries its id. Claiming LSP for it
+     * would light the pane's status up while every call no-ops — the pane must fall back to its
+     * quiet "code intelligence is off" note, which is what desktop did by resolving off the store.
+     */
+    @Test
+    fun aStalePrimarySessionIdDoesNotClaimLsp() = runComposeUiTest {
+        val app = fakeApp()
+        setPlatformContent(platform()) {
+            ViewHost(
+                view = view("editor", mapOf("mode" to "file", "path" to "a.txt")),
+                workspaceId = "w1",
+                workdir = "/w",
+                actions = rememberShellActions(app),
+                drafts = mutableStateMapOf(),
+                documents = store(),
+                primarySessionId = "ghost",
+                editorEngineFactory = noJcef,
+            )
+        }
+        onNodeWithTag("editor-no-lsp").assertIsDisplayed()
+    }
+
+    /** A LIVE primary session does drive it. */
+    @Test
+    fun aLivePrimarySessionIdClaimsLsp() = runComposeUiTest {
+        val app = fakeApp()
+        seedChat(app)
+        setPlatformContent(platform()) {
+            ViewHost(
+                view = view("editor", mapOf("mode" to "file", "path" to "a.txt")),
+                workspaceId = "w1",
+                workdir = "/w",
+                actions = rememberShellActions(app),
+                drafts = mutableStateMapOf(),
+                documents = store(),
+                primarySessionId = "s1",
+                editorEngineFactory = noJcef,
+            )
+        }
+        onNodeWithTag("editor-no-lsp").assertDoesNotExist()
+    }
+
     // ── NEW (G7): every kind renders under BOTH hosts' chrome ────────────────────────────────
 
     /**
@@ -365,6 +455,11 @@ class ViewHostTest {
         }
         onNodeWithTag("workspace_overflow").assertIsDisplayed()
         onNodeWithTag("shell_overflow").assertDoesNotExist()
+        // The tablet's chat overflow carries the three session rows now (Android's had none).
+        onNodeWithTag("workspace_overflow").performClick()
+        onNodeWithTag("overflow_rename").assertIsDisplayed()
+        onNodeWithTag("overflow_mute").assertIsDisplayed()
+        onNodeWithTag("overflow_kill").assertIsDisplayed()
     }
 
     /** …and the PANEL shape carries desktop's, through the panel's header slots. */

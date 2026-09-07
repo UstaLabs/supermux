@@ -227,7 +227,7 @@ fun rememberShellActions(
             walkthroughState = { id ->
                 if (walkthroughCap) routeToHost(id).walkthroughState<WalkthroughState>(id) else null
             },
-)
+        )
     }
 }
 
@@ -286,6 +286,6 @@ fun rememberShellActions(fleet: FleetStore): ShellActions {
             walkthroughState = { id ->
                 if (walkthroughCap) fleet.walkthroughState<WalkthroughState>(id) else null
             },
-)
+        )
     }
 }

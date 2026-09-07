@@ -432,115 +432,115 @@ fun OverflowMenu(
     }
 
     RowContextMenu(items = contextEntries) {
-    Box(modifier) {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag(buttonTag)) {
-            Icon(
-                Icons.Outlined.MoreVert,
-                contentDescription = "More",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
-        }
-        val uiPrefs = LocalUiPrefs.current
-        val chatDetail by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
-        var detailSubmenu by remember { mutableStateOf(false) }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false; detailSubmenu = false },
-        ) {
-            DropdownMenuItem(
-                text = {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Detail")
-                        Text(chatDetail.label, color = cs.onSurfaceVariant)
-                    }
-                },
-                modifier = Modifier.testTag(detailTag),
-                onClick = { detailSubmenu = true },
-            )
-            if (onContinue != null) {
-                ContinueMenuItem {
-                    expanded = false
-                    showContinue = true
-                }
-            }
-            if (onGitOp != null && session.git != null) {
-                GitRow("Fetch", Icons.Outlined.Download, "overflow_git_fetch") {
-                    expanded = false; onGitOp("fetch")
-                }
-                GitRow("Pull", Icons.Outlined.CallMerge, "overflow_git_pull") {
-                    expanded = false; onGitOp("pull")
-                }
-                if (shouldPublish(session.git)) {
-                    GitRow("Publish", Icons.Outlined.CloudOff, "overflow_git_publish") {
-                        expanded = false; onGitOp("publish")
-                    }
-                } else {
-                    GitRow("Push", Icons.Outlined.CloudUpload, "overflow_git_push") {
-                        expanded = false; onGitOp("push")
-                    }
-                }
-            }
-            if (showManagementRows) {
-                DropdownMenuItem(
-                    text = { Text("Usage") },
-                    modifier = Modifier.testTag("overflow_usage"),
-                    onClick = { expanded = false; onUsage() },
-                )
-                DropdownMenuItem(
-                    text = { Text("Editor / LSP…") },
-                    modifier = Modifier.testTag("overflow_lsp_settings"),
-                    onClick = { expanded = false; onLspSettings() },
+        Box(modifier) {
+            IconButton(onClick = { expanded = true }, modifier = Modifier.testTag(buttonTag)) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = "More",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
                 )
             }
-            if (showSessionRows) {
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    modifier = Modifier.testTag("overflow_rename"),
-                    onClick = { expanded = false; renameText = session.name; showRename = true },
-                )
-                DropdownMenuItem(
-                    text = { Text(if (muted) "Unmute" else "Mute") },
-                    modifier = Modifier.testTag("overflow_mute"),
-                    onClick = { expanded = false; onToggleMute(!muted) },
-                )
-                DropdownMenuItem(
-                    text = { Text("Kill", color = cs.error) },
-                    modifier = Modifier.testTag("overflow_kill"),
-                    onClick = { expanded = false; showKill = true },
-                )
-            }
-        }
-        DropdownMenu(
-            expanded = detailSubmenu,
-            onDismissRequest = { detailSubmenu = false },
-        ) {
-            listOf(
-                ChatDetailLevel.LOW to "Messages only · tools on status line",
-                ChatDetailLevel.MEDIUM to "Quiet tool lines between messages",
-                ChatDetailLevel.HIGH to "Terminal windows & file diffs",
-            ).forEach { (level, desc) ->
+            val uiPrefs = LocalUiPrefs.current
+            val chatDetail by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
+            var detailSubmenu by remember { mutableStateOf(false) }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false; detailSubmenu = false },
+            ) {
                 DropdownMenuItem(
                     text = {
-                        Column {
-                            Text(
-                                level.label,
-                                fontWeight = if (chatDetail == level) FontWeight.SemiBold else FontWeight.Normal,
-                            )
-                            Text(desc, color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Detail")
+                            Text(chatDetail.label, color = cs.onSurfaceVariant)
                         }
                     },
-                    modifier = Modifier.testTag("overflow_detail_${level.wire}"),
-                    enabled = true,
-                    onClick = {
-                        scope.launch { uiPrefs.putChatDetailLevel(level) }
-                        detailSubmenu = false
-                        expanded = false
-                    },
+                    modifier = Modifier.testTag(detailTag),
+                    onClick = { detailSubmenu = true },
                 )
+                if (onContinue != null) {
+                    ContinueMenuItem {
+                        expanded = false
+                        showContinue = true
+                    }
+                }
+                if (onGitOp != null && session.git != null) {
+                    GitRow("Fetch", Icons.Outlined.Download, "overflow_git_fetch") {
+                        expanded = false; onGitOp("fetch")
+                    }
+                    GitRow("Pull", Icons.Outlined.CallMerge, "overflow_git_pull") {
+                        expanded = false; onGitOp("pull")
+                    }
+                    if (shouldPublish(session.git)) {
+                        GitRow("Publish", Icons.Outlined.CloudOff, "overflow_git_publish") {
+                            expanded = false; onGitOp("publish")
+                        }
+                    } else {
+                        GitRow("Push", Icons.Outlined.CloudUpload, "overflow_git_push") {
+                            expanded = false; onGitOp("push")
+                        }
+                    }
+                }
+                if (showManagementRows) {
+                    DropdownMenuItem(
+                        text = { Text("Usage") },
+                        modifier = Modifier.testTag("overflow_usage"),
+                        onClick = { expanded = false; onUsage() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Editor / LSP…") },
+                        modifier = Modifier.testTag("overflow_lsp_settings"),
+                        onClick = { expanded = false; onLspSettings() },
+                    )
+                }
+                if (showSessionRows) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        modifier = Modifier.testTag("overflow_rename"),
+                        onClick = { expanded = false; renameText = session.name; showRename = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (muted) "Unmute" else "Mute") },
+                        modifier = Modifier.testTag("overflow_mute"),
+                        onClick = { expanded = false; onToggleMute(!muted) },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Kill", color = cs.error) },
+                        modifier = Modifier.testTag("overflow_kill"),
+                        onClick = { expanded = false; showKill = true },
+                    )
+                }
+            }
+            DropdownMenu(
+                expanded = detailSubmenu,
+                onDismissRequest = { detailSubmenu = false },
+            ) {
+                listOf(
+                    ChatDetailLevel.LOW to "Messages only · tools on status line",
+                    ChatDetailLevel.MEDIUM to "Quiet tool lines between messages",
+                    ChatDetailLevel.HIGH to "Terminal windows & file diffs",
+                ).forEach { (level, desc) ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    level.label,
+                                    fontWeight = if (chatDetail == level) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                                Text(desc, color = cs.onSurfaceVariant, fontSize = 12.sp)
+                            }
+                        },
+                        modifier = Modifier.testTag("overflow_detail_${level.wire}"),
+                        enabled = true,
+                        onClick = {
+                            scope.launch { uiPrefs.putChatDetailLevel(level) }
+                            detailSubmenu = false
+                            expanded = false
+                        },
+                    )
+                }
             }
         }
-    }
     }
 
     if (showRename) {
@@ -627,6 +627,11 @@ fun ChatViewHeader(
     sessionLinks: List<ProxyDto>,
     finish: FinishBindings,
     onGitOp: (String) -> Unit,
+    /** Rename / Mute / Kill — Android's tablet overflow had none of the three; desktop's did, and
+     *  its dialogs come with them. [onToggleMute] receives the DESIRED next state. */
+    onRename: (String) -> Unit = {},
+    onToggleMute: (Boolean) -> Unit = {},
+    onKill: () -> Unit = {},
     onContinue: (suspend (ContinueHandoff) -> String?)? = null,
     loadContinueAgents: suspend () -> List<String> = { emptyList() },
     loadContinueModels: suspend (String) -> List<ModelInfo> = { emptyList() },
@@ -674,17 +679,18 @@ fun ChatViewHeader(
         FinishHeaderButton(session = session, bindings = finish)
         OverflowMenu(
             session = session,
-            onRename = {},
-            onToggleMute = {},
-            onKill = {},
+            onRename = onRename,
+            onToggleMute = onToggleMute,
+            onKill = onKill,
             onGitOp = onGitOp,
             onContinue = onContinue,
             loadContinueAgents = loadContinueAgents,
             loadContinueModels = loadContinueModels,
             loadContinueReasoning = loadContinueReasoning,
             onContinued = onContinued,
+            // Settings/Usage/Devices stay on the session-list overflow (they have no chat home);
+            // Rename/Mute/Kill belong to THIS session and are here on both hosts now.
             showManagementRows = false,
-            showSessionRows = false,
             buttonTag = "workspace_overflow",
             detailTag = "workspace_overflow_detail",
         )

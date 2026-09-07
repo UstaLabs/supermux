@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -78,7 +79,17 @@ fun WorkspaceScreen(
     // The ONE holder every pane reaches the broker through (cluster G1), and the workspace's chat
     // drafts — hoisted here so a tab switch (and the phone⇄tablet swap) keeps what was typed.
     val shell = rememberShellActions(vm.fleet)
+    // In-memory only (broker-side draft sync is M4). This screen is as high as the compose tree
+    // goes on Android today; G8's root hoists it beside desktop's AppShell-level map so a draft
+    // also survives leaving the workspace. Until then it is pruned the same way desktop's is: a
+    // killed session must not keep its text alive for a future session that reuses the id.
     val drafts = remember { mutableStateMapOf<String, String>() }
+    val liveSessions by vm.fleet.sessions.collectAsState()
+    LaunchedEffect(liveSessions) {
+        if (liveSessions.isEmpty()) return@LaunchedEffect // first snapshot not in — don't wipe
+        val live = liveSessions.mapTo(mutableSetOf()) { it.id }
+        drafts.keys.filterNot { it in live }.forEach(drafts::remove)
+    }
     if (wide) {
         TabletWorkspace(workspace, session, vm, shell, drafts, newId, modifier, onSelectSession)
     } else {
