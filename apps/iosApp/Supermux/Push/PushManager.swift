@@ -68,24 +68,61 @@ final class PushManager: NSObject {
 
     // MARK: - Step 1: authorization + registration
 
+    /// Whether an authorization request is already awaiting the user's answer.
+    ///
+    /// This is called from more than one place on purpose — the app delegate at launch, and (under
+    /// the Compose shell) the shared root when "paired" becomes true — and both can fire before
+    /// the user has touched the prompt. `requestAuthorization` invoked a SECOND time while its
+    /// prompt is still up returns `granted: false` immediately rather than waiting, which is not a
+    /// refusal: it logged "notification authorization denied" on a launch where the user went on
+    /// to tap Allow, and registration then succeeded anyway. Any future reader of that log would
+    /// have been sent looking for a permissions bug that does not exist.
+    private var authorizationInFlight = false
+
     /// Request notification authorization (if paired) and register for remote
-    /// notifications on grant. Called on launch and after pairing.
+    /// notifications on grant. Called on launch and after pairing; safe to call repeatedly.
     func registerIfPaired() {
         guard BrokerConfig.isPaired else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error { NSLog("[supermux push] authorization error: %@", error.localizedDescription) }
-            guard granted else {
-                NSLog("[supermux push] notification authorization denied")
-                return
+        let center = UNUserNotificationCenter.current()
+        // Ask what the user has already decided before asking THEM. iOS shows this prompt exactly
+        // once per install, so every later call is either "already granted — just re-register"
+        // (the cold-start path) or "already refused — say so once and stop".
+        center.getNotificationSettings { [weak self] settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                DispatchQueue.main.async {
+                    guard let self, !self.authorizationInFlight else { return }
+                    self.authorizationInFlight = true
+                    center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                        DispatchQueue.main.async { self.authorizationInFlight = false }
+                        if let error {
+                            NSLog("[supermux push] authorization error: %@", error.localizedDescription)
+                        }
+                        guard granted else {
+                            NSLog("[supermux push] notification authorization refused by the user")
+                            return
+                        }
+                        Self.registerForRemote()
+                    }
+                }
+            case .denied:
+                NSLog("[supermux push] notifications are turned off for this app in Settings")
+            default:
+                // Authorized (or provisional/ephemeral): no prompt to show, but the APNs token can
+                // change between launches, so re-register every time.
+                Self.registerForRemote()
             }
-            // registerForRemoteNotifications must run on the main thread.
-            DispatchQueue.main.async {
-                #if canImport(UIKit)
-                UIApplication.shared.registerForRemoteNotifications()
-                #else
-                NSApplication.shared.registerForRemoteNotifications()
-                #endif
-            }
+        }
+    }
+
+    /// `registerForRemoteNotifications` must run on the main thread.
+    private static func registerForRemote() {
+        DispatchQueue.main.async {
+            #if canImport(UIKit)
+            UIApplication.shared.registerForRemoteNotifications()
+            #else
+            NSApplication.shared.registerForRemoteNotifications()
+            #endif
         }
     }
 
