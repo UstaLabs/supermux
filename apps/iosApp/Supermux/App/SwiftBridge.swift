@@ -169,8 +169,39 @@ final class SwiftBridge: NSObject, IosBridge {
         return IosPickedFile(name: url.lastPathComponent, mime: mime, bytes: IosBytesKt.bytesFrom(data: data))
     }
 
-    func scanQr(onResult: @escaping (String?) -> Void) { onResult(nil) }
+    // MARK: QR
 
+    /// Present the pairing-code scanner. `onResult` fires EXACTLY ONCE — with the decoded string,
+    /// or nil when the user backs out, when no controller is available to present from, or when
+    /// there is no camera at all (every simulator). Never firing would leave the Add host screen
+    /// suspended on a sheet the user has already dismissed.
+    ///
+    /// It presents `QRScannerView.ScannerController` — the existing scanner's own UIKit
+    /// controller — DIRECTLY, rather than the `UIViewControllerRepresentable` wrapped back up in a
+    /// `UIHostingController`. That round trip would add a SwiftUI layer whose only job is to host
+    /// the controller we already have. What the SwiftUI screen supplied and a bare controller does
+    /// not is a way OUT: hence the navigation controller and its Cancel button, without which a
+    /// camera the user changes their mind about is a dead end.
+    func scanQr(onResult: @escaping (String?) -> Void) {
+        guard let presenter = presenter() else { return onResult(nil) }
+        let delegate = ScanDelegate(onResult: onResult)
+        retain(delegate)
+        delegate.onFinish = { [weak self] in self?.release(delegate) }
+        let scanner = QRScannerView.ScannerController(
+            coordinator: QRScannerView.Coordinator { code in delegate.finish(code) }
+        )
+        scanner.title = "Scan pairing code"
+        let nav = UINavigationController(rootViewController: scanner)
+        scanner.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            systemItem: .cancel,
+            primaryAction: UIAction { [weak nav] _ in
+                nav?.dismiss(animated: true)
+                delegate.finish(nil)
+            }
+        )
+        delegate.presented = nav
+        presenter.present(nav, animated: true)
+    }
     // MARK: microphone + dictation
     //
     // Two objects, never both at once: `AudioRecorder` captures a clip the broker transcribes,
@@ -299,6 +330,28 @@ final class SwiftBridge: NSObject, IosBridge {
     /// `PushGroupState` (App Group) is the source of truth for the unread counts the NSE keeps.
     func cancelNotificationsFor(sessionId: String) {
         PushManager.shared.clearDelivered(sessionId: sessionId)
+    }
+}
+
+/// The scanner's one-shot completion, and the dismissal that goes with it.
+///
+/// Same retention discipline as the picker delegates: nothing else owns this object, so the bridge
+/// holds it until the completion fires. A decode dismisses the sheet itself (the user is done and
+/// the camera should stop); a Cancel has already dismissed it before finishing.
+private final class ScanDelegate: NSObject {
+    private let onResult: (String?) -> Void
+    var onFinish: (() -> Void)?
+    weak var presented: UIViewController?
+    private var fired = false
+
+    init(onResult: @escaping (String?) -> Void) { self.onResult = onResult }
+
+    func finish(_ code: String?) {
+        guard !fired else { return }
+        fired = true
+        if code != nil { presented?.dismiss(animated: true) }
+        onResult(code)
+        onFinish?()
     }
 }
 
