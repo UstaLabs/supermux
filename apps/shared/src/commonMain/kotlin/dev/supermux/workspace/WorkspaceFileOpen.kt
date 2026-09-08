@@ -247,7 +247,8 @@ class WorkspaceFileOpener(
                 println("[WorkspaceFileOpener] broker created '$path' as $created, not the $id we drew — withdrawing our tab")
             }
             provisional.remove(id)
-            placing.remove(path, id)
+            // Two-arg remove(key, value) is a JVM default method, absent on Kotlin/Native.
+            if (placing[path] == id) placing.remove(path)
             edit { tree -> removeViewFromLayout(tree, id) ?: tree }
         }
     }

@@ -4,7 +4,6 @@ import platform.Foundation.NSDate
 import platform.Foundation.NSTimeZone
 import platform.Foundation.dateWithTimeIntervalSince1970
 import platform.Foundation.localTimeZone
-import platform.Foundation.secondsFromGMTForDate
 
 /** Apple: the local zone's offset at that instant (DST-aware). */
 actual fun localUtcOffsetMs(epochMs: Long): Long {
