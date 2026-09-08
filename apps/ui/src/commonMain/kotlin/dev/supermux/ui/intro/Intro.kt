@@ -256,6 +256,18 @@ fun OnboardingFlow(
     val scope = rememberCoroutineScope()
     val page = pagerState.currentPage
 
+    // `initialPage` only applies on the FIRST composition, which covers the launch-by-link case
+    // and nothing else. A link that arrives while the intro is already on screen — the app was
+    // open in the background, or the user came back to it and then tapped the link — left the
+    // pager wherever it was, and the connect page is where `initialDeepLink` is actually consumed
+    // (`ConnectPage` owns the `validatePair` effect, and a pager does not compose a page three
+    // slots away). So the link did nothing at all, silently. Observed on the simulator.
+    LaunchedEffect(initialDeepLink) {
+        if (initialDeepLink != null && pagerState.currentPage != connectPage) {
+            pagerState.animateScrollToPage(connectPage)
+        }
+    }
+
     // The seen flag is written ONCE, the first time the reader actually reaches the end of the
     // carousel (or arrives on it via a deep link). Desktop's marker file only ever recorded
     // "the intro played"; this is the same fact for a flow the user can page through.
