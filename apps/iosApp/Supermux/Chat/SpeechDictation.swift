@@ -51,6 +51,15 @@ final class SpeechDictation {
 
     private(set) var phase: Phase = .idle
     private(set) var transcript = ""
+
+    /// Fired on every change to `transcript`, including the clear at the start of a session.
+    ///
+    /// SwiftUI observes `transcript` directly through `@Observable` and needs nothing here; the
+    /// Compose composer is on the other side of a Kotlin bridge that cannot observe a Swift
+    /// property, so it needs to be pushed. Set by `SwiftBridge.startTranscript`, cleared when that
+    /// session ends — one closure, so a stale bridge from a previous dictation cannot keep
+    /// writing into the current one.
+    var onPartial: ((String) -> Void)?
     private(set) var elapsed: TimeInterval = 0
     private(set) var usedLocale: String?   // the on-device locale actually chosen (debug)
     private(set) var lastError: String?    // last failure reason, surfaced for the debug screen
@@ -108,7 +117,7 @@ final class SpeechDictation {
         if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             // Drain the analyzer so any volatile result is finalized, then read it.
             await backend.finish()
-            transcript = backend.transcript
+            publishTranscript(backend.transcript)
         } else {
             // Legacy: tell the recognizer no more buffers are coming and let it emit the
             // final transcription.
@@ -122,6 +131,12 @@ final class SpeechDictation {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         await cleanup()
         return (text, false)
+    }
+
+    /// The single write path for `transcript`, so `onPartial` cannot be forgotten at a new one.
+    private func publishTranscript(_ text: String) {
+        transcript = text
+        onPartial?(text)
     }
 
     func cancel() {
@@ -214,7 +229,7 @@ final class SpeechDictation {
         }
 
         backend.onUpdate = { [weak self] text in
-            Task { @MainActor in self?.transcript = text }
+            Task { @MainActor in self?.publishTranscript(text) }
         }
         analyzerBox = backend
 
@@ -266,7 +281,7 @@ final class SpeechDictation {
             Task { @MainActor in
                 guard let self else { return }
                 if let result {
-                    self.transcript = result.bestTranscription.formattedString
+                    self.publishTranscript(result.bestTranscription.formattedString)
                 }
                 if error != nil || (result?.isFinal ?? false) {
                     self.legacyTask = nil
@@ -299,7 +314,7 @@ final class SpeechDictation {
     private func beginSession() {
         startedAt = Date()
         elapsed = 0
-        transcript = ""
+        publishTranscript("")
         phase = .listening
         startTicker()
     }

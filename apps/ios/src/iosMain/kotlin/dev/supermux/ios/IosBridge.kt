@@ -77,33 +77,57 @@ interface IosBridge {
 
     // ── Microphone + dictation (H3) ─────────────────────────────────────────────────────────
 
-    /** Whether a microphone exists AND the app may use it — gates the mic button being offered. */
+    /**
+     * Whether the app may use the microphone — gates the mic button being offered at all.
+     *
+     * True while the record permission is granted OR still undetermined (asking is the mic
+     * button's own first step); false only once the user has actually refused, which is the one
+     * state where offering the button would be offering something that cannot work.
+     *
+     * Read during COMPOSITION, so it must be cheap and must never present anything.
+     */
     fun micAvailable(): Boolean
 
     /** Ask for the microphone (and speech-recognition) permission. [onResult] gets the verdict. */
     fun requestMicPermission(onResult: (Boolean) -> Unit)
 
-    /** Begin recording. Returns false if the audio session could not be taken. */
+    /**
+     * Begin recording a clip. False if the audio session could not be taken.
+     *
+     * Synchronous, because the shared `MicCapture.start()` is: the recorder has to be running by
+     * the time the composer redraws itself as a RecordingBar, or the first word is lost. Every
+     * step is synchronous on the Swift side too (the audio session, then `AVAudioRecorder.record()`) —
+     * the permission prompt, which is not, has already been answered by [requestMicPermission].
+     */
     fun startRecording(): Boolean
 
-    /**
-     * Stop recording and hand back the clip. [onResult] gets the encoded bytes plus the filename
-     * and MIME type Swift chose for them (m4a today), or nulls if nothing was captured.
-     */
-    fun stopRecording(onResult: (bytes: ByteArray?, filename: String?, mime: String?) -> Unit)
+    /** Stop recording and hand back the clip, or null if nothing usable was captured. */
+    fun stopRecording(): IosCapturedAudio?
 
     /** Abandon the recording and release the audio session; nothing is handed back. */
     fun cancelRecording()
 
     /**
-     * Start live on-device transcription (`SFSpeechRecognizer`). [glossary] is the contextual
-     * vocabulary (session and project names — the words a general model gets wrong); [onPartial]
-     * fires repeatedly with the running text. False if recognition is unavailable, in which case
-     * the composer falls back to recording a clip and letting the broker transcribe it.
+     * Start live on-device transcription (`SpeechAnalyzer` on iOS 26, `SFSpeechRecognizer`
+     * before it). [glossary] is the contextual vocabulary (session and project names — the words a
+     * general model gets wrong); [onPartial] fires repeatedly with the running text.
+     *
+     * False when recognition is unavailable, and the composer then falls back to recording a clip
+     * for the broker to transcribe. The check is necessarily SHALLOW — the honest answer needs a
+     * locale plan and possibly a model download, and this returns on the frame the user tapped —
+     * so it reports what can be known synchronously (permission not refused, a recogniser exists).
+     * A deeper failure surfaces as an empty [stopTranscript], which the shared state machine
+     * already renders as "Didn't catch that".
      */
     fun startTranscript(glossary: List<String>, onPartial: (String) -> Unit): Boolean
 
-    /** Finish transcription; [onResult] gets the final text (possibly empty). */
+    /**
+     * Finish transcription; [onResult] gets the final text (possibly empty).
+     *
+     * A callback and not a return value: iOS 26's `SpeechAnalyzer` holds the tail of the last
+     * sentence as "volatile" and only finalises it when the analyzer is drained, so answering
+     * synchronously could only mean answering with the last partial.
+     */
     fun stopTranscript(onResult: (String) -> Unit)
 
     /** Abandon transcription, discarding whatever was heard. */
@@ -173,6 +197,29 @@ data class IosPickedFile(
 }
 
 /**
+ * One finished voice clip, as Swift's `AudioRecorder` hands it over.
+ *
+ * The shared `CapturedAudio` is the same three fields; this exists only so the boundary type is
+ * `:ios`'s own and Swift is not constructing `:ui` values. Bytes rather than a file URL for the
+ * same reason [IosPickedFile] carries bytes: the recording lives in a temp file the recorder
+ * deletes as it cleans up, so a URL handed to Kotlin would be a URL to nothing.
+ */
+data class IosCapturedAudio(
+    val bytes: ByteArray,
+    val filename: String,
+    val mime: String,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is IosCapturedAudio) return false
+        return bytes.contentEquals(other.bytes) && filename == other.filename && mime == other.mime
+    }
+
+    override fun hashCode(): Int =
+        (bytes.contentHashCode() * 31 + filename.hashCode()) * 31 + mime.hashCode()
+}
+
+/**
  * The bridge that does nothing — what [MainViewController] links until Swift supplies a real one.
  *
  * Every callback fires immediately with the "not available / cancelled" answer rather than never
@@ -196,7 +243,7 @@ object NoopIosBridge : IosBridge {
     override fun micAvailable(): Boolean = false
     override fun requestMicPermission(onResult: (Boolean) -> Unit) = onResult(false)
     override fun startRecording(): Boolean = false
-    override fun stopRecording(onResult: (ByteArray?, String?, String?) -> Unit) = onResult(null, null, null)
+    override fun stopRecording(): IosCapturedAudio? = null
     override fun cancelRecording() = Unit
     override fun startTranscript(glossary: List<String>, onPartial: (String) -> Unit): Boolean = false
     override fun stopTranscript(onResult: (String) -> Unit) = onResult("")

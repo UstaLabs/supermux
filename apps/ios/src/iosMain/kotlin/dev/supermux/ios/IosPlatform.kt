@@ -171,30 +171,38 @@ class IosPlatform(
      */
     override val notices: FlowNotices = FlowNotices()
 
-    // ── H3: native bridges ──────────────────────────────────────────────────────────────────
+    // ── H3: native bridges ─────────────────────────────────────────────────────────────────
     //
-    // These ANSWER rather than throw, and H1's opposite choice here was a bug worth recording.
+    // Each of these is a Swift object that existed for the SwiftUI shell, wrapped rather than
+    // reimplemented: `PushManager` (above), `AudioRecorder` + `SpeechDictation`, `MessageSpeech`,
+    // `QRScannerView`. Nothing about push, speech or the camera got better by being rewritten in
+    // Kotlin, and each of them shares state with something outside this process — the push keypair
+    // with the notification service extension, the audio session with the OS.
     //
+    // They still ANSWER rather than throw, and H1's opposite choice here was a bug worth recording.
     // The rule that matters is not "is it wired yet" but WHO READS IT. `mic` and `tts` are read
     // while the chat screen COMPOSES — the composer asks `mic.available` to decide whether to
     // offer a mic button, the timeline reads `tts` per message row — so a throwing getter killed
     // the composition the moment a session was opened. With `installIosCrashGuard` keeping the
     // process alive, the only visible symptom was that tapping a session did nothing whatsoever:
     // no crash, no message, just a list that would not open. A seam composition reads must always
-    // answer; only a seam reached by an explicit user action may fail loudly.
-    //
-    // `available = false` and a no-op engine are the DESIGNED way to say "not here" — the composer
-    // omits the button, exactly as on a desktop with no microphone — so nothing is pretending to
-    // work. H3 swaps in the Swift-backed implementations over the bridge members that already
-    // exist for them.
+    // answer; only a seam reached by an explicit user action may fail loudly. That is why
+    // `micAvailable()` is a permission read and not a device probe.
 
-    /** Routed to the bridge, which answers null until H3 presents the AVFoundation scanner. Null
-     *  is "cancelled", which every caller already handles. */
+    /** Swift presents the AVFoundation scanner (`QRScannerView`'s own controller) and reports the
+     *  decoded text, or null if the user backed out or the camera is unavailable — which is every
+     *  simulator. Null is "cancelled", which every caller already handles. */
     override suspend fun scanQr(): String? = awaitCallback { done -> bridge.scanQr(done) }
 
-    override val mic: MicCapture = UnavailableMicCapture
+    /**
+     * Swift's `AudioRecorder` + `SpeechDictation`. The live transcript is offered unconditionally
+     * — unlike Android, which gates it on a dev flag — because on-device recognition is a first
+     * class iOS capability the SwiftUI composer already used, and the shared controller falls back
+     * to record-then-POST by itself the moment `start()` answers false.
+     */
+    override val mic: MicCapture = IosMicCapture(bridge, IosLiveTranscript(bridge))
 
-    override val tts: TtsEngine = NoopTtsEngine
+    override val tts: TtsEngine = IosTtsEngine(bridge)
 
 }
 

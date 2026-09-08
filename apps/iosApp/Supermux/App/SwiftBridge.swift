@@ -1,5 +1,7 @@
 #if COMPOSE_SHELL
+import AVFoundation
 import Foundation
+import Speech
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -27,6 +29,13 @@ final class SwiftBridge: NSObject, IosBridge {
     weak var root: UIViewController?
 
     private var pendingDelegates: [NSObject] = []
+
+    /// The two dictation backends, one each, for the life of the bridge. Not per-capture: an
+    /// `AVAudioEngine` and an `SFSpeechRecognizer` are expensive to stand up, and `SpeechDictation`
+    /// counts on being able to tear its analyzer down between sessions to stay under the system's
+    /// "maximum number of recognizers" limit — which it can only do if it is the same object.
+    @MainActor private lazy var recorder = AudioRecorder()
+    @MainActor private lazy var dictation = SpeechDictation()
 
     private func retain(_ delegate: NSObject) { pendingDelegates.append(delegate) }
     private func release(_ delegate: NSObject) { pendingDelegates.removeAll { $0 === delegate } }
@@ -167,14 +176,92 @@ final class SwiftBridge: NSObject, IosBridge {
     // awaiting it suspended forever, which reads as a frozen screen rather than a missing feature.
 
     func scanQr(onResult: @escaping (String?) -> Void) { onResult(nil) }
-    func micAvailable() -> Bool { false }
-    func requestMicPermission(onResult: @escaping (KotlinBoolean) -> Void) { onResult(KotlinBoolean(bool: false)) }
-    func startRecording() -> Bool { false }
-    func stopRecording(onResult: @escaping (KotlinByteArray?, String?, String?) -> Void) { onResult(nil, nil, nil) }
-    func cancelRecording() {}
-    func startTranscript(glossary: [String], onPartial: @escaping (String) -> Void) -> Bool { false }
-    func stopTranscript(onResult: @escaping (String) -> Void) { onResult("") }
-    func cancelTranscript() {}
+    // MARK: microphone + dictation
+    //
+    // Two objects, never both at once: `AudioRecorder` captures a clip the broker transcribes,
+    // `SpeechDictation` recognises on the device. The shared `DictationController` picks one per
+    // capture (live when `startTranscript` succeeds, the recorder otherwise), which is what keeps
+    // them from fighting over the audio session.
+    //
+    // Both are `@MainActor`. Every call below arrives on the main thread already — Kotlin's
+    // `awaitCallback`/`onMainThread` hop first — so `MainActor.assumeIsolated` is a statement of
+    // that fact rather than a hop of its own; a real hop would make these synchronous members
+    // impossible.
+
+    /// Whether the app may record. Granted or not-yet-asked → yes (asking is the mic button's own
+    /// first step); a refusal is the one state where offering the button is offering nothing.
+    /// Read while the composer COMPOSES, so it only reads a cached permission flag.
+    func micAvailable() -> Bool {
+        AVAudioApplication.shared.recordPermission != .denied
+    }
+
+    func requestMicPermission(onResult: @escaping (KotlinBoolean) -> Void) {
+        // Speech recognition and the microphone are separate grants, and the live path needs both.
+        // The mic is asked for first because a refusal there makes the speech prompt pointless,
+        // and a granted mic still leaves the record-then-POST path fully working — so a speech
+        // refusal is NOT a failure here.
+        AVAudioApplication.requestRecordPermission { granted in
+            guard granted else { return onResult(KotlinBoolean(bool: false)) }
+            SFSpeechRecognizer.requestAuthorization { _ in
+                onResult(KotlinBoolean(bool: true))
+            }
+        }
+    }
+
+    func startRecording() -> Bool {
+        MainActor.assumeIsolated { recorder.startGranted() }
+    }
+
+    func stopRecording() -> IosCapturedAudio? {
+        MainActor.assumeIsolated {
+            guard let clip = recorder.stop() else { return nil }
+            return IosCapturedAudio(
+                bytes: IosBytesKt.bytesFrom(data: clip.data),
+                filename: clip.filename,
+                mime: "audio/mp4"
+            )
+        }
+    }
+
+    func cancelRecording() {
+        MainActor.assumeIsolated { recorder.cancel() }
+    }
+
+    /// Optimistic by necessity — the Kotlin side documents why. What CAN be decided on the frame
+    /// the user tapped is decided here: a speech authorization the user has refused means the live
+    /// path cannot run at all, and answering false sends the shared controller down the
+    /// record-then-POST path instead of into a dictation that would produce nothing.
+    func startTranscript(glossary: [String], onPartial: @escaping (String) -> Void) -> Bool {
+        guard SFSpeechRecognizer.authorizationStatus() != .denied,
+              SFSpeechRecognizer.authorizationStatus() != .restricted else { return false }
+        return MainActor.assumeIsolated {
+            dictation.onPartial = onPartial
+            Task { @MainActor in
+                let result = await dictation.start(contextualStrings: glossary)
+                if result != .started {
+                    NSLog("[supermux dictation] on-device start failed: %@", "\(result)")
+                }
+            }
+            return true
+        }
+    }
+
+    func stopTranscript(onResult: @escaping (String) -> Void) {
+        MainActor.assumeIsolated {
+            Task { @MainActor in
+                let (text, _) = await dictation.stop()
+                dictation.onPartial = nil
+                onResult(text)
+            }
+        }
+    }
+
+    func cancelTranscript() {
+        MainActor.assumeIsolated {
+            dictation.onPartial = nil
+            dictation.cancel()
+        }
+    }
     func speak(text: String, onDone: @escaping () -> Void) { onDone() }
     func playAudioChunk(bytes: KotlinByteArray, onDone: @escaping () -> Void) { onDone() }
     func stopSpeaking() {}

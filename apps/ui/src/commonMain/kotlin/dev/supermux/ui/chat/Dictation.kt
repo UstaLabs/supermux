@@ -148,17 +148,24 @@ class DictationController(
         if (t.isNotEmpty()) onAppend(t)
     }
 
+    /** The cleanup POST and what to do with its answer. Split out of [runTranscription] so the
+     *  on-device path can await [LiveTranscript.stop] and then this in ONE coroutine — two would
+     *  mean two jobs, and [cancelMic] can only cancel the one it is holding. */
+    private suspend fun transcribeAndAppend(rawFallback: String?, call: suspend () -> String?) {
+        val cleaned = call()?.trim()
+        when {
+            !cleaned.isNullOrEmpty() -> appendToDraft(cleaned)
+            // On-device already produced usable text — keep it rather than losing the turn.
+            !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)
+            else -> fail("Transcription failed")
+        }
+    }
+
     private fun runTranscription(rawFallback: String?, call: suspend () -> String?) {
         transcribeJob = scope.launch {
             transcribing = true
             try {
-                val cleaned = call()?.trim()
-                when {
-                    !cleaned.isNullOrEmpty() -> appendToDraft(cleaned)
-                    // On-device already produced usable text — keep it rather than losing the turn.
-                    !rawFallback.isNullOrBlank() -> appendToDraft(rawFallback)
-                    else -> fail("Transcription failed")
-                }
+                transcribeAndAppend(rawFallback, call)
             } finally {
                 transcribing = false
             }
@@ -190,13 +197,25 @@ class DictationController(
             listening = false
             partialJob?.cancel()
             partialJob = null
-            val draft = mic.liveTranscript?.stop().orEmpty()
+            val live = mic.liveTranscript
             liveTranscript = null
-            if (draft.isBlank()) {
-                fail("Didn't catch that")
-                return
+            // The UI has already left the listening state, so the wait below is covered by the
+            // "Transcribing…" strip rather than a RecordingBar that will not go away.
+            // `LiveTranscript.stop()` suspends because iOS must drain its on-device analyzer to
+            // finalise the last words; Android's returns without suspending.
+            transcribeJob = scope.launch {
+                transcribing = true
+                try {
+                    val draft = live?.stop().orEmpty()
+                    if (draft.isBlank()) {
+                        fail("Didn't catch that")
+                        return@launch
+                    }
+                    transcribeAndAppend(rawFallback = draft) { transcribeDraft(draft) }
+                } finally {
+                    transcribing = false
+                }
             }
-            runTranscription(rawFallback = draft) { transcribeDraft(draft) }
         } else if (recording) {
             recording = false
             val audio: CapturedAudio? = mic.stop()

@@ -18,12 +18,25 @@ final class AudioRecorder {
 
     func start() async -> StartResult {
         guard await requestPermission() else { return .denied }
+        return startGranted() ? .started : .failed
+    }
+
+    /// Begin recording with the permission ALREADY granted — everything `start()` does after its
+    /// one asynchronous step.
+    ///
+    /// It exists because the Compose composer's `MicCapture.start()` is synchronous on every host:
+    /// the recorder has to be running by the time the composer redraws itself as a RecordingBar,
+    /// or the first word is lost. Nothing here needs to await — the audio session and
+    /// `AVAudioRecorder.record()` are both synchronous — and the caller that has NOT yet asked for
+    /// permission (`IosBridge.requestMicPermission`) asks first.
+    @discardableResult
+    func startGranted() -> Bool {
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
-        } catch { return .failed }
+        } catch { return false }
         #endif
         // macOS: no audio session — AVAudioEngine drives the mic directly.
 
@@ -36,14 +49,14 @@ final class AudioRecorder {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
         ]
         guard let rec = try? AVAudioRecorder(url: file, settings: settings), rec.record() else {
-            return .failed
+            return false
         }
         recorder = rec
         url = file
         elapsed = 0
         isRecording = true
         startTicker()
-        return .started
+        return true
     }
 
     /// Stop and return the recorded bytes + a friendly filename, or nil if the clip

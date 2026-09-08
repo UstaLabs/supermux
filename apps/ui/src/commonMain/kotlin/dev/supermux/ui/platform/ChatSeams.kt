@@ -162,8 +162,17 @@ interface LiveTranscript {
     /** Start recognising, biased by [glossary] (project/agent names). False when unavailable. */
     fun start(glossary: List<String>): Boolean
 
-    /** Stop and return the full accumulated transcript (may be blank). */
-    fun stop(): String
+    /**
+     * Stop and return the full accumulated transcript (may be blank).
+     *
+     * Suspending because finishing is real work on at least one host: iOS's `SpeechAnalyzer` has
+     * to be DRAINED before the words still held as "volatile" become final, so a synchronous
+     * `stop()` there could only return the last partial and drop the tail of the last sentence.
+     * Android's `SpeechRecognizer` answers immediately and simply does not suspend. The caller
+     * ([dev.supermux.ui.chat.DictationController.stopMic]) has already left the listening state by
+     * the time it awaits this, so the wait is covered by the "Transcribing…" strip.
+     */
+    suspend fun stop(): String
 
     /** Abandon the session and discard the transcript. */
     fun cancel()

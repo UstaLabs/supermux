@@ -258,7 +258,7 @@ internal class AndroidLiveTranscript(private val engine: DictationEngine) : Live
     override fun start(glossary: List<String>): Boolean =
         runCatching { engine.start(glossary) }.getOrNull() == DictationStart.STARTED
 
-    override fun stop(): String {
+    override suspend fun stop(): String {
         val text = runCatching { engine.stop() }.getOrDefault("")
         _partial.value = ""
         return text

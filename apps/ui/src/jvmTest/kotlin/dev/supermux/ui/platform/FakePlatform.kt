@@ -318,7 +318,7 @@ internal class FakeLiveTranscript(private var text: String = "hello") : LiveTran
         return true
     }
 
-    override fun stop(): String {
+    override suspend fun stop(): String {
         events.add("stop")
         return text
     }

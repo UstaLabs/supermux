@@ -267,8 +267,12 @@ class MainActivity : ComponentActivity() {
                     val owned = hostId?.let { vm.fleet.workspaceForSession(it, sid) }
                     val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
                     ui.selectSession(sid)
-                    if (tap.workspaceId != null && tap.activeViewId != null) {
-                        vm.fleet.setActiveView(tap.workspaceId, tap.activeViewId)
+                    // Locals, not a smart cast: `PushTapResolution` moved into `:ui`, and Kotlin
+                    // will not smart-cast a public property declared in another module.
+                    val tappedWorkspace = tap.workspaceId
+                    val tappedView = tap.activeViewId
+                    if (tappedWorkspace != null && tappedView != null) {
+                        vm.fleet.setActiveView(tappedWorkspace, tappedView)
                     }
                     if (decision == PushTapHandle.ApplyConsume) {
                         handledPushSessionId = sid

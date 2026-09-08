@@ -1,6 +1,7 @@
-// iOS's implementations of the shared chat/shell seams on `Platform` (cluster H2): the pasteboard,
-// files, haptics. Everything UIKit-shaped lives on this side of the seam so no shared screen ever
-// names it — the same split `DesktopChatSeams.kt` and `AndroidChatSeams.kt` already make.
+// iOS's implementations of the shared chat/shell seams on `Platform`: the pasteboard, files and
+// haptics (H2); the microphone, on-device dictation and read-aloud (H3). Everything UIKit-shaped
+// lives on this side of the seam so no shared screen ever names it — the same split
+// `DesktopChatSeams.kt` and `AndroidChatSeams.kt` already make.
 package dev.supermux.ios
 
 import dev.supermux.chat.mimeForFileName
@@ -19,6 +20,9 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import dev.supermux.util.toByteArray
 import dev.supermux.util.toNSData
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
@@ -180,43 +184,103 @@ class IosFileAccess(private val bridge: IosBridge) : FileAccess {
 internal fun safeFileName(name: String): String =
     name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
 
-// ── mic + read-aloud (real bridges in H3) ────────────────────────────────────
+// ── mic + read-aloud (cluster H3) ────────────────────────────────────────────
 
 /**
- * The microphone, reported as ABSENT until cluster H3 bridges `AVAudioRecorder` and
- * `SFSpeechRecognizer`.
+ * The microphone, over Swift's `AudioRecorder` (clip) and `SpeechDictation` (live recognition).
  *
- * This is an object that answers rather than a getter that throws, and the difference is not
- * stylistic — it was a bug. `Platform.mic` is read while the CHAT SCREEN COMPOSES (the composer
- * asks `available` to decide whether to offer a mic button at all), not when the user taps
- * something. A throwing getter therefore killed the composition the instant a session was opened,
- * and because `installIosCrashGuard` keeps the process alive, the only symptom was that tapping a
- * session in the list appeared to do nothing at all.
+ * The split matches the shared state machine's: `DictationController` runs the live path when
+ * [liveTranscript] is non-null and the record-then-POST path otherwise, never both, so the two
+ * Swift objects never contend for the audio session.
  *
- * That is the general rule this encodes: a seam COMPOSITION reads must always answer, and only a
- * seam reached by an explicit user action may fail loudly. `available = false` is the designed way
- * to say "no microphone here" — the composer simply omits the button, exactly as it does on a
- * desktop with no input device.
+ * [available] answers from the PERMISSION rather than from hardware. Every iPhone and iPad has a
+ * microphone, and the Simulator forwards the Mac's, so "is there a mic" is not the question a
+ * host can usefully answer here; "may we use it" is, and a refusal is the one state where offering
+ * the button would be offering something that cannot work. It is read while the composer composes
+ * — see the file header rule — so it must be cheap and total, which a permission-status read is.
  */
-object UnavailableMicCapture : MicCapture {
-    override val available: Boolean = false
-    override val liveTranscript: LiveTranscript? = null
-    override fun start(): Boolean = false
-    override fun stop(): CapturedAudio? = null
-    override fun cancel() = Unit
-    override suspend fun requestPermission(): Boolean = false
+internal class IosMicCapture(
+    private val bridge: IosBridge,
+    override val liveTranscript: LiveTranscript?,
+) : MicCapture {
+
+    override val available: Boolean get() = bridge.micAvailable()
+
+    override fun start(): Boolean = bridge.startRecording()
+
+    override fun stop(): CapturedAudio? =
+        bridge.stopRecording()?.let { CapturedAudio(it.bytes, it.filename, it.mime) }
+
+    override fun cancel() = bridge.cancelRecording()
+
+    /**
+     * The system prompt, awaited. iOS shows it once per install and remembers the answer, so a
+     * second dictation after a grant resolves without any UI — which is why the shared controller
+     * may call this on every mic tap.
+     */
+    override suspend fun requestPermission(): Boolean =
+        awaitCallback { done -> bridge.requestMicPermission(done) }
 }
 
 /**
- * Read-aloud, as a no-op until H3 bridges `AVSpeechSynthesizer`.
+ * On-device live recognition over Swift's `SpeechDictation`, exposed as the growing [partial] the
+ * shared RecordingBar renders.
  *
- * Same reasoning as [UnavailableMicCapture]: the chat timeline reads `Platform.tts` as it composes
- * a message row, so this must answer. Every member completes immediately rather than hanging —
- * `speak` that never returned would leave a message stuck in its "speaking" state forever.
+ * Audio never leaves the device on this path: `SpeechDictation` deliberately refuses Apple's cloud
+ * recogniser, and only the finished TEXT is POSTed to the broker for a cleanup pass. The glossary
+ * (project and agent names) is passed through as contextual strings so the recogniser spells them
+ * right at the source rather than being corrected afterwards.
+ *
+ * [start] is optimistic by necessity — see [IosBridge.startTranscript]. When the deeper setup
+ * fails, [stop] answers blank and the shared machine says "Didn't catch that"; the alternative
+ * would be blocking the tap for as long as a model download takes to find out.
  */
-object NoopTtsEngine : TtsEngine {
-    override suspend fun speak(text: String) = Unit
-    override suspend fun playAudioChunk(bytes: ByteArray) = Unit
-    override fun stop() = Unit
-    override fun shutdown() = Unit
+internal class IosLiveTranscript(private val bridge: IosBridge) : LiveTranscript {
+    private val _partial = MutableStateFlow("")
+    override val partial: StateFlow<String> = _partial.asStateFlow()
+
+    override fun start(glossary: List<String>): Boolean {
+        _partial.value = ""
+        return bridge.startTranscript(glossary) { text -> _partial.value = text }
+    }
+
+    override suspend fun stop(): String {
+        val text = awaitCallback<String> { done -> bridge.stopTranscript(done) }
+        _partial.value = ""
+        return text
+    }
+
+    override fun cancel() {
+        bridge.cancelTranscript()
+        _partial.value = ""
+    }
+}
+
+/**
+ * Read-aloud over Swift's `MessageSpeech` — `AVSpeechSynthesizer` for the platform voice, an
+ * `AVAudioPlayer` for the mp3 chunks the broker streams for the codex one.
+ *
+ * All four members are thin: `MessageTts` in `:ui` decides WHAT to speak, which message owns the
+ * speaking state, and how the codex chunks are queued. This only makes noise, which is exactly the
+ * split `AndroidTtsEngine` makes against the same shared state machine.
+ *
+ * [speak] and [playAudioChunk] complete when the utterance or chunk finishes OR when [stop]
+ * silences it — never later. A `speak` that outlived its stop would leave the message stuck in its
+ * speaking state with no way back.
+ */
+internal class IosTtsEngine(private val bridge: IosBridge) : TtsEngine {
+
+    override suspend fun speak(text: String) {
+        if (text.isBlank()) return
+        awaitCallback<Unit> { done -> bridge.speak(text) { done(Unit) } }
+    }
+
+    override suspend fun playAudioChunk(bytes: ByteArray) {
+        if (bytes.isEmpty()) return
+        awaitCallback<Unit> { done -> bridge.playAudioChunk(bytes) { done(Unit) } }
+    }
+
+    override fun stop() = onMainThread { bridge.stopSpeaking() }
+
+    override fun shutdown() = onMainThread { bridge.shutdownSpeech() }
 }
