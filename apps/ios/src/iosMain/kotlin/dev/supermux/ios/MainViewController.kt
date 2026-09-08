@@ -24,6 +24,7 @@ import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
+import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.intro.OnboardingFlow
 import dev.supermux.ui.prefs.ShellStateSeed
@@ -341,9 +342,14 @@ private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
                 url, token, scope, deps,
                 onConnectionChange = onConn,
                 walkthroughSeam = IosWalkthroughSeam,
-                // No `bindTts`: `IosPlatform.tts` is not wired until cluster H3, so there is no
-                // engine for a remote audio stream to reach. Binding a half-engine here would make
-                // read-aloud look available and then do nothing.
+                // Read-aloud's BROKER half: which engine this host is configured for, and the
+                // `/speak` stream for the non-platform (codex) voice. `MessageTts` holds them as
+                // process-wide function references, so this must be bound per host — the active
+                // host's config is the one that decides. Identical to `AppViewModel`'s.
+                bindTts = { resolve, speak ->
+                    MessageTts.resolveEngine = resolve
+                    MessageTts.speakRemoteStream = speak
+                },
             )
         },
     )

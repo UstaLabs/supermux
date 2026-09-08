@@ -169,13 +169,8 @@ final class SwiftBridge: NSObject, IosBridge {
         return IosPickedFile(name: url.lastPathComponent, mime: mime, bytes: IosBytesKt.bytesFrom(data: data))
     }
 
-    // MARK: H3 — not wired yet
-    //
-    // Each answers the "unavailable / cancelled" value IMMEDIATELY. That is the contract the Kotlin
-    // side documents for `NoopIosBridge`: a member that simply did nothing would leave whatever is
-    // awaiting it suspended forever, which reads as a frozen screen rather than a missing feature.
-
     func scanQr(onResult: @escaping (String?) -> Void) { onResult(nil) }
+
     // MARK: microphone + dictation
     //
     // Two objects, never both at once: `AudioRecorder` captures a clip the broker transcribes,
@@ -262,10 +257,31 @@ final class SwiftBridge: NSObject, IosBridge {
             dictation.cancel()
         }
     }
-    func speak(text: String, onDone: @escaping () -> Void) { onDone() }
-    func playAudioChunk(bytes: KotlinByteArray, onDone: @escaping () -> Void) { onDone() }
-    func stopSpeaking() {}
-    func shutdownSpeech() {}
+    // MARK: read-aloud
+    //
+    // The low half of `MessageSpeech` only. `MessageTts` in `:ui` decides WHAT to speak, which
+    // message owns the speaking state and how the codex chunks are queued — the same split
+    // `AndroidTtsEngine` makes. `MessageSpeech.shared` and not a new object, so the process has
+    // exactly one `AVSpeechSynthesizer`: two would talk over each other and neither `stop()`
+    // could silence the other.
+
+    func speak(text: String, onDone: @escaping () -> Void) {
+        MainActor.assumeIsolated { MessageSpeech.shared.speakText(text, onDone: onDone) }
+    }
+
+    func playAudioChunk(bytes: KotlinByteArray, onDone: @escaping () -> Void) {
+        MainActor.assumeIsolated {
+            MessageSpeech.shared.playChunk(IosBytesKt.dataFrom(bytes: bytes), onDone: onDone)
+        }
+    }
+
+    func stopSpeaking() {
+        MainActor.assumeIsolated { MessageSpeech.shared.stop() }
+    }
+
+    func shutdownSpeech() {
+        MainActor.assumeIsolated { MessageSpeech.shared.shutdownEngine() }
+    }
     // MARK: push
 
     /// The whole `PushManager` sequence, unchanged from the SwiftUI shell: authorisation →

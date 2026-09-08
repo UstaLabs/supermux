@@ -25,6 +25,72 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
 
     func isSpeaking(_ key: String) -> Bool { speakingKey == key }
 
+    // MARK: - Compose shell (cluster H3)
+    //
+    // The three members below are the LOW half of this class, exposed for the Compose composer.
+    // Everything above — deciding which engine to use, keeping `speakingKey`, queueing the codex
+    // chunks — is duplicated on the Kotlin side by `MessageTts` in `:ui`, which owns that state
+    // for all three hosts. So the bridge takes only the noise-making: speak this, play this chunk,
+    // be quiet.
+    //
+    // They live on `MessageSpeech.shared` rather than in a new class so there is exactly ONE
+    // `AVSpeechSynthesizer` and one audio player in the process. Two would talk over each other,
+    // and `stop()` on one could not silence the other.
+
+    /// The completion waiting on whatever is making noise right now — an utterance or an audio
+    /// chunk. Fired on finish, on cancel, and by `stop()`, exactly once.
+    ///
+    /// ONE slot for both, because `stop()` has to release either of them and only one can be
+    /// playing at a time. This matters most for the chunk path: `AVAudioPlayer.stop()` does NOT
+    /// call `audioPlayerDidFinishPlaying`, so a silenced chunk would otherwise leave the Kotlin
+    /// side awaiting a callback that is never coming — read-aloud stuck mid-message with no way
+    /// to start it again.
+    private var pendingDone: (() -> Void)?
+
+    /// Speak with the OS synthesiser. `onDone` fires when the utterance completes OR is stopped.
+    func speakText(_ text: String, onDone: @escaping () -> Void) {
+        guard !text.isEmpty else { return onDone() }
+        gen &+= 1
+        finishUtterance()
+        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        audioPlayer?.stop()
+        audioPlayer = nil
+        pendingDone = onDone
+        let u = AVSpeechUtterance(string: text)
+        u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
+            ?? AVSpeechSynthesisVoice(language: "en-US")
+        u.rate = AVSpeechUtteranceDefaultSpeechRate
+        synth.speak(u)
+    }
+
+    /// Play one mp3 chunk from the broker's `/speak` stream, calling back when it has played out
+    /// so Kotlin can queue the next one gaplessly. A chunk that will not decode calls back at
+    /// once rather than stalling the queue.
+    func playChunk(_ data: Data, onDone: @escaping () -> Void) {
+        finishUtterance()
+        guard let player = try? AVAudioPlayer(data: data) else { return onDone() }
+        audioPlayer = player
+        pendingDone = onDone
+        let box = FinishBox { [weak self] in
+            Task { @MainActor in self?.finishUtterance() }
+        }
+        finishBox = box
+        player.delegate = box
+        if !player.play() { finishUtterance() }
+    }
+
+    /// Release the synthesiser and the audio session — the app is going away.
+    func shutdownEngine() {
+        stop()
+    }
+
+    /// Fire the pending completion, at most once.
+    private func finishUtterance() {
+        let done = pendingDone
+        pendingDone = nil
+        done?()
+    }
+
     func toggle(rawText: String, broker: BrokerSession?) {
         let plain = Self.plainTextForSpeech(rawText)
         guard !plain.isEmpty else { return }
@@ -48,6 +114,9 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         audioPlayer?.stop()
         audioPlayer = nil
         speakingKey = nil
+        // A Compose-side `speak` awaiting this utterance must be released, or the message it
+        // belongs to keeps its speaking state after the user has silenced it.
+        finishUtterance()
     }
 
     private static func resolveEngine(broker: BrokerSession?) async -> String {
@@ -163,6 +232,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
 
     private func clearIfCurrent() {
         if speakingKey != nil { speakingKey = nil }
+        finishUtterance()
     }
 
     static func plainTextForSpeech(_ md: String) -> String {
