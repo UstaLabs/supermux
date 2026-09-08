@@ -3,6 +3,8 @@ package dev.supermux.ui.adaptive
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.runtime.remember
 
 /**
@@ -54,4 +56,27 @@ val LocalWindowWidthClass = compositionLocalOf { WindowWidthClass.Expanded }
 fun ProvideWindowWidthClass(widthDp: Int, content: @Composable () -> Unit) {
     val widthClass = remember(widthDp) { widthClassFor(widthDp) }
     CompositionLocalProvider(LocalWindowWidthClass provides widthClass, content = content)
+}
+
+/**
+ * The current window's width class, measured from the window itself.
+ *
+ * Every host that hosts the shared root needs exactly this measurement and used to derive it
+ * separately: `containerSize` ÷ density, with a fallback for the frame before the window has been
+ * laid out. [androidx.compose.ui.platform.LocalWindowInfo]'s `containerSize` is `0` during the
+ * FIRST composition (composition precedes measure), and [widthClassForPx] maps 0 to
+ * [WindowWidthClass.Expanded] — the desktop-safe answer, and the wrong one for a phone, which
+ * would paint one frame at the desktop type scale before settling.
+ *
+ * @param fallbackDp a width in dp to classify while the window reports nothing yet. Android passes
+ *   `LocalConfiguration.screenWidthDp`; a host with no such value (iOS, where the view controller's
+ *   bounds are known by the time Compose measures) passes null and takes the Expanded default for
+ *   that one frame.
+ */
+@Composable
+fun rememberWindowWidthClass(fallbackDp: Int? = null): WindowWidthClass {
+    val widthPx = LocalWindowInfo.current.containerSize.width
+    val density = LocalDensity.current.density
+    return if (widthPx > 0 || fallbackDp == null) widthClassForPx(widthPx, density)
+    else widthClassFor(fallbackDp)
 }

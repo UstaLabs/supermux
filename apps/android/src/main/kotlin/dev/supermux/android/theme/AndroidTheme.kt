@@ -3,48 +3,26 @@ package dev.supermux.android.theme
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.core.view.WindowCompat
 import dev.supermux.android.platform.rememberAndroidPlatform
 import dev.supermux.android.platform.rememberInputMode
 import dev.supermux.android.platform.rememberPointerAvailable
-import dev.supermux.ui.adaptive.LocalInputMode
-import dev.supermux.ui.adaptive.LocalPointerAvailable
-import dev.supermux.ui.adaptive.LocalWindowWidthClass
-import dev.supermux.ui.adaptive.widthClassFor
-import dev.supermux.ui.adaptive.widthClassForPx
+import dev.supermux.ui.adaptive.rememberWindowWidthClass
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.prefs.InMemorySettingsStore
-import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.prefs.UiPrefs
-import dev.supermux.ui.theme.LocalHaptics
-import dev.supermux.ui.theme.SupermuxTheme
+import dev.supermux.ui.theme.HostTheme
 
 /**
- * Android's thin wrapper over the shared [SupermuxTheme]: edge-to-edge system-bar icon contrast
+ * Android's thin wrapper over the shared theme: edge-to-edge system-bar icon contrast
  * plus the platform services ([dev.supermux.android.platform.AndroidPlatform], including haptics).
  *
- * It also provides the adaptive locals ABOVE the shared theme, so every Android entry point —
- * `MainActivity` and the debug preview activities — gets them from one place and the theme can
- * pick its type scale from the width class:
- *  - `LocalWindowWidthClass` from the window's own bounds (`containerSize` ÷ density) — the same
- *    measurement desktop uses, and the same WindowMetrics-based one the old Material3 window
- *    size class helper used; NOT `Configuration.screenWidthDp`, which excludes the system bars
- *    before API 35.
- *  - `LocalInputMode` = `Touch` unless a hardware keyboard or mouse/touchpad is attached.
- *  - `LocalUiPrefs` — the persisted editor / chat-detail preferences (`ui/prefs/UiPrefs.kt`).
- *    `MainActivity` passes the real one (`vm.uiPrefs`, on the app's DataStore); the debug preview
- *    activities pass nothing and get a process-local store that behaves the same but persists
- *    nothing.
- *
- * No typography is passed: the shared theme derives it from the width class alone.
+ * Everything below the bar-contrast effect is `:ui`'s [HostTheme] — the provider stack (platform,
+ * haptics, width class, input mode, UI preferences) plus the shared theme, shared with the iOS host
+ * rather than copied per app. Android supplies the two answers only it can give: `Touch` unless a
+ * hardware keyboard or mouse is attached, and `screenWidthDp` as the width for the first frame.
  *
  * Dynamic color (Material You) is OFF and has no code path any more — the brand OKLCH palette is
  * the only palette on every platform (2026-07-04 decision, `ThemeDefaults.DYNAMIC_COLOR_ENABLED`
@@ -73,32 +51,20 @@ fun AndroidTheme(
         }
     }
     // The whole platform seam (pickers + clipboard + links + haptics) is installed here, so
-    // MainActivity and the debug preview activities all get it from one place; `LocalHaptics`
-    // is just a shortcut onto `platform.haptics` for `rememberHaptics()` call sites.
+    // MainActivity and the debug preview activities all get it from one place.
     val platform = rememberAndroidPlatform()
-    val prefs = uiPrefs ?: remember { UiPrefs(InMemorySettingsStore()) }
-    val widthPx = LocalWindowInfo.current.containerSize.width
-    val density = LocalDensity.current.density
-    // `containerSize` is 0 during the very first composition (composition precedes measure), and
-    // the shared helper maps 0 → Expanded — right for desktop, wrong for a phone (one frame of the
-    // desktop type scale). Fall back to the configuration width until the window has measured.
-    val widthClass =
-        if (widthPx > 0) widthClassForPx(widthPx, density)
-        else widthClassFor(LocalConfiguration.current.screenWidthDp)
-    CompositionLocalProvider(
-        LocalPlatform provides platform,
-        LocalHaptics provides platform.haptics,
-        LocalWindowWidthClass provides widthClass,
-        LocalInputMode provides rememberInputMode(),
-        // Hit-target sizing asks for a real mouse/touchpad, never the keyboard — a phone with a
-        // Bluetooth keyboard is still a thumb device. See ui/adaptive/InputMode.kt.
-        LocalPointerAvailable provides rememberPointerAvailable(),
-        LocalUiPrefs provides prefs,
-    ) {
-        SupermuxTheme(
-            appearance = appearance,
-            textScale = textScale,
-            content = content,
-        )
-    }
+    HostTheme(
+        platform = platform,
+        appearance = appearance,
+        textScale = textScale,
+        uiPrefs = uiPrefs,
+        inputMode = rememberInputMode(),
+        pointerAvailable = rememberPointerAvailable(),
+        // `containerSize` is 0 during the very first composition, and the shared helper maps 0 →
+        // Expanded — right for desktop, wrong for a phone. `screenWidthDp` covers that one frame.
+        // NOT the other way round: `screenWidthDp` excludes the system bars before API 35, so the
+        // window's own bounds are the measurement that agrees with desktop and iOS.
+        widthClass = rememberWindowWidthClass(LocalConfiguration.current.screenWidthDp),
+        content = content,
+    )
 }
