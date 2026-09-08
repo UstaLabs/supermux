@@ -16,6 +16,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.width
@@ -71,6 +72,34 @@ class SupermuxAppNavTest {
     }
 
     // ── Compact: push / pop, and a REAL predictive back gesture ────────────────────────────────
+
+    /**
+     * A selected session that resolves to NOTHING must still draw a way out.
+     *
+     * The route in is real: `pushTapHandleDecision` deliberately applies a tapped notification
+     * before the session list has arrived, so the shell can open the chat on a cold start. If the
+     * session never turns up — it was killed, or its host is offline and the list is empty — the
+     * compact branch used to render nothing whatsoever: no header, no back. On iOS that is
+     * unrecoverable, since the interactive edge-swipe back is inert while the navigation stack is
+     * one deep, so the app has to be force-quit.
+     *
+     * `chatFallback` is deliberately NOT supplied here, which is exactly the iOS configuration.
+     */
+    @Test fun compact_a_selected_session_that_does_not_exist_still_offers_a_way_back() = runComposeUiTest {
+        val ui = ShellUiState().apply { selectedId = "ghost" }
+        val app = testHostStore()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
+        }
+        waitForIdle()
+
+        onNodeWithTag("session_unavailable").assertIsDisplayed()
+
+        onNodeWithTag("session_unavailable_back").performClick()
+        waitForIdle()
+
+        assertEquals(null, ui.selectedId)
+    }
 
     @Test fun compact_back_pops_a_pushed_route_before_it_leaves_home() = runComposeUiTest {
         val ui = ShellUiState()

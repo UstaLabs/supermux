@@ -81,7 +81,13 @@ final class AudioRecorder {
         recorder = nil; url = nil
         isRecording = false; elapsed = 0
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        // Hand the category back. `.playAndRecord` routes playback to the receiver rather than the
+        // speaker and keeps the mic indicator alive, so leaving it set after a recording made the
+        // NEXT read-aloud come out quiet and earpiece-shaped. Only matters now that the same
+        // process both records and speaks (cluster H3).
+        try? session.setCategory(.playback)
         #endif
         // macOS: no audio session — AVAudioEngine drives the mic directly.
     }

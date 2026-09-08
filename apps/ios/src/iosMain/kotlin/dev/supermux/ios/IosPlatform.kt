@@ -27,7 +27,7 @@ import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import platform.UIKit.UIPasteboard
 
 /**
@@ -77,10 +77,7 @@ class IosPlatform(
      * link the user already used.
      */
     override fun pendingScans(): Flow<String> =
-        IosAppState.pendingPairLink.filterNotNull().map {
-            IosAppState.consumePendingPairLink()
-            it
-        }
+        IosAppState.pendingPairLink.filterNotNull().onEach { IosAppState.consumePendingPairLink() }
 
     /** No terminal engine until H5 hosts Swift's SwiftTerm view in a `UIKitView`; `caps.terminal`
      *  is false, and this factory draws the "no terminal here" hint if anything asks anyway. */

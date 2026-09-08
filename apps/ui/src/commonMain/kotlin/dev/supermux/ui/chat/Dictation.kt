@@ -138,6 +138,19 @@ class DictationController(
     /** The on-device partial collector, cancelled with the recognition session it belongs to. */
     private var partialJob: Job? = null
 
+    /**
+     * Whether the on-device recogniser has been STARTED and not yet stopped or cancelled.
+     *
+     * Not the same as [listening], and the difference is the bug it exists to prevent. [stopMic]
+     * leaves the listening state immediately and only THEN awaits `LiveTranscript.stop()`, which
+     * on iOS drains the analyzer. During that window a [cancelMic] — a session switch, the
+     * composer being disposed — used to cancel the transcribe job while leaving the recogniser
+     * running, and the next dictation would start a second one on top of it. iOS caps how many can
+     * exist at once ("maximum number of recognizers reached"), so the mic would simply stop
+     * working until the app was relaunched.
+     */
+    private var liveSessionOpen = false
+
     private fun fail(message: String) {
         banner = message
         errorMessage = message
@@ -181,6 +194,7 @@ class DictationController(
         micUnavailable = false
         val live = mic.liveTranscript
         if (live != null && live.start(glossary.toList())) {
+            liveSessionOpen = true
             listening = true
             liveTranscript = ""
             partialJob?.cancel()
@@ -199,14 +213,17 @@ class DictationController(
             partialJob = null
             val live = mic.liveTranscript
             liveTranscript = null
+            // Set here rather than inside the coroutine: the strip has to be up on the frame the
+            // user tapped Stop, and a state write on the next dispatch would leave the composer
+            // showing nothing at all for a frame.
+            transcribing = true
             // The UI has already left the listening state, so the wait below is covered by the
             // "Transcribing…" strip rather than a RecordingBar that will not go away.
             // `LiveTranscript.stop()` suspends because iOS must drain its on-device analyzer to
             // finalise the last words; Android's returns without suspending.
             transcribeJob = scope.launch {
-                transcribing = true
                 try {
-                    val draft = live?.stop().orEmpty()
+                    val draft = try { live?.stop().orEmpty() } finally { liveSessionOpen = false }
                     if (draft.isBlank()) {
                         fail("Didn't catch that")
                         return@launch
@@ -229,9 +246,10 @@ class DictationController(
 
     fun cancelMic() {
         val wasRecording = recording
-        val wasListening = listening
+        val wasLiveOpen = liveSessionOpen
         recording = false
         listening = false
+        liveSessionOpen = false
         liveTranscript = null
         partialJob?.cancel()
         partialJob = null
@@ -240,7 +258,10 @@ class DictationController(
         // must not resolve into the next session's draft.
         transcribeJob?.cancel()
         transcribeJob = null
-        if (wasListening) mic.liveTranscript?.cancel()
+        // [liveSessionOpen] and not `listening`: a cancel that arrives while `stopMic` is still
+        // draining the recogniser must stop it too, or the next dictation starts a second one.
+        // `cancel()` is idempotent on every host and also clears the partial.
+        if (wasLiveOpen) mic.liveTranscript?.cancel()
         if (wasRecording) mic.cancel()
     }
 

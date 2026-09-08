@@ -63,3 +63,24 @@ internal suspend fun <T> awaitCallback(start: (done: (T) -> Unit) -> Unit): T =
 internal fun onMainThread(block: () -> Unit) {
     if (NSThread.isMainThread) block() else dispatch_async(dispatch_get_main_queue()) { block() }
 }
+
+/**
+ * [onMainThread] for a call that has to RETURN something.
+ *
+ * The shared seams it serves — `MicCapture.available`, `.start()`, `.stop()`,
+ * `LiveTranscript.start()` — are synchronous by contract on every host, so they cannot suspend and
+ * cannot use [awaitCallback]'s hop. When already on the main thread (which is where a Compose
+ * event handler and a composition both are) this is a direct call. Off it, there is nothing to do
+ * but wait: `dispatch_sync` would deadlock if the main thread were itself waiting on us, so this
+ * uses a queue hand-off with a latch instead.
+ *
+ * The waiting case is the rare one and it is bounded — every one of these Swift members returns
+ * without doing I/O.
+ */
+@OptIn(ExperimentalForeignApi::class)
+internal fun <T> onMainThreadResult(block: () -> T): T {
+    if (NSThread.isMainThread) return block()
+    val done = kotlinx.coroutines.channels.Channel<T>(capacity = 1)
+    dispatch_async(dispatch_get_main_queue()) { done.trySend(block()) }
+    return kotlinx.coroutines.runBlocking { done.receive() }
+}

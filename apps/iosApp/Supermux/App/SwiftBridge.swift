@@ -182,6 +182,14 @@ final class SwiftBridge: NSObject, IosBridge {
     /// the controller we already have. What the SwiftUI screen supplied and a bare controller does
     /// not is a way OUT: hence the navigation controller and its Cancel button, without which a
     /// camera the user changes their mind about is a dead end.
+    ///
+    /// There are TWO ways out, though, and the second is the easy one to miss: this is presented
+    /// as a sheet, so it can also be swiped down. That dismissal runs through neither Cancel nor a
+    /// decode, so without the presentation-controller delegate below the completion would never
+    /// fire — leaving Kotlin suspended forever, the delegate leaked in `pendingDelegates`, and the
+    /// Add host screen's scan button permanently dead. The gesture is deliberately NOT disabled
+    /// (`isModalInPresentation`): swiping a sheet away is what people expect, so it is reported as
+    /// a cancel rather than forbidden.
     func scanQr(onResult: @escaping (String?) -> Void) {
         guard let presenter = presenter() else { return onResult(nil) }
         let delegate = ScanDelegate(onResult: onResult)
@@ -200,6 +208,7 @@ final class SwiftBridge: NSObject, IosBridge {
             }
         )
         delegate.presented = nav
+        nav.presentationController?.delegate = delegate
         presenter.present(nav, animated: true)
     }
     // MARK: microphone + dictation
@@ -338,7 +347,7 @@ final class SwiftBridge: NSObject, IosBridge {
 /// Same retention discipline as the picker delegates: nothing else owns this object, so the bridge
 /// holds it until the completion fires. A decode dismisses the sheet itself (the user is done and
 /// the camera should stop); a Cancel has already dismissed it before finishing.
-private final class ScanDelegate: NSObject {
+private final class ScanDelegate: NSObject, UIAdaptivePresentationControllerDelegate {
     private let onResult: (String?) -> Void
     var onFinish: (() -> Void)?
     weak var presented: UIViewController?
@@ -352,6 +361,14 @@ private final class ScanDelegate: NSObject {
         if code != nil { presented?.dismiss(animated: true) }
         onResult(code)
         onFinish?()
+    }
+
+    /// The sheet was swiped away. UIKit has already dismissed it, so this only has to report the
+    /// cancel — the third exit, beside Cancel and a decode, and the one that silently hung.
+    /// Not called for a programmatic `dismiss`, so a decode cannot double-fire (and `fired`
+    /// guards that regardless).
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        finish(nil)
     }
 }
 

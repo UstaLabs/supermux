@@ -204,14 +204,24 @@ internal class IosMicCapture(
     override val liveTranscript: LiveTranscript?,
 ) : MicCapture {
 
-    override val available: Boolean get() = bridge.micAvailable()
+    // Every member here ends in a `MainActor` Swift call, so each hops first — the rule
+    // `AwaitCallback.kt` states and the reason `onMainThread` exists. The synchronous ones cannot
+    // use `awaitCallback`, which is where the hop otherwise lives, and the shared dictation
+    // controller is free to drive them from a coroutine on another dispatcher.
+    //
+    // `onMainThread` takes the already-on-main fast path, so the three that ARE called from a
+    // Compose event handler pay nothing: `start` must have the recorder running before the
+    // composer redraws as a RecordingBar, and a dispatch would put that a runloop turn late.
 
-    override fun start(): Boolean = bridge.startRecording()
+    override val available: Boolean get() = onMainThreadResult { bridge.micAvailable() }
 
-    override fun stop(): CapturedAudio? =
+    override fun start(): Boolean = onMainThreadResult { bridge.startRecording() }
+
+    override fun stop(): CapturedAudio? = onMainThreadResult {
         bridge.stopRecording()?.let { CapturedAudio(it.bytes, it.filename, it.mime) }
+    }
 
-    override fun cancel() = bridge.cancelRecording()
+    override fun cancel() = onMainThread { bridge.cancelRecording() }
 
     /**
      * The system prompt, awaited. iOS shows it once per install and remembers the answer, so a
@@ -241,17 +251,18 @@ internal class IosLiveTranscript(private val bridge: IosBridge) : LiveTranscript
 
     override fun start(glossary: List<String>): Boolean {
         _partial.value = ""
-        return bridge.startTranscript(glossary) { text -> _partial.value = text }
+        return onMainThreadResult { bridge.startTranscript(glossary) { text -> _partial.value = text } }
     }
 
     override suspend fun stop(): String {
+        // `awaitCallback` hops to Main itself before calling the bridge.
         val text = awaitCallback<String> { done -> bridge.stopTranscript(done) }
         _partial.value = ""
         return text
     }
 
     override fun cancel() {
-        bridge.cancelTranscript()
+        onMainThread { bridge.cancelTranscript() }
         _partial.value = ""
     }
 }

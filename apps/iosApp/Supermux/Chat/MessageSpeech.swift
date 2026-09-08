@@ -47,19 +47,39 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     /// to start it again.
     private var pendingDone: (() -> Void)?
 
+    /// Which armed completion [pendingDone] is, so a LATE callback from a superseded utterance or
+    /// chunk cannot fire the completion belonging to the one that replaced it.
+    ///
+    /// This is not hypothetical. `MessageTts.speakPlatform` calls `stop()` immediately before
+    /// every `speak()`, and `AVSpeechSynthesizer.stopSpeaking(at: .immediate)` delivers its
+    /// `didCancel` ASYNCHRONOUSLY — after the next utterance has already been armed. Without the
+    /// tag, reading one message aloud while another was speaking finished the NEW one instantly:
+    /// the row left its speaking state while the audio played on, and the next tap could not stop
+    /// it because Kotlin already believed that utterance was over.
+    private var pendingGen = 0
+
+    /// The utterance [pendingDone] belongs to, for the same reason — identity is what tells a
+    /// delegate callback whether it is about the CURRENT utterance or a cancelled predecessor.
+    private var currentUtterance: AVSpeechUtterance?
+
     /// Speak with the OS synthesiser. `onDone` fires when the utterance completes OR is stopped.
+    ///
+    /// Order matters: the previous utterance is stopped and its waiter released BEFORE the new one
+    /// is armed, so the `didCancel` that arrives asynchronously afterwards finds a generation that
+    /// no longer matches and does nothing.
     func speakText(_ text: String, onDone: @escaping () -> Void) {
         guard !text.isEmpty else { return onDone() }
         gen &+= 1
-        finishUtterance()
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         audioPlayer?.stop()
         audioPlayer = nil
-        pendingDone = onDone
+        finishPending()
         let u = AVSpeechUtterance(string: text)
         u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
             ?? AVSpeechSynthesisVoice(language: "en-US")
         u.rate = AVSpeechUtteranceDefaultSpeechRate
+        arm(onDone)
+        currentUtterance = u
         synth.speak(u)
     }
 
@@ -67,16 +87,16 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     /// so Kotlin can queue the next one gaplessly. A chunk that will not decode calls back at
     /// once rather than stalling the queue.
     func playChunk(_ data: Data, onDone: @escaping () -> Void) {
-        finishUtterance()
+        finishPending()
         guard let player = try? AVAudioPlayer(data: data) else { return onDone() }
         audioPlayer = player
-        pendingDone = onDone
+        let myGen = arm(onDone)
         let box = FinishBox { [weak self] in
-            Task { @MainActor in self?.finishUtterance() }
+            Task { @MainActor in self?.finishPending(gen: myGen) }
         }
         finishBox = box
         player.delegate = box
-        if !player.play() { finishUtterance() }
+        if !player.play() { finishPending(gen: myGen) }
     }
 
     /// Release the synthesiser and the audio session — the app is going away.
@@ -84,10 +104,24 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         stop()
     }
 
+    /// Arm a completion and return the generation that identifies it.
+    @discardableResult
+    private func arm(_ onDone: @escaping () -> Void) -> Int {
+        pendingGen &+= 1
+        pendingDone = onDone
+        return pendingGen
+    }
+
     /// Fire the pending completion, at most once.
-    private func finishUtterance() {
+    ///
+    /// [gen] is the generation the CALLER armed. A late callback from a superseded utterance or
+    /// chunk passes its own and is ignored; `stop()` and the "make way for the next one" paths
+    /// pass nothing, meaning "whatever is armed right now".
+    private func finishPending(gen: Int? = nil) {
+        if let gen, gen != pendingGen { return }
         let done = pendingDone
         pendingDone = nil
+        currentUtterance = nil
         done?()
     }
 
@@ -116,7 +150,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         speakingKey = nil
         // A Compose-side `speak` awaiting this utterance must be released, or the message it
         // belongs to keeps its speaking state after the user has silenced it.
-        finishUtterance()
+        finishPending()
     }
 
     private static func resolveEngine(broker: BrokerSession?) async -> String {
@@ -136,6 +170,9 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
             ?? AVSpeechSynthesisVoice(language: "en-US")
         u.rate = AVSpeechUtteranceDefaultSpeechRate
+        // Registered for the same reason the Compose path registers: `utteranceEnded` clears
+        // `speakingKey` only for the utterance that is actually current.
+        currentUtterance = u
         synth.speak(u)
     }
 
@@ -223,16 +260,22 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.clearIfCurrent() }
+        Task { @MainActor in self.utteranceEnded(utterance) }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.clearIfCurrent() }
+        Task { @MainActor in self.utteranceEnded(utterance) }
     }
 
-    private func clearIfCurrent() {
+    /// One utterance stopped making noise — finished, or cancelled to make way for another.
+    ///
+    /// The identity check is what keeps a cancelled predecessor from clearing the state of the
+    /// utterance that replaced it: `stopSpeaking(at: .immediate)` delivers `didCancel` after the
+    /// next `speak()` has already been issued.
+    private func utteranceEnded(_ utterance: AVSpeechUtterance) {
+        guard utterance === currentUtterance else { return }
         if speakingKey != nil { speakingKey = nil }
-        finishUtterance()
+        finishPending()
     }
 
     static func plainTextForSpeech(_ md: String) -> String {

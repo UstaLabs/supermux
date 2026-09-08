@@ -202,6 +202,12 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             var groupByProject by remember { mutableStateOf(readGroupByProject(defaults)) }
             val foreground by IosAppState.foreground.collectAsState()
 
+            // Silence read-aloud when the app leaves the screen, the way Android stops it on
+            // ON_STOP. Without this an utterance keeps talking out of a phone the user has put
+            // away — and iOS, unlike Android, never destroys the composition that owns it, so
+            // nothing else would ever stop it.
+            LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+
             // A `supermux://pair` link that arrives while ALREADY paired adds a second host rather
             // than re-entering the gate. It goes to the shared Add host screen through
             // `Platform.pendingScans()`, which that screen already collects and claims — the same
@@ -255,7 +261,16 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             LaunchedEffect(pendingPush, workspaces) {
                 val decision =
                     pushTapHandleDecision(pendingPush, handledPushSessionId, workspaces.isNotEmpty())
-                if (decision == PushTapHandle.Skip) return@LaunchedEffect
+                // Skip means "this tap is spent" — most often because the chat it names is the one
+                // already open. The id must still be CLEARED, which Android does by removing the
+                // Intent extra. Leaving it in the flow is not inert: `handledPushSessionId` is
+                // reset whenever the selection goes back to null, so the next workspaces emission
+                // would find a live pending id again and drag the user back into the chat they had
+                // just left.
+                if (decision == PushTapHandle.Skip) {
+                    if (pendingPush != null) IosAppState.consumePendingPushSessionId()
+                    return@LaunchedEffect
+                }
                 val sid = pendingPush!!
                 val hostId = sessionHost[sid] ?: fleet.activeHost.value
                 val owned = hostId?.let { fleet.workspaceForSession(it, sid) }

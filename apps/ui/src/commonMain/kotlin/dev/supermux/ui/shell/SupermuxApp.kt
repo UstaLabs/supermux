@@ -41,17 +41,23 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -1152,6 +1158,22 @@ private fun ShellHome(
                         }
                     }
                 }
+                // A session is selected that resolves to NOTHING — no live row, no archived row,
+                // no workspace. Outside the `chatFallback` guard on purpose: a host without a
+                // session-only chat (iOS) reaches this for ANY workspace-less id, and every host
+                // reaches it for an id whose session has gone.
+                //
+                // It is reachable, and it used to be a trap. Tapping a notification for a chat
+                // that has since been killed — or any notification while its host is offline, so
+                // the session list is empty — selects the id (`pushTapHandleDecision` returns
+                // ApplyRetry on empty workspaces DELIBERATELY, so a cold start can open the chat
+                // before the list arrives). The screen then drew nothing at all: no header, no
+                // back affordance. On iOS that is unrecoverable, because the interactive
+                // edge-swipe back is inert while the navigation stack is one deep, and the app has
+                // to be force-quit. So the shell draws its own way out.
+                if (ui.selectedId != null && selectedSession == null && activeWorkspace == null) {
+                    UnavailableSessionPane { ui.selectedId = null }
+                }
             }
 
             AnimatedContent(
@@ -1437,4 +1459,39 @@ fun rememberVisitedSessions(selected: String?, liveSessionIds: Set<String>): Set
         visited = if (selected != null) kept + selected else kept
     }
     return visited
+}
+
+/**
+ * What the shell shows for a selected session that does not exist.
+ *
+ * Deliberately the SHELL's own screen and not a host's: it is the last thing standing between the
+ * user and a dead end, so it must not depend on a host having supplied a `chatFallback`. The back
+ * arrow is the whole point — the message alone would still be a screen with no way off it.
+ */
+@Composable
+private fun UnavailableSessionPane(onBack: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .fillMaxSize()
+            .zIndex(2f)
+            .background(cs.surfaceContainerLow)
+            .testTag("session_unavailable"),
+    ) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack, modifier = Modifier.testTag("session_unavailable_back")) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = cs.onSurface,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("This session is no longer available", color = cs.onSurfaceVariant)
+            }
+        }
+    }
 }
