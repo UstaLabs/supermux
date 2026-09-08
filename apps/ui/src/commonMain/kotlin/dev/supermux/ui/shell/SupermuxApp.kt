@@ -39,6 +39,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -1030,7 +1034,16 @@ private fun ShellHome(
 
     if (!compact) {
         Box(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxSize()) {
+            // A tablet-class Android window is edge-to-edge under the status bar and the
+            // navigation bar; the whole two-pane frame steps inside them here and CONSUMES them,
+            // so a pane that pads for a bar on its own (the phone-layer screens do) does not pad
+            // twice. Desktop insets are zero: this is the row it always was.
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .consumeWindowInsets(WindowInsets.systemBars),
+            ) {
                 // ── Sidebar: collapsed rail, or the full list ──
                 val collapsed = ui.sidebarCollapsed
                 var resizing by remember { mutableStateOf(false) }
