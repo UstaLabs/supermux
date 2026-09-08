@@ -27,3 +27,6 @@ include(":shared")
 include(":ui")
 include(":android")
 include(":desktop")
+// SupermuxKit.framework: the ONE Kotlin binary the iOS app links (it re-exports :ui and :shared).
+// iOS-only targets, so on this Linux host every one of its tasks is disabled and it costs nothing.
+include(":ios")
