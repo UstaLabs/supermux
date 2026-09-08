@@ -349,10 +349,25 @@ extension PushAppDelegate: UNUserNotificationCenterDelegate {
 
     /// User TAPPED a notification → open the session it was about. The NSE stashed the
     /// session id under `sm_session_id` in the decrypted notification's userInfo.
+    ///
+    /// Two sinks, because there are two shells. `PushRouter` is the SwiftUI one (`RootView`
+    /// observes it); `IosAppState` is the Compose one, whose shared root resolves the id to a
+    /// workspace view. Under `COMPOSE_SHELL` nothing reads `PushRouter` any more — writing it
+    /// anyway costs a property assignment and keeps the flag-off build's behaviour identical,
+    /// which is the whole point of the flag until H6 deletes the SwiftUI path.
+    ///
+    /// Both are set on the main actor, and both are STATE rather than events: a tap can be what
+    /// launches the app, and the observer that appears a moment later must still see it.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
         guard let id = info["sm_session_id"] as? String, !id.isEmpty else { return }
-        await MainActor.run { PushRouter.shared.pendingSessionId = id }
+        await MainActor.run {
+            PushRouter.shared.pendingSessionId = id
+            #if COMPOSE_SHELL
+            IosAppState.shared.setPendingPushSessionId(id: id)
+            #endif
+        }
+        NSLog("[supermux push] tap → session %@", id)
     }
 }

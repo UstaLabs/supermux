@@ -26,6 +26,8 @@ import dev.supermux.ui.terminal.UnavailableTerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import platform.UIKit.UIPasteboard
 
 /**
@@ -59,7 +61,26 @@ class IosPlatform(
      * continuation is always still there to receive it — exactly as on desktop.
      */
     override fun pendingPicks(requester: String): Flow<PickedFile> = emptyFlow()
-    override fun pendingScans(): Flow<String> = emptyFlow()
+
+    /**
+     * NOT empty, unlike [pendingPicks] — and for a reason that has nothing to do with activity
+     * recreation.
+     *
+     * The contract this flow actually carries is "a pairing string arrived from outside the Add
+     * host screen, claim it": `AddHostScreen` collects it and runs its paste path over whatever
+     * comes through. On Android that is a QR scan redelivered after the scanner activity tore the
+     * composition down. On iOS it is a `supermux://pair` link the user opened while the app was
+     * already paired — the same "here is a host, add it" event through the same door, rather than
+     * a second mechanism doing the identical thing.
+     *
+     * The value is consumed as it is handed over so re-entering Add host later does not re-claim a
+     * link the user already used.
+     */
+    override fun pendingScans(): Flow<String> =
+        IosAppState.pendingPairLink.filterNotNull().map {
+            IosAppState.consumePendingPairLink()
+            it
+        }
 
     /** No terminal engine until H5 hosts Swift's SwiftTerm view in a `UIKitView`; `caps.terminal`
      *  is false, and this factory draws the "no terminal here" hint if anything asks anyway. */
@@ -85,11 +106,10 @@ class IosPlatform(
     override val windows: WindowHostController? = null
 
     /**
-     * H3 supplies the real registrar over [IosBridge.registerForPush]. Null until then, which is
-     * consistent with `caps.push = false` below — a screen that offers a push affordance now would
-     * offer one that cannot work.
+     * Swift's `PushManager`, behind the shared seam. See [IosPushRegistrar] for why two of its
+     * four members are deliberately no-ops on this platform.
      */
-    override val push: PushRegistrar? = null
+    override val push: PushRegistrar = IosPushRegistrar(bridge)
 
     /**
      * No embedded browser until H5 runs the `EditorWeb` cm6 bundle in a `WKWebView`. Every editor
@@ -181,14 +201,15 @@ class IosPlatform(
 /**
  * What an iPhone/iPad can do.
  *
- * `push`, `terminal`, `scrcpy`, `hardwareVideoDecode` and `appUpdate` are all false FOR NOW and flip
- * in their own clusters (H3 for push, H5 for the terminal and the decoder); the App Store owns
- * updating, so `appUpdate` stays false forever. Everything else is a permanent property of the
+ * `terminal`, `scrcpy` and `hardwareVideoDecode` are false FOR NOW and flip in H5; the App Store
+ * owns updating, so `appUpdate` stays false forever. `push` is true from H3: `IosPushRegistrar`
+ * drives the same APNs → relay → broker registration the SwiftUI shell used, and the notification
+ * service extension that decrypts the sealed alerts is untouched by this cluster. Everything else is a permanent property of the
  * platform: one window, no tray, no arbitrary file system (the app is confined to what a document
  * picker grants it), no local broker process.
  */
 val IOS_CAPS: Caps = Caps(
-    push = false,
+    push = true,
     camera = true,
     tray = false,
     externalDisplay = true,

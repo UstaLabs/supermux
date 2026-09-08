@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.window.ComposeUIViewController
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.host.IosHostStores
+import dev.supermux.host.PairingPayload
+import dev.supermux.host.workspaceForSession
 import dev.supermux.net.PairUrl
 import dev.supermux.net.iosHttpFactory
 import dev.supermux.pairing.PairingState
@@ -20,14 +22,22 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.WalkthroughSeam
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.intro.OnboardingFlow
 import dev.supermux.ui.prefs.ShellStateSeed
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.prefs.seedShellState
+import dev.supermux.ui.push.PushTapHandle
+import dev.supermux.ui.push.notificationCancelSessionIds
+import dev.supermux.ui.push.pushTapHandleDecision
+import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
+import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.workspace.toDomainOrNull
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -166,6 +176,14 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                         IosHostStores.migrateFromLegacyIfNeeded()
                         IosAppState.consumeOpenedUrl()
                         paired = true
+                        // The one call the SwiftUI branch made here and the Compose branch did
+                        // not: APNs registration is gated on being paired, so a device that pairs
+                        // during THIS launch — the common case, and the only case for a first
+                        // install opened from a `supermux://pair` link — never registers unless
+                        // something asks again once pairing exists. The `LaunchedEffect(paired)`
+                        // below is that something; this is belt and braces for the same reason
+                        // `PushManager.registerIfPaired` is idempotent.
+                        platform.push.registerIfPaired()
                     },
                     initialDeepLink = deepLink,
                 )
@@ -184,8 +202,76 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             val foreground by IosAppState.foreground.collectAsState()
 
             // A `supermux://pair` link that arrives while ALREADY paired adds a second host rather
-            // than re-entering the gate; consuming it keeps a recomposition from re-reading it.
-            LaunchedEffect(openedUrl) { if (openedUrl != null) IosAppState.consumeOpenedUrl() }
+            // than re-entering the gate. It goes to the shared Add host screen through
+            // `Platform.pendingScans()`, which that screen already collects and claims — the same
+            // door a QR scan comes through, rather than a second path doing the same thing. The
+            // link is handed over BEFORE navigating only because `pendingPairLink` is state: the
+            // screen picks it up whenever it composes. Consuming `openedUrl` keeps a
+            // recomposition from re-reading it.
+            LaunchedEffect(openedUrl) {
+                val raw = openedUrl ?: return@LaunchedEffect
+                IosAppState.consumeOpenedUrl()
+                if (!isPairLink(raw)) return@LaunchedEffect
+                IosAppState.setPendingPairLink(raw)
+                ui.openAddHost()
+            }
+
+            // Registration is gated on being paired, so it belongs here and not at launch: this
+            // fires on every cold start of an already-paired app AND on the first composition
+            // after the gate above hands over. `PushManager` no-ops when it has no credentials
+            // and is idempotent when it does.
+            LaunchedEffect(Unit) { platform.push.registerIfPaired() }
+
+            val workspaces by fleet.workspaces.collectAsState()
+            val sessionHost by fleet.sessionHost.collectAsState()
+            val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+
+            // Withdraw the delivered notifications for every chat that is now on screen — the
+            // user is looking at it, so a banner about it is noise. Same rule, same shared
+            // helpers, as `MainActivity`. Gated on [foreground] because iOS keeps the last
+            // composition alive behind the app switcher.
+            LaunchedEffect(ui.selectedId, workspaces, compact, foreground) {
+                val sid = ui.selectedId ?: return@LaunchedEffect
+                if (!foreground) return@LaunchedEffect
+                val ws = workspaceForSession(workspaces, sid)
+                val visibleIds = ws?.let {
+                    visibleWorkspaceChatIdsAt(compact, it, it.layout.toDomainOrNull())
+                }.orEmpty()
+                for (id in notificationCancelSessionIds(visibleIds, sid)) {
+                    platform.push.cancelForSession(id)
+                }
+            }
+
+            // A tapped notification carries the chat id (`sm_session_id`, stashed by the
+            // notification service extension and read by `PushAppDelegate`). Resolve the owning
+            // workspace and activate that chat view without PATCHing the layout; an old broker or
+            // a session in no workspace falls back to the session-only screen. The extra is
+            // consumed only once the workspace list has arrived, so a tap that launches the app
+            // cold still lands after the fleet connects.
+            var handledPushSessionId by remember { mutableStateOf<String?>(null) }
+            val pendingPush by IosAppState.pendingPushSessionId.collectAsState()
+            LaunchedEffect(ui.selectedId) { if (ui.selectedId == null) handledPushSessionId = null }
+            LaunchedEffect(pendingPush, workspaces) {
+                val decision =
+                    pushTapHandleDecision(pendingPush, handledPushSessionId, workspaces.isNotEmpty())
+                if (decision == PushTapHandle.Skip) return@LaunchedEffect
+                val sid = pendingPush!!
+                val hostId = sessionHost[sid] ?: fleet.activeHost.value
+                val owned = hostId?.let { fleet.workspaceForSession(it, sid) }
+                val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
+                ui.selectSession(sid)
+                // Destructured into locals rather than smart-cast: `PushTapResolution` is `:ui`'s,
+                // and Kotlin will not smart-cast a public property from another module.
+                val tappedWorkspace = tap.workspaceId
+                val tappedView = tap.activeViewId
+                if (tappedWorkspace != null && tappedView != null) {
+                    fleet.setActiveView(tappedWorkspace, tappedView)
+                }
+                if (decision == PushTapHandle.ApplyConsume) {
+                    handledPushSessionId = sid
+                    IosAppState.consumePendingPushSessionId()
+                }
+            }
 
             SupermuxApp(
                 fleet = fleet,
@@ -199,6 +285,9 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                     groupByProject = value
                     defaults.setBool(value, forKey = GROUP_BY_PROJECT_KEY)
                 },
+                // A newly added host has its own relay: this device has to register with it too,
+                // or that host's pushes never arrive. Android does the same here.
+                onAddedHost = { platform.push.registerIfPaired() },
                 // No `chatFallback`, `settingsExtra` or `settingsSection`: those slots exist for a
                 // host with a screen the shared shell has no version of, and iOS has none — the
                 // SwiftUI screens they would name are the ones this cluster is replacing.
@@ -206,6 +295,18 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
         }
     }
 }
+
+/**
+ * Whether [raw] is a pairing link at all.
+ *
+ * Both forms the Add host screen accepts, asked in the same order it asks them: the current
+ * `PairingPayload` QR/link payload, then the legacy `supermux://pair?t=` / `https://…/pair?t=`
+ * URL. Anything else — a `supermux://` URL that means something other than pairing, a link the
+ * system handed us by mistake — is ignored rather than dropped into the Add host screen, where it
+ * would render as "that isn't a valid supermux pairing link" for a link the user never pasted.
+ */
+private fun isPairLink(raw: String): Boolean =
+    PairingPayload.parse(raw) != null || PairUrl.parse(raw) != null
 
 /**
  * Whether this device is paired with anything.

@@ -1,4 +1,4 @@
-package dev.supermux.android.push
+package dev.supermux.ui.push
 
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.LayoutNode
@@ -9,7 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** Push-tap resolution + the notification-cancel set (Android-only, moved from host/). */
+/** Push-tap resolution + the notification-cancel set. */
 class PushTapTest {
 
     private fun chatView(id: String, sessionId: String, workspaceId: String = "w1") = ViewDto(

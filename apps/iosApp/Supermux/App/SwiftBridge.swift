@@ -179,8 +179,24 @@ final class SwiftBridge: NSObject, IosBridge {
     func playAudioChunk(bytes: KotlinByteArray, onDone: @escaping () -> Void) { onDone() }
     func stopSpeaking() {}
     func shutdownSpeech() {}
-    func registerForPush(onToken: @escaping (String?) -> Void) { onToken(nil) }
-    func cancelNotificationsFor(sessionId: String) {}
+    // MARK: push
+
+    /// The whole `PushManager` sequence, unchanged from the SwiftUI shell: authorisation →
+    /// `registerForRemoteNotifications()` → APNs token → relay → broker device registration with
+    /// the Keychain'd push keypair the notification service extension decrypts with.
+    ///
+    /// Nothing is returned. The Kotlin side documents why (`IosBridge.registerPushIfPaired`): the
+    /// token arrives at the app delegate, not here, and every step after it already lives in
+    /// `PushManager`.
+    func registerPushIfPaired() {
+        PushManager.shared.registerIfPaired()
+    }
+
+    /// Withdraw the delivered notifications for a chat the user is now looking at, and re-badge.
+    /// `PushGroupState` (App Group) is the source of truth for the unread counts the NSE keeps.
+    func cancelNotificationsFor(sessionId: String) {
+        PushManager.shared.clearDelivered(sessionId: sessionId)
+    }
 }
 
 /// `UIDocumentPickerDelegate` as a retained one-shot. Both delegate methods must resolve the

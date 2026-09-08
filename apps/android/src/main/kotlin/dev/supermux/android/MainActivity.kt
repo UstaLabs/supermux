@@ -37,11 +37,7 @@ import dev.supermux.android.chat.SessionChatFallback
 import dev.supermux.android.host.HostStores
 import dev.supermux.android.pairing.PairingHolder
 import dev.supermux.android.push.AndroidPushRegistrar
-import dev.supermux.android.push.PushTapHandle
 import dev.supermux.android.push.SupermuxMessagingService
-import dev.supermux.android.push.notificationCancelSessionIds
-import dev.supermux.android.push.pushTapHandleDecision
-import dev.supermux.android.push.resolvePushTap
 import dev.supermux.android.session.readGroupByProject
 import dev.supermux.android.session.readLegacyCollapsedPaths
 import dev.supermux.android.session.seedSessionListPrefs
@@ -66,6 +62,10 @@ import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
+import dev.supermux.ui.push.PushTapHandle
+import dev.supermux.ui.push.notificationCancelSessionIds
+import dev.supermux.ui.push.pushTapHandleDecision
+import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first

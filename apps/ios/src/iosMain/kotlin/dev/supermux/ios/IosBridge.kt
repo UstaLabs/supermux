@@ -126,11 +126,20 @@ interface IosBridge {
     // ── Push (H3) ───────────────────────────────────────────────────────────────────────────
 
     /**
-     * Ask for the notification permission and register with APNs. [onToken] gets the device token
-     * as lowercase hex, or null if the user refused or registration failed. APNs registration is
-     * app-delegate territory, which is why this cannot be Kotlin.
+     * Ask for the notification permission, register with APNs, and hand the resulting token to the
+     * relay and the broker — the whole `PushManager.registerIfPaired()` sequence. A no-op when the
+     * device is not paired. Idempotent: iOS answers a repeated authorisation request from the
+     * decision already on file, and re-registering an unchanged APNs token is free.
+     *
+     * Nothing comes BACK. The plan sketched this as `registerForPush(onToken:)`, but the token is
+     * useless to Kotlin: it arrives asynchronously at the app delegate, and everything that
+     * happens next — resolving the broker's relay URL, POSTing the token to the relay, registering
+     * the push keypair with the broker — is `PushManager`'s existing four-step flow, sharing the
+     * Keychain'd keypair with the notification-service extension. Handing the token over would
+     * invite a SECOND registration path in Kotlin that raced the Swift one and registered the same
+     * device twice.
      */
-    fun registerForPush(onToken: (String?) -> Unit)
+    fun registerPushIfPaired()
 
     /** Withdraw already-delivered notifications for [sessionId] (the user just opened it). */
     fun cancelNotificationsFor(sessionId: String)
@@ -198,7 +207,7 @@ object NoopIosBridge : IosBridge {
     override fun stopSpeaking() = Unit
     override fun shutdownSpeech() = Unit
 
-    override fun registerForPush(onToken: (String?) -> Unit) = onToken(null)
+    override fun registerPushIfPaired() = Unit
     override fun cancelNotificationsFor(sessionId: String) = Unit
 
     override fun openUrl(url: String) = Unit

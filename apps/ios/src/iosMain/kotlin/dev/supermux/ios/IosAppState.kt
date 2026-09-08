@@ -55,4 +55,51 @@ object IosAppState {
     fun consumeOpenedUrl() {
         _openedUrl.value = null
     }
+
+    private val _pendingPushSessionId = MutableStateFlow<String?>(null)
+
+    /**
+     * The chat a tapped notification was about, or null.
+     *
+     * Set by `PushAppDelegate`'s `didReceive response:` handler — the same place that feeds
+     * `PushRouter.pendingSessionId` for the SwiftUI shell, which under `COMPOSE_SHELL` nobody
+     * reads any more (only the deleted-path `RootView` ever did). It is a STATE flow rather than
+     * an event channel deliberately: a tap can be what LAUNCHES the app, in which case Swift sets
+     * this before the Compose root exists, and the collector that appears milliseconds later must
+     * still see it.
+     *
+     * The shared shell consumes it via `resolvePushTap`, and [consumePendingPushSessionId] clears
+     * it so a later recomposition cannot yank the user back to a chat they have since left.
+     */
+    val pendingPushSessionId: StateFlow<String?> = _pendingPushSessionId.asStateFlow()
+
+    fun setPendingPushSessionId(id: String?) {
+        _pendingPushSessionId.value = id
+    }
+
+    fun consumePendingPushSessionId() {
+        _pendingPushSessionId.value = null
+    }
+
+    private val _pendingPairLink = MutableStateFlow<String?>(null)
+
+    /**
+     * A `supermux://pair` / `https://…/pair?t=` link that arrived while the app is ALREADY paired.
+     *
+     * The unpaired case is [openedUrl], which the pairing gate takes as its `initialDeepLink`. A
+     * link that arrives afterwards means "add this second host", so it goes down a different path:
+     * `IosPlatform.pendingScans()` publishes it, the shared `AddHostScreen` collects that flow and
+     * claims whatever it receives, and `MainViewController` navigates to that screen. Which is why
+     * it is a state flow and not an event: the screen has to be composed before it can collect,
+     * and a plain event emitted at navigation time would land before there was anything listening.
+     */
+    val pendingPairLink: StateFlow<String?> = _pendingPairLink.asStateFlow()
+
+    fun setPendingPairLink(url: String?) {
+        _pendingPairLink.value = url
+    }
+
+    fun consumePendingPairLink() {
+        _pendingPairLink.value = null
+    }
 }
