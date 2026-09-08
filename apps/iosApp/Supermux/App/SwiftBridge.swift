@@ -99,28 +99,57 @@ final class SwiftBridge: NSObject, IosBridge {
     }
 
     /// "Save as…" and "Open with…" are the same sheet on iOS: the share sheet, which offers both
-    /// "Save to Files" and every app that can open the type. iOS has no separate save dialog, and
-    /// `UIDocumentPickerViewController(forExporting:)` would offer ONLY the file system.
+    /// "Save to Files" and every app that can open the type. iOS has no separate save dialog.
+    ///
+    /// The result is the destination the shared caller shows in its "Saved to …" notice. iOS only
+    /// tells us WHICH activity ran (`UIActivity.ActivityType`, e.g. `com.apple.CopyToPasteboard`),
+    /// never where a file landed, so the last path component of that identifier is the most honest
+    /// label available; "Files" is the fallback when iOS reports nothing. A dismissed sheet is a
+    /// cancelled save and returns nil, which is what `completed == false` means here.
     func saveAs(name: String, mime: String, bytes: KotlinByteArray, onResult: @escaping (String?) -> Void) {
-        share(name: name, bytes: bytes) { completed in onResult(completed ? "Files" : nil) }
+        share(name: name, bytes: bytes) { _, completed, activity in
+            guard completed else { return onResult(nil) }
+            onResult(activity?.rawValue.components(separatedBy: ".").last ?? "Files")
+        }
     }
 
+    /// True when the sheet was PRESENTED, per the Kotlin contract — deliberately not the activity's
+    /// `completed` flag. iOS does not report what the user did with a shared file, and a plain
+    /// dismissal sets `completed = false`; returning that would make the shared caller announce
+    /// "couldn't open that" every time someone opened the sheet and changed their mind.
     func openExternally(name: String, mime: String, bytes: KotlinByteArray, onResult: @escaping (KotlinBoolean) -> Void) {
-        share(name: name, bytes: bytes) { presented in onResult(KotlinBoolean(bool: presented)) }
+        share(name: name, bytes: bytes) { presented, _, _ in
+            onResult(KotlinBoolean(bool: presented))
+        }
     }
 
-    private func share(name: String, bytes: KotlinByteArray, onResult: @escaping (Bool) -> Void) {
-        guard let presenter = presenter() else { return onResult(false) }
+    /// Writes the bytes to a temp file and presents the share sheet over them.
+    ///
+    /// The completion fires twice-shaped information exactly once: `presented` says whether the
+    /// sheet ever went up, and `completed`/`activity` describe what the user chose (or nothing, if
+    /// it was never presented). The two callers above want different halves of that.
+    private func share(
+        name: String,
+        bytes: KotlinByteArray,
+        onResult: @escaping (_ presented: Bool, _ completed: Bool, _ activity: UIActivity.ActivityType?) -> Void
+    ) {
+        guard let presenter = presenter() else { return onResult(false, false, nil) }
         let data = IosBytesKt.dataFrom(bytes: bytes)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        guard (try? data.write(to: url, options: .atomic)) != nil else { return onResult(false) }
+        // The name is broker-supplied and ends up in a path: strip any directory part so it cannot
+        // escape the temp directory. Mirrors `safeFileName` on the Kotlin side.
+        let leaf = name.components(separatedBy: CharacterSet(charactersIn: "/\\")).last
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "file"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(leaf)
+        guard (try? data.write(to: url, options: .atomic)) != nil else { return onResult(false, false, nil) }
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         // iPad has no "present from nowhere": a popover without an anchor is a runtime trap.
         sheet.popoverPresentationController?.sourceView = presenter.view
         sheet.popoverPresentationController?.sourceRect = CGRect(
             x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0
         )
-        sheet.completionWithItemsHandler = { _, completed, _, _ in onResult(completed) }
+        sheet.completionWithItemsHandler = { activity, completed, _, _ in
+            onResult(true, completed, activity)
+        }
         presenter.present(sheet, animated: true)
     }
 
@@ -233,15 +262,25 @@ struct ComposeRootView: UIViewControllerRepresentable {
     /// Also the navigation controller's gesture delegate — see `makeUIViewController`.
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var bridge: SwiftBridge?
+        weak var navigation: UINavigationController?
 
-        /// Re-enable the interactive pop gesture.
+        /// Allow the interactive pop gesture only when there is something to pop.
         ///
         /// UIKit disables `interactivePopGestureRecognizer` whenever the navigation bar is hidden,
         /// and this navigation controller hides it because the shared shell draws its own headers.
-        /// Without this the edge swipe does nothing at all — which on iOS means the app has no
-        /// back gesture, the one navigation every iPhone user reaches for first. Returning true
-        /// hands the gesture back, and Compose's `PredictiveBackHandler` receives it.
-        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool { true }
+        /// Re-enabling it is therefore necessary — but it must NOT be unconditional: with a single
+        /// view controller on the stack, letting the gesture begin drives UIKit into a pop it
+        /// cannot complete and wedges the navigation controller, after which even programmatic
+        /// navigation misbehaves. The count check is what keeps a missing feature from becoming a
+        /// broken one.
+        ///
+        /// Today the stack IS one deep, so this returns false and the edge swipe does nothing;
+        /// the shared shell's own back affordances work throughout. Giving Compose's
+        /// `PredictiveBackHandler` a real interactive gesture needs a second controller on the
+        /// stack to pop against, which is H3/H4 work.
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            (navigation?.viewControllers.count ?? 0) > 1
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -253,6 +292,7 @@ struct ComposeRootView: UIViewControllerRepresentable {
         let nav = UINavigationController(rootViewController: compose)
         nav.setNavigationBarHidden(true, animated: false)
         nav.interactivePopGestureRecognizer?.delegate = context.coordinator
+        context.coordinator.navigation = nav
         // Present sheets from the navigation controller, not from the Compose controller: it is the
         // one that is actually in the window's hierarchy.
         bridge.root = nav

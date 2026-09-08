@@ -76,12 +76,13 @@ jobs:
               - 'apps/ui/**'
             ios:
               - 'apps/iosApp/**'
-              # The Kotlin half of the iOS app. `apps/ios` is the SupermuxKit framework module and
-              # `apps/ui/src/iosMain` holds the iOS actuals — a change to either can break the iOS
-              # build without touching a single Swift file, which is exactly the change this lane
-              # exists to catch.
+              # The Kotlin half of the iOS app, which this lane could not see before. `apps/ios` is
+              # the SupermuxKit framework module and ALL of `apps/ui` links into it — commonMain
+              # most of all, not just the iOS actuals — so a change to either can break the iOS
+              # build without touching a single Swift file. (`apps/shared` already reaches this
+              # lane through the `wire` filter below.)
               - 'apps/ios/**'
-              - 'apps/ui/src/iosMain/**'
+              - 'apps/ui/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'
@@ -346,13 +347,31 @@ jobs:
         working-directory: apps/iosApp
         run: |
           set -o pipefail
+          # No `-sdk`: it would force the EMBEDDED watchOS app and the two extensions onto the
+          # iOS simulator SDK, and the watch app then compiles its watch-only AppIcon for iPhone
+          # ("did not have any applicable content") and fails the build.
+          #
+          # Ad-hoc signing (`CODE_SIGN_IDENTITY=-`) rather than CODE_SIGNING_ALLOWED=NO: the app
+          # declares an App Group, and an unsigned build has no entitlements, so it CRASHES at
+          # launch when the container URL comes back nil. Ad-hoc keeps the entitlement without
+          # needing an identity a fork does not have.
+          #
+          # The two -skip flags: SwiftTerm ships a build-tool plugin from 1.20.0, and xcodebuild
+          # otherwise refuses to run it without interactive validation.
           xcodebuild \
             -scheme Supermux \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
             -derivedDataPath build/dd-ios-test \
             -resultBundlePath build/ios-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             test
 
       - name: Upload xcresult

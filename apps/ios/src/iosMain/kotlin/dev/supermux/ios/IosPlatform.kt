@@ -103,10 +103,10 @@ class IosPlatform(
 
     /** `UIApplication.openURL` lives on the Swift side — it is app-delegate territory, and a
      *  Compose surface has no application object of its own to reach for. Fire-and-forget. */
-    override fun openUrl(url: String) = bridge.openUrl(url)
+    override fun openUrl(url: String) = onMainThread { bridge.openUrl(url) }
 
     /** Parity with Android's `ClipData.newPlainText`; iOS has no clip label to set. */
-    override fun copyToClipboard(text: String) {
+    override fun copyToClipboard(text: String) = onMainThread {
         UIPasteboard.generalPasteboard.string = text
     }
 

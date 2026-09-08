@@ -24,18 +24,23 @@ appId: dev.supermux.app
 - assertVisible: "Still shipping."
 - assertVisible: "See what it does"
 
-# Paging is a Compose gesture + animation. Tapping through all four pages proves the composition is
-# live and handling input, not a static first frame.
+# Paging is a Compose gesture + animation. One tap and two swipes carry the pager across all four
+# pages, which proves the composition is live and handling input rather than a static first frame.
+#
+# The assertion after the tap is that page ONE is gone. That is deliberately a negative: it holds
+# whatever the second page happens to say, so the test cannot rot when that copy is edited, while
+# still failing loudly if the tap did nothing — which is exactly the failure mode a mounted-but-
+# inert Compose surface produces.
 - tapOn: "See what it does"
-- assertVisible: ".*"
+- assertNotVisible: "AFK."
 
 - swipe:
     direction: LEFT
 - swipe:
     direction: LEFT
 
-# The last page is the connect page — the shared pairing entry point (PairingState), which is what
-# every later cluster builds on. Reaching it means the whole intro flow ran inside Compose.
-- assertVisible:
-    text: "Connect|Pair|broker|link"
-    optional: false
+# The last page is the connect page — the shared pairing entry point (PairingState) that every
+# later cluster builds on. These are its own controls, so reaching them means the whole intro ran
+# inside Compose and ended somewhere usable.
+- assertVisible: "Scan pairing code"
+- assertVisible: "Manual entry"

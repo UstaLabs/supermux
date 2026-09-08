@@ -58,13 +58,21 @@ interface IosBridge {
     fun captureVideo(onResult: (IosPickedFile?) -> Unit)
 
     /**
-     * Present `UIDocumentPickerViewController(forExporting:)` for [bytes]. [onResult] gets a
-     * human-readable destination (shown in the "Saved to …" notice) or null if cancelled.
+     * Present the share sheet for [bytes] as a SAVE. [onResult] gets a human-readable destination
+     * (shown in the "Saved to …" notice) or null if the user dismissed it.
+     *
+     * The share sheet and not `UIDocumentPickerViewController(forExporting:)`: iOS has no separate
+     * save dialog, and the picker would offer ONLY the file system, hiding every other app that
+     * can take the file. iOS never reports where a file actually landed, so the destination is
+     * derived from the activity the user chose.
      */
     fun saveAs(name: String, mime: String, bytes: ByteArray, onResult: (String?) -> Unit)
 
-    /** Present `UIActivityViewController` for [bytes] ("Open with…"). [onResult] is true if it
-     *  was presented at all — iOS does not report what the user did with it afterwards. */
+    /**
+     * Present the share sheet for [bytes] as an OPEN ("Open with…"). [onResult] is true if the
+     * sheet was PRESENTED at all — iOS does not report what the user did with it afterwards, and
+     * a plain dismissal must not read as a failure to open.
+     */
     fun openExternally(name: String, mime: String, bytes: ByteArray, onResult: (Boolean) -> Unit)
 
     // ── Microphone + dictation (H3) ─────────────────────────────────────────────────────────

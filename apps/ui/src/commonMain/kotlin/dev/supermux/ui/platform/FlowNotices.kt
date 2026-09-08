@@ -3,6 +3,7 @@ package dev.supermux.ui.platform
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -62,7 +63,12 @@ fun NoticeOverlay(notices: FlowNotices, content: @Composable () -> Unit) {
         content()
         SnackbarHost(
             hostState = snackbars,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+            // `safeDrawingPadding` before the visual padding: the iOS host draws edge-to-edge
+            // (`.ignoresSafeArea()`, because Compose owns the insets), so without this the
+            // snackbar sits under the home indicator — legible, but with its action button in the
+            // one strip of screen the system takes for itself. Desktop insets are zero, so this is
+            // free there.
+            modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(16.dp),
         )
     }
 }

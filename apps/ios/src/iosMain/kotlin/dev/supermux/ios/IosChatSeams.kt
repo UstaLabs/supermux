@@ -53,7 +53,7 @@ import platform.UIKit.UIPasteboard
  * `UIFeedbackGenerator` is main-thread-only, so there is no dispatch here to get wrong.
  */
 class IosHaptics : Haptics {
-    override fun perform(kind: HapticKind) {
+    override fun perform(kind: HapticKind) = onMainThread {
         when (kind) {
             HapticKind.Tick -> UIImpactFeedbackGenerator(UIImpactFeedbackStyle.UIImpactFeedbackStyleLight).impactOccurred()
             HapticKind.Confirm ->
@@ -83,7 +83,11 @@ class IosClipboardAccess : ClipboardAccess {
     override fun hasImage(): Boolean = UIPasteboard.generalPasteboard.hasImages
 
     override suspend fun readImages(): List<PickedFile> {
-        val images = UIPasteboard.generalPasteboard.images.orEmpty().filterIsInstance<UIImage>()
+        // The pasteboard read itself is UIKit and belongs on the main thread; only the PNG encode
+        // below is heavy enough to be worth moving off it.
+        val images = withContext(Dispatchers.Main) {
+            UIPasteboard.generalPasteboard.images.orEmpty().filterIsInstance<UIImage>()
+        }
         if (images.isEmpty()) return emptyList()
         return withContext(Dispatchers.Default) {
             images.mapIndexedNotNull { index, image ->

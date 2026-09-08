@@ -22,8 +22,12 @@ import platform.posix.memcpy
  * released.
  */
 @OptIn(ExperimentalForeignApi::class)
-fun ByteArray.toNSData(): NSData = usePinned { pinned ->
-    if (isEmpty()) NSData() else NSData.create(bytes = pinned.addressOf(0), length = size.convert())
+fun ByteArray.toNSData(): NSData {
+    // The empty check comes BEFORE `usePinned`: pinning an empty array and asking for
+    // `addressOf(0)` is an out-of-bounds index, so the old order would have thrown on the one
+    // input most likely to reach here by accident (a zero-byte attachment, an empty token).
+    if (isEmpty()) return NSData()
+    return usePinned { pinned -> NSData.create(bytes = pinned.addressOf(0), length = size.convert()) }
 }
 
 @OptIn(ExperimentalForeignApi::class)

@@ -15,17 +15,26 @@ import platform.Foundation.NSUUID
  */
 object IosHostStores {
 
-    private var storeInstance: PairedHostStore? = null
-    private var snapshotInstance: HostSnapshotStore? = null
+    // `by lazy` and not a null-check: the default `LazyThreadSafetyMode.SYNCHRONIZED` is what
+    // actually delivers the "exactly ONE store" guarantee this object's KDoc claims. The
+    // check-then-assign it replaced could hand two callers two different stores under a race, and
+    // each would then hold its own in-memory fleet and overwrite the other's saves — the precise
+    // failure the guarantee exists to prevent. Construction is cheap (a Keychain read happens on
+    // first `list()`, not here), so paying for synchronisation costs nothing.
 
     /** The shared store; recordIds are random UUIDs, matching Swift's `UUID().uuidString`. */
-    fun store(): PairedHostStore =
-        storeInstance ?: PairedHostStore(KeychainHostPersistence()) { NSUUID().UUIDString }
-            .also { storeInstance = it }
+    private val storeInstance: PairedHostStore by lazy {
+        PairedHostStore(KeychainHostPersistence()) { NSUUID().UUIDString }
+    }
 
     /** The shared per-host offline-snapshot cache (spec §5), outside the Keychain. */
-    fun snapshotStore(): HostSnapshotStore =
-        snapshotInstance ?: HostSnapshotStore(IosSnapshotPersistence()).also { snapshotInstance = it }
+    private val snapshotInstance: HostSnapshotStore by lazy {
+        HostSnapshotStore(IosSnapshotPersistence())
+    }
+
+    fun store(): PairedHostStore = storeInstance
+
+    fun snapshotStore(): HostSnapshotStore = snapshotInstance
 
     /**
      * One-time single-host → `PairedHost[0]` migration, run at launch. Idempotent: a store that

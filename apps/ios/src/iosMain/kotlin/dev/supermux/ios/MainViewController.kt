@@ -79,6 +79,21 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
     // The SwiftUI shell's preferences onto the shared keys, once (see migrateSwiftPrefsOnce): the
     // theme, chat density, drafts and collapsed groups an upgrading user already chose.
     migrateSwiftPrefsOnce(defaults)
+    // The legacy single-host pairing into the fleet store, here at CONSTRUCTION — the same place
+    // Android runs it (`MainActivity`'s pre-gate `remember`, and again in `AppViewModel`'s fleet
+    // initialiser). Running it only from the pairing gate's `onPaired`, as this first did, is
+    // wrong for the two cases that never pass through that callback:
+    //
+    //  1. The `SM_PAIR_TOKEN`/`SM_PAIR_BASE` launch seed. `SupermuxApp.swift` writes ONLY the
+    //     legacy pairing, so `isPaired()` is already true on the next launch, the gate is skipped
+    //     entirely, and `buildFleet` would snapshot an empty `PairedHostStore` — a seeded
+    //     simulator that looks paired and has no hosts.
+    //  2. A user upgrading from a PRE-multi-host SwiftUI build, whose only record is the legacy
+    //     pair. Same path, same empty fleet, except it is a real person's device.
+    //
+    // It is idempotent (it no-ops once the store holds any host), so running it on every launch —
+    // and again from `onPaired` below, for the pairing that happens after this point — is safe.
+    IosHostStores.migrateFromLegacyIfNeeded()
 
     val deps = HostStoreDeps(
         httpFactory = iosHttpFactory(),
@@ -144,8 +159,10 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 OnboardingFlow(
                     pairing = pairing,
                     onPaired = {
-                        // Fold the pairing the gate just wrote into the fleet store, so the
+                        // Fold the pairing the gate JUST wrote into the fleet store, so the
                         // FleetStore built on the next composition sees a host rather than none.
+                        // The construction-time call above cannot cover this one: it ran before
+                        // this pairing existed.
                         IosHostStores.migrateFromLegacyIfNeeded()
                         IosAppState.consumeOpenedUrl()
                         paired = true

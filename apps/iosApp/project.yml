@@ -1,9 +1,12 @@
 # XcodeGen project for the supermux iOS client.
 #   xcodegen generate  (the .xcodeproj is gitignored)
-# Kotlin framework: the app target's pre-build phase runs
-# `./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode` (apps/ is the gradle root),
-# which builds Shared.framework into shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-# and embeds+signs it into Supermux.app/Frameworks (JetBrains direct-integration flow).
+# Kotlin frameworks: each app target's pre-build phase runs
+# `./gradlew --no-daemon :<module>:embedAndSignAppleFrameworkForXcode` (apps/ is the gradle root),
+# which builds the framework into <module>/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME) and
+# embeds+signs it into the .app's Frameworks/ (JetBrains direct-integration flow).
+#
+# The iOS app builds `:ios` → SupermuxKit.framework, which re-exports :ui and :shared and is the
+# ONE Kotlin framework it links. SupermuxMac and the watch app still build `:shared` → Shared.
 name: Supermux
 options:
   bundleIdPrefix: dev.supermux
