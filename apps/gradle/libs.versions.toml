@@ -39,7 +39,13 @@ jbrApi = "1.10.1"
 # desktop/build.gradle.kts in lockstep: JCEF's Java/native ABI is a compatibility unit.
 jcef = "137.0.17-gf354b0e-chromium-137.0.7151.104-api-1.20-253-b13"
 markdown = "0.7.6"
-coil = "3.5.0"
+# 3.4.0, NOT 3.5.0, and pinned by the Kotlin version rather than by taste: coil 3.5.0's
+# Kotlin/Native klibs are built with Kotlin 2.4 (klib abi_version 2.4.0), and a 2.3.21 compiler
+# refuses to read them — ":ui:compileKotlinIosSimulatorArm64" fails with "can consume libraries
+# having ABI version <= 2.3.0" the moment `:ui` has an iOS target. 3.4.0 is abi_version 2.3.0
+# (compiler 2.3.10). Every other native dependency we ship is already <= 2.3.0. Raise this again
+# when Kotlin moves to 2.4.
+coil = "3.4.0"
 # Compose Media Player — inline video in the desktop chat stream. MIT (vlcj, the obvious
 # alternative, is GPLv3 and would relicense the app). Per-platform native backends compiled into
 # the jar: AVPlayer on macOS, Media Foundation on Windows, GStreamer on Linux — no system install.
