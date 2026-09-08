@@ -83,6 +83,18 @@ kotlin {
             }
         }
         appleMain.dependencies { implementation(libs.ktor.client.darwin) }
+        // nonIosAppleMain — the Apple targets that are NOT the iPhone app: watchOS and macOS.
+        //
+        // It exists for exactly one declaration, `SecureTokenStore`. Cluster H2 gives iOS a real
+        // Keychain actual, and an actual in `appleMain` would have to serve watchOS and macOS too
+        // — but the watch has no Keychain item to read (it is provisioned over WatchConnectivity)
+        // and the Mac app deliberately keeps its token in `~/.mux/state`, not the login keychain
+        // (a reinstalled local build changes its designated requirement and the read would block
+        // on an authorization prompt before the first window). So the in-memory stub stays here
+        // for those two, and the Keychain actual lives in `iosMain`.
+        val nonIosAppleMain by creating { dependsOn(appleMain.get()) }
+        watchosMain { dependsOn(nonIosAppleMain) }
+        macosArm64Main { dependsOn(nonIosAppleMain) }
         androidMain {
             dependsOn(nonAppleMain)
             dependencies { implementation(libs.androidx.security.crypto) }
