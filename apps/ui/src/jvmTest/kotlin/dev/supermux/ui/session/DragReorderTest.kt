@@ -26,6 +26,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.LocalHaptics
@@ -73,6 +74,7 @@ class DragReorderTest {
     ) {
         CompositionLocalProvider(
             LocalInputMode provides mode,
+            LocalPointerAvailable provides (mode == InputMode.Pointer),
             LocalHaptics provides haptics,
         ) {
             val listState = rememberLazyListState()

@@ -731,7 +731,15 @@ fun ChatPanel(
                         )
                     }
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                    // A pointer host can still raise a soft keyboard (a tablet with a mouse, DeX
+                    // with the phone as touchpad), so the composer clears it here too; the inset
+                    // is zero on a desktop, where this is the layout it always was.
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
                         Column(
                             Modifier
                                 .widthIn(max = CONTENT_MAX_WIDTH)

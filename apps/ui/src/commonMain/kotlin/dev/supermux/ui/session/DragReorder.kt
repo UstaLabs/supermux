@@ -31,8 +31,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.zIndex
 import dev.supermux.session.moveId
-import dev.supermux.ui.adaptive.InputMode
-import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.LocalHaptics
@@ -48,7 +47,7 @@ import kotlinx.coroutines.launch
 // Reorder-in-place: the elevate-and-shuffle list reorder both hosts' session and
 // workspace lists use. This is the one implementation of what the third-party reorderable library
 // used to do on each host separately (same call shape: rememberReorderableListState +
-// ReorderableItem + a drag-handle modifier), with the gesture branched on LocalInputMode:
+// ReorderableItem + a drag-handle modifier), with the gesture branched on LocalPointerAvailable:
 // Pointer grabs on press + slop, Touch grabs on long-press with a haptic tick.
 // ---------------------------------------------------------------------------
 
@@ -214,8 +213,8 @@ class ReorderableItemScope internal constructor(
     /**
      * Makes the modified node the row's drag handle.
      *
-     * Under [InputMode.Pointer] the grab happens on press + touch slop (mouse-friendly, no
-     * waiting); under [InputMode.Touch] it happens on long-press with a [HapticKind.Tick], so
+     * With a pointer ([LocalPointerAvailable]) the grab happens on press + touch slop
+     * (mouse-friendly, no waiting); without one it happens on long-press with a [HapticKind.Tick], so
      * a vertical fling still scrolls the list. [interactionSource] is the row's own, so the
      * click indication and the drag do not fight over the press.
      */
@@ -226,7 +225,10 @@ class ReorderableItemScope internal constructor(
         onDragStarted: (startedPosition: Offset) -> Unit = {},
         onDragStopped: () -> Unit = {},
     ): Modifier {
-        val touch = LocalInputMode.current == InputMode.Touch
+        // A gesture question asks for a POINTER, not the input mode: a phone with a Bluetooth
+        // keyboard is in the Pointer input mode yet has nothing that can press-and-slide a row, and an
+        // immediate drag there eats every scroll.
+        val touch = !LocalPointerAvailable.current
         val haptics = LocalHaptics.current
         val started = rememberUpdatedState(onDragStarted)
         val stopped = rememberUpdatedState(onDragStopped)
