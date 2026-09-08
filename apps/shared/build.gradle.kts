@@ -47,17 +47,31 @@ kotlin {
             // MockEngine: capture the exact request shapes BrokerApi produces.
             implementation(libs.ktor.client.mock)
         }
-        // The GFM markdown parser (org.jetbrains:markdown) only publishes JVM + Android +
-        // a subset of Apple targets — notably NOT watchosArm64 — so it can't live in commonMain.
-        // The chat markdown renderer is Android-only anyway; iOS has its own native MarkdownView.
-        // A non-Apple (jvm + android) intermediate source set holds the parser and its dependency,
-        // keeping the Apple framework free of it entirely.
-        val nonAppleMain by creating { dependsOn(commonMain.get()) }
-        val nonAppleTest by creating { dependsOn(commonTest.get()) }
-        nonAppleMain.dependencies {
-            implementation(libs.markdown)
-            implementation(libs.ktor.client.cio)
-        }
+        // Two intermediate source sets, both narrower than commonMain, for two DIFFERENT reasons.
+        //
+        // nonWatchMain — the GFM markdown parser (org.jetbrains:markdown 0.7.6). It publishes JVM,
+        // Android, iOS and macOS but NOT watchosArm64, so it cannot live in commonMain. The set is
+        // therefore "everything except the watch": the phone, the desktop and the Mac all render
+        // markdown from `ui/Markdown.kt`, and `:ui`'s chat renderer (which is commonMain and now
+        // compiles for iOS) needs `parseMarkdownBlocks` to resolve there. Only the watch app's
+        // framework stays free of it — the watch shows plain text.
+        //
+        // nonAppleMain — the JVM/Android-only code: `java.time` labels, `java.util.TimeZone`, and
+        // the CIO HTTP engine (Apple targets use Darwin). It sits UNDER nonWatchMain so jvm and
+        // android reach the markdown parser through one edge rather than two.
+        val nonWatchMain by creating { dependsOn(commonMain.get()) }
+        val nonWatchTest by creating { dependsOn(commonTest.get()) }
+        nonWatchMain.dependencies { implementation(libs.markdown) }
+
+        val nonAppleMain by creating { dependsOn(nonWatchMain) }
+        val nonAppleTest by creating { dependsOn(nonWatchTest) }
+        nonAppleMain.dependencies { implementation(libs.ktor.client.cio) }
+
+        // iosMain is the default hierarchy's intermediate over iosArm64 + iosSimulatorArm64; both,
+        // plus macosArm64, get the parser. watchosArm64/watchosSimulatorArm64 deliberately do not.
+        iosMain { dependsOn(nonWatchMain) }
+        macosArm64Main { dependsOn(nonWatchMain) }
+
         jvmMain { dependsOn(nonAppleMain) }
         jvmTest {
             dependsOn(nonAppleTest)
