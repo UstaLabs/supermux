@@ -15,11 +15,22 @@ plugins {
 // This is a MATERIAL 3 pane library, deliberately: both consumers already ship material3, so
 // staying toolkit-neutral would cost a colour-token abstraction that nothing would use.
 //
-// jvm() + androidTarget(). Desktop consumes the JVM artifact; Android wires :ui in a later phase.
+// jvm() + androidTarget() + the two iOS targets. Desktop consumes the JVM artifact, Android the
+// android one, and `:ios` (SupermuxKit.framework) the iOS ones.
 kotlin {
     jvmToolchain(17)
     jvm()
     androidTarget()
+    // iOS (cluster H1). Declared so `iosMain` exists and the 8 expect seams get their Apple
+    // actuals; the compile/link tasks are DISABLED on this Linux host
+    // (kotlin.native.ignoreDisabledTargets in gradle.properties) and run on the Mac. No framework
+    // is declared here — `:ios` owns the single one the phone links (SupermuxKit), which re-exports
+    // this module; a second framework would embed the klibs twice.
+    iosArm64()
+    iosSimulatorArm64()
+    // Explicit, matching `:shared`: iosMain sits under the default apple/native hierarchy, and
+    // naming the template keeps that wiring stable if an intermediate source set is ever added.
+    applyDefaultHierarchyTemplate()
 
     sourceSets {
         commonMain.dependencies {
