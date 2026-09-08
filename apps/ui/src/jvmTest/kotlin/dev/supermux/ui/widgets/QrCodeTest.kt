@@ -16,10 +16,12 @@ import kotlin.test.assertTrue
 
 /**
  * Pure round-trip proofs for the ONE QR encoder (cluster E4; was desktop's `host/QrCodeTest`): a
- * payload encoded with
- * [encodeQr] decodes back to the exact original string via ZXing's own [QRCodeReader]. No Skiko /
- * display / network needed — the [BitMatrix] is turned into a synthetic luminance grid the reader
- * consumes directly.
+ * payload encoded with [encodeQr] decodes back to the exact original string via ZXing's own
+ * [QRCodeReader]. No Skiko / display / network needed — the matrix is turned into a synthetic
+ * luminance grid the reader consumes directly.
+ *
+ * These cover the RENDERING half (the scale-to-sizePx step and the run-length Canvas raster). The
+ * encoder itself — versions, EC tables, Reed–Solomon, masks — is covered by `qr/QrEncoderTest`.
  */
 class QrCodeTest {
 

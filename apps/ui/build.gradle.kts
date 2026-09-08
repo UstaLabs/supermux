@@ -83,11 +83,6 @@ kotlin {
             // exposes the Nav3 back stack and `FullPaneOverlaySceneStrategy` is a `SceneStrategy`
             // in this module's own public signatures.
             api(libs.jetbrains.navigation3.ui)
-            // The ONE QR encoder (widgets/QrCode.kt). Pure-Java ZXing core — NOT the Android
-            // `zxing-android-embedded` scanner Android's copy pulled in just to draw a bitmap.
-            // Only the module matrix comes from it; the raster is a Compose Canvas, so this stays
-            // `implementation`: no ZXing type appears in `:ui`'s own public API.
-            implementation(libs.zxing.core)
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))
@@ -102,9 +97,12 @@ kotlin {
             // BackHandler. The artifact is already on the runtime classpath via ui-backhandler;
             // naming it here only puts it on the test COMPILE classpath.
             implementation(libs.jetbrains.navigationevent.compose)
-            // QrCodeTest decodes what widgets/QrCode.kt encoded, through ZXing's own reader.
-            // (commonMain declares zxing as `implementation`, which a KMP test source set does
-            // not inherit.)
+            // ZXing lives HERE ONLY, and only as a DECODER. `widgets/qr/QrEncoder.kt` is a
+            // hand-written encoder (ZXing core is a JVM-only jar, so it stopped resolving when
+            // this module gained iOS targets, and this phase adds no libraries) — the one honest
+            // proof that it is spec-correct is a round trip through an INDEPENDENT reader, which
+            // is what QrEncoderTest / QrCodeTest / DevicesSettingsScreenTest do. Nothing in
+            // commonMain, and therefore nothing shipped, references it.
             implementation(libs.zxing.core)
         }
     }
