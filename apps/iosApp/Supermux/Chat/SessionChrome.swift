@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Session-level header state + actions shared by the compact `ChatView` toolbar and the
 /// regular-width `IPadWorkspace` header bar: git status, proxy links, the finish flow

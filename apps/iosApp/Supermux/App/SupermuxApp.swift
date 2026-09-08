@@ -1,5 +1,14 @@
 import SwiftUI
+#if COMPOSE_SHELL
+// The Compose shell links ONE Kotlin framework, SupermuxKit, which re-exports :shared.
+// Linking Shared as well would embed the :shared klib twice — two Kotlin runtimes, two
+// copies of every object. The macOS target and the extensions keep plain `import Shared`,
+// which is why this is a compilation condition and not a rename. Cluster H6 deletes the
+// SwiftUI path and with it the #else branch.
+import SupermuxKit
+#else
 import Shared
+#endif
 
 @main
 struct SupermuxApp: App {
@@ -13,6 +22,11 @@ struct SupermuxApp: App {
     #endif
     @State private var paired: Bool
     @AppStorage("appearance") private var appearance = "system"
+    #if COMPOSE_SHELL
+    // Drives `IosAppState.foreground`, which the shared shell reads to suppress viewing presence
+    // (and so keep pushes coming) while the app is in the background.
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
     #if os(macOS)
     @StateObject private var macHost: MacHostCoordinator
     @State private var macManualPairing = false
@@ -53,7 +67,14 @@ struct SupermuxApp: App {
         // First-run intro cinematic — once ever, never in seeded dev runs (see IntroPolicy).
         _introVisible = State(initialValue: IntroPolicy.shouldShow())
         #else
+        // Under COMPOSE_SHELL the Kotlin root owns the ONE `PairedHostStore` in the process
+        // (`IosHostStores`), and it runs this same migration itself at construction. Running it
+        // here too would build a SECOND store over the same Keychain items: two in-memory copies of
+        // the fleet, each overwriting the other's saves. The env seed above still applies — it
+        // writes the LEGACY pairing, which is exactly what Kotlin's migration then folds in.
+        #if !COMPOSE_SHELL
         HostStore.migrateFromLegacyIfNeeded()
+        #endif
         _paired = State(initialValue: BrokerConfig.isPaired)
         #endif
         #if os(macOS)
@@ -75,6 +96,31 @@ struct SupermuxApp: App {
     }
 
     var body: some Scene {
+        #if COMPOSE_SHELL
+        // The Compose shell: ONE scene whose content is the shared `SupermuxApp` root inside a
+        // navigation controller (see ComposeRootView). Deliberately absent, compared with the
+        // SwiftUI branch below:
+        //  - `.preferredColorScheme` — Compose owns appearance now, reading `appearance:mode` from
+        //    the shared settings store. Leaving it would let SwiftUI force a scheme the Compose
+        //    theme disagrees with, and the two would fight on every change.
+        //  - the pairing gate — `MainViewController` runs the shared intro/pairing flow itself, so
+        //    Swift no longer decides what "paired" means.
+        WindowGroup {
+            ComposeRootView()
+                // Compose draws to the very edges and pads for the safe areas itself, through
+                // `WindowInsets.safeDrawing` in the shared shell.
+                .ignoresSafeArea()
+                .onOpenURL { url in
+                    // Handing over the raw string rather than parsing here: `PairUrl.parse` is
+                    // shared code and already handles both `supermux://pair?...` and a pasted
+                    // https link, with the stored base URL as the fallback.
+                    IosAppState.shared.setOpenedUrl(url: url.absoluteString)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    IosAppState.shared.setForeground(value: phase == .active)
+                }
+        }
+        #else
         WindowGroup {
             Group {
                 // XCUITest / feel-test: real SessionStatusRail UI without pairing or broker.
@@ -190,6 +236,7 @@ struct SupermuxApp: App {
         Settings {
             MacSettingsWindow()
         }
+        #endif
         #endif
     }
 

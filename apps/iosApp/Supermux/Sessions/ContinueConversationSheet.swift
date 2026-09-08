@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// "Continue in new conversation" — same working directory as the source session, with an
 /// editable handoff first-message that points the new agent at `read_session` (web

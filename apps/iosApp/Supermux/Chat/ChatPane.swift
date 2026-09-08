@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 import PhotosUI
 import UniformTypeIdentifiers
 

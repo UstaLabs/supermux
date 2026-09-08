@@ -1,6 +1,10 @@
 import SwiftUI
 import WebKit
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// The native code-editor pane (PWA-parity, Phase 1): a lazy file tree + unlimited
 /// tabs over a CodeMirror `WKWebView` surface, with filename search and editor
@@ -239,9 +243,14 @@ struct EditorPane: View {
             comments: state.diffComments,
             onAddComment: { repo, path, anchorLine, anchorContext, hunkHeader, body in
                 await broker.reviewAddComment(session.id,
+                    // `deliver`/`parentId` are `= null` in Kotlin, but a default argument does not
+                    // cross into Objective-C: Swift must pass every parameter. This call site had
+                    // been stale since those fields were added — CI's iOS lane only watched
+                    // `apps/iosApp/**`, so a `:shared` change could not trigger it (now fixed).
                     AddCommentBody(repo: repo, path: path, side: "RIGHT",
                                    anchorLine: Int32(anchorLine), anchorContext: anchorContext,
-                                   body: body, diffHunkHeader: hunkHeader))
+                                   body: body, diffHunkHeader: hunkHeader,
+                                   deliver: nil, parentId: nil))
             },
             onResolve: { commentId in await broker.reviewResolve(session.id, commentId) },
             onSubmit: { _ = await broker.reviewSubmit(session.id) },

@@ -2,7 +2,11 @@
 import AppKit
 import Combine
 import CoreImage
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 import SwiftUI
 
 struct MacHostEndpoint: Equatable {

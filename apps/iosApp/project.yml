@@ -86,6 +86,11 @@ targets:
             CFBundleURLSchemes:
               - supermux
         UILaunchScreen: {}
+        # Required by Compose Multiplatform's iOS runtime, which refuses to start without it
+        # (`PlistSanityCheck`). Without the key CoreAnimation caps an app at 60 fps on a ProMotion
+        # iPhone, so every scroll in the shared shell would run at half the display's rate — the
+        # runtime treats that as a misconfiguration rather than a preference, and throws at launch.
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -111,21 +116,32 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Supermux/Supermux.entitlements
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+          - $(SRCROOT)/../ios/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        # The phone app links exactly ONE Kotlin framework. SupermuxKit re-exports :shared (and
+        # :ui), so every symbol Shared used to provide is still here — but linking Shared AS WELL
+        # would embed the :shared klib twice: two Kotlin runtimes, two copies of every object, and
+        # state that silently does not agree with itself. The watch app is a separate binary and
+        # keeps its own Shared.framework; so do the notification extensions.
         OTHER_LDFLAGS:
           - $(inherited)
           - -framework
-          - Shared
+          - SupermuxKit
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/Frameworks"
+        # The Compose shell. With it OFF the SwiftUI shell still compiles and runs against
+        # Shared.framework (the `#else` branch of every conditional import), which is what keeps
+        # the old path available until cluster H6 deletes it.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS:
+          - $(inherited)
+          - COMPOSE_SHELL
       configs:
         Release:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux App Store"
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
     preBuildScripts:
-      - name: Build Kotlin Shared.framework (embed and sign)
+      - name: Build Kotlin SupermuxKit.framework (embed and sign)
         basedOnDependencyAnalysis: false
         script: |
           set -e
@@ -137,7 +153,12 @@ targets:
           # --no-daemon: the embed step runs codesign; a detached Gradle daemon
           # loses the calling session's keychain access (errSecInternalComponent)
           # when signing headlessly over SSH. Running in-session keeps codesign working.
-          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+          #
+          # This task also copies :ui's compose-resources (the Geist fonts) into the app bundle —
+          # which is why the `:ios` module applies the org.jetbrains.compose plugin even though it
+          # declares no resources of its own. Without the plugin there is no such hook, the fonts
+          # never reach the bundle, and every screen falls back to the system face SILENTLY.
+          ./gradlew --no-daemon :ios:embedAndSignAppleFrameworkForXcode
 
   SupermuxWatch:
     type: application
@@ -367,9 +388,16 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
+        # Mirrors the host target: these tests are compiled INTO the app's module, so they see the
+        # same framework and must resolve the same conditional imports. (SupermuxMacTests reuses
+        # the same sources against SupermuxMac, which keeps Shared — hence the condition, not a
+        # rename.)
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+          - $(SRCROOT)/../ios/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS:
+          - $(inherited)
+          - COMPOSE_SHELL
 
   SupermuxMacTests:
     # Mac twin of SupermuxTests: same suite, same @testable import Supermux (SupermuxMac's

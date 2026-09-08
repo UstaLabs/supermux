@@ -1,5 +1,9 @@
 import Foundation
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Observable controller around the shared `TerminalClient`. Mirrors how
 /// `BrokerSession` consumes Kotlin flows via SKIE (`for await`): pumps pty bytes

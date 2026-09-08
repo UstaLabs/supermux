@@ -3,7 +3,11 @@ import UIKit
 #else
 import AppKit
 #endif
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 import Metal
 import QuartzCore
 import simd

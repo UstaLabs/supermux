@@ -28,7 +28,11 @@
 
 import Combine
 import Foundation
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 #if canImport(UIKit)
 import UIKit
 #else

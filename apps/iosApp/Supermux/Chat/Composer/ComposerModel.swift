@@ -1,6 +1,10 @@
 // apps/iosApp/Supermux/Chat/Composer/ComposerModel.swift
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 import PhotosUI
 import UniformTypeIdentifiers
 #if canImport(UIKit)

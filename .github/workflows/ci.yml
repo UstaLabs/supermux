@@ -76,6 +76,12 @@ jobs:
               - 'apps/ui/**'
             ios:
               - 'apps/iosApp/**'
+              # The Kotlin half of the iOS app. `apps/ios` is the SupermuxKit framework module and
+              # `apps/ui/src/iosMain` holds the iOS actuals — a change to either can break the iOS
+              # build without touching a single Swift file, which is exactly the change this lane
+              # exists to catch.
+              - 'apps/ios/**'
+              - 'apps/ui/src/iosMain/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'

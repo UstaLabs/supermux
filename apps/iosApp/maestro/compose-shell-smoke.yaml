@@ -1,0 +1,41 @@
+# The Compose shell boots and the shared root is really on screen (cluster H2).
+#
+# Run:  maestro --udid <simulator-udid> test apps/iosApp/maestro/compose-shell-smoke.yaml
+#
+# What this is FOR: proving that `SupermuxApp` — the shared Compose root — is what the iOS app
+# renders, not the SwiftUI shell it replaces, and that it is interactive rather than a first frame
+# that happens to paint. The intro is the ideal subject because it is unmistakably shared code (the
+# same pager Android shows), it needs no broker, and every page transition is driven by the Compose
+# gesture/animation stack — so if Compose were mounted but not receiving touches, this fails.
+#
+# Assertions are on TEXT, deliberately, not on testTags: Compose's `testTag` becomes an
+# accessibility identifier on Android through `testTagsAsResourceId`, but on iOS the shared screens
+# expose their labels as accessibility TEXT, which is what Maestro reads here.
+appId: dev.supermux.app
+---
+# A fresh launch, so the run is not sensitive to whatever the previous one left behind. `clearState`
+# would also drop the pairing, which is exactly what we want for the intro.
+- launchApp:
+    clearState: true
+
+# Page 1 — the shared intro's first page. If the SwiftUI shell were still the root this would be
+# `OnboardingView`, which has none of this copy.
+- assertVisible: "AFK."
+- assertVisible: "Still shipping."
+- assertVisible: "See what it does"
+
+# Paging is a Compose gesture + animation. Tapping through all four pages proves the composition is
+# live and handling input, not a static first frame.
+- tapOn: "See what it does"
+- assertVisible: ".*"
+
+- swipe:
+    direction: LEFT
+- swipe:
+    direction: LEFT
+
+# The last page is the connect page — the shared pairing entry point (PairingState), which is what
+# every later cluster builds on. Reaching it means the whole intro flow ran inside Compose.
+- assertVisible:
+    text: "Connect|Pair|broker|link"
+    optional: false

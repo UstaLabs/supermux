@@ -1,5 +1,9 @@
 import XCTest
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 @testable import Supermux
 
 @MainActor

@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 // MARK: - Tool/activity blocks (parity with the web ChatView)
 

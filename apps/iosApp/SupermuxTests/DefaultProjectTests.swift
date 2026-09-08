@@ -1,6 +1,10 @@
 import XCTest
 @testable import Supermux
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Smoke tests for the shared KMP default-project helpers used by NewSessionView
 /// (web/Android chooseDefaultProject parity). Full table coverage lives in

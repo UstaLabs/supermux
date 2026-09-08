@@ -1,6 +1,10 @@
 #if os(macOS)
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// The native macOS Settings window (⌘, / Supermux ▸ Settings…): the classic icon-tab
 /// strip over grouped-form panes — the Settings-scene twin of the iOS sheet's

@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// The chat **Finish** bottom sheet — native parity with the PWA `FinishSheet.vue`.
 ///

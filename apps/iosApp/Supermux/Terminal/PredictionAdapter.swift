@@ -1,5 +1,9 @@
 import SwiftTerm
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Renders the shared `PredictionEngine`'s Step-2 `DisplayOp`s against a SwiftTerm
 /// `TerminalView`. The engine (shared Kotlin, reached via SKIE) owns ALL reconcile

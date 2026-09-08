@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// System settings — mirrors `SystemSettingsView.vue` on the web PWA.
 ///

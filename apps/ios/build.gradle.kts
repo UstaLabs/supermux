@@ -1,9 +1,16 @@
 plugins {
     alias(libs.plugins.multiplatform)
-    // The Compose COMPILER only. The `org.jetbrains.compose` plugin is deliberately not applied:
-    // this module owns no Compose resources and needs no `compose.` DSL — every Compose artifact
-    // arrives through `api(project(":ui"))`, which declares them `api` for exactly this reason.
     alias(libs.plugins.compose.compiler)
+    // The `org.jetbrains.compose` plugin, even though this module declares no Compose resources of
+    // its own and needs no `compose.` DSL (every artifact arrives through `api(project(":ui"))`).
+    //
+    // It is here for ONE reason: `syncComposeResourcesForIos`. Compose Multiplatform copies a
+    // dependency's `composeResources` — for us `:ui`'s Geist fonts — into the app bundle from a
+    // hook it installs on the FRAMEWORK module's `embedAndSignAppleFrameworkForXcode`, and that
+    // hook only exists where this plugin is applied. Without it the framework still links and the
+    // app still launches; the fonts are simply absent and every screen falls back to the system
+    // face, with no error anywhere. H1 left the plugin off and hit exactly that.
+    alias(libs.plugins.compose.multiplatform)
     // Swift-friendly Kotlin: sealed classes become enums, suspend functions become async, flows
     // become AsyncSequence. Same version `:shared` uses; the phone links ONE framework, so the
     // SKIE-generated Swift lives in this one.

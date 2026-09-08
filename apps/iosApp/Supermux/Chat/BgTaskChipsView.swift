@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Background-task chips (direction B of the waiting-state design): one mono chip per
 /// RUNNING bg shell / subagent / workflow, with its own live elapsed. The caller passes

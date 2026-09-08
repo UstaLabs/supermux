@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Native git-diff viewer + lightweight code-review tool — 1:1 parity with the PWA
 /// `DiffView.vue`. Renders unified diffs as monospaced rows (add/del/ctx/hunk), groups

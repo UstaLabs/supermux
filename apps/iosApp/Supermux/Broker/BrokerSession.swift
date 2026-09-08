@@ -1,5 +1,9 @@
 import Foundation
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 #if os(macOS)
 import AppKit   // NSWorkspace wake notification (sleep/wake reconnect)
 #endif
@@ -144,7 +148,11 @@ final class BrokerSession {
             http: IosClientKt.iosHttpClient(),
             sessionId: sessionId,
             kind: kind,
-            terminalId: terminalId
+            terminalId: terminalId,
+            // Workspace-scoped terminals (workspaces phase 4). The SwiftUI shell predates
+            // workspaces and drives session-scoped terminals only, so it addresses the session's
+            // own terminal — which is what `nil` means to the shared client.
+            workspaceId: nil
         )
     }
 
@@ -433,6 +441,23 @@ final class BrokerSession {
         case .lspReady(let f): lspBridges[f.session]?.handleReady(f.serverId)
         case .lspError(let f): lspBridges[f.session ?? ""]?.handleError(f.serverId)
         case .lspRpcIn(let f): lspBridges[f.session]?.handleRpcIn(f.serverId, f.message)
+        // Review comments reach the shell through `reviewAddComment`'s own reload on this path;
+        // the SwiftUI reducer has no incremental comment state to update.
+        case .reviewCommentFrame: break
+        // The workspace/view frames (workspaces phases 1-5). This reducer is the SwiftUI shell's,
+        // and that shell has no workspace model at all — it drives one session at a time — so
+        // there is nothing here to update. The Compose shell reduces these in `HostStore`.
+        case .workspaceAdded: break
+        case .workspaceChanged: break
+        case .workspaceRemoved: break
+        case .workspacesReordered: break
+        case .viewAdded: break
+        case .viewChanged: break
+        case .viewRemoved: break
+        case .viewMoved: break
+        // The walkthrough slideshow is reduced through `HostStore`'s WalkthroughSeam, which only
+        // the Compose shell installs.
+        case .walkthroughUpdated: break
         case .lspExit: break
         case .lspInstallProgress: break
         case .lspInstallDone: break
@@ -513,7 +538,7 @@ final class BrokerSession {
     private func sendViewingIfChanged() {
         if let last = lastSentViewing, last.session == viewingSession, last.visible == viewingVisible { return }
         lastSentViewing = (viewingSession, viewingVisible)
-        let frame = ClientFrameViewing(session: viewingSession, visible: viewingVisible)
+        let frame = ClientFrameViewing(session: viewingSession, visible: viewingVisible, sessions: nil)
         Task { [client] in try? await client.send(frame: frame) }
     }
 
@@ -529,7 +554,7 @@ final class BrokerSession {
                 guard let self else { return }
                 guard self.viewingVisible else { continue }
                 // Read state synchronously on the main actor, then send capturing only `client`.
-                let frame = ClientFrameViewing(session: self.viewingSession, visible: true)
+                let frame = ClientFrameViewing(session: self.viewingSession, visible: true, sessions: nil)
                 let client = self.client
                 Task { [client] in try? await client.send(frame: frame) }
             }
@@ -707,8 +732,12 @@ final class BrokerSession {
             baseBranch: nil,
             reasoningLevel: reasoningLevel,
             userStatus: "draft",
+            // Both post-date the SwiftUI launcher: it spawns into no workspace and sends its first
+            // message over the socket afterwards rather than inline with the spawn.
+            workspaceId: nil,
             draftPayload: payload,
-            inheritFrom: nil
+            inheritFrom: nil,
+            firstMessage: nil
         )
         return try? await api.spawn(req: req).id
     }

@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Per-session git badge: branch icon + `+N −M` for local (base), `↑N ↓M` for remote.
 /// Renders nothing when `git` is nil (non-repo session).

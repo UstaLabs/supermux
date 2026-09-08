@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Host badge visuals for the merged fleet list (spec §5): a stable per-host color dot, a compact
 /// per-row badge, and the `All · <host…> · +` filter chip row. The color slot, compact label, and

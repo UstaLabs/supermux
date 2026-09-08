@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 import CoreImage
 
 // Relative "last seen" + ISO parsing shared by the device/usage pages.
@@ -483,11 +487,11 @@ struct UsageView: View {
                 if loading && data == nil {
                     ProgressView().tint(Theme.teal).frame(maxWidth: .infinity).padding(.top, 60)
                 } else if let d = data {
-                    claudeCard(d.claude, err: d.errors["claude"], asOf: asOfCaption(d, "claude"), refreshing: isRefreshing(d, "claude"))
-                    codexCard(d.codex, err: d.errors["codex"], asOf: asOfCaption(d, "codex"), refreshing: isRefreshing(d, "codex"))
-                    cursorCard(d.cursor, err: d.errors["cursor"], asOf: asOfCaption(d, "cursor"), refreshing: isRefreshing(d, "cursor"))
-                    opencodeCard(d.opencode, err: d.errors["opencode"], asOf: asOfCaption(d, "opencode"), refreshing: isRefreshing(d, "opencode"))
-                    grokCard(d.grok, err: d.errors["grok"], asOf: asOfCaption(d, "grok"), refreshing: isRefreshing(d, "grok"))
+                    claudeCard(d.claude, err: d.errors["claude"] as? String, asOf: asOfCaption(d, "claude"), refreshing: isRefreshing(d, "claude"))
+                    codexCard(d.codex, err: d.errors["codex"] as? String, asOf: asOfCaption(d, "codex"), refreshing: isRefreshing(d, "codex"))
+                    cursorCard(d.cursor, err: d.errors["cursor"] as? String, asOf: asOfCaption(d, "cursor"), refreshing: isRefreshing(d, "cursor"))
+                    opencodeCard(d.opencode, err: d.errors["opencode"] as? String, asOf: asOfCaption(d, "opencode"), refreshing: isRefreshing(d, "opencode"))
+                    grokCard(d.grok, err: d.errors["grok"] as? String, asOf: asOfCaption(d, "grok"), refreshing: isRefreshing(d, "grok"))
                 } else {
                     ContentUnavailableView("Usage unavailable", systemImage: "chart.bar")
                         .padding(.top, 40)
@@ -516,7 +520,9 @@ struct UsageView: View {
     }
 
     private func asOfCaption(_ d: UsageResponse, _ provider: String) -> String? {
-        guard let iso = d.fetchedAt[provider], !iso.isEmpty else { return nil }
+        // `fetchedAt` is a Kotlin `Map<String, String?>`; a nullable map VALUE bridges to ObjC
+        // as `Any`, because an ObjC dictionary cannot express "String or nil" as its value type.
+        guard let iso = d.fetchedAt[provider] as? String, !iso.isEmpty else { return nil }
         return "as of \(relTime(iso))"
     }
 

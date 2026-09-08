@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Lazy file tree for the editor pane. Mirrors the Android `FileTree` / PWA `FileTree.vue`:
 /// the root loads from `loadDir(".")`, directories expand on tap (loaded once, tracked in

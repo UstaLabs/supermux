@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Debounced filename search for the editor header. A glass search field with a
 /// live results dropdown — mirrors the Android `EditorSearchField` + overlay, but

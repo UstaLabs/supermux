@@ -1,6 +1,10 @@
 // apps/iosApp/SupermuxTests/ComposerModelTests.swift
 import XCTest
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 #if canImport(UIKit)
 import UIKit
 #else

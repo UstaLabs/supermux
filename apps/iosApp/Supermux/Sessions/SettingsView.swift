@@ -1,5 +1,9 @@
 import SwiftUI
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Settings hub — mirrors the web PWA SettingsIndexView with NavigationLink rows
 /// for each sub-screen, plus an inline Appearance picker.

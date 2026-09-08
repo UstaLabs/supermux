@@ -1,5 +1,9 @@
 import Foundation
+#if COMPOSE_SHELL
+import SupermuxKit
+#else
 import Shared
+#endif
 
 /// Source of truth for the editor pane — open tabs, their content/dirty state, and
 /// the file-tree UI state. Mirrors the Android `EditorState`, but with UNLIMITED tabs
