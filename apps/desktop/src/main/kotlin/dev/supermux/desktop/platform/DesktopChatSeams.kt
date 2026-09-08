@@ -6,6 +6,7 @@ package dev.supermux.desktop.platform
 import dev.supermux.chat.mimeForFileName
 import dev.supermux.desktop.upload.FileChunkSource
 import dev.supermux.ui.platform.CapturedAudio
+import dev.supermux.ui.platform.FlowNotices
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
 import dev.supermux.ui.platform.LiveTranscript
@@ -25,8 +26,6 @@ import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.TargetDataLine
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.swing.Swing
 import kotlinx.coroutines.withContext
 
@@ -280,25 +279,13 @@ private fun which(bin: String): Boolean =
 // ── notices ──────────────────────────────────────────────────────────────────
 
 /**
- * Desktop's transient notices: an in-memory bus the theme wrapper drains into a `SnackbarHost`.
+ * Desktop's transient notices.
  *
- * `MutableSharedFlow(extraBufferCapacity = 8, DROP_OLDEST)` and [SharedFlow.tryEmit], so [show] is
- * a non-suspending fire-and-forget from any thread and a burst of failures cannot back-pressure the
- * caller — the newest message wins, which is what a toast queue does anyway.
+ * The bus itself is `:ui`'s [FlowNotices] — desktop and iOS both raise a shared screen's one-line
+ * failure as a Compose snackbar (neither has an OS transient message), so the implementation is
+ * shared and only the NAME stays here, where `DesktopPlatform` and its test already say it.
  */
-class DesktopNotices : NoticeChannel {
-    private val _messages = MutableSharedFlow<String>(
-        extraBufferCapacity = 8,
-        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
-    )
-
-    /** Collected by `DesktopTheme`'s snackbar host. */
-    val messages: SharedFlow<String> = _messages
-
-    override fun show(text: String) {
-        if (text.isNotBlank()) _messages.tryEmit(text)
-    }
-}
+typealias DesktopNotices = FlowNotices
 
 /** [writeToTempDir] under the name the tests use, so its role there is obvious at the call site. */
 internal fun stageAttachmentForTest(name: String, bytes: ByteArray): File? =

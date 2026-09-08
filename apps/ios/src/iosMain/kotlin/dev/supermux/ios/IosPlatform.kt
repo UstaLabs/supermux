@@ -12,6 +12,9 @@ import dev.supermux.ui.platform.NoAppUpdater
 import dev.supermux.ui.platform.NoticeChannel
 import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.platform.NotificationManager
+import dev.supermux.net.ByteArrayChunkSource
+import dev.supermux.ui.platform.FlowNotices
+import dev.supermux.ui.platform.NoticeOverlay
 import dev.supermux.ui.platform.PickKind
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.Platform
@@ -23,6 +26,7 @@ import dev.supermux.ui.terminal.UnavailableTerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import platform.UIKit.UIPasteboard
 
 /**
  * iOS's [Platform] — the third host of the shared Compose root, beside `AndroidPlatform` and
@@ -96,26 +100,63 @@ class IosPlatform(
 
     // ── H2: UIKit ───────────────────────────────────────────────────────────────────────────
 
-    override fun openUrl(url: String): Unit = unsupported("openUrl")
+    /** `UIApplication.openURL` lives on the Swift side — it is app-delegate territory, and a
+     *  Compose surface has no application object of its own to reach for. Fire-and-forget. */
+    override fun openUrl(url: String) = bridge.openUrl(url)
 
-    override fun copyToClipboard(text: String): Unit = unsupported("copyToClipboard")
+    /** Parity with Android's `ClipData.newPlainText`; iOS has no clip label to set. */
+    override fun copyToClipboard(text: String) {
+        UIPasteboard.generalPasteboard.string = text
+    }
 
+    /**
+     * `UIDocumentPickerViewController` / `PHPickerViewController` through the bridge, suspended
+     * until the user picks or dismisses. Cancelling yields an empty list.
+     *
+     * [requester] is ignored, and that is the correct answer rather than an omission: it exists so
+     * Android can re-deliver a pick to the screen that asked after an activity recreation, and iOS
+     * never re-creates the view controller under a presented sheet. See [pendingPicks].
+     *
+     * The bytes arrive whole rather than as a stream because a `UIDocumentPicker` hands Swift a
+     * security-scoped URL whose access must be stopped before the callback returns — reading it
+     * lazily from Kotlin later would be reading a revoked URL. They are wrapped in a
+     * [ByteArrayChunkSource] so the upload path is byte-identical to the other two hosts'.
+     */
     override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> =
-        unsupported("pickFiles")
+        awaitCallback<List<IosPickedFile>> { done -> bridge.pickFiles(kind.wire, done) }
+            .map { it.toPickedFile() }
 
-    override suspend fun captureImage(requester: String): PickedFile? = unsupported("captureImage")
+    /** `UIImagePickerController(.camera)` in still mode, through the bridge. Null = backed out. */
+    override suspend fun captureImage(requester: String): PickedFile? =
+        awaitCallback<IosPickedFile?> { done -> bridge.captureImage(done) }?.toPickedFile()
 
-    override suspend fun captureVideo(requester: String): PickedFile? = unsupported("captureVideo")
+    /** The same, in video mode. */
+    override suspend fun captureVideo(requester: String): PickedFile? =
+        awaitCallback<IosPickedFile?> { done -> bridge.captureVideo(done) }?.toPickedFile()
 
-    override val haptics: Haptics get() = unsupported("haptics")
+    override val haptics: Haptics = IosHaptics()
 
-    override val clipboard: ClipboardAccess get() = unsupported("clipboard")
+    override val clipboard: ClipboardAccess = IosClipboardAccess()
 
-    override val files: FileAccess get() = unsupported("files")
+    override val files: FileAccess = IosFileAccess(bridge)
 
-    override val notices: NoticeChannel get() = unsupported("notices")
+    /**
+     * A Compose snackbar at the root, NOT a system alert.
+     *
+     * iOS has no Toast: an app that wants a transient line draws it. `UIAlertController` would be
+     * the wrong shape twice over — it is modal, and it demands a dismissal for a message the user
+     * is meant to be able to ignore. `MainViewController` composes [NoticeOverlay] over the app
+     * root and drains this, exactly as desktop's theme does.
+     */
+    override val notices: FlowNotices = FlowNotices()
 
     // ── H3: native bridges ──────────────────────────────────────────────────────────────────
+    //
+    // Still throwing, deliberately. Each of these is a Swift capability the bridge already declares
+    // (AVFoundation's scanner, `SFSpeechRecognizer`, `AVSpeechSynthesizer`) but that H3 wires and
+    // proves on a device. A stub that quietly returned "unavailable" instead would be worse than a
+    // throw: `caps.camera` is TRUE, so the add-host screen offers a Scan button, and a silent null
+    // would read to the user as a scanner that is broken rather than one that is not here yet.
 
     override suspend fun scanQr(): String? = unsupported("scanQr")
 
@@ -151,7 +192,10 @@ val IOS_CAPS: Caps = Caps(
     fileSystem = false,
     clipboardImages = true,
     saveAs = true,
-    walkthrough = false,
+    // `MainViewController` installs `IosWalkthroughSeam` in its HostStore factory, exactly as
+    // Android's `AppViewModel` does — so the diff pane may offer the walkthrough slideshow.
+    // Reading a walkthrough holder on a host that never installed the seam would throw.
+    walkthrough = true,
     appearanceControls = true,
     // Material You is an Android 12+ wallpaper API. iOS has no equivalent, so the row is not
     // offered at all rather than shown as an inert switch.
@@ -160,3 +204,21 @@ val IOS_CAPS: Caps = Caps(
     terminal = false,
     scrcpy = false,
 )
+
+/**
+ * The wire form of [PickKind] the bridge takes.
+ *
+ * A string and not the enum itself: crossing the boundary as an enum would make the Swift side
+ * depend on Kotlin's declaration ORDER (an `@objc` enum is its ordinal), so inserting a kind here
+ * would silently re-point every existing Swift branch.
+ */
+internal val PickKind.wire: String
+    get() = when (this) {
+        PickKind.Any -> "any"
+        PickKind.Images -> "images"
+        PickKind.Media -> "media"
+    }
+
+/** The bridge's byte-carrying file, as the streaming [PickedFile] the shared upload path takes. */
+internal fun IosPickedFile.toPickedFile(): PickedFile =
+    PickedFile(name, mime, ByteArrayChunkSource(bytes))

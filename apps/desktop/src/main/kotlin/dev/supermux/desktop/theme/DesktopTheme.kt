@@ -1,23 +1,15 @@
 package dev.supermux.desktop.theme
 
 import androidx.compose.foundation.LocalContextMenuRepresentation
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import dev.supermux.desktop.platform.DesktopPlatform
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.ModalPresenceHost
 import dev.supermux.desktop.ui.SupermuxContextMenuRepresentation
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.NoticeOverlay
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
 import dev.supermux.ui.prefs.InMemorySettingsStore
@@ -75,20 +67,9 @@ fun DesktopTheme(
             textScale = textScale,
         ) {
             // Desktop's `Platform.notices`: a snackbar at the window root, so a shared screen's
-            // one-line "couldn't open that" surfaces the same way Android's Toast does. The Box is
-            // the whole window; the host draws over the bottom of the content and nothing else
-            // shifts (a Scaffold here would re-lay-out every screen).
-            val snackbars = remember { SnackbarHostState() }
-            LaunchedEffect(platform) {
-                platform.notices.messages.collect { snackbars.showSnackbar(it) }
-            }
-            Box(Modifier.fillMaxSize()) {
-                content()
-                SnackbarHost(
-                    hostState = snackbars,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
-                )
-            }
+            // one-line "couldn't open that" surfaces the same way Android's Toast does. The host
+            // itself is `:ui`'s NoticeOverlay — iOS raises its notices exactly the same way.
+            NoticeOverlay(platform.notices) { content() }
         }
     }
 }
