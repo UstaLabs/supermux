@@ -230,8 +230,18 @@ private final class CaptureDelegate: NSObject, UIImagePickerControllerDelegate, 
 /// and a deallocated bridge would turn every picker and share sheet into a silent no-op.
 struct ComposeRootView: UIViewControllerRepresentable {
 
-    final class Coordinator {
+    /// Also the navigation controller's gesture delegate — see `makeUIViewController`.
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var bridge: SwiftBridge?
+
+        /// Re-enable the interactive pop gesture.
+        ///
+        /// UIKit disables `interactivePopGestureRecognizer` whenever the navigation bar is hidden,
+        /// and this navigation controller hides it because the shared shell draws its own headers.
+        /// Without this the edge swipe does nothing at all — which on iOS means the app has no
+        /// back gesture, the one navigation every iPhone user reaches for first. Returning true
+        /// hands the gesture back, and Compose's `PredictiveBackHandler` receives it.
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool { true }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -242,6 +252,7 @@ struct ComposeRootView: UIViewControllerRepresentable {
         let compose = MainViewControllerKt.MainViewController(bridge: bridge)
         let nav = UINavigationController(rootViewController: compose)
         nav.setNavigationBarHidden(true, animated: false)
+        nav.interactivePopGestureRecognizer?.delegate = context.coordinator
         // Present sheets from the navigation controller, not from the Compose controller: it is the
         // one that is actually in the window's hierarchy.
         bridge.root = nav

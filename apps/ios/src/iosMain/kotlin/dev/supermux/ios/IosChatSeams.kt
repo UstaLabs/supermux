@@ -5,10 +5,14 @@ package dev.supermux.ios
 
 import dev.supermux.chat.mimeForFileName
 import dev.supermux.net.ByteArrayChunkSource
+import dev.supermux.ui.platform.CapturedAudio
 import dev.supermux.ui.platform.ClipboardAccess
 import dev.supermux.ui.platform.FileAccess
+import dev.supermux.ui.platform.LiveTranscript
+import dev.supermux.ui.platform.MicCapture
 import dev.supermux.ui.platform.PickedFile
 import dev.supermux.ui.platform.SavedFile
+import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.theme.HapticKind
 import dev.supermux.ui.theme.Haptics
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -171,3 +175,44 @@ class IosFileAccess(private val bridge: IosBridge) : FileAccess {
  */
 internal fun safeFileName(name: String): String =
     name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+
+// ── mic + read-aloud (real bridges in H3) ────────────────────────────────────
+
+/**
+ * The microphone, reported as ABSENT until cluster H3 bridges `AVAudioRecorder` and
+ * `SFSpeechRecognizer`.
+ *
+ * This is an object that answers rather than a getter that throws, and the difference is not
+ * stylistic — it was a bug. `Platform.mic` is read while the CHAT SCREEN COMPOSES (the composer
+ * asks `available` to decide whether to offer a mic button at all), not when the user taps
+ * something. A throwing getter therefore killed the composition the instant a session was opened,
+ * and because `installIosCrashGuard` keeps the process alive, the only symptom was that tapping a
+ * session in the list appeared to do nothing at all.
+ *
+ * That is the general rule this encodes: a seam COMPOSITION reads must always answer, and only a
+ * seam reached by an explicit user action may fail loudly. `available = false` is the designed way
+ * to say "no microphone here" — the composer simply omits the button, exactly as it does on a
+ * desktop with no input device.
+ */
+object UnavailableMicCapture : MicCapture {
+    override val available: Boolean = false
+    override val liveTranscript: LiveTranscript? = null
+    override fun start(): Boolean = false
+    override fun stop(): CapturedAudio? = null
+    override fun cancel() = Unit
+    override suspend fun requestPermission(): Boolean = false
+}
+
+/**
+ * Read-aloud, as a no-op until H3 bridges `AVSpeechSynthesizer`.
+ *
+ * Same reasoning as [UnavailableMicCapture]: the chat timeline reads `Platform.tts` as it composes
+ * a message row, so this must answer. Every member completes immediately rather than hanging —
+ * `speak` that never returned would leave a message stuck in its "speaking" state forever.
+ */
+object NoopTtsEngine : TtsEngine {
+    override suspend fun speak(text: String) = Unit
+    override suspend fun playAudioChunk(bytes: ByteArray) = Unit
+    override fun stop() = Unit
+    override fun shutdown() = Unit
+}

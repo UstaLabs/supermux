@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -300,7 +301,19 @@ fun PhoneWorkspacePanes(
     Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
         if (tabs.viewIds.isNotEmpty()) {
             val selectedIndex = tabs.viewIds.indexOf(tabs.selectedId).coerceAtLeast(0)
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            // The strip is the TOP-MOST surface on a phone when a workspace has views: the compact
+            // branch of the shell does not pad for the system bars (only the tablet frame does —
+            // "the phone-layer screens do it themselves"), and this strip is a phone-layer screen
+            // that was not doing it. On iOS that put the tab row and its close/add/overflow buttons
+            // underneath the status bar and the Dynamic Island, where they are not merely ugly but
+            // UNTAPPABLE — the island does not forward touches — so a session in a workspace could
+            // be opened and then never left. The pad is on the Row and not the Column so that a
+            // workspace with no strip is unchanged and cannot end up padded twice by the pane
+            // below, which pads for itself.
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 ScrollableTabRow(
                     selectedTabIndex = selectedIndex,
                     modifier = Modifier.weight(1f),

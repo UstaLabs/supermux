@@ -32,15 +32,16 @@ import platform.UIKit.UIPasteboard
  * iOS's [Platform] — the third host of the shared Compose root, beside `AndroidPlatform` and
  * `DesktopPlatform`.
  *
- * H1 wires the members that are ANSWERS, not stubs: the capability set, the flows that are
- * genuinely empty on iOS, and the three "this host has none" factories. Everything that needs UIKit
- * throws [UnsupportedOperationException] naming itself, so H2 finds the remaining work by running
- * the app rather than by grepping for TODOs — and so a half-wired member can never masquerade as a
- * working one by silently doing nothing.
+ * Every member ANSWERS. Nothing here throws, and that is a deliberate correction to H1, which
+ * threw from every unwired seam so that H2 would find them by running the app.
  *
- * The throwing members are all `get()`-based, deliberately: a `val x = unsupported(...)` would
- * throw while the object is being CONSTRUCTED, which would take the whole app down at launch
- * instead of at the call site that is actually missing.
+ * Running the app did find them — and showed why the technique cannot be used for these seams at
+ * all. `Platform.mic` and `Platform.tts` are read while a screen COMPOSES, not when the user acts,
+ * so a throwing getter killed the chat composition the moment a session was opened; and because
+ * `installIosCrashGuard` deliberately keeps the process alive after an unhandled exception, the
+ * only symptom was a session list whose rows did nothing when tapped. A seam that composition
+ * reads must always answer; the capability flags (`caps`, `MicCapture.available`) are how a host
+ * says "not here", and every shared screen already branches on them.
  */
 class IosPlatform(
     /** Everything only Swift can do. H1 links [NoopIosBridge]; H2/H3 pass the real one. */
@@ -152,24 +153,29 @@ class IosPlatform(
 
     // ── H3: native bridges ──────────────────────────────────────────────────────────────────
     //
-    // Still throwing, deliberately. Each of these is a Swift capability the bridge already declares
-    // (AVFoundation's scanner, `SFSpeechRecognizer`, `AVSpeechSynthesizer`) but that H3 wires and
-    // proves on a device. A stub that quietly returned "unavailable" instead would be worse than a
-    // throw: `caps.camera` is TRUE, so the add-host screen offers a Scan button, and a silent null
-    // would read to the user as a scanner that is broken rather than one that is not here yet.
+    // These ANSWER rather than throw, and H1's opposite choice here was a bug worth recording.
+    //
+    // The rule that matters is not "is it wired yet" but WHO READS IT. `mic` and `tts` are read
+    // while the chat screen COMPOSES — the composer asks `mic.available` to decide whether to
+    // offer a mic button, the timeline reads `tts` per message row — so a throwing getter killed
+    // the composition the moment a session was opened. With `installIosCrashGuard` keeping the
+    // process alive, the only visible symptom was that tapping a session did nothing whatsoever:
+    // no crash, no message, just a list that would not open. A seam composition reads must always
+    // answer; only a seam reached by an explicit user action may fail loudly.
+    //
+    // `available = false` and a no-op engine are the DESIGNED way to say "not here" — the composer
+    // omits the button, exactly as on a desktop with no microphone — so nothing is pretending to
+    // work. H3 swaps in the Swift-backed implementations over the bridge members that already
+    // exist for them.
 
-    override suspend fun scanQr(): String? = unsupported("scanQr")
+    /** Routed to the bridge, which answers null until H3 presents the AVFoundation scanner. Null
+     *  is "cancelled", which every caller already handles. */
+    override suspend fun scanQr(): String? = awaitCallback { done -> bridge.scanQr(done) }
 
-    override val mic: MicCapture get() = unsupported("mic")
+    override val mic: MicCapture = UnavailableMicCapture
 
-    override val tts: TtsEngine get() = unsupported("tts")
+    override val tts: TtsEngine = NoopTtsEngine
 
-    /**
-     * Named rather than generic on purpose: the message that reaches a crash report says exactly
-     * which seam is missing, so an H2/H3 gap is one line of triage instead of a stack walk.
-     */
-    private fun unsupported(member: String): Nothing =
-        throw UnsupportedOperationException("IosPlatform.$member is not wired yet (cluster H2/H3)")
 }
 
 /**
