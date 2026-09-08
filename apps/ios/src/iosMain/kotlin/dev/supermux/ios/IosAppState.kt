@@ -29,6 +29,12 @@ object IosAppState {
      * keeps the broker sending pushes for a chat the user is not actually looking at. Starts `true`
      * because the only way this object is first read is from a launching, foregrounded app; Swift
      * corrects it on the first scene-phase change.
+     *
+     * "In front" means VISIBLE, not focused: Swift maps `scenePhase != .background`, matching
+     * Android's ON_START/ON_STOP rather than desktop's window focus. A phone loses focus for
+     * things that leave the chat perfectly readable — Notification Center pulled halfway down, a
+     * call banner — and reporting "away" for those would have the broker push a notification for
+     * the message already on screen.
      */
     val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
 

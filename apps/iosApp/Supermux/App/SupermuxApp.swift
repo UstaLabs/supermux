@@ -117,7 +117,16 @@ struct SupermuxApp: App {
                     IosAppState.shared.setOpenedUrl(url: url.absoluteString)
                 }
                 .onChange(of: scenePhase) { _, phase in
-                    IosAppState.shared.setForeground(value: phase == .active)
+                    // `!= .background`, deliberately not `== .active`. This drives viewing
+                    // presence (spec §11): while it is false the broker treats the user as away
+                    // and keeps sending pushes for the chat on screen. Android's equivalent is
+                    // ON_START/ON_STOP — VISIBILITY, which does not end when a system overlay
+                    // steals focus — and iOS's `.inactive` is exactly that set of moments:
+                    // Notification Center or Control Center pulled down, an incoming call banner,
+                    // the app switcher on its way up, plus the instant of every transition. Using
+                    // `.active` would report "not looking" while the user is plainly reading the
+                    // chat, and the broker would push a notification for a message on screen.
+                    IosAppState.shared.setForeground(value: phase != .background)
                 }
         }
         #else
