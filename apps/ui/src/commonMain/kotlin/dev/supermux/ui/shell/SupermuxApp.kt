@@ -137,7 +137,7 @@ import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
 import dev.supermux.ui.settings.rememberProxiesSettingsActions
 import dev.supermux.ui.theme.AppearanceMode
-import dev.supermux.ui.update.AppUpdateBanner
+import dev.supermux.ui.update.AppUpdateBannerHost
 import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
@@ -544,9 +544,8 @@ fun SupermuxApp(
                     else Modifier.shellShortcuts(ui, onNewSession, onMoveToNewWindow),
                 ),
         ) {
-            Column(Modifier.fillMaxSize()) {
-                AppUpdateBanner(onOpenPage = { ui.openAppUpdate() })
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+            AppUpdateBannerHost(onOpenPage = { ui.openAppUpdate() }, modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
 
                     val usageActions = rememberUsageActions(fleet)
                     // Body shared by the wide footer-anchored popover and the Compact destination.

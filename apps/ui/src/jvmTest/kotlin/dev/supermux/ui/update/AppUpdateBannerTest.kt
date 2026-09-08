@@ -1,6 +1,12 @@
 package dev.supermux.ui.update
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import dev.supermux.ui.platform.UpdateStatus
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -25,6 +31,7 @@ import dev.supermux.ui.platform.NO_CAPS
 import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -216,5 +223,28 @@ class AppUpdateBannerTest {
         onNodeWithTag("app_update_banner").assertDoesNotExist()
         // Dismissal is about the STRIP; the page still offers the update.
         onNodeWithTag("app_update_install").assertIsDisplayed()
+    }
+
+    // ── the host: strip + app, one status-bar inset between them ─────────────────────────────
+
+    @Test fun showsBanner_is_a_newer_undismissed_release_and_nothing_else() {
+        assertFalse(UpdateStatus().showsBanner)
+        assertFalse(UpdateStatus(release = release(available = false)).showsBanner)
+        assertTrue(UpdateStatus(release = release()).showsBanner)
+        assertFalse(UpdateStatus(release = release(), dismissed = true).showsBanner)
+    }
+
+    @Test fun the_host_lays_the_app_under_the_strip_and_hides_the_strip_when_dismissed() = runComposeUiTest {
+        val updater = FakeAppUpdater(release = release())
+        setPlatformContent(platform(updater)) {
+            AppUpdateBannerHost(onOpenPage = {}, updater = updater) {
+                Box(Modifier.fillMaxWidth().height(40.dp).testTag("app_body"))
+            }
+        }
+        onNodeWithTag("app_update_banner").assertIsDisplayed()
+        onNodeWithTag("app_body").assertIsDisplayed()
+        onNodeWithTag("app_update_banner_dismiss").performClick()
+        onNodeWithTag("app_update_banner").assertDoesNotExist()
+        onNodeWithTag("app_body").assertIsDisplayed()
     }
 }

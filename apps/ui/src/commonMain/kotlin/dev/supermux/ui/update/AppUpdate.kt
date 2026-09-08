@@ -30,6 +30,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -61,10 +65,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -76,6 +78,7 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.platform.UpdateStatus
 import dev.supermux.ui.platform.UpdatePhase
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
@@ -438,6 +441,42 @@ fun installCaption(kind: String?): String = when (kind) {
 
 // ── Banner ────────────────────────────────────────────────────────────────────
 
+/** Whether [AppUpdateBanner] draws for this status: a check found a newer, undismissed release. */
+val UpdateStatus.showsBanner: Boolean
+    get() = release?.updateAvailable == true && !dismissed
+
+/**
+ * The strip above the whole app plus the app under it.
+ *
+ * On a phone the strip is the topmost thing on screen, so it takes the status-bar inset itself
+ * (behind the clock, not under it) and, while it is showing, CONSUMES that inset for [content]:
+ * every screen below already pads for the status bar on its own, and without the consume the two
+ * pads stack into an empty band under the strip. On desktop the inset is zero, so this is the
+ * plain column it looks like.
+ */
+@Composable
+fun AppUpdateBannerHost(
+    onOpenPage: () -> Unit,
+    modifier: Modifier = Modifier,
+    updater: AppUpdater = LocalPlatform.current.updates,
+    content: @Composable () -> Unit,
+) {
+    val shown = updater.status.collectAsState().value.showsBanner
+    Column(modifier) {
+        AppUpdateBanner(
+            onOpenPage = onOpenPage,
+            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+            updater = updater,
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .then(if (shown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+        ) { content() }
+    }
+}
+
 /**
  * Startup strip: "Update available — tap to install", shown once a check has found a newer release
  * that has not been dismissed for that version.
@@ -453,7 +492,6 @@ fun AppUpdateBanner(
 ) {
     val scope = rememberCoroutineScope()
     val update by updater.status.collectAsState()
-    var dismissed by remember { mutableStateOf(false) }
     val installing = update.busy
     val downloadLabel =
         if (installing) formatUpdateProgress(update.bytesReceived, update.contentLength) else null
@@ -461,7 +499,7 @@ fun AppUpdateBanner(
     LaunchedEffect(updater) { updater.check() }
 
     val s = update.release
-    if (s == null || dismissed || update.dismissed || !s.updateAvailable) return
+    if (s == null || !update.showsBanner) return
 
     val cs = MaterialTheme.colorScheme
     Row(
@@ -511,10 +549,7 @@ fun AppUpdateBanner(
             }
         }
         IconButton(
-            onClick = {
-                updater.dismiss()
-                dismissed = true
-            },
+            onClick = { updater.dismiss() },
             modifier = Modifier.size(32.dp).testTag("app_update_banner_dismiss"),
         ) {
             Icon(
