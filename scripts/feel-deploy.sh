@@ -20,7 +20,7 @@
 #   swap    — preview-broker live-port swap (disruptive; needs detached unit)
 #
 # Clients:
-#   --android / --ios / --mac / --web
+#   --android / --ios / --web
 #   (default if none: --android when a device is present, else resolve-only)
 set -euo pipefail
 
@@ -44,7 +44,6 @@ QUERY=""
 BACKEND=auto
 DO_ANDROID=0
 DO_IOS=0
-DO_MAC=0
 DO_WEB=0
 RESOLVE_ONLY=0
 STOP_SHADOW=0
@@ -62,9 +61,8 @@ while [[ $# -gt 0 ]]; do
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --android) DO_ANDROID=1; shift ;;
     --ios) DO_IOS=1; shift ;;
-    --mac) DO_MAC=1; shift ;;
     --web) DO_WEB=1; shift ;;
-    --all-clients) DO_ANDROID=1; DO_IOS=1; DO_MAC=1; shift ;;
+    --all-clients) DO_ANDROID=1; DO_IOS=1; shift ;;
     --resolve-only) RESOLVE_ONLY=1; shift ;;
     --stop-shadow) STOP_SHADOW=1; shift ;;
     --connect) CONNECT="${2:-}"; shift 2 ;;
@@ -156,14 +154,14 @@ fi
 log "change map: backend=$has_backend android=$has_android ios=$has_ios mac=$has_mac web=$has_web"
 
 # default clients
-if [[ $DO_ANDROID -eq 0 && $DO_IOS -eq 0 && $DO_MAC -eq 0 && $DO_WEB -eq 0 ]]; then
+if [[ $DO_ANDROID -eq 0 && $DO_IOS -eq 0 && $DO_WEB -eq 0 ]]; then
   if command -v adb >/dev/null && adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{ok=1} END{exit !ok}'; then
     DO_ANDROID=1
     log "default target: android (device attached)"
   else
     log "no client flags and no adb device — resolving only"
     echo "workdir=$workdir branch=$branch"
-    echo "hint: re-run with --android / --ios / --mac and optionally --backend shadow"
+    echo "hint: re-run with --android / --ios and optionally --backend shadow"
     exit 0
   fi
 fi
@@ -249,24 +247,6 @@ if [[ $DO_IOS -eq 1 ]]; then
   log "Or re-run with a connected phone UDID once wireless CoreDevice is up."
 fi
 
-if [[ $DO_MAC -eq 1 ]]; then
-  log "macOS app: using mac-app-run style sync from worktree"
-  if [[ -x "$MAIN_ROOT/scripts/mac-app-run.sh" ]]; then
-    # mac-app-run always tars the CWD root — run from worktree by temporarily
-    # pointing it via env override if we add one; for now rsync + remote build.
-    REMOTE_DIR="~/supermux-feel-mac"
-    tar -C "$workdir" --exclude .git --exclude 'apps/shared/build' --exclude 'apps/iosApp/build' \
-        --exclude node_modules -czf - . \
-      | ssh mac "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR && tar -xzf - -C $REMOTE_DIR"
-    ssh mac "source ~/ios-build-env.sh 2>/dev/null; cd $REMOTE_DIR/apps/iosApp && xcodegen generate && \
-      xcodebuild -scheme SupermuxMac -destination 'platform=macOS,arch=arm64' \
-        -derivedDataPath build/dd-mac CODE_SIGNING_ALLOWED=NO build && \
-      codesign --force --sign - --deep build/dd-mac/Build/Products/Debug/Supermux.app && \
-      pkill -x Supermux 2>/dev/null || true; open build/dd-mac/Build/Products/Debug/Supermux.app"
-  else
-    die "mac-app-run.sh missing"
-  fi
-fi
 
 log "FEEL DEPLOY DONE"
 echo "SOURCE=$workdir"

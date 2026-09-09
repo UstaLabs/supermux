@@ -1,8 +1,7 @@
 // scripts/generate-versions-json.ts
 // usage:
 //   bun scripts/generate-versions-json.ts <version> <linux-x64-sha> <linux-arm64-sha> <darwin-arm64-sha> \
-//     [android-apk-sha] [desktop-linux-sha] [desktop-windows-sha] [desktop-macos-sha] \
-//     [compose-desktop-macos-sha]
+//     [android-apk-sha] [desktop-linux-sha] [desktop-windows-sha] [compose-desktop-macos-sha]
 //
 // Optional env for client marketing versions:
 //   CLIENT_ANDROID_VERSION / CLIENT_ANDROID_CODE
@@ -14,9 +13,10 @@
 // workflow publishes this to supermux.dev; the broker's update checker polls
 // broker assets, while native clients poll `clients` + desktop/android asset keys.
 //
-// Two macOS client DMGs ship side-by-side:
-//   desktop-macos          → supermux-macos.dmg          (native SwiftUI Supermux.app)
-//   compose-desktop-macos  → supermux-desktop-macos.dmg  (Compose Multiplatform Supermux Desktop.app)
+// The macOS client is the Compose Multiplatform desktop app:
+//   compose-desktop-macos  → supermux-desktop-macos.dmg  (Supermux Desktop.app)
+// The key is historical — it once sat beside a `desktop-macos` entry for the retired native
+// SwiftUI Supermux.app — and stays because installed clients (ClientPlatform.DESKTOP_MACOS) read it.
 const [
   version,
   shaLinuxX64,
@@ -25,7 +25,6 @@ const [
   shaAndroid,
   shaDesktopLinux,
   shaDesktopWindows,
-  shaDesktopMacos,
   shaComposeDesktopMacos,
 ] = process.argv.slice(2)
 
@@ -33,7 +32,7 @@ if (!version || !shaLinuxX64 || !shaLinuxArm64 || !shaDarwinArm64) {
   console.error(
     "usage: generate-versions-json.ts <version> <linux-x64-sha256> <linux-arm64-sha256>" +
       " <darwin-arm64-sha256> [android-apk-sha256] [desktop-linux-sha256]" +
-      " [desktop-windows-sha256] [desktop-macos-sha256] [compose-desktop-macos-sha256]",
+      " [desktop-windows-sha256] [compose-desktop-macos-sha256]",
   )
   process.exit(2)
 }
@@ -54,11 +53,7 @@ if (shaDesktopLinux) {
 if (shaDesktopWindows) {
   assets["desktop-windows"] = { url: `${base}/supermux-windows.msi`, sha256: shaDesktopWindows }
 }
-// Historical key: native SwiftUI mac host (AppUpdateView still reads this).
-if (shaDesktopMacos) {
-  assets["desktop-macos"] = { url: `${base}/supermux-macos.dmg`, sha256: shaDesktopMacos }
-}
-// Compose Multiplatform mac client (apps/desktop); used by ClientPlatform.DESKTOP_MACOS.
+// Compose Multiplatform mac client (apps/desktop); read by ClientPlatform.DESKTOP_MACOS.
 if (shaComposeDesktopMacos) {
   assets["compose-desktop-macos"] = {
     url: `${base}/supermux-desktop-macos.dmg`,

@@ -203,9 +203,10 @@ jobs:
       - name: KMP sharing guardrail
         run: bash scripts/check-no-duplicate-kt.sh
 
-      # Cluster H6 made Compose the only iOS shell. The SwiftUI screens still exist — they ARE the
-      # macOS app — so nothing but this stops one being re-added under the iOS target's source
-      # directory and silently compiled into the phone app again.
+      # Cluster H6 made Compose the only iOS shell, and the native macOS SwiftUI app that kept the
+      # old screens alive was retired after it. Nothing in Xcode stops a SwiftUI screen being
+      # re-added under the iOS target's source directory and silently compiled into the phone app
+      # again — this does.
       - name: iOS shell cutover guardrail
         run: bash scripts/check-ios-shell-cutover.sh
 

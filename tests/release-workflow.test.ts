@@ -103,32 +103,35 @@ function composeMacPosition(needle: string): number {
   return index
 }
 
-test("Compose macOS desktop ships alongside native Swift macOS DMG", () => {
+test("Compose macOS desktop is the only macOS lane", () => {
   expect(composeMacStart).toBeGreaterThanOrEqual(0)
   expect(composeMacEnd).toBeGreaterThan(composeMacStart)
 
-  // Still builds the native SwiftUI host app under the historical job name.
-  expect(workflow).toContain("  build-desktop-macos:")
-  expect(workflow).toContain("dist/supermux-macos.dmg")
-  // New Compose Multiplatform lane with a distinct stable asset name.
+  // The native SwiftUI Supermux.app lane is retired: no job, no xcodebuild of a Mac scheme,
+  // no supermux-macos.dmg asset anywhere in the workflow.
+  expect(workflow).not.toContain("build-desktop-macos:")
+  expect(workflow).not.toContain("supermux-macos.dmg")
+  expect(workflow).not.toContain("SupermuxMac")
+  // The Compose Multiplatform lane keeps its stable asset name.
   composeMacPosition(":desktop:packageDmg")
   composeMacPosition("stage-desktop-binaries.sh macos-arm64")
   composeMacPosition("dist/supermux-desktop-macos.dmg")
   composeMacPosition("-PsmMacSignIdentity=")
   composeMacPosition("notarytool submit")
-  // Must not clobber the native Swift artifact name.
-  expect(composeMacJob).not.toContain("dist/supermux-macos.dmg")
 })
 
-test("release job publishes both macOS DMGs", () => {
+test("release job publishes the Compose macOS DMG", () => {
   const releaseStart = workflow.indexOf("  release:")
   const releaseJob = workflow.slice(releaseStart, workflow.indexOf("  publish-website:", releaseStart))
   expect(releaseJob).toContain("build-compose-desktop-macos")
-  expect(releaseJob).toContain("dist/supermux-macos.dmg")
   expect(releaseJob).toContain("dist/supermux-desktop-macos.dmg")
+  expect(releaseJob).toContain("dist/supermux-desktop-macos.dmg.sha256")
 })
 
 test("publish-website includes compose-desktop-macos sha for versions.json", () => {
   expect(publishJob).toContain("supermux-desktop-macos.dmg.sha256")
   expect(publishJob).toContain("SHA_COMPOSE_DESKTOP_MACOS")
+  // The retired SwiftUI DMG's positional arg is gone from the generate-versions-json call.
+  expect(publishJob).not.toContain("SHA_DESKTOP_MACOS=")
+  expect(publishJob).not.toContain('"$SHA_DESKTOP_MACOS"')
 })

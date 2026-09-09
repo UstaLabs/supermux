@@ -363,171 +363,14 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  build-desktop-macos:
-    # Native SwiftUI/KMP macOS host app. Tag builds require Developer ID + App
-    # Store Connect notary credentials and publish a notarized, stapled DMG.
-    # workflow_dispatch remains useful before those secrets are configured: it
-    # builds the complete unsigned app and uploads an explicitly unsigned DMG.
-    runs-on: macos-26
-    env:
-      DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
-      MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
-      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-      APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
-      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: oven-sh/setup-bun@v2
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Resolve version
-        id: ver
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-dryrun"; fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Build portable tmux
-        run: scripts/build-portable-tmux.sh "$RUNNER_TEMP/tmux"
-      - name: Stage host helper binaries
-        env:
-          SUPERMUX_TMUX: ${{ runner.temp }}/tmux
-        run: scripts/stage-desktop-binaries.sh macos-arm64 "${{ steps.ver.outputs.version }}" "${{ steps.ver.outputs.commit }}"
-      - name: Generate Xcode project
-        working-directory: apps/iosApp
-        run: xcodegen generate
-      - name: Build unsigned release app
-        working-directory: apps/iosApp
-        run: |
-          xcodebuild \
-            -scheme SupermuxMac \
-            -configuration Release \
-            -destination "platform=macOS,arch=arm64" \
-            -derivedDataPath build/dd-mac \
-            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/supermux-broker
-          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/frpc
-          test -x build/dd-mac/Build/Products/Release/Supermux.app/Contents/Resources/HostResources/tmux
-      - name: Check release credentials
-        id: signing
-        run: |
-          have=1
-          [ -n "$MACOS_DEVELOPER_ID_P12_BASE64" ] || have=0
-          [ -n "$MACOS_DEVELOPER_ID_P12_PASSWORD" ] || have=0
-          [ -n "$APPLE_NOTARY_KEY_P8_BASE64" ] || have=0
-          [ -n "$APPLE_NOTARY_KEY_ID" ] || have=0
-          [ -n "$APPLE_NOTARY_ISSUER_ID" ] || have=0
-          if [ "$have" = 0 ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "::error::macOS signing/notarization secrets are required for tag releases"
-            exit 1
-          fi
-          if [ "$have" = 0 ]; then
-            echo "::warning::macOS release secrets are absent; uploading an unsigned dry-run DMG"
-          fi
-          echo "have=$have" >> "$GITHUB_OUTPUT"
-      - name: Import Developer ID certificate
-        if: steps.signing.outputs.have == '1'
-        env:
-          KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          KEYCHAIN="$RUNNER_TEMP/supermux-release.keychain-db"
-          CERTIFICATE="$RUNNER_TEMP/developer-id.p12"
-          printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 --decode > "$CERTIFICATE"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
-          test -n "$SIGNING_IDENTITY"
-          security list-keychains -d user -s "$KEYCHAIN"
-          echo "MACOS_RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
-          echo "MACOS_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
-      - name: Sign app inside-out
-        if: steps.signing.outputs.have == '1'
-        run: |
-          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
-          sign() {
-            codesign --force --options runtime --timestamp \
-              --keychain "$MACOS_RELEASE_KEYCHAIN" \
-              --sign "$MACOS_SIGNING_IDENTITY" "$1"
-          }
-          for helper in supermux-broker frpc tmux; do
-            sign "$APP/Contents/Resources/HostResources/$helper"
-          done
-          sign "$APP/Contents/Frameworks/Shared.framework"
-          sign "$APP/Contents/PlugIns/SupermuxMacPushNSE.appex"
-          sign "$APP/Contents/MacOS/Supermux"
-          sign "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-      - name: Notarize and staple app
-        if: steps.signing.outputs.have == '1'
-        run: |
-          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
-          NOTARY_KEY="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
-          printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY"
-          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Supermux.app.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/Supermux.app.zip" \
-            --key "$NOTARY_KEY" \
-            --key-id "$APPLE_NOTARY_KEY_ID" \
-            --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait
-          xcrun stapler staple "$APP"
-          xcrun stapler validate "$APP"
-          spctl --assess --type execute --verbose=2 "$APP"
-          echo "APPLE_NOTARY_KEY_PATH=$NOTARY_KEY" >> "$GITHUB_ENV"
-      - name: Create DMG
-        run: |
-          APP="apps/iosApp/build/dd-mac/Build/Products/Release/Supermux.app"
-          if [ "${{ steps.signing.outputs.have }}" = "1" ]; then
-            DMG="dist/supermux-macos.dmg"
-          else
-            DMG="dist/supermux-macos-unsigned.dmg"
-          fi
-          # Styled installer: Supermux.app + Applications symlink + drag-arrow background.
-          chmod +x scripts/package-macos-dmg.sh
-          scripts/package-macos-dmg.sh "$APP" "$DMG"
-          echo "MACOS_DMG=$DMG" >> "$GITHUB_ENV"
-      - name: Sign, notarize, and staple DMG
-        if: steps.signing.outputs.have == '1'
-        run: |
-          codesign --force --timestamp \
-            --keychain "$MACOS_RELEASE_KEYCHAIN" \
-            --sign "$MACOS_SIGNING_IDENTITY" "$MACOS_DMG"
-          xcrun notarytool submit "$MACOS_DMG" \
-            --key "$APPLE_NOTARY_KEY_PATH" \
-            --key-id "$APPLE_NOTARY_KEY_ID" \
-            --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait
-          xcrun stapler staple "$MACOS_DMG"
-          xcrun stapler validate "$MACOS_DMG"
-          spctl --assess --type open --context context:primary-signature --verbose=2 "$MACOS_DMG"
-      - name: Checksum
-        run: |
-          cd dist
-          shasum -a 256 "$(basename "$MACOS_DMG")" > "$(basename "$MACOS_DMG").sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: supermux-desktop-macos
-          path: dist/*
-          if-no-files-found: error
-      - name: Remove temporary keychain
-        if: always() && steps.signing.outputs.have == '1'
-        run: security delete-keychain "$MACOS_RELEASE_KEYCHAIN" || true
-
   build-compose-desktop-macos:
-    # Compose Multiplatform macOS client (apps/desktop / jpackage DMG). Distinct from
-    # build-desktop-macos above, which ships the native SwiftUI Supermux.app as
-    # supermux-macos.dmg. This lane produces supermux-desktop-macos.dmg ("Supermux
-    # Desktop.app", bundle id dev.supermux.desktop) so both can install side-by-side
-    # on a case-insensitive volume. Same Developer ID + notary secrets as the native
-    # lane; dry runs without secrets upload an explicitly unsigned DMG.
+    # THE macOS client: the Compose Multiplatform desktop app (apps/desktop / jpackage DMG),
+    # the same family as the Linux .deb and Windows .msi. It ships as supermux-desktop-macos.dmg
+    # ("Supermux Desktop.app", bundle id dev.supermux.desktop) — the asset name and the
+    # `compose-desktop-macos` versions.json key predate the retirement of the native SwiftUI
+    # Supermux.app and are kept stable so installed clients keep finding their updates.
+    # Tag builds require Developer ID + notary credentials; dry runs without secrets upload an
+    # explicitly unsigned DMG.
     runs-on: macos-26
     env:
       DEVELOPER_ID_APPLICATION: "Developer ID Application: AHMET HUSEYIN DOK (57L7J9XA89)"
@@ -659,9 +502,8 @@ jobs:
 
   build-ios-testflight:
     # Signed iOS app (with the embedded watch app + both notification extensions)
-    # archived, exported as an App Store .ipa, and uploaded to TestFlight. Unlike the
-    # mac host app the iOS app bundles NO broker/tmux/frpc (its sources exclude Host/**
-    # and HostResources/**), so there's no bun/stage-desktop-binaries step here.
+    # archived, exported as an App Store .ipa, and uploaded to TestFlight. The iOS app
+    # bundles NO broker/tmux/frpc, so there's no bun/stage-desktop-binaries step here.
     #
     # Runs on tag pushes AND workflow_dispatch dry runs. Whether it uploads to TestFlight is
     # the `upload` flag computed below = signing secrets present AND (a v* tag OR a dry run
@@ -688,7 +530,7 @@ jobs:
     env:
       TESTFLIGHT_BUILD_OFFSET: "1000"
       # Apple Distribution signing certificate (App Store), exported as a password-protected
-      # .p12 and base64-encoded. This is a DIFFERENT cert from the mac job's Developer ID.
+      # .p12 and base64-encoded. This is a DIFFERENT cert from the Compose macOS job's Developer ID.
       APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
       APPLE_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
       # The four App Store provisioning profiles (.mobileprovision), each base64-encoded.
@@ -697,7 +539,7 @@ jobs:
       IOS_PP_PUSH_NSE_BASE64: ${{ secrets.IOS_PP_PUSH_NSE_BASE64 }}
       IOS_PP_NOTIF_CONTENT_BASE64: ${{ secrets.IOS_PP_NOTIF_CONTENT_BASE64 }}
       # App Store Connect API key used for the TestFlight upload. Dedicated key (App Manager
-      # role) rather than the mac job's notary key, which may be notarization-scoped and would
+      # role) rather than the Compose macOS job's notary key, which may be notarization-scoped and would
       # 403 on an upload.
       ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
       ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
@@ -850,7 +692,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-desktop-macos, build-compose-desktop-macos]
+    needs: [build-binaries, docker, build-android, build-desktop-linux, build-desktop-windows, build-compose-desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -878,8 +720,6 @@ jobs:
             dist/supermux-linux.deb.sha256
             dist/supermux-windows.msi
             dist/supermux-windows.msi.sha256
-            dist/supermux-macos.dmg
-            dist/supermux-macos.dmg.sha256
             dist/supermux-desktop-macos.dmg
             dist/supermux-desktop-macos.dmg.sha256
           )
@@ -921,9 +761,9 @@ jobs:
           SHA_ANDROID=$(cut -d' ' -f1 dist/supermux-android.apk.sha256)
           SHA_DESKTOP_LINUX=$(cut -d' ' -f1 dist/supermux-linux.deb.sha256 2>/dev/null || true)
           SHA_DESKTOP_WINDOWS=$(cut -d' ' -f1 dist/supermux-windows.msi.sha256 2>/dev/null || true)
-          # desktop-macos = native SwiftUI Supermux.app DMG (historical key; AppUpdateView).
-          SHA_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-macos.dmg.sha256 2>/dev/null || true)
-          # compose-desktop-macos = Compose Multiplatform "Supermux Desktop" DMG.
+          # compose-desktop-macos = the Compose Multiplatform "Supermux Desktop" DMG, the only Mac
+          # client. (The key name is historical — it once sat beside a `desktop-macos` SwiftUI DMG —
+          # and stays as-is because installed clients read it.)
           SHA_COMPOSE_DESKTOP_MACOS=$(cut -d' ' -f1 dist/supermux-desktop-macos.dmg.sha256 2>/dev/null || true)
           # Android: prefer the version CI baked into the APK (android-client.env from
           # build-android). Fall back to gradle defaults only if the env file is missing.
@@ -943,7 +783,7 @@ jobs:
           echo "clients.android version=${CLIENT_ANDROID_VERSION} versionCode=${CLIENT_ANDROID_CODE}"
           git clone "https://x-access-token:${TOKEN}@github.com/AhmetHuseyinDOK/supermux-website.git" site
           bun scripts/generate-versions-json.ts "$V" "$SHA_LINUX_X64" "$SHA_LINUX_ARM64" "$SHA_DARWIN_ARM64" \
-            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" "$SHA_DESKTOP_MACOS" \
+            "$SHA_ANDROID" "$SHA_DESKTOP_LINUX" "$SHA_DESKTOP_WINDOWS" \
             "$SHA_COMPOSE_DESKTOP_MACOS" > site/versions.json
           sed "s|__SUPERMUX_TAG__|v${V}|" .github/release-assets/docker-compose.release.yml > site/docker-compose.yml
           cd site
