@@ -9,11 +9,15 @@
 // The pane CONTENT is one `ViewHost` call for every width; only the chrome around it differs.
 package dev.supermux.ui.shell
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -37,6 +41,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -310,38 +316,75 @@ fun PhoneWorkspacePanes(
             // be opened and then never left. The pad is on the Row and not the Column so that a
             // workspace with no strip is unchanged and cannot end up padded twice by the pane
             // below, which pads for itself.
+            // ONE surface for the whole strip, painted on the Row and BEFORE the inset pad, so it
+            // reaches both the right edge and up under the status bar. Three things were wrong
+            // when this was left to `ScrollableTabRow`'s default container:
+            //
+            //  1. The overflow button is a SIBLING of the tab row, not one of its tabs, so the
+            //     tab row's own background stopped short of it and the button sat on the page
+            //     background — the strip read as a block that did not reach the right edge.
+            //  2. `statusBarsPadding()` was applied outside the coloured area, so the status bar
+            //     kept the page colour and the strip looked like it was floating below it.
+            //  3. `surface` is the `card` token (L 0.995 — effectively white) against an L 0.955
+            //     page. The desktop strip has always used `surfaceContainerLow` (the `chat`
+            //     token); the phone strip only ever used `surface` by not asking.
+            //
+            // `Color.Transparent` on the tab row rather than the same colour, so there is exactly
+            // one painter and the selected-tab indicator cannot end up on a second surface.
             Row(
-                Modifier.fillMaxWidth().statusBarsPadding(),
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .statusBarsPadding(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ScrollableTabRow(
                     selectedTabIndex = selectedIndex,
                     modifier = Modifier.weight(1f),
+                    containerColor = Color.Transparent,
+                    edgePadding = 0.dp,
                 ) {
                     tabs.viewIds.forEach { id ->
                         val view = viewsById[id]
                         val title = view?.let { viewTitle(it) } ?: "view"
+                        // The title and its close button on ONE line. M3's `text` + `icon` slots
+                        // stack them vertically, which on a phone spent ~72dp of a small screen on
+                        // a tab bar and put the close button ABOVE its own label — no phone tab
+                        // strip on either platform looks like that, and the pane below is the
+                        // thing the user came for.
                         Tab(
                             selected = id == tabs.selectedId,
                             onClick = { app.setActiveView(current.id, id) },
-                            text = {
+                            modifier = Modifier.height(48.dp),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(start = 14.dp, end = 4.dp),
+                            ) {
                                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            },
-                            icon = {
-                                IconButton(onClick = {
-                                    val v = view ?: return@IconButton
-                                    closeOrConfirm(v)
-                                }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Close $title")
+                                IconButton(
+                                    onClick = {
+                                        val v = view ?: return@IconButton
+                                        closeOrConfirm(v)
+                                    },
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Close,
+                                        contentDescription = "Close $title",
+                                        modifier = Modifier.size(16.dp),
+                                    )
                                 }
-                            },
-                        )
+                            }
+                        }
                     }
                     Tab(
                         selected = false,
                         onClick = { showAdd = true },
-                        icon = { Icon(Icons.Filled.Add, contentDescription = "Add view") },
-                    )
+                        modifier = Modifier.height(48.dp),
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = "Add view")
+                    }
                 }
                 viewsById[tabs.selectedId]?.chatSessionId()?.let { sid ->
                     PhoneTabChatOverflow(sid, shell) { ui.selectSession(it) }
