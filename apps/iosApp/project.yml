@@ -161,7 +161,11 @@ targets:
           # which is why the `:ios` module applies the org.jetbrains.compose plugin even though it
           # declares no resources of its own. Without the plugin there is no such hook, the fonts
           # never reach the bundle, and every screen falls back to the system face SILENTLY.
-          ./gradlew --no-daemon :ios:embedAndSignAppleFrameworkForXcode
+          #
+          # :ios:syncEditorWeb refreshes Supermux/EditorWeb from apps/android/src/main/assets/editor
+          # (the ONE source of truth for the CodeMirror bundle — desktop copies from there too).
+          # It runs BEFORE the resources phase, so the .app can never ship a stale cm6.js again.
+          ./gradlew --no-daemon :ios:syncEditorWeb :ios:embedAndSignAppleFrameworkForXcode
 
   SupermuxWatch:
     type: application

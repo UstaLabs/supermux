@@ -52,3 +52,27 @@ kotlin {
         }
     }
 }
+
+// H5.3 — the CodeMirror bundle has ONE source of truth: apps/android/src/main/assets/editor/.
+//
+// Desktop already copies it from there at build time (`:desktop`'s processResources), and the iOS
+// app used to keep a hand-copied duplicate under `iosApp/Supermux/EditorWeb/` that had silently
+// rotted: no `cmShowDiffRegion` (so the walkthrough's diff region could never render) and none of
+// the comment callbacks. This task is what stops that happening again — it runs from the Xcode
+// pre-build phase, BEFORE the resources are copied into the .app, so an iOS build always ships the
+// same bytes Android does.
+//
+// The files stay COMMITTED rather than generated-and-gitignored on purpose: `project.yml` declares
+// `Supermux/EditorWeb` as a folder reference, and xcodegen resolves it when the project is
+// generated — which is before this task has ever run on a fresh clone. Keeping them in git means a
+// clean checkout generates and builds, and a drift shows up as an ordinary `git diff`.
+val syncEditorWeb by tasks.registering(Copy::class) {
+    group = "build"
+    description = "Refresh iosApp/Supermux/EditorWeb from the Android editor assets (single source of truth)"
+    val source = File(rootProject.projectDir, "android/src/main/assets/editor")
+    doFirst {
+        check(source.isDirectory) { "editor bundle missing at $source" }
+    }
+    from(source) { include("index.html", "cm6.js") }
+    into(File(rootProject.projectDir, "iosApp/Supermux/EditorWeb"))
+}
