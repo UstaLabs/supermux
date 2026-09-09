@@ -79,9 +79,11 @@ class SupermuxAppNavTest {
      * The route in is real: `pushTapHandleDecision` deliberately applies a tapped notification
      * before the session list has arrived, so the shell can open the chat on a cold start. If the
      * session never turns up — it was killed, or its host is offline and the list is empty — the
-     * compact branch used to render nothing whatsoever: no header, no back. On iOS that is
-     * unrecoverable, since the interactive edge-swipe back is inert while the navigation stack is
-     * one deep, so the app has to be force-quit.
+     * compact branch used to render nothing whatsoever: no header, no back. iOS is where that
+     * costs the most, because it is the host that supplies no `chatFallback` — so the screen had
+     * no affordance of its own AND the edge swipe cannot help, since the gesture is gated on the
+     * very handler this state fails to register (H4 measured the recogniser: disabled with nothing
+     * to pop). A chrome-less pane there is a force-quit.
      *
      * `chatFallback` is deliberately NOT supplied here, which is exactly the iOS configuration.
      */

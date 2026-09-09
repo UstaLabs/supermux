@@ -436,12 +436,18 @@ private final class CaptureDelegate: NSObject, UIImagePickerControllerDelegate, 
 
 /// The shared Compose root, as a SwiftUI view.
 ///
-/// The `UINavigationController` is not decoration. Compose Multiplatform delivers the interactive
-/// swipe-back that `PredictiveBackHandler` (and therefore every back gesture in the shared shell)
-/// listens for by driving the hosting navigation controller's pop interaction — hosting the Compose
-/// controller bare would leave the app with no edge-swipe back at all, on a platform where that is
-/// the primary way anyone navigates. The bar itself is hidden because the shared shell draws its
-/// own headers.
+/// The `UINavigationController` is here to PRESENT, not to navigate. It is the controller that is
+/// actually in the window's hierarchy, so it is the one every sheet the bridge puts up — pickers,
+/// the share sheet, the QR scanner — is presented from; the Compose controller inside it is not a
+/// reliable presenter. Its bar is hidden because the shared shell draws its own headers.
+///
+/// It is explicitly NOT what delivers the back gesture, whatever the comment here used to say.
+/// Compose Multiplatform (since 1.10.3) installs its OWN pair of `UIKitBackGestureRecognizer`s on
+/// the window's direct child and feeds them straight into the `NavigationEventDispatcher` that the
+/// shared `PredictiveBackHandler` listens on — nothing is configured and nothing is needed here.
+/// The start edge (left, in LTR) is permanently bound to back; the opposite edge is governed by
+/// `ComposeUIViewControllerConfiguration.endEdgePanGestureBehavior`, which stays at its `Disabled`
+/// default on purpose, since a right-edge swipe means nothing on iOS in a left-to-right layout.
 ///
 /// The `SwiftBridge` is held by the coordinator: nothing else retains it (the Kotlin side holds it
 /// weakly-in-effect through an interface reference that does not own the Swift object's lifetime),
@@ -453,26 +459,21 @@ struct ComposeRootView: UIViewControllerRepresentable {
         var bridge: SwiftBridge?
         weak var navigation: UINavigationController?
 
-        /// Allow the interactive pop gesture only when there is something to pop.
+        /// Refuse UIKit's interactive pop. The stack is one deep and stays that way, so there is
+        /// nothing to pop, and letting the gesture begin drives UIKit into a pop it cannot complete
+        /// and wedges the navigation controller.
         ///
-        /// UIKit disables `interactivePopGestureRecognizer` whenever the navigation bar is hidden,
-        /// and this navigation controller hides it because the shared shell draws its own headers.
-        /// Re-enabling it is therefore necessary — but it must NOT be unconditional: with a single
-        /// view controller on the stack, letting the gesture begin drives UIKit into a pop it
-        /// cannot complete and wedges the navigation controller, after which even programmatic
-        /// navigation misbehaves. The count check is what keeps a missing feature from becoming a
-        /// broken one.
-        ///
-        /// Today the stack IS one deep, so this returns false and the edge swipe does nothing;
-        /// the shared shell's own back affordances work throughout. Giving Compose's
-        /// `PredictiveBackHandler` a real interactive gesture needs a second controller on the
-        /// stack to pop against, which is H3/H4 work.
+        /// This is NOT the app's back gesture and never was — Compose owns that (see the type
+        /// doc). Keeping the refusal is still worth it: UIKit's recogniser lives on this
+        /// controller's view, an ANCESTOR of the one carrying Compose's, so a version of it that
+        /// began would take the same edge away from Compose.
         func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
             (navigation?.viewControllers.count ?? 0) > 1
         }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
+
 
     func makeUIViewController(context: Context) -> UINavigationController {
         let bridge = SwiftBridge()
