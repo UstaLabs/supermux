@@ -7,18 +7,26 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
@@ -117,7 +125,10 @@ class SupermuxAppNavTest {
         }
         waitForIdle()
 
-        ui.openSettings(SettingsSection.Voice)
+        // The DEFAULT section on purpose. This test is about the route stack, and the hub now
+        // lands a phone straight on any section other than the default — with `Voice` here, the
+        // first gesture would pop the hub's own detail to the index and never reach the route.
+        ui.openSettings()
         waitForIdle()
         assertTrue(ui.settingsOpen)
 
@@ -265,6 +276,125 @@ class SupermuxAppNavTest {
         waitForIdle()
         onNodeWithTag("settings_hub_detail").assertIsDisplayed()
         onNodeWithTag("settings_row_voice").assertDoesNotExist()
+        // The CAUSE, not just the symptom: the route was never rewritten. `settingsSection` reads
+        // the live `Route.Settings` off the stack, so anything other than the section it was
+        // opened with means the compact push reported itself back and the entry was re-keyed.
+        assertEquals(SettingsSection.Agents, ui.settingsSection)
+    }
+
+    /**
+     * A deep link to a section — `openLspSettings`, `settings/lsp` — must LAND on that section on a
+     * phone, not on the index with `ShellUiState.lspSettingsOpen` claiming otherwise.
+     *
+     * The hub seeds its compact push stack from `section` for exactly this, treating the
+     * `Route.Settings` default ([SettingsSection.Agents]) as "just Settings" and anything else as a
+     * destination. That seeding is only safe because the settings entry has a stable content key;
+     * while the route WAS the key, a rewrite would have re-seeded and reopened the section under
+     * the user.
+     */
+    @Test fun compact_a_deep_link_opens_the_section_itself() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { section, _ -> Text("body:" + section.name) },
+            )
+        }
+        waitForIdle()
+
+        ui.openLspSettings()
+        waitForIdle()
+
+        onNodeWithTag("settings_hub_detail").assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.EditorLsp.name).assertIsDisplayed()
+        // The index is BEHIND us, not under us.
+        onNodeWithTag("settings_row_voice").assertDoesNotExist()
+        assertTrue(ui.lspSettingsOpen)
+
+        // And back still returns to the index rather than closing the hub outright.
+        onNodeWithTag("settings_detail_back").performClick()
+        waitForIdle()
+        onNodeWithTag("settings_row_voice").assertIsDisplayed()
+        assertTrue(ui.settingsOpen)
+    }
+
+    /**
+     * A rail click must not rebuild the hub.
+     *
+     * `ShellUiState.settingsSection` rewrites the stack slot with a NEW `Route.Settings(section)`,
+     * and the route is NavDisplay's default content key — so before the entry was given a stable
+     * `clazzContentKey`, every rail click disposed the whole entry and composed a fresh one. The
+     * visible cost was scroll and selection thrown away on each click; the sharper one was
+     * ordering, since the outgoing hub's `DisposableEffect` is free to run AFTER the incoming one
+     * registers, leaving the shell's `settingsTryClose` pointing at the UNGUARDED `onBack` and
+     * letting Escape walk past the unsaved-edits prompt.
+     *
+     * The probe is a plain `remember` in the section-body slot. That slot is invoked from ONE call
+     * site inside the hub, so a section change only recomposes it with a new argument and the
+     * counter survives; disposing the entry takes the counter with it. The count is therefore a
+     * direct read of "is this the same hub".
+     */
+    @Test fun wide_a_rail_click_changes_the_section_without_rebuilding_the_hub() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = true, widthClass = WindowWidthClass.Expanded) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { section, _ ->
+                    var alive by remember { mutableStateOf(0) }
+                    Text(
+                        "body:" + section.name + ":" + alive,
+                        Modifier.testTag("probe").clickable { alive++ },
+                    )
+                },
+            )
+        }
+        waitForIdle()
+
+        ui.openSettings(SettingsSection.Agents)
+        waitForIdle()
+        onNodeWithTag("settings_hub_rail").assertIsDisplayed()
+        onNodeWithText("body:" + SettingsSection.Agents.name + ":0").assertIsDisplayed()
+
+        onNodeWithTag("probe").performClick()
+        onNodeWithTag("probe").performClick()
+        waitForIdle()
+        onNodeWithText("body:" + SettingsSection.Agents.name + ":2").assertIsDisplayed()
+
+        onNodeWithTag("settings_section_devices").performClick()
+        waitForIdle()
+
+        // The section changed — and the hub did not.
+        assertEquals(SettingsSection.Devices, ui.settingsSection)
+        onNodeWithText("body:" + SettingsSection.Devices.name + ":2").assertIsDisplayed()
+    }
+
+    /**
+     * The phone tab strip is ONE line, with ONE close button per tab.
+     *
+     * M3's `text` + `icon` slots stack vertically, which spent ~72dp of a phone screen and put the
+     * close button ABOVE its own label; the strip moved to the generic `Tab` overload and lays the
+     * title and its close button out itself. Pinned here because that overload also opts out of
+     * `TabBaselineLayout`, so nothing but this file decides the height any more.
+     */
+    @Test fun compact_the_workspace_tab_strip_is_one_line_per_tab() = runComposeUiTest {
+        val ui = ShellUiState().apply { selectedId = "s1" }
+        val app = oneWorkspaceStore()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
+        }
+        waitForIdle()
+
+        onNodeWithTag("phone_workspace_tab_strip").assertIsDisplayed()
+        // One view in the workspace, so exactly ONE close affordance — the stacked `text` + `icon`
+        // arrangement this replaced drew the close button on a line of its own.
+        assertEquals(1, onAllNodesWithContentDescription("Close ", substring = true).fetchSemanticsNodes().size)
+        // One line: 48dp for the tab, plus the status inset, which is 0 in a test window. The
+        // stacked arrangement was ~72dp.
+        assertEquals(48.dp, onNodeWithTag("phone_workspace_tab_strip").getBoundsInRoot().height)
     }
 }
 

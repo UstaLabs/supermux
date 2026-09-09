@@ -758,7 +758,21 @@ fun SupermuxApp(
                                 }
                             }
 
+                            // A `Route.Settings` is the only route that mutates a field of
+                            // itself in place: `ShellUiState.settingsSection` rewrites the stack
+                            // slot with `Route.Settings(section)` on every rail click. The route
+                            // IS NavDisplay's default content key, so without a stable one the
+                            // whole hub is disposed and recomposed per click — scroll and
+                            // selection lost on a wide host, and the outgoing hub's
+                            // `DisposableEffect` free to run AFTER the incoming one registers,
+                            // leaving `settingsTryClose` on the unguarded `onBack` so Escape skips
+                            // the dirty-discard prompt. One key for the destination, not for its
+                            // contents.
+                            //
+                            // The parameter is spelled `clazzContentKey` on the reified overload,
+                            // which is why H4 recorded navigation3 1.1.1 as not exposing one.
                             entry<Route.Settings>(
+                                clazzContentKey = { "settings" },
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) { route ->
                                 EscapeBox(
@@ -771,9 +785,9 @@ fun SupermuxApp(
                                 ) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         // Keyed on the HOST only: `route.section` here would
-                                        // remount the hub on every section change, and under a
-                                        // compact window that throws away the hub's push stack the
-                                        // moment a row reports its section back (E1 review).
+                                        // remount the hub on every section change — the same
+                                        // mistake the `clazzContentKey` above exists to prevent
+                                        // one level up (E1 review).
                                         key(activeHostId) {
                                             SettingsHub(
                                                 section = route.section,

@@ -703,8 +703,9 @@ class VoiceSettingsScreenTest {
             }
         }
         waitForIdle()
-        onNodeWithTag("settings_row_voice").performClick()
-        waitForIdle()
+        // No row click: `section = Voice` is a deliberate destination, so the compact hub seeds its
+        // push stack from it and lands here already. The index is still BEHIND us, which is what
+        // the second gesture below goes back to.
         waitUntil(timeoutMillis = 5_000) {
             try {
                 onNodeWithTag("voice_glossary_link").assertIsDisplayed()

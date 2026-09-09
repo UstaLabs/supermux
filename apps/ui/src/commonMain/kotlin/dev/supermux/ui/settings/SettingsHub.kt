@@ -61,6 +61,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -168,8 +169,22 @@ fun SettingsHub(
     var showDiscardDialog by remember { mutableStateOf(false) }
     /** When non-null, discard-confirm runs this instead of closing the hub. */
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+    /**
+     * The compact hub's landing target: [SettingsSection.Agents] is `Route.Settings`'s default and
+     * means "just Settings", so it lands on the index; anything else is a DELIBERATE destination
+     * (`openLspSettings`, `openPersonalAssistants`, a `settings/lsp` deep link) and lands there.
+     *
+     * Before this, `opened` always started at null, so a phone deep link showed the index while
+     * `ShellUiState.lspSettingsOpen` reported the section open — the state lied. It is safe to seed
+     * now only because the shell gives the settings entry a stable content key: while `section`
+     * was the entry key, seeding from it would have reopened the section every time the route was
+     * rewritten.
+     */
+    fun landing(): Target? =
+        if (compact) section.takeIf { it != SettingsSection.Agents }?.let(Target::Sec) else null
+
     /** Compact push stack (null = index); wide extra selection. Both reset with the host. */
-    var opened by remember(hostKey) { mutableStateOf<Target?>(null) }
+    var opened by remember(hostKey) { mutableStateOf(landing()) }
     var extraSelected by remember(hostKey) { mutableStateOf<SettingsExtra?>(null) }
 
     /** Runs [action], or asks to discard first when a section reported unsaved edits. */
@@ -228,6 +243,10 @@ fun SettingsHub(
         pending = null
         if (next != null) next() else onBack()
     }
+
+    // A deep link that arrives while this hub is already composed (the stable content key keeps
+    // the entry alive across a `Route.Settings` rewrite) still has to land on its section.
+    LaunchedEffect(compact, section) { landing()?.let { opened = it } }
 
     // Keep the registered close handler current for Escape / system back on the outer host.
     DisposableEffect(identityDirty, opened, compact) {
