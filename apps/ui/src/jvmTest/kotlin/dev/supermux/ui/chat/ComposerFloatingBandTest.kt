@@ -31,6 +31,14 @@ import kotlin.test.assertTrue
  * `background(surfaceContainerLow)`, the panel's colour, is what makes flush mean opaque; a
  * geometry gap is the part a future edit is most likely to reintroduce, and it is what the old
  * `padding(horizontal = 8.dp, vertical = 6.dp)` on the whole cluster produced.)
+ *
+ * ⚠️ WHAT THESE CANNOT SEE: `runComposeUiTest` renders with ZERO window insets, so the ime/nav-bar
+ * band under the strip has no height here and "flush to the bottom of the cluster" is trivially
+ * satisfied whether the strip's background is painted inside or outside the inset padding. The
+ * second half of the fix — background BEFORE `windowInsetsPadding`, so the opaque surface reaches
+ * the real bottom of the window on a device that has a nav bar or a raised keyboard — is invisible
+ * to this test and is pinned only by the comment at the call site. Do not read a green run here as
+ * proof the inset band is opaque on a phone.
  */
 @OptIn(ExperimentalTestApi::class)
 class ComposerFloatingBandTest {

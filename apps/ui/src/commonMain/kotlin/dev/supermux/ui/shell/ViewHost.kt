@@ -71,6 +71,7 @@ import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toWorkdirRelativePath
 import dev.supermux.ui.widgets.KeepAlivePanel
+import dev.supermux.ui.widgets.keepAlivePanel
 import kotlinx.coroutines.launch
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
@@ -484,12 +485,19 @@ private fun ChatViewPane(
             onContinued = onSelectSession,
         )
         Box(Modifier.weight(1f).fillMaxSize()) {
-            // KeepAlivePanel rather than the alpha modifier: the native half below IS a terminal
-            // on every host that has one, and a terminal is a platform view its compositor draws
-            // outside the Compose layer (UIKit interop on iOS, a heavyweight SwingPanel on
-            // desktop). Alpha does not hide either, so the hidden half would paint over the shown
-            // one. Android's actual is the same alpha hide as before.
-            KeepAlivePanel(visible = !nativeView) { body(Modifier) }
+            // The two halves hide by DIFFERENT mechanisms, and that asymmetry is deliberate.
+            //
+            // The native half below IS a terminal on every host that has one, and a terminal is a
+            // platform view its compositor draws outside the Compose layer (UIKit interop on iOS, a
+            // heavyweight SwingPanel on desktop). Alpha does not hide either, so it needs
+            // [KeepAlivePanel]'s layout-level hide (0×0 on both) or it paints over the chat half.
+            //
+            // This half is pure Compose — `body` here passes NO `nativeContent` to ChatPanel, so
+            // there is no interop inside it — and it must NOT use the same hide. On desktop
+            // KeepAlivePanel means `size(0.dp)`, and a 0×0 layout pass takes the transcript's
+            // LazyListState with it: a hidden-then-shown chat came back scrolled to the top. Alpha
+            // keeps it MEASURED at full size, so a tab round-trip preserves the scroll position.
+            body(Modifier.keepAlivePanel(visible = !nativeView))
             if (session.agent == "claude") {
                 KeepAlivePanel(visible = nativeView) {
                     key(sessionId) {

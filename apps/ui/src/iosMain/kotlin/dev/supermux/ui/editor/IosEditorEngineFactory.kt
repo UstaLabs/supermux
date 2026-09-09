@@ -17,10 +17,13 @@ import platform.Foundation.NSLog
  * nothing to do.
  *
  * ⚠️ A DEAD CONTENT PROCESS MUST NOT LATCH HERE, exactly as on Android. WebKit reclaiming a
- * backgrounded content process is routine, and recoverable by reloading — which the engine does
- * itself in `webViewWebContentProcessDidTerminate`. Flipping this flow to [EngineState.Failed]
- * would take EVERY editor in the app to its native fallback until relaunch. Renderer loss therefore
- * stays on the ENGINE's own `failed` flow, which fails the one surface that saw it.
+ * backgrounded content process is routine, and recoverable — the engine re-issues its own
+ * `loadFileURL` in `webViewWebContentProcessDidTerminate` (a bare `reload()` would come back
+ * without the directory read-access scope and render a blank page). Flipping this flow to
+ * [EngineState.Failed] would take EVERY editor in the app to its native fallback until relaunch.
+ * Renderer loss therefore stays on the ENGINE's own `failed` flow, which fails the one surface that
+ * saw it — and only after a SECOND termination with no successful load in between, which is a page
+ * crashing its own renderer rather than the system reclaiming it.
  *
  * An `object` rather than a class because it holds nothing: unlike Android's, which carries an
  * activity-context provider (the display density a WebView is born with is load-bearing there), an

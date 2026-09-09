@@ -51,7 +51,6 @@ import dev.supermux.net.TerminalClient
 import dev.supermux.net.TerminalStatus
 import dev.supermux.net.decodeInput
 import dev.supermux.net.linesFromPixels
-import dev.supermux.net.printableSequence
 import dev.supermux.net.wheelEventsFromLines
 import kotlin.math.abs
 import kotlinx.coroutines.launch

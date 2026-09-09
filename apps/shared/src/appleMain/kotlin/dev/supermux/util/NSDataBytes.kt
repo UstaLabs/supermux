@@ -38,3 +38,18 @@ fun NSData.toByteArray(): ByteArray {
         out.usePinned { pinned -> memcpy(pinned.addressOf(0), bytes, length) }
     }
 }
+
+/**
+ * [toNSData] as a TOP-LEVEL function, because Swift cannot see the extension.
+ *
+ * Kotlin/Native does not export extension functions whose receiver is a Kotlin builtin, so
+ * `ByteArray.toNSData()` is absent from the generated header while `NSData.toByteArray()` (receiver
+ * `NSData`, an ObjC type) is present. `:ios`'s `dataFrom` covers the Compose bridge, but it lives in
+ * SupermuxKit and the macOS target links `Shared` alone — so the ONE conversion both shells need
+ * (the terminal's pty bytes) has to be here.
+ *
+ * Swift calls `NSDataBytesKt.nsDataOf(bytes:)` and then `[UInt8](data)`: two bulk copies instead of
+ * one Objective-C message per byte. On a `cat` of a large file that is the difference between a
+ * memcpy and several million bridged calls per second.
+ */
+fun nsDataOf(bytes: ByteArray): NSData = bytes.toNSData()

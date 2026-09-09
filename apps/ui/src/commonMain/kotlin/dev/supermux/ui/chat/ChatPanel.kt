@@ -774,14 +774,16 @@ fun ChatPanel(
                             transcript(with(density) { composerHeightPx.toDp() } + Space.md)
                         }
                     }
+                    // The inset the whole cluster sits above. It is applied per-HALF rather than
+                    // to the cluster, because the strip's background must paint THROUGH it (see
+                    // below) while the glass card must sit above it.
+                    val bottomInset = WindowInsets.ime.union(WindowInsets.navigationBars)
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            // Measure the FULL footprint (card + strip + nav/ime inset):
-                            // onSizeChanged sits OUTSIDE windowInsetsPadding so the inset is
-                            // included.
-                            .onSizeChanged { composerHeightPx = it.height }
-                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
+                            // Measure the FULL footprint (card + strip + nav/ime inset): the inset
+                            // is now inside the children, so this still sees it.
+                            .onSizeChanged { composerHeightPx = it.height },
                     ) {
                         // The GLASS half — chip + composer card — floats over the transcript. That
                         // see-through is the design (iOS parity), and it is bounded by the card.
@@ -808,12 +810,21 @@ fun ChatPanel(
                         // over the git strip. The band exists only at tablet widths, which is why a
                         // phone never showed it, and only under the FLOATING arrangement, which is
                         // why a trackpad (which docks the composer) made it disappear.
+                        //
+                        // The background is applied BEFORE the inset padding, so the opaque surface
+                        // extends down THROUGH the nav-bar/keyboard band to the true bottom of the
+                        // window. With the inset on the cluster instead (H4's first shape) the band
+                        // itself stayed transparent and the transcript still showed through it —
+                        // the same bug, moved 30dp down. On a host with zero insets the two are
+                        // identical, which is why the test below cannot tell them apart and this
+                        // comment has to.
                         if (LocalWindowWidthClass.current != WindowWidthClass.Compact) {
                             Column(
                                 Modifier
                                     .testTag("composer_float_strip")
                                     .fillMaxWidth()
                                     .background(cs.surfaceContainerLow)
+                                    .windowInsetsPadding(bottomInset)
                                     .padding(horizontal = 8.dp)
                                     .padding(top = 3.dp, bottom = 6.dp),
                             ) {
@@ -826,7 +837,9 @@ fun ChatPanel(
                                 )
                             }
                         } else {
-                            Spacer(Modifier.height(6.dp))
+                            // Compact has no strip, so the glass card itself has to clear the
+                            // inset: the spacer carries it.
+                            Spacer(Modifier.windowInsetsPadding(bottomInset).height(6.dp))
                         }
                     }
                 }

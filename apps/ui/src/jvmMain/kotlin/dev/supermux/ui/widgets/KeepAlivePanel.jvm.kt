@@ -14,7 +14,9 @@ import androidx.compose.ui.zIndex
  *
  * STRATEGY: [content] stays in the SAME composition slot whether visible or not — so every
  * `remember` inside it (the TerminalClient, the JediTermWidget, the connector) survives a hide/show
- * cycle — but when hidden, the wrapping Box is laid out at **0×0** (`Modifier.size(0.dp)` + clip).
+ * cycle — but when hidden, the wrapping Box is laid out at **0×0** (`Modifier.size(0.dp)`; the
+ * `clipToBounds` is only belt-and-braces for Compose children that would otherwise overflow a
+ * zero-size box — it is the SIZE that hides the AWT child, not the clip).
  * SwingPanel propagates Compose layout bounds to its AWT child, so the heavyweight Swing component
  * gets 0×0 bounds: not painted, not clickable, can't hold focus. Alpha/zIndex alone would NOT
  * achieve this — a heavyweight AWT child ignores Compose drawing modifiers and would keep painting

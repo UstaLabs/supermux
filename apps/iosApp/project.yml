@@ -39,9 +39,16 @@ settings:
       "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
 packages:
+  # PINNED, not a range. The terminal host depends on SwiftTerm behaviour that a minor bump can
+  # silently change — `TerminalView`'s 0-height early return is load-bearing for the keep-alive
+  # hide (a 0xH layout must not resize the remote pty), and the `send`/feed byte paths are the
+  # hot bridge. `from:` also has nothing to pin it in git: the `Package.resolved` that records the
+  # actual revision lives inside the GENERATED `Supermux.xcodeproj`, which is not tracked, so a
+  # fresh checkout on another Mac would resolve whatever is newest. `exactVersion` is the only
+  # pin that survives `xcodegen generate`. 1.20.0 is what H5 built and verified against.
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
-    from: "1.13.0"
+    exactVersion: "1.20.0"
 
 targets:
   Supermux:
@@ -338,7 +345,11 @@ targets:
           fi
           export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
           cd "$SRCROOT/.."
-          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+          # :shared:syncEditorWeb (via :ios's task — the copy is the same one) refreshes
+          # Supermux/EditorWeb from apps/android/src/main/assets/editor before the resources phase,
+          # exactly as the iOS target does. The Mac app bundles the SAME CodeMirror folder
+          # reference, so without this it is the one target that can still ship a stale cm6.js.
+          ./gradlew --no-daemon :ios:syncEditorWeb :shared:embedAndSignAppleFrameworkForXcode
     postBuildScripts:
       - name: Sign bundled native host helpers
         basedOnDependencyAnalysis: false

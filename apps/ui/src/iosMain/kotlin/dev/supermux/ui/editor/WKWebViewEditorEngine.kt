@@ -43,8 +43,11 @@ import kotlinx.cinterop.readValue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.experimental.ExperimentalNativeApi
+import kotlin.native.Platform
 import platform.CoreGraphics.CGRectZero
 import platform.Foundation.NSBundle
+import platform.Foundation.NSURL
 import platform.Foundation.NSError
 import platform.Foundation.NSNumber
 import platform.WebKit.WKNavigation
@@ -85,7 +88,7 @@ private val POST_SHIM = """
     };
 """.trimIndent()
 
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, ExperimentalNativeApi::class)
 class WKWebViewEditorEngine(
     lineWrap: Boolean,
     fontSize: Int,
@@ -106,6 +109,29 @@ class WKWebViewEditorEngine(
     private var webView: WKWebView? = null
     private var pendingDiffRegion: DiffRegionRequest? = null
     private var disposed = false
+
+    /**
+     * Held for the life of the engine rather than reached through `webView.configuration`, so
+     * [dispose] can unregister the handlers even if the view is gone, and so the retain-cycle
+     * ownership is visible in one place.
+     */
+    private val contentController = WKUserContentController()
+
+    /** The bundled page, resolved once — the reload path below needs the URL, not just the view. */
+    private val pageUrl: NSURL? = NSBundle.mainBundle.URLForResource(
+        name = "index",
+        withExtension = "html",
+        subdirectory = "EditorWeb",
+    )
+
+    /**
+     * Consecutive content-process terminations with no [BridgeEvent.Ready] in between. One is
+     * routine (the system reclaimed a backgrounded renderer) and is recovered from silently; a
+     * SECOND with no successful load between them means the page itself is killing the renderer,
+     * and reloading forever would spin. That case latches [failed] so this one surface drops to the
+     * native fallback — the factory's process-wide state still never latches.
+     */
+    private var consecutiveTerminations = 0
 
     // ── Kotlin → JS ─────────────────────────────────────────────────────────
 
@@ -183,8 +209,8 @@ class WKWebViewEditorEngine(
         // BOTH handlers must come off, or the user-content controller keeps holding this engine
         // (the classic WKScriptMessageHandler retain cycle — the Swift EditorHost.stop() did the
         // same). Then stop loading and drop the delegate so nothing calls back into a dead engine.
-        view.configuration.userContentController.removeScriptMessageHandlerForName(HANDLER_EDITOR)
-        view.configuration.userContentController.removeScriptMessageHandlerForName(HANDLER_LSP)
+        contentController.removeScriptMessageHandlerForName(HANDLER_EDITOR)
+        contentController.removeScriptMessageHandlerForName(HANDLER_LSP)
         view.navigationDelegate = null
         view.stopLoading()
         view.removeFromSuperview()
@@ -196,7 +222,7 @@ class WKWebViewEditorEngine(
     // ── The web view itself ─────────────────────────────────────────────────
 
     private fun createWebView(): WKWebView {
-        val controller = WKUserContentController()
+        val controller = contentController
         // Document START: the bundle's own script runs after this, so `window.AndroidEditor` and
         // the LSP hook exist before cm6 can touch either. This is also why the shim is NOT part of
         // the didFinish eval the way desktop concatenates it into one — an injected user script
@@ -225,22 +251,31 @@ class WKWebViewEditorEngine(
             // One-Dark's backing, so the first frames are dark rather than the WKWebView's white.
             setOpaque(false)
             // iOS 16.4+; the app's deployment target is 26.0. Web Inspector over Safari is how the
-            // bundle is debugged on device, and the two other hosts both enable their equivalent.
-            setInspectable(true)
+            // bundle is debugged on device — in a debug binary only: a release build must not leave
+            // the editor's document tree open to any attached Safari.
+            setInspectable(Platform.isDebugBinary)
 
-            val url = NSBundle.mainBundle.URLForResource(
-                name = "index",
-                withExtension = "html",
-                subdirectory = "EditorWeb",
-            )
-            if (url == null) {
-                _failed.value = "EditorWeb/index.html missing from the app bundle"
-            } else {
-                // Read access to the DIRECTORY, not the file: cm6.js is a sibling, and a file URL
-                // scoped to index.html alone cannot load it.
-                loadFileURL(url, allowingReadAccessToURL = url.URLByDeletingLastPathComponent!!)
-            }
+            loadPage(this)
         }
+    }
+
+    /**
+     * Load (or RE-load) the bundled page.
+     *
+     * Never `reload()`: a `file://` load carries a read-access scope that is an argument to
+     * `loadFileURL`, not a property of the view, and a reload after a content-process crash comes
+     * back without it — cm6.js is a sibling of index.html, so the page would come up blank. The only
+     * correct recovery is to re-issue the original call with the directory scope.
+     */
+    private fun loadPage(view: WKWebView) {
+        val url = pageUrl
+        if (url == null) {
+            _failed.value = "EditorWeb/index.html missing from the app bundle"
+            return
+        }
+        // Read access to the DIRECTORY, not the file: cm6.js is a sibling, and a file URL scoped to
+        // index.html alone cannot load it.
+        view.loadFileURL(url, allowingReadAccessToURL = url.URLByDeletingLastPathComponent!!)
     }
 
     /** One object for both handler names; [WKScriptMessage.name] says which arrived. */
@@ -289,16 +324,25 @@ class WKWebViewEditorEngine(
 
         /**
          * The content process died — iOS's `onRenderProcessGone`, and just as routine (the system
-         * reclaims a backgrounded renderer). Android's rule applies verbatim: reload rather than
-         * latch a failure, and tell the planner so every push queues again until a fresh page
-         * fires `onReady`.
+         * reclaims a backgrounded renderer). Android's rule applies verbatim: recover rather than
+         * latch a failure, and tell the planner so every push queues again until a fresh page fires
+         * `onReady`.
+         *
+         * Recovery re-issues [loadPage], not `reload()` — see that function for why. And it gives
+         * up after the SECOND consecutive termination: at that point the page is crashing its own
+         * renderer, and this surface latches [failed] instead of looping.
          */
         override fun webViewWebContentProcessDidTerminate(webView: WKWebView) {
-            val why = "web content process terminated"
+            consecutiveTerminations++
+            val why = "web content process terminated (x$consecutiveTerminations)"
             _ready.value = false
             planner.onRendererLost()
             onRendererGone(why)
-            webView.reload()
+            if (consecutiveTerminations >= 2) {
+                _failed.value = "the editor's web content process died twice without loading"
+            } else {
+                loadPage(webView)
+            }
         }
     }
 
@@ -308,6 +352,9 @@ class WKWebViewEditorEngine(
         when (val event = parseBridgeEvent(request)) {
             null -> Unit // malformed / unknown fn: log-and-ignore, exactly as the other two hosts
             is BridgeEvent.Ready -> {
+                // A page that reached ready clears the crash streak: the NEXT termination is a
+                // first one again, and recoverable.
+                consecutiveTerminations = 0
                 _failed.value = null
                 _ready.value = true
                 emit(planner.onReady())
