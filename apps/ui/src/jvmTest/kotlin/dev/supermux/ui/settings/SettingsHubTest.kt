@@ -230,7 +230,18 @@ class SettingsHubTest {
         }
         onNodeWithTag("settings_row_devices").performClick()
         waitForIdle()
-        assertEquals(SettingsSection.Devices, picked)
+        // The compact push does NOT report the section, and this assertion is the fix for a real
+        // bug rather than an accommodation of one. The host writes what it is told into
+        // `Route.Settings`, that route is NavDisplay's content key for the settings entry, and a
+        // changed key disposes the entry — so reporting the push destroyed the hub that had just
+        // pushed, and every section row on a phone looked dead. The rail path still reports,
+        // because there the section IS the destination.
+        //
+        // This suite could not have caught that: it drives `SettingsHub` directly, with no
+        // NavDisplay above it, so the hub survived its own report here while failing in the app.
+        // `SupermuxAppNavTest.compact_opening_a_settings_section_stays_open` is the one that runs
+        // the whole shell and would have.
+        assertEquals(null, picked)
         onNodeWithTag("settings_hub_detail").assertExists()
         onNodeWithTag("section_devices").assertExists()
         onNodeWithTag("settings_detail_title").assertExists()
