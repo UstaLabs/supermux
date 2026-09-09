@@ -777,25 +777,56 @@ fun ChatPanel(
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            // Measure the FULL footprint (card + nav/ime inset): onSizeChanged sits
-                            // OUTSIDE windowInsetsPadding so the inset is included.
+                            // Measure the FULL footprint (card + strip + nav/ime inset):
+                            // onSizeChanged sits OUTSIDE windowInsetsPadding so the inset is
+                            // included.
                             .onSizeChanged { composerHeightPx = it.height }
-                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                     ) {
-                        WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
-                        composer()
+                        // The GLASS half — chip + composer card — floats over the transcript. That
+                        // see-through is the design (iOS parity), and it is bounded by the card.
+                        Column(
+                            Modifier
+                                .testTag("composer_float_glass")
+                                .padding(horizontal = 8.dp)
+                                .padding(top = 6.dp),
+                        ) {
+                            WalkthroughUnreadChip(
+                                state,
+                                onOpenWalkthrough,
+                                Modifier.align(Alignment.CenterHorizontally),
+                            )
+                            composer()
+                        }
                         // Compact (a phone) keeps the footer-less composer it always had; a
                         // tablet-class window gets desktop's strip.
+                        //
+                        // D4 (H4): the strip is CHROME, not glass, so it carries the panel's own
+                        // background. Without it the bottom of this floating cluster had no opaque
+                        // surface at all — a transparent ~50dp band under the card — and transcript
+                        // rows scrolled into it, reading as messages sitting BELOW the composer and
+                        // over the git strip. The band exists only at tablet widths, which is why a
+                        // phone never showed it, and only under the FLOATING arrangement, which is
+                        // why a trackpad (which docks the composer) made it disappear.
                         if (LocalWindowWidthClass.current != WindowWidthClass.Compact) {
-                            ComposerFooter(
-                                session = session,
-                                modifier = Modifier.padding(top = 3.dp),
-                                onFetch = actions.composer.gitFetch,
-                                onPull = actions.composer.gitPull,
-                                onPush = actions.composer.gitPush,
-                                onPublish = actions.composer.gitPublish,
-                            )
+                            Column(
+                                Modifier
+                                    .testTag("composer_float_strip")
+                                    .fillMaxWidth()
+                                    .background(cs.surfaceContainerLow)
+                                    .padding(horizontal = 8.dp)
+                                    .padding(top = 3.dp, bottom = 6.dp),
+                            ) {
+                                ComposerFooter(
+                                    session = session,
+                                    onFetch = actions.composer.gitFetch,
+                                    onPull = actions.composer.gitPull,
+                                    onPush = actions.composer.gitPush,
+                                    onPublish = actions.composer.gitPublish,
+                                )
+                            }
+                        } else {
+                            Spacer(Modifier.height(6.dp))
                         }
                     }
                 }
