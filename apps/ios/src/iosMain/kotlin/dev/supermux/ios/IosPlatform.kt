@@ -79,9 +79,15 @@ class IosPlatform(
     override fun pendingScans(): Flow<String> =
         IosAppState.pendingPairLink.filterNotNull().onEach { IosAppState.consumePendingPairLink() }
 
-    /** No terminal engine until H5 hosts Swift's SwiftTerm view in a `UIKitView`; `caps.terminal`
-     *  is false, and this factory draws the "no terminal here" hint if anything asks anyway. */
-    override fun terminalView(): TerminalViewFactory = UnavailableTerminalViewFactory
+    /**
+     * SwiftTerm, hosted by `UIKitView` (cluster H5).
+     *
+     * Null vendor — [NoopIosBridge], and any host that has not wired the Swift side — still gets
+     * the shared "this client has no terminal" hint rather than a factory that says it is
+     * available and then cannot build a view.
+     */
+    override fun terminalView(): TerminalViewFactory =
+        bridge.terminalVendor()?.let { IosTerminalViewFactory(it) } ?: UnavailableTerminalViewFactory
 
     /**
      * No hardware decoder, so every display renders through `VncFramebuffer` — whose iOS actual is
@@ -206,7 +212,9 @@ class IosPlatform(
 /**
  * What an iPhone/iPad can do.
  *
- * `terminal`, `scrcpy` and `hardwareVideoDecode` are false FOR NOW and flip in H5; the App Store
+ * `terminal` is true from H5 (SwiftTerm through `UIKitView`). `scrcpy` and `hardwareVideoDecode`
+ * stay false: every display renders through the Skia `VncFramebuffer`, which is a complete path
+ * rather than a degraded one, and a VideoToolbox decoder is deferred (see the H5 plan). The App Store
  * owns updating, so `appUpdate` stays false forever. `push` is true from H3: `IosPushRegistrar`
  * drives the same APNs → relay → broker registration the SwiftUI shell used, and the notification
  * service extension that decrypts the sealed alerts is untouched by this cluster. Everything else is a permanent property of the
@@ -233,7 +241,10 @@ val IOS_CAPS: Caps = Caps(
     // offered at all rather than shown as an inert switch.
     dynamicColor = false,
     appUpdate = false,
-    terminal = false,
+    // H5: `Platform.terminalView()` builds a SwiftTerm surface. NB nothing in `:ui` reads this cap
+    // to gate the terminal — the only degrade path is `UnavailableTerminalViewFactory` — so it is
+    // the FACTORY that must be right; this flag is the honest description beside it.
+    terminal = true,
     scrcpy = false,
 )
 

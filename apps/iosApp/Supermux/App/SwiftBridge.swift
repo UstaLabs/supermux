@@ -340,6 +340,14 @@ final class SwiftBridge: NSObject, IosBridge {
     func cancelNotificationsFor(sessionId: String) {
         PushManager.shared.clearDelivered(sessionId: sessionId)
     }
+
+    // MARK: terminal (H5)
+
+    /// The SwiftTerm vendor. One per bridge and stateless — every terminal it makes owns its own
+    /// view, coordinator and prediction pipeline, so nothing is shared between panes.
+    private lazy var terminals = ComposeTerminalVendor()
+
+    func terminalVendor() -> (any IosTerminalVendor)? { terminals }
 }
 
 /// The scanner's one-shot completion, and the dismissal that goes with it.
@@ -443,8 +451,11 @@ private final class CaptureDelegate: NSObject, UIImagePickerControllerDelegate, 
 ///
 /// It is explicitly NOT what delivers the back gesture, whatever the comment here used to say.
 /// Compose Multiplatform (since 1.10.3) installs its OWN pair of `UIKitBackGestureRecognizer`s on
-/// the window's direct child and feeds them straight into the `NavigationEventDispatcher` that the
-/// shared `PredictiveBackHandler` listens on — nothing is configured and nothing is needed here.
+/// the window's DIRECT CHILD — the `UITransitionView` under the SwiftUI hosting controller, which
+/// is an ANCESTOR of this navigation controller's view — and feeds them straight into the
+/// `NavigationEventDispatcher` that the shared `PredictiveBackHandler` listens on. Nothing is
+/// configured and nothing is needed here. (Measured by walking the hierarchy and printing every
+/// recogniser; see D1 in the H4 execution log.)
 /// The start edge (left, in LTR) is permanently bound to back; the opposite edge is governed by
 /// `ComposeUIViewControllerConfiguration.endEdgePanGestureBehavior`, which stays at its `Disabled`
 /// default on purpose, since a right-edge swipe means nothing on iOS in a left-to-right layout.
@@ -465,8 +476,9 @@ struct ComposeRootView: UIViewControllerRepresentable {
         ///
         /// This is NOT the app's back gesture and never was — Compose owns that (see the type
         /// doc). Keeping the refusal is still worth it: UIKit's recogniser lives on this
-        /// controller's view, an ANCESTOR of the one carrying Compose's, so a version of it that
-        /// began would take the same edge away from Compose.
+        /// controller's view, a DESCENDANT of the `UITransitionView` that carries Compose's, so it
+        /// sees the same touches first and a version of it that began would take the edge away
+        /// from Compose.
         func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
             (navigation?.viewControllers.count ?? 0) > 1
         }

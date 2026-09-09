@@ -127,13 +127,13 @@ fun TermlibTerminalView(
             defaultForeground = Color(c.terminalForeground),
             defaultBackground = Color(c.terminal),
             onKeyboardInput = { data ->
-                val ch = singlePrintableChar(data)
-                if (sink.armed && ch != null) {
-                    // Apply the armed modifier to this keystroke and send it directly. Control codes
-                    // aren't printable, so skip predictive echo (web parity). Consume `once`.
-                    val bytes = printableSequence(ch, sink.mods).encodeToByteArray()
-                    sink.consumeOnce()
-                    scope.launch { client.sendInput(bytes) }
+                // The armed-bar-modifier rule now lives on the sink (`applyArmedModifiers`), shared
+                // with iOS so the two hosts cannot drift on which keystrokes it may transform.
+                // Non-null = re-encoded with the modifier, sent directly, `once` consumed: a
+                // control code is not printable, so predictive echo is skipped (web parity).
+                val modified = sink.applyArmedModifiers(data)
+                if (modified != null) {
+                    scope.launch { client.sendInput(modified) }
                 } else {
                     pred.handleInput(data) // predictive echo BEFORE the send (web/iOS parity)
                     scope.launch { client.sendInput(data) }
@@ -343,17 +343,6 @@ private fun StatusChip(status: TerminalStatus, modifier: Modifier = Modifier) {
         )
         Text(label, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
     }
-}
-
-/**
- * A single printable ASCII char (0x20–0x7e) from a keystroke's bytes, or null. This is the only
- * input an armed bar modifier transforms (Ctrl/Alt + letter/punct); control keys, Enter, and
- * multi-byte/IME input pass through untouched. Mirrors TerminalPane.vue's isSinglePrintable.
- */
-private fun singlePrintableChar(data: ByteArray): Char? {
-    if (data.size != 1) return null
-    val b = data[0].toInt() and 0xff
-    return if (b in 0x20..0x7e) b.toChar() else null
 }
 
 /**

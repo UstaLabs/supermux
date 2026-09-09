@@ -40,7 +40,7 @@ final class TerminalHost {
         // Coordinator owns the terminal-view delegate (send/sizeChanged → session), the
         // hardware-keyboard policy, AND the predictive-echo pipeline (engine + adapter),
         // wired once to the persistent view.
-        let coordinator = TerminalCoordinator(session: session)
+        let coordinator = TerminalCoordinator(io: session)
         self.delegate = coordinator
         tv.terminalDelegate = coordinator
         coordinator.attach(tv)
@@ -61,13 +61,33 @@ final class TerminalHost {
     }
 }
 
+/// Where a terminal's keystrokes and measured grid go. `TerminalSession` (the SwiftUI shell's
+/// websocket controller) is one implementation; `KotlinTerminalIO` (the Compose shell's bridge to
+/// the shared `TerminalClient`) is the other.
+///
+/// It exists so `TerminalCoordinator` — the hardware-keyboard policy, the pan→wheel scroll bridge
+/// and the predictive-echo pipeline, which is the only genuinely hard part of the iOS terminal —
+/// is written ONCE and reused by both shells instead of being forked for H5. @MainActor because
+/// both implementations are, and the coordinator reaches them under `assumeIsolated`.
+@MainActor
+protocol TerminalIO: AnyObject {
+    func sendInput(_ bytes: [UInt8])
+    func resize(cols: Int, rows: Int)
+}
+
+extension TerminalSession: TerminalIO {}
+
 /// The persistent terminal's delegate + hardware-keyboard policy. Lives in `TerminalHost`
 /// (tied to the long-lived `TerminalView`) rather than a per-mount SwiftUI coordinator, so
 /// the policy and the FIFO input wiring survive remounts. Plain `NSObject` (not @MainActor)
-/// so it satisfies SwiftTerm's nonisolated `TerminalViewDelegate` — the @MainActor session
+/// so it satisfies SwiftTerm's nonisolated `TerminalViewDelegate` — the @MainActor io sink
 /// is reached via `assumeIsolated` (we ARE on the main thread when SwiftTerm calls us).
 final class TerminalCoordinator: NSObject, TerminalViewDelegate {
-    let session: TerminalSession
+    let io: TerminalIO
+    /// Suppress SwiftTerm's own `TerminalAccessory` toolbar for good. The Compose shell draws the
+    /// SHARED `TerminalKeyBar` above the keyboard instead (one bar, three hosts, one sticky-modifier
+    /// state machine), so leaving SwiftTerm's would stack two rows of keys over each other.
+    private let hostDrawsAccessoryBar: Bool
     private weak var tv: TerminalView?
     #if os(iOS)
     private var savedAccessory: UIView?
@@ -98,8 +118,9 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
     // threshold, and latency was otherwise only ever learned from confirmed predictions).
     private var lastKeyAt: Int64 = 0
 
-    init(session: TerminalSession) {
-        self.session = session
+    init(io: TerminalIO, hostDrawsAccessoryBar: Bool = false) {
+        self.io = io
+        self.hostDrawsAccessoryBar = hostDrawsAccessoryBar
         super.init()
         #if os(iOS)
         // A connected hardware keyboard means the on-screen keyboard (soft keys + the
@@ -123,7 +144,15 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
     func attach(_ terminal: TerminalView) {
         tv = terminal
         #if os(iOS)
-        savedAccessory = terminal.inputAccessoryView   // SwiftTerm's TerminalAccessory (set in its setup)
+        if hostDrawsAccessoryBar {
+            // Drop SwiftTerm's toolbar and remember NOTHING, so applyKeyboardPolicy's restore path
+            // (`inputAccessoryView = savedAccessory`) keeps it suppressed rather than bringing it
+            // back when a hardware keyboard is unplugged.
+            terminal.inputAccessoryView = nil
+            savedAccessory = nil
+        } else {
+            savedAccessory = terminal.inputAccessoryView   // SwiftTerm's TerminalAccessory (set in its setup)
+        }
         #endif
         // Predictive local echo (mirror TerminalPane.vue onMounted): pure-logic shared engine
         // + SwiftTerm dim-render adapter. The engine owns all reconcile/cursor math; the
@@ -185,7 +214,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
                 let col = Int32(cols > 1 ? cols / 2 : 1)
                 let row = Int32(rows > 1 ? rows / 2 : 1)
                 let bytes = TerminalScrollKt.wheelEventsFromLines(lines: step.lines, col: col, row: row)
-                MainActor.assumeIsolated { session.sendInput(bytes.toUInt8()) }
+                MainActor.assumeIsolated { io.sendInput(bytes.toUInt8()) }
             }
         default:
             break
@@ -201,7 +230,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
         guard let tv else { return }
         let hardware = GCKeyboard.coalesced != nil
         if hardware, !suppressed {
-            if savedAccessory == nil { savedAccessory = tv.inputAccessoryView }
+            if savedAccessory == nil, !hostDrawsAccessoryBar { savedAccessory = tv.inputAccessoryView }
             tv.inputView = emptyInputView
             tv.inputAccessoryView = nil
             suppressed = true
@@ -261,7 +290,7 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
         let col = Int32(cols > 1 ? cols / 2 : 1)
         let row = Int32(rows > 1 ? rows / 2 : 1)
         let bytes = TerminalScrollKt.wheelEventsFromLines(lines: step.lines, col: col, row: row)
-        MainActor.assumeIsolated { session.sendInput(bytes.toUInt8()) }
+        MainActor.assumeIsolated { io.sendInput(bytes.toUInt8()) }
     }
     #endif
 
@@ -275,19 +304,23 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
             // Predictive local echo BEFORE the send (mirror TerminalPane.vue term.onData):
             // show the keystroke instantly + advance the caret, then send as today.
             handleInput(bytes)
-            session.sendInput(bytes)
+            io.sendInput(bytes)
         }
     }
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        MainActor.assumeIsolated { session.resize(cols: newCols, rows: newRows) }
+        MainActor.assumeIsolated { io.resize(cols: newCols, rows: newRows) }
     }
 
     // MARK: - Predictive local echo (mirror TerminalPane.vue's input / output handlers)
 
     /// INPUT: decode the keystroke, render the engine's ops, then stamp the RTT clock.
     /// Called from send(...) inside the main-actor block, BEFORE the bytes reach the pty.
+    ///
+    /// Skipped entirely while a host key-bar modifier is armed (`modsArmed`): Kotlin re-encodes
+    /// that keystroke as a control code on the way through, so echoing the LETTER would paint a
+    /// glyph the server never sends. Android skips it on the same condition (web parity).
     private func handleInput(_ bytes: [UInt8]) {
-        guard let engine, let predAdapter else { return }
+        guard !modsArmed, let engine, let predAdapter else { return }
         let str = String(decoding: bytes, as: UTF8.self)
         predAdapter.render(engine.onInput(ev: PredictiveEchoKt.decodeInput(data: str),
                                           serverCursor: predAdapter.cursor()))
@@ -318,6 +351,10 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
             predAdapter.render(engine.onServerData(bytes: bytes))
         }
     }
+
+    /// Whether the host's shared key bar currently has Ctrl or Alt armed. Set from Kotlin through
+    /// `IosTerminalHandle.setMods`; read only by `handleInput`.
+    var modsArmed = false
 
     /// Drop the engine + adapter (teardown). Later output falls back to a direct feed.
     func teardownPrediction() {

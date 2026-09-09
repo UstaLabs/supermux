@@ -83,6 +83,43 @@ class TerminalKeySink(private val send: (ByteArray) -> Unit) {
         if (ctrl == TerminalModState.ONCE) ctrl = TerminalModState.OFF
         if (alt == TerminalModState.ONCE) alt = TerminalModState.OFF
     }
+
+    /**
+     * Re-encode a REAL keystroke with whatever bar modifier is armed — the other half of the sink,
+     * and the one without which a bar Ctrl is decorative.
+     *
+     * The bar itself only carries Esc/Tab/Ctrl/Alt/arrows: there is no `Ctrl` and no `C` on it, so
+     * "Ctrl-C" is always the bar arming Ctrl and the SOFT KEYBOARD typing `c`. That keystroke does
+     * not come through [press] — it comes from the grid — so every surface has to route it here.
+     *
+     * Returns the bytes to send INSTEAD of [data] (consuming a `once` as it goes), or null when the
+     * keystroke passes through untouched. Null also means "predict this one": a control code is not
+     * printable, so a predicted local echo of it would paint a glyph the server never sends (web
+     * parity — `TerminalPane.vue` skips the echo on the same condition).
+     *
+     * Only a SINGLE printable ASCII char (0x20–0x7e) is transformed. Control keys, Enter,
+     * multi-byte UTF-8 and IME composition pass through: a modifier has no defined meaning for them
+     * and mangling them would break every non-ASCII keyboard.
+     */
+    fun applyArmedModifiers(data: ByteArray): ByteArray? {
+        if (!armed) return null
+        val ch = singlePrintableChar(data) ?: return null
+        val bytes = printableSequence(ch, mods).encodeToByteArray()
+        consumeOnce()
+        return bytes
+    }
+}
+
+/**
+ * A single printable ASCII char (0x20–0x7e) from a keystroke's bytes, or null.
+ *
+ * Was private to Android's termlib view; lifted here in H5 when iOS needed the identical rule, so
+ * the two hosts cannot drift on which keystrokes an armed bar modifier may transform.
+ */
+fun singlePrintableChar(data: ByteArray): Char? {
+    if (data.size != 1) return null
+    val b = data[0].toInt() and 0xff
+    return if (b in 0x20..0x7e) b.toChar() else null
 }
 
 /**
