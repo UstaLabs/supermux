@@ -31,14 +31,11 @@ final class AudioRecorder {
     /// permission (`IosBridge.requestMicPermission`) asks first.
     @discardableResult
     func startGranted() -> Bool {
-        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playAndRecord, mode: .default)
             try session.setActive(true)
         } catch { return false }
-        #endif
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
 
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-\(UUID().uuidString).m4a")
@@ -80,7 +77,6 @@ final class AudioRecorder {
         if let url { try? FileManager.default.removeItem(at: url) }
         recorder = nil; url = nil
         isRecording = false; elapsed = 0
-        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         // Hand the category back. `.playAndRecord` routes playback to the receiver rather than the
@@ -88,8 +84,6 @@ final class AudioRecorder {
         // NEXT read-aloud come out quiet and earpiece-shaped. Only matters now that the same
         // process both records and speaks (cluster H3).
         try? session.setCategory(.playback)
-        #endif
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
     }
 
     private func startTicker() {

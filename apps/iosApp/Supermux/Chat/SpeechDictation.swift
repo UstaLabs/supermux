@@ -92,7 +92,7 @@ final class SpeechDictation {
         phase = .requesting
         guard await requestMicPermission() else { phase = .idle; return .denied }
 
-        if #available(iOS 26.0, macOS 26.0, *) {
+        if #available(iOS 26.0, *) {
             return await startModern(contextualStrings: contextualStrings)
         } else {
             return await startLegacy(contextualStrings: contextualStrings)
@@ -114,7 +114,7 @@ final class SpeechDictation {
         if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
 
-        if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
+        if #available(iOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             // Drain the analyzer so any volatile result is finalized, then read it.
             await backend.finish()
             publishTranscript(backend.transcript)
@@ -144,7 +144,7 @@ final class SpeechDictation {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
         }
-        if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
+        if #available(iOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             backend.cancel()
         }
         Task { await cleanup() }
@@ -154,7 +154,7 @@ final class SpeechDictation {
         ticker?.cancel(); ticker = nil
         // Modern: release the analyzer/transcriber so we don't hit "Maximum number of
         // recognizers reached" after a few sessions.
-        if #available(iOS 26.0, macOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
+        if #available(iOS 26.0, *), let backend = analyzerBox as? SpeechAnalyzerBackend {
             await backend.teardown()
         }
         analyzerBox = nil
@@ -168,7 +168,7 @@ final class SpeechDictation {
 
     // MARK: - Modern (iOS 26 SpeechAnalyzer)
 
-    @available(iOS 26.0, macOS 26.0, *)
+    @available(iOS 26.0, *)
     private func startModern(contextualStrings: [String]) async -> StartResult {
         guard SpeechTranscriber.isAvailable else { phase = .idle; return .unavailable }
         guard await requestSpeechAuth() else { phase = .idle; return .denied }
@@ -296,7 +296,6 @@ final class SpeechDictation {
     // MARK: - Shared helpers
 
     private func configureAudioSession() -> Bool {
-        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.record, mode: .measurement, options: .duckOthers)
@@ -305,10 +304,6 @@ final class SpeechDictation {
         } catch {
             return false
         }
-        #else
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
-        return true
-        #endif
     }
 
     private func beginSession() {
@@ -320,10 +315,7 @@ final class SpeechDictation {
     }
 
     private func deactivateSession() {
-        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
-        // macOS: no audio session — AVAudioEngine drives the mic directly.
     }
 
     private func startTicker() {
@@ -356,7 +348,7 @@ final class SpeechDictation {
 /// Wraps the iOS 26 `SpeechAnalyzer` + `SpeechTranscriber` lifecycle: model installation,
 /// the mic→analyzer `AsyncStream<AnalyzerInput>` pump, results consumption, and teardown.
 /// Kept in its own `@available` class so the rest of the file still compiles on older SDKs.
-@available(iOS 26.0, macOS 26.0, *)
+@available(iOS 26.0, *)
 @MainActor
 final class SpeechAnalyzerBackend {
     enum PrepareResult { case ready, downloading, unsupported, failed }
@@ -591,7 +583,7 @@ final class SpeechAnalyzerBackend {
 
 /// Converts an `AVAudioPCMBuffer` from the mic's native format to the analyzer's required
 /// format via a cached `AVAudioConverter`. (Mirrors Apple's WWDC sample BufferConverter.)
-@available(iOS 26.0, macOS 26.0, *)
+@available(iOS 26.0, *)
 final class DictationBufferConverter {
     private var converter: AVAudioConverter?
 

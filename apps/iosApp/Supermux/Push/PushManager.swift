@@ -29,36 +29,15 @@
 import Combine
 import Foundation
 // The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared
-// as well would embed the :shared klib twice. The macOS target — which still compiles this file,
-// plus the whole SwiftUI shell under `SupermuxMacUI/` — links Shared directly. H6 replaced the
-// COMPOSE_SHELL flag with this platform test: after the cutover the only non-Compose shell IS the
-// Mac one, so the shell axis and the platform axis are the same axis.
-#if os(iOS)
+// as well would embed the :shared klib twice.
 import SupermuxKit
-#else
-import Shared
-#endif
-#if canImport(UIKit)
 import UIKit
-#else
-import AppKit
-#endif
 import UserNotifications
-
-/// Platform-neutral background-push outcome — the same three cases as
-/// `UIBackgroundFetchResult`, but without importing UIKit so `PushManager` stays
-/// cross-platform. The iOS delegate maps this back to `UIBackgroundFetchResult`.
-enum PushFetchResult {
-    case newData, noData, failed
-}
 
 /// App-side push manager: drives APNs registration and the broker register→bootstrap
 /// orchestration. A singleton (the `PushAppDelegate` forwards UIKit callbacks here).
 final class PushManager: NSObject {
     static let shared = PushManager()
-    // macOS also registers as "ios": same APNs topic (shared bundle id), and
-    // the relay only distinguishes APNs vs FCM. Introduce "macos" only when
-    // the broker learns to segment device platforms.
     private static let platform = "ios"
 
     private override init() { super.init() }
@@ -123,11 +102,7 @@ final class PushManager: NSObject {
     /// `registerForRemoteNotifications` must run on the main thread.
     private static func registerForRemote() {
         DispatchQueue.main.async {
-            #if canImport(UIKit)
             UIApplication.shared.registerForRemoteNotifications()
-            #else
-            NSApplication.shared.registerForRemoteNotifications()
-            #endif
         }
     }
 
@@ -180,8 +155,8 @@ final class PushManager: NSObject {
 
     /// Called when the user opens a chat: forget that chat's unread state (the single card
     /// the NSE keeps under `threadIdentifier == sessionId`) and reset the app-icon badge to
-    /// the total unread that remains. `PushGroupState` is the source of truth on iOS; the
-    /// mac client (no App Group) falls back to counting the chats still on screen.
+    /// the total unread that remains. `PushGroupState` (the App Group store) is the source of
+    /// truth; without a store it falls back to counting the chats still on screen.
     func clearDelivered(sessionId: String) {
         guard !sessionId.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
@@ -206,15 +181,11 @@ final class PushManager: NSObject {
 
     // MARK: - Step 3: bootstrap push → register device with broker
 
-    /// Handle a background remote notification. Returns a platform-neutral fetch result
-    /// (`PushFetchResult`) — the iOS delegate maps it back to the real
-    /// `UIBackgroundFetchResult` the OS contract wants, while macOS (no background-fetch
-    /// completion contract) simply discards it. Keeping this method UIKit-free is what
-    /// lets `PushManager` compile on macOS.
+    /// Handle a background remote notification.
     /// A BOOTSTRAP payload (plaintext `{"kind":"bootstrap","routingToken":...}` in `data`)
     /// registers this device (pubkey + routingToken) with the broker. SEALED alerts are
     /// handled by the NSE, not here.
-    func didReceiveRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> PushFetchResult {
+    func didReceiveRemoteNotification(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
         guard let blob = userInfo["data"] as? String,
               let routingToken = Self.parseBootstrapRoutingToken(blob) else {
             return .noData
@@ -251,97 +222,11 @@ final class PushManager: NSObject {
     }
 }
 
-/// Routes a tapped push to the right chat. Set by the notification tap handler
-/// (`didReceive response`), observed by `RootView` to drive session selection.
-@MainActor final class PushRouter: ObservableObject {
-    static let shared = PushRouter()
-    @Published var pendingSessionId: String?
-    private init() {}
-}
-
-#if canImport(UIKit)
 /// UIKit application delegate, adapted into the SwiftUI lifecycle via
 /// `@UIApplicationDelegateAdaptor`. Forwards push callbacks to `PushManager`.
-/// Method bodies are hoisted into the shared `private extension` below (see
-/// `handleLaunch()`/`handleToken(_:)`/`handleFailure(_:)`) so this class and its
-/// `NSApplicationDelegate` twin (`#else`, below) stay thin shells around the same
-/// logic; `handleRemote(_:)` is the one exception — it can't be fully shared because
-/// its return type (`UIBackgroundFetchResult`) is UIKit-only, so each platform gets
-/// its own thin `handleRemote` that still funnels into `PushManager` identically.
 final class PushAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        handleLaunch()
-        return true
-    }
-
-    func application(_ application: UIApplication,
-                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        handleToken(deviceToken)
-    }
-
-    func application(_ application: UIApplication,
-                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        handleFailure(error)
-    }
-
-    func application(_ application: UIApplication,
-                     didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        await handleRemote(userInfo)
-    }
-
-    /// Shared body lives in `PushManager.shared.didReceiveRemoteNotification` (which
-    /// returns a platform-neutral `PushFetchResult`); this thin wrapper exists only to
-    /// map that back to the UIKit-only `UIBackgroundFetchResult` the OS method requires,
-    /// which is why it can't move into the cross-platform extension below.
-    private func handleRemote(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        switch await PushManager.shared.didReceiveRemoteNotification(userInfo) {
-        case .newData: return .newData
-        case .noData: return .noData
-        case .failed: return .failed
-        }
-    }
-}
-#else
-/// AppKit application delegate, adapted into the SwiftUI lifecycle via
-/// `@NSApplicationDelegateAdaptor`. Mirrors `PushAppDelegate`'s UIKit branch
-/// method-for-method (see the type doc comment there); shared bodies live in the
-/// `private extension` below.
-final class PushAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        handleLaunch()
-    }
-
-    func application(_ application: NSApplication,
-                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        handleToken(deviceToken)
-    }
-
-    func application(_ application: NSApplication,
-                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        handleFailure(error)
-    }
-
-    func application(_ application: NSApplication,
-                     didReceiveRemoteNotification userInfo: [String: Any]) {
-        handleRemote(userInfo)
-    }
-
-    /// Same underlying call as iOS's `handleRemote`, minus the `UIBackgroundFetchResult`
-    /// the OS-facing method has nowhere to return on macOS (no background-fetch
-    /// completion contract) — fire-and-forget the async broker registration instead.
-    private func handleRemote(_ userInfo: [String: Any]) {
-        Task { _ = await PushManager.shared.didReceiveRemoteNotification(userInfo) }
-    }
-}
-#endif
-
-/// Shared method bodies for both `PushAppDelegate` branches above — kept once here so
-/// neither `#if` branch duplicates logic (only the OS-facing method *signatures* differ).
-private extension PushAppDelegate {
-    /// Shared `application(_:didFinishLaunchingWithOptions:)` /
-    /// `applicationDidFinishLaunching(_:)` body.
-    func handleLaunch() {
         UNUserNotificationCenter.current().delegate = self
         // Register the chat category so a long-press / pull-down on a collapsed chat
         // notification routes to the custom expanded content extension (SupermuxNotifContent).
@@ -350,13 +235,6 @@ private extension PushAppDelegate {
             UNNotificationCategory(identifier: PushGroupState.chatCategory, actions: [],
                                    intentIdentifiers: [], options: [])
         ])
-        #if os(macOS)
-        // Headless host smoke builds and XCTest-injected app hosts deliberately avoid Keychain.
-        // A differently ad-hoc-signed binary can trigger an ACL prompt over SSH, and XCTest must
-        // never initialize real persistent services. Production/direct-distribution launches
-        // satisfy both policies and take the normal path.
-        guard MacHostPolicy.shouldPersist(), MacHostPolicy.shouldAutostart() else { return }
-        #endif
         // Warm the push keypair on launch so its public key is generated + persisted in
         // the shared Keychain group up front (the NSE reads the same key to decrypt, and
         // the bootstrap handler registers this pubkey with the broker). Idempotent.
@@ -364,23 +242,25 @@ private extension PushAppDelegate {
         // Register on launch if already paired (post-pairing registration is kicked
         // off from the pairing flow / `registerIfPaired()`).
         PushManager.shared.registerIfPaired()
+        return true
     }
 
-    /// Shared `didRegisterForRemoteNotificationsWithDeviceToken` body.
-    func handleToken(_ deviceToken: Data) {
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushManager.shared.didRegister(deviceToken: deviceToken)
     }
 
-    /// Shared `didFailToRegisterForRemoteNotificationsWithError` body.
-    func handleFailure(_ error: Error) {
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
         PushManager.shared.didFailToRegister(error: error)
+    }
+
+    func application(_ application: UIApplication,
+                     didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        await PushManager.shared.didReceiveRemoteNotification(userInfo)
     }
 }
 
-/// `UNUserNotificationCenterDelegate` is identical on iOS and macOS (the
-/// `UserNotifications` framework itself is cross-platform), and both `PushAppDelegate`
-/// branches above share the same type name, so this conformance is declared ONCE here
-/// — outside the `#if` — rather than duplicated into each branch.
 extension PushAppDelegate: UNUserNotificationCenterDelegate {
     /// Show banners/sounds even while the app is in the foreground (parity with the
     /// Android high-importance channel).
@@ -392,23 +272,15 @@ extension PushAppDelegate: UNUserNotificationCenterDelegate {
     /// User TAPPED a notification → open the session it was about. The NSE stashed the
     /// session id under `sm_session_id` in the decrypted notification's userInfo.
     ///
-    /// Two sinks, because there are two shells — but they are now two PLATFORMS. `PushRouter` is
-    /// the SwiftUI one, observed by the macOS `RootView` in `SupermuxMacUI/`; `IosAppState` is the
-    /// Compose one, whose shared root resolves the id to a workspace view. Nothing on iOS reads
-    /// `PushRouter` any more; writing it anyway costs one property assignment and keeps this
-    /// function's shape identical on both platforms.
-    ///
-    /// Both are set on the main actor, and both are STATE rather than events: a tap can be what
+    /// `IosAppState` is the sink: the Compose shell's shared root resolves the id to a workspace
+    /// view. It is set on the main actor, and it is STATE rather than an event: a tap can be what
     /// launches the app, and the observer that appears a moment later must still see it.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
         guard let id = info["sm_session_id"] as? String, !id.isEmpty else { return }
         await MainActor.run {
-            PushRouter.shared.pendingSessionId = id
-            #if os(iOS)
             IosAppState.shared.setPendingPushSessionId(id: id)
-            #endif
         }
         NSLog("[supermux push] tap → session %@", id)
     }

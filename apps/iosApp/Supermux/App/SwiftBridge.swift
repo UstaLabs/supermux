@@ -1,5 +1,3 @@
-// iOS only: the macOS target has its own SwiftUI shell (SupermuxMacUI/) and no Compose root.
-#if os(iOS)
 import AVFoundation
 import Foundation
 import Speech
@@ -504,4 +502,3 @@ struct ComposeRootView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: UINavigationController, context: Context) {}
 }
-#endif

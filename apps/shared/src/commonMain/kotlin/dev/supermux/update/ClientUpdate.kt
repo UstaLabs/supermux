@@ -80,8 +80,9 @@ fun ClientPlatform.assetKey(): String = when (this) {
     ClientPlatform.ANDROID -> "android"
     ClientPlatform.DESKTOP_LINUX -> "desktop-linux"
     ClientPlatform.DESKTOP_WINDOWS -> "desktop-windows"
-    // Compose Multiplatform mac client. (Native SwiftUI Supermux.app keeps the
-    // historical `desktop-macos` → supermux-macos.dmg mapping for AppUpdateView.)
+    // Compose Multiplatform mac client — the only Mac client. The key is historical (it once sat
+    // beside a `desktop-macos` entry for the retired native SwiftUI Supermux.app) and is kept so
+    // installed clients keep finding their updates.
     ClientPlatform.DESKTOP_MACOS -> "compose-desktop-macos"
     ClientPlatform.IOS -> ""
 }

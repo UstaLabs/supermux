@@ -1,11 +1,6 @@
 import Foundation
 import AVFoundation
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-#else
-import AppKit
-#endif
 
 /// Process-wide read-aloud: AVSpeechSynthesizer (platform) or ChatGPT via broker /speak.
 @MainActor
@@ -15,8 +10,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     private let synth = AVSpeechSynthesizer()
     private var gen = 0
     private var audioPlayer: AVAudioPlayer?
-    /// Holds the playing chunk's delegate alive — `AVAudioPlayer.delegate` is weak. Used by both
-    /// the Compose chunk path (`playChunk`) and the Mac codex stream, so it lives out here.
+    /// Holds the playing chunk's delegate alive — `AVAudioPlayer.delegate` is weak.
     private var finishBox: FinishBox?
 
     @Published private(set) var speakingKey: String?
@@ -128,36 +122,9 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         done?()
     }
 
-    // ── The broker-driven half: macOS only ──────────────────────────────────
-    //
-    // `toggle`, engine resolution and the codex chunk stream all take a `BrokerSession`, which is
-    // the Mac shell's connection type (`SupermuxMacUI/Broker/`). On iOS none of this is reachable:
-    // Kotlin's `MessageTts` in `:ui` owns engine selection, the speaking key and the chunk queue
-    // for all three hosts, and reaches this class only through the three low-level members above
-    // (speak / play a chunk / be quiet). Guarding by platform rather than splitting the class
-    // keeps ONE AVSpeechSynthesizer and ONE audio player in the process, which is the whole
-    // reason `shared` exists.
-    #if os(macOS)
-
-    func toggle(rawText: String, broker: BrokerSession?) {
-        let plain = Self.plainTextForSpeech(rawText)
-        guard !plain.isEmpty else { return }
-        if speakingKey == plain {
-            stop()
-            return
-        }
-        Task {
-            let engine = await Self.resolveEngine(broker: broker)
-            if engine == "codex", let broker {
-                await speakCodex(rawText: rawText, plain: plain, broker: broker)
-            } else {
-                speakPlatform(plain)
-            }
-        }
-    }
-
-    #endif
-
+    /// Silence whatever is making noise. Kotlin's `MessageTts` in `:ui` owns engine selection,
+    /// the speaking key and the chunk queue for all three hosts, and reaches this class only
+    /// through `speakText` / `playChunk` / `stop`.
     func stop() {
         gen &+= 1
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
@@ -169,115 +136,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         finishPending()
     }
 
-    #if os(macOS)
-
-    private static func resolveEngine(broker: BrokerSession?) async -> String {
-        guard let broker else { return "platform" }
-        let cfg = await broker.config()
-        let e = cfg?.voiceTtsEngine ?? ""
-        return e.isEmpty ? "platform" : e
-    }
-
-    #endif
-
-    private func speakPlatform(_ plain: String) {
-        gen &+= 1
-        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
-        audioPlayer?.stop()
-        audioPlayer = nil
-        speakingKey = plain
-        let u = AVSpeechUtterance(string: plain)
-        u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
-            ?? AVSpeechSynthesisVoice(language: "en-US")
-        u.rate = AVSpeechUtteranceDefaultSpeechRate
-        // Registered for the same reason the Compose path registers: `utteranceEnded` clears
-        // `speakingKey` only for the utterance that is actually current.
-        currentUtterance = u
-        synth.speak(u)
-    }
-
-    #if os(macOS)
-    private func speakCodex(rawText: String, plain: String, broker: BrokerSession) async {
-        gen &+= 1
-        let myGen = gen
-        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
-        audioPlayer?.stop()
-        audioPlayer = nil
-        speakingKey = plain
-
-        // Collect chunks as they arrive; play each to completion before the next,
-        // starting as soon as the first piece is ready (stream continues in parallel).
-        actor ChunkQueue {
-            private var items: [Data] = []
-            private var cont: CheckedContinuation<Data?, Never>?
-            private var closed = false
-
-            func push(_ d: Data) {
-                if let c = cont {
-                    cont = nil
-                    c.resume(returning: d)
-                } else {
-                    items.append(d)
-                }
-            }
-
-            func close() {
-                closed = true
-                if let c = cont {
-                    cont = nil
-                    c.resume(returning: nil)
-                }
-            }
-
-            func next() async -> Data? {
-                if !items.isEmpty { return items.removeFirst() }
-                if closed { return nil }
-                return await withCheckedContinuation { (c: CheckedContinuation<Data?, Never>) in
-                    cont = c
-                }
-            }
-        }
-
-        let queue = ChunkQueue()
-        let streamTask = Task {
-            let ok = await broker.speakStream(rawText, engine: "codex") { data in
-                Task { await queue.push(data) }
-            }
-            _ = ok
-            await queue.close()
-        }
-
-        while true {
-            guard gen == myGen else {
-                streamTask.cancel()
-                break
-            }
-            guard let data = await queue.next() else { break }
-            guard gen == myGen else { break }
-            await playDataAndWait(data, myGen: myGen)
-        }
-        if gen == myGen { speakingKey = nil }
-    }
-
-    private func playDataAndWait(_ data: Data, myGen: Int) async {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            do {
-                let player = try AVAudioPlayer(data: data)
-                audioPlayer = player
-                let box = FinishBox {
-                    cont.resume()
-                }
-                finishBox = box
-                player.delegate = box
-                if !player.play() {
-                    cont.resume()
-                }
-            } catch {
-                cont.resume()
-            }
-        }
-    }
-
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in self.utteranceEnded(utterance) }
     }
@@ -285,8 +143,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in self.utteranceEnded(utterance) }
     }
-
-    #endif
 
     /// One utterance stopped making noise — finished, or cancelled to make way for another.
     ///

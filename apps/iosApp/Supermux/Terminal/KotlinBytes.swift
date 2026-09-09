@@ -1,11 +1,7 @@
 import Foundation
-// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; the macOS target
-// links Shared directly.
-#if os(iOS)
+// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared
+// as well would embed the :shared klib twice.
 import SupermuxKit
-#else
-import Shared
-#endif
 
 // MARK: - KotlinByteArray bridging
 //
@@ -14,8 +10,8 @@ import Shared
 // Objective-C message per byte, and this is the terminal's hot path in both directions: every pty
 // chunk out (a `cat` of a big file is megabytes) and every keystroke and mouse-wheel burst in.
 //
-// `NSDataBytesKt` lives in `:shared`, so these compile against Shared.framework (the macOS target)
-// and SupermuxKit alike; `:ios`'s `IosBytesKt` would not.
+// `NSDataBytesKt` lives in `:shared` (re-exported by SupermuxKit), so the watch app's Shared.framework
+// gets the same conversion; `:ios`'s `IosBytesKt` would not.
 
 extension KotlinByteArray {
     func toUInt8() -> [UInt8] {
