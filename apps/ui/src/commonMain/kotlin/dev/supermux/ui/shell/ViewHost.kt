@@ -70,7 +70,7 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.toWorkdirRelativePath
-import dev.supermux.ui.widgets.keepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
 import kotlinx.coroutines.launch
 
 /** Journey + desktop-parity tags for the workspace chat pane. */
@@ -484,9 +484,14 @@ private fun ChatViewPane(
             onContinued = onSelectSession,
         )
         Box(Modifier.weight(1f).fillMaxSize()) {
-            Box(Modifier.keepAlivePanel(!nativeView)) { body(Modifier) }
+            // KeepAlivePanel rather than the alpha modifier: the native half below IS a terminal
+            // on every host that has one, and a terminal is a platform view its compositor draws
+            // outside the Compose layer (UIKit interop on iOS, a heavyweight SwingPanel on
+            // desktop). Alpha does not hide either, so the hidden half would paint over the shown
+            // one. Android's actual is the same alpha hide as before.
+            KeepAlivePanel(visible = !nativeView) { body(Modifier) }
             if (session.agent == "claude") {
-                Box(Modifier.keepAlivePanel(nativeView)) {
+                KeepAlivePanel(visible = nativeView) {
                     key(sessionId) {
                         nativeContent(
                             { actions.connectAgentTerminal(sessionId).orFail(sessionId) },

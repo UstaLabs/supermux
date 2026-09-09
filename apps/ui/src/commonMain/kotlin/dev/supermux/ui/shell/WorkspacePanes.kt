@@ -62,7 +62,7 @@ import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.ui.theme.MonoFontFamily
-import dev.supermux.ui.widgets.keepAlivePanel
+import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
@@ -335,7 +335,8 @@ fun PhoneWorkspacePanes(
                 Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .statusBarsPadding(),
+                    .statusBarsPadding()
+                    .testTag("phone_workspace_tab_strip"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ScrollableTabRow(
@@ -361,7 +362,20 @@ fun PhoneWorkspacePanes(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(start = 14.dp, end = 4.dp),
                             ) {
-                                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                // The generic `Tab` overload has no `text` slot, so nothing
+                                // applies M3's tab typography for us — `TabBaselineLayout` is what
+                                // does that, and it is only reached through the `text`/`icon`
+                                // slots. Say it here or the label silently falls back to
+                                // `bodyLarge` and the strip stops looking like a tab strip. The
+                                // 14dp start padding stands in for `TabBaselineLayout`'s 16dp
+                                // horizontal text padding, which cannot be used unchanged because
+                                // the close button shares the line.
+                                Text(
+                                    title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                                 IconButton(
                                     onClick = {
                                         val v = view ?: return@IconButton
@@ -404,7 +418,12 @@ fun PhoneWorkspacePanes(
                 retained.forEach { id ->
                     if (viewsById[id] == null) return@forEach
                     key(id) {
-                        Box(Modifier.keepAlivePanel(id == tabs.selectedId)) {
+                        // KeepAlivePanel (the expect/actual container), NOT the alpha modifier: a
+                        // retained pane can hold a platform view the host's compositor draws
+                        // OUTSIDE the Compose layer — a `UIKitView`'s SwiftTerm grid on iOS, a
+                        // heavyweight SwingPanel on desktop — and neither is hidden by alpha. The
+                        // Android actual is still exactly the alpha hide this used to be.
+                        KeepAlivePanel(visible = id == tabs.selectedId) {
                             WorkspacePaneContent(
                                 viewId = id,
                                 hostId = ui.windows.mainHostId,

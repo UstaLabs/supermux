@@ -46,9 +46,13 @@ fun Modifier.keepAlivePanel(visible: Boolean): Modifier = this
  *    (JediTerm's Swing panel, JCEF) which ignores Compose drawing modifiers entirely and would
  *    keep painting over every Compose sibling; the interop wrapper propagates Compose layout
  *    bounds to its AWT child, so 0×0 bounds are the only kind of hiding it respects.
- *  • Android has no interop of that shape, so it uses the cheaper [keepAlivePanel] alpha/zIndex
- *    hide, which keeps the pane MEASURED at full size — a re-shown pane needs no re-layout and an
- *    embedded platform view (TextureView, WebView) is never re-parented at a degenerate size.
+ *  • iOS does the same, for the same reason in a different toolkit: a `UIKitView`'s child is
+ *    composited by UIKit ABOVE the Compose canvas, so `Modifier.alpha` — which only dims the
+ *    Compose layer — does not hide it either (H5 correction; the iOS actual used to claim it did).
+ *  • Android has no interop of that shape: an `AndroidView` is drawn by the same view system as
+ *    the Compose host, so it uses the cheaper [keepAlivePanel] alpha/zIndex hide, which keeps the
+ *    pane MEASURED at full size — a re-shown pane needs no re-layout and an embedded platform view
+ *    (TextureView, WebView) is never re-parented at a degenerate size.
  */
 @Composable
 expect fun KeepAlivePanel(
