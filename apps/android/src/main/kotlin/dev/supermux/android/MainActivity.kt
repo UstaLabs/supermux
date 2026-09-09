@@ -42,8 +42,6 @@ import dev.supermux.android.session.readGroupByProject
 import dev.supermux.android.session.readLegacyCollapsedPaths
 import dev.supermux.android.session.seedSessionListPrefs
 import dev.supermux.android.session.writeGroupByProject
-import dev.supermux.android.settings.AndroidSettingsExtra
-import dev.supermux.android.settings.AndroidSettingsSection
 import dev.supermux.android.settings.AndroidSettingsStore
 import dev.supermux.android.settings.readLegacyAppearancePrefs
 import dev.supermux.android.settings.seedAppearancePrefs
@@ -66,6 +64,8 @@ import dev.supermux.ui.push.PushTapHandle
 import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
+import dev.supermux.ui.settings.FleetSettingsExtra
+import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first
@@ -306,8 +306,8 @@ class MainActivity : ComponentActivity() {
                             onOpenDisplays = { ui.openDisplays() },
                         )
                     },
-                    settingsExtra = { extra, scope -> AndroidSettingsExtra(extra, scope) },
-                    settingsSection = { section, scope -> AndroidSettingsSection(section, scope, vm.fleet) },
+                    settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
+                    settingsSection = { section, scope -> FleetSettingsSection(section, scope, vm.fleet) },
                 )
             }
         }

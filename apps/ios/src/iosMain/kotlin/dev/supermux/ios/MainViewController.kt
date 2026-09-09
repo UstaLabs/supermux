@@ -34,6 +34,8 @@ import dev.supermux.ui.push.PushTapHandle
 import dev.supermux.ui.push.notificationCancelSessionIds
 import dev.supermux.ui.push.pushTapHandleDecision
 import dev.supermux.ui.push.resolvePushTap
+import dev.supermux.ui.settings.FleetSettingsExtra
+import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
@@ -304,9 +306,21 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 // A newly added host has its own relay: this device has to register with it too,
                 // or that host's pushes never arrive. Android does the same here.
                 onAddedHost = { platform.push.registerIfPaired() },
-                // No `chatFallback`, `settingsExtra` or `settingsSection`: those slots exist for a
-                // host with a screen the shared shell has no version of, and iOS has none — the
-                // SwiftUI screens they would name are the ones this cluster is replacing.
+                // The settings hub renders its pushed detail through these two slots and ONLY
+                // through them. H2's reading of them — an escape hatch for a screen the shared
+                // shell has no version of — stopped being true at cluster E7, when every settings
+                // page moved into `:ui` and the slot became the mapping from `SettingsSection` to
+                // the shared screen. Leaving them out did not opt iOS out of a host-specific
+                // feature; it left every one of the ten sections opening onto an empty page under
+                // a bare title bar, which reads as a row that does not respond.
+                //
+                // `FleetSettingsSection` is the same function Android calls, which is the point:
+                // the mapping is decided by `SettingsSection` and `FleetStore`, and both are
+                // shared. `Caps` still filters the extras, so `AppUpdate` is unreachable here.
+                settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
+                settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+                // No `chatFallback`: that slot IS the host-specific escape hatch, and iOS has no
+                // screen to put in it. `UnavailableSessionPane` (H3.7) is what covers its absence.
             )
         }
     }

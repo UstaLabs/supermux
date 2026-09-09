@@ -191,10 +191,19 @@ fun SettingsHub(
 
     fun open(target: Target) {
         if (compact) {
-            guard {
-                opened = target
-                if (target is Target.Sec) onSectionChange(target.section)
-            }
+            // No `onSectionChange` here, and that omission is the whole point.
+            //
+            // The compact hub owns its own destination in [opened]; `section` is the WIDE rail's
+            // selection and nothing on a phone reads it. Reporting it back anyway was not merely
+            // redundant, it undid the push: the shell writes it into the back stack as a NEW
+            // `Route.Settings(section)`, that value IS NavDisplay's content key for the entry, and
+            // a changed key disposes the entry and composes a fresh one — a fresh hub, whose
+            // `opened` starts at null. So the tap opened a section and the rewrite closed it in
+            // the same frame, and every settings section on a phone was a row that did nothing.
+            //
+            // The `key(activeHostId)` in `SupermuxApp` is the same rule already learned once, one
+            // level down: `route.section` must not be allowed to remount this hub.
+            guard { opened = target }
             return
         }
         when (target) {

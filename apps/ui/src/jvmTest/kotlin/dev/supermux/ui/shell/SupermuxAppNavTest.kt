@@ -231,7 +231,43 @@ class SupermuxAppNavTest {
         waitForIdle()
         onNodeWithTag("phone_workspace_tabs").assertIsDisplayed()
     }
+
+    /**
+     * Opening a settings section on a phone must actually OPEN it.
+     *
+     * The hub keeps its compact push stack in a plain `remember`, and it used to also report the
+     * section it opened back to the shell, which writes it into `Route.Settings`. That route IS
+     * NavDisplay's content key for the entry, so the write disposed the entry and composed a fresh
+     * hub — back to the index, before the detail had drawn a frame. Every settings section on a
+     * phone was unreachable, and the row read as one that does not respond to a tap.
+     *
+     * The `settingsSection` slot is supplied here because it is the only thing that draws a
+     * section body at all; the assertions are on the hub's own chrome, so they hold whatever that
+     * body turns out to contain.
+     */
+    @Test fun compact_opening_a_settings_section_stays_open() = runComposeUiTest {
+        val ui = ShellUiState()
+        val app = testHostStore()
+        setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
+            SupermuxApp(
+                fleet = rememberTestFleet(app),
+                ui = ui,
+                settingsSection = { section, _ -> Text("body:" + section.name) },
+            )
+        }
+        waitForIdle()
+
+        ui.openSettings(SettingsSection.Agents)
+        waitForIdle()
+        onNodeWithTag("settings_row_voice").assertIsDisplayed()
+
+        onNodeWithTag("settings_row_voice").performClick()
+        waitForIdle()
+        onNodeWithTag("settings_hub_detail").assertIsDisplayed()
+        onNodeWithTag("settings_row_voice").assertDoesNotExist()
+    }
 }
+
 
 /** Fires a real completed back gesture at whatever `BackHandler`s the composition registered. */
 private class ShellBackInput : NavigationEventInput() {

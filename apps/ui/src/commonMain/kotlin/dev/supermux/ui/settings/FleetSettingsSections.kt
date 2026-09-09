@@ -1,47 +1,30 @@
-// Android's slot wiring for the shared `SettingsHub` (cluster E7), mirroring desktop's
-// `DesktopSettingsSections.kt`.
+// The slot wiring for the shared `SettingsHub` (cluster E7) on every FLEET host — Android and iOS.
 //
 // This is what is left of `MoreScreens.kt`, the 2524-line settings monolith: every page it held is
-// now a screen in `:ui`, so all this file answers is "which composable is section X on Android,
-// and how does it reach the store". Android's store is the fleet's ACTIVE host, so each screen
-// gets the `FleetStore` overload of its actions holder — desktop passes one `HostStore`.
+// now a screen in `:ui`, so all this file answers is "which composable is section X, and how does
+// it reach the store". It lived in `apps/android` until H4, when iOS needed it and the honest
+// choice was one copy or two. Two would have been two answers to a question with one answer: the
+// mapping is decided entirely by `SettingsSection` and `FleetStore`, both of them shared, and
+// nothing in it is Android's.
 //
-// Every page is shared now, so the hub paints the pushed detail's chrome itself (E7 dropped the
-// `compactTopBar` escape hatch it needed while these were Android pages) and nothing below carries
-// a `Scaffold`, a `TopAppBar` or a `BackHandler` of its own: exactly one bar per page on a phone,
-// and the hub's `BackHandler` owns Back everywhere.
-package dev.supermux.android.settings
+// It is the fleet spelling specifically. Desktop keeps `DesktopSettingsSections.kt` because its
+// store is one `HostStore` and every screen's actions holder has a different overload for that;
+// here the store is the fleet's ACTIVE host.
+//
+// The hub paints the pushed detail's chrome itself (E7 dropped the `compactTopBar` escape hatch it
+// needed while these were Android pages), so nothing below carries a `Scaffold`, a `TopAppBar` or a
+// `BackHandler` of its own: exactly one bar per page on a phone, and the hub's `BackHandler` owns
+// Back everywhere.
+package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
 import dev.supermux.ui.update.AppUpdateScreen
 import dev.supermux.state.FleetStore
 import dev.supermux.ui.nav.SettingsSection
-import dev.supermux.ui.settings.AgentSettingsScreen
-import dev.supermux.ui.settings.AppearanceSettingsScreen
-import dev.supermux.ui.settings.AssistantSettingsScreen
-import dev.supermux.ui.settings.CuratorSettingsScreen
-import dev.supermux.ui.settings.DevicesSettingsScreen
-import dev.supermux.ui.settings.EditorSettingsScreen
-import dev.supermux.ui.settings.GitHostingScreen
-import dev.supermux.ui.settings.PersonalAssistantsScreen
-import dev.supermux.ui.settings.ProxiesSettingsScreen
-import dev.supermux.ui.settings.SettingsExtra
-import dev.supermux.ui.settings.SettingsSlotScope
-import dev.supermux.ui.settings.SystemSettingsScreen
-import dev.supermux.ui.settings.VoiceSettingsScreen
-import dev.supermux.ui.settings.rememberAgentSettingsActions
-import dev.supermux.ui.settings.rememberAssistantSettingsActions
-import dev.supermux.ui.settings.rememberCuratorSettingsActions
-import dev.supermux.ui.settings.rememberDevicesSettingsActions
-import dev.supermux.ui.settings.rememberGitHostingActions
-import dev.supermux.ui.settings.rememberPersonalAssistantsActions
-import dev.supermux.ui.settings.rememberProxiesSettingsActions
-import dev.supermux.ui.settings.rememberSystemSettingsActions
-import dev.supermux.ui.settings.rememberVoiceSettingsActions
 
 /** Renders [section] against the fleet's active host. Called from the hub's `content` slot. */
 @Composable
-fun AndroidSettingsSection(
+fun FleetSettingsSection(
     section: SettingsSection,
     scope: SettingsSlotScope,
     fleet: FleetStore,
@@ -116,11 +99,12 @@ fun AndroidSettingsSection(
 
 /**
  * Renders one host-local [SettingsExtra] row's page. Appearance is shared since E7 and the in-app
- * updater since G5; the ROWS are still host-local, so this one is only reached because
- * `Caps.appUpdate` is true here.
+ * updater since G5; the ROWS are still host-local — the hub filters them by `Caps` — so a host
+ * reaches only the ones it advertises. iOS never reaches `AppUpdate`: `Caps.appUpdate` is false
+ * there because the App Store owns updates.
  */
 @Composable
-fun AndroidSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
+fun FleetSettingsExtra(extra: SettingsExtra, scope: SettingsSlotScope) {
     when (extra) {
         SettingsExtra.Appearance -> AppearanceSettingsScreen(
             onBack = scope.onClose,
