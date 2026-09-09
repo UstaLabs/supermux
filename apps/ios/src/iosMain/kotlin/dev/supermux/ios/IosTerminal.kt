@@ -6,7 +6,7 @@ import platform.UIKit.UIView
  * The Swift half of the terminal (cluster H5).
  *
  * WHY Swift vends the view at all, when the editor's browser is pure Kotlin/Native: SwiftTerm has
- * no Kotlin binding, and `TerminalHost.swift` + `PredictionAdapter.swift` are ~470 lines of working
+ * no Kotlin binding, and `TerminalCoordinator.swift` + `PredictionAdapter.swift` are ~470 lines of working
  * POLICY on top of it — the hardware-keyboard suppression, the one-finger pan → SGR wheel bytes
  * bridge that makes tmux scroll at all, the pre-send predictive echo. Re-deriving that against a
  * cinterop'd Objective-C surface would be a rewrite of the only part of the iOS terminal that was

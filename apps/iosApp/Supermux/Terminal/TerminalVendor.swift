@@ -1,5 +1,6 @@
 import SwiftTerm
 import SupermuxKit
+import SwiftUI
 import UIKit
 
 /// The Compose shell's terminal: Swift vends a live SwiftTerm `TerminalView` and Kotlin hosts it in
@@ -13,9 +14,8 @@ import UIKit
 /// that turns into SGR wheel bytes so tmux scrolls, predictive local echo) is `TerminalCoordinator`,
 /// reused verbatim rather than re-derived.
 ///
-/// What is deliberately NOT here: `TerminalSession` and `BrokerSession`. The Compose shell's bytes
-/// come from the shared `TerminalClient`, driven by Kotlin, so this path never touches the Swift
-/// reducer that H6 deletes.
+/// There is deliberately no Swift-side session or reducer here: the bytes come from the shared
+/// `TerminalClient`, driven by Kotlin.
 final class ComposeTerminalVendor: NSObject, IosTerminalVendor {
 
     func make(
@@ -38,7 +38,7 @@ final class ComposeTerminalHandle: NSObject, IosTerminalHandle {
 
     /// The view Compose parents. Stable for the life of the handle — Kotlin remembers the handle
     /// across a `KeepAlivePanel` hide/show, so the emulator buffer and the scrollback survive a
-    /// tab switch exactly as the SwiftUI shell's cached `TerminalHost` made them survive a remount.
+    /// tab switch.
     var view: UIView { terminal }
 
     init(onInput: @escaping (KotlinByteArray) -> Void, onSize: @escaping (KotlinInt, KotlinInt) -> Void) {

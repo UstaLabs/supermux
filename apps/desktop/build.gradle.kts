@@ -283,9 +283,9 @@ compose.desktop {
             } else {
                 targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.AppImage)
             }
-            // macOS gets a DISTINCT name: the shipping native SwiftUI client installs as
-            // `Supermux.app`, and on a case-insensitive volume `/Applications/supermux.app` is the
-            // SAME PATH — dragging this DMG's app over would silently replace it. (Setting
+            // macOS keeps its DISTINCT name "Supermux Desktop": it was chosen so the app could sit
+            // beside the (since retired) native SwiftUI `Supermux.app` on a case-insensitive volume,
+            // and it stays because installed clients update in place under this name. (Setting
             // `macOS { packageName }` alone does NOT rename the bundle in Compose 1.11.1 — the app
             // image and DMG both keep this outer name — so scope it here instead.)
             packageName = if (macBuildHost) "Supermux Desktop" else "supermux"
@@ -317,11 +317,10 @@ compose.desktop {
                 // `libgstreamer-1.0-0` + `gstreamer1.0-plugins-{base,good,libav}` the player fails
                 // to load and Timeline.kt falls back to the download chip — the app still starts.
             }
-            // macOS DMG. Deliberately a DIFFERENT app name + bundle id from the shipping native
-            // SwiftUI mac client (`Supermux.app` / `dev.supermux.app`): both would land in
-            // /Applications, and on a case-insensitive volume `supermux.app` and `Supermux.app` are
-            // the SAME path — installing this would silently replace the native app. `packageName`
-            // here is mac-only; Linux/Windows keep "supermux" from the block above.
+            // macOS DMG. The app name + bundle id differ from the retired native SwiftUI client
+            // (`Supermux.app` / `dev.supermux.app`) and are KEPT that way for update continuity:
+            // installed "Supermux Desktop" clients look for this bundle id and asset name.
+            // `packageName` here is mac-only; Linux/Windows keep "supermux" from the block above.
             macOS {
                 bundleID = "dev.supermux.desktop"
                 dockName = "Supermux Desktop"

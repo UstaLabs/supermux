@@ -12,8 +12,8 @@ protocol TerminalIO: AnyObject {
 }
 
 
-/// The persistent terminal's delegate + hardware-keyboard policy. Lives in `TerminalHost`
-/// (tied to the long-lived `TerminalView`) rather than a per-mount SwiftUI coordinator, so
+/// The persistent terminal's delegate + hardware-keyboard policy. Owned by the long-lived
+/// `ComposeTerminalHandle` (tied to its `TerminalView`) rather than a per-mount coordinator, so
 /// the policy and the FIFO input wiring survive remounts. Plain `NSObject` (not @MainActor)
 /// so it satisfies SwiftTerm's nonisolated `TerminalViewDelegate` — the @MainActor io sink
 /// is reached via `assumeIsolated` (we ARE on the main thread when SwiftTerm calls us).

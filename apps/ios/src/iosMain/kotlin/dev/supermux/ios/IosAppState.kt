@@ -67,9 +67,7 @@ object IosAppState {
     /**
      * The chat a tapped notification was about, or null.
      *
-     * Set by `PushAppDelegate`'s `didReceive response:` handler — the same place that feeds
-     * `PushRouter.pendingSessionId` for the SwiftUI shell, which under `COMPOSE_SHELL` nobody
-     * reads any more (only the deleted-path `RootView` ever did). It is a STATE flow rather than
+     * Set by `PushAppDelegate`'s `didReceive response:` handler. It is a STATE flow rather than
      * an event channel deliberately: a tap can be what LAUNCHES the app, in which case Swift sets
      * this before the Compose root exists, and the collector that appears milliseconds later must
      * still see it.

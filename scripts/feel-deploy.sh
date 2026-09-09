@@ -122,7 +122,6 @@ fi
 has_backend=0
 has_android=0
 has_ios=0
-has_mac=0
 has_web=0
 if git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   # Prefer merge-base with base branch tip if available
@@ -144,14 +143,13 @@ if git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     case "$f" in
       src/web-app/*|src/channels/web/static/*) has_web=1 ;;
       src/*) has_backend=1 ;;
-      apps/android/*|apps/shared/*) has_android=1; has_ios=1; has_mac=1 ;;
-      apps/iosApp/*) has_ios=1; has_mac=1 ;;
-      apps/desktop/*) has_mac=1 ;;
-      apps/shared/*) has_android=1; has_ios=1; has_mac=1 ;;
+      apps/android/*|apps/shared/*) has_android=1; has_ios=1 ;;
+      apps/iosApp/*) has_ios=1 ;;
+      apps/shared/*) has_android=1; has_ios=1 ;;
     esac
   done <<<"$files"
 fi
-log "change map: backend=$has_backend android=$has_android ios=$has_ios mac=$has_mac web=$has_web"
+log "change map: backend=$has_backend android=$has_android ios=$has_ios web=$has_web"
 
 # default clients
 if [[ $DO_ANDROID -eq 0 && $DO_IOS -eq 0 && $DO_WEB -eq 0 ]]; then
@@ -246,7 +244,6 @@ if [[ $DO_IOS -eq 1 ]]; then
   log "iOS build OK. Install with: ssh mac 'xcrun devicectl device install app --device <id> $REMOTE_DIR/apps/iosApp/build/dd/Build/Products/Debug-iphoneos/Supermux.app'"
   log "Or re-run with a connected phone UDID once wireless CoreDevice is up."
 fi
-
 
 log "FEEL DEPLOY DONE"
 echo "SOURCE=$workdir"

@@ -42,8 +42,8 @@ final class PushManager: NSObject {
 
     private override init() { super.init() }
 
-    /// Build the shared Ktor client the same way `BrokerSession` does (Darwin engine,
-    /// ATS-relaxed for self-hosted brokers). One per `BrokerApi` call site.
+    /// Build the shared Ktor client (Darwin engine, ATS-relaxed for self-hosted brokers).
+    /// One per `BrokerApi` call site.
     private func makeApi() -> BrokerApi? {
         guard let base = BrokerConfig.baseURL, let token = BrokerConfig.token,
               !base.isEmpty, !token.isEmpty else { return nil }

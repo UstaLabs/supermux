@@ -15,15 +15,14 @@ kotlin {
 
     jvm()
     androidTarget()
-    // Apple targets are declared so the appleMain/iosMain/watchosMain/macosMain source sets +
+    // Apple targets are declared so the appleMain/iosMain/watchosMain source sets +
     // Apple actuals exist; their compile/link tasks run on a Mac (Spec 2). On this
     // Linux host they are disabled (see kotlin.native.ignoreDisabledTargets in
-    // gradle.properties). iOS + watchOS + macOS share Darwin code via the default hierarchy's
+    // gradle.properties). iOS + watchOS share Darwin code via the default hierarchy's
     // intermediate `appleMain` source set.
     listOf(
         iosArm64(), iosSimulatorArm64(),
         watchosArm64(), watchosSimulatorArm64(),
-        macosArm64(),
     ).forEach { t ->
         t.binaries.framework {
             baseName = "Shared"
@@ -67,10 +66,9 @@ kotlin {
         val nonAppleTest by creating { dependsOn(nonWatchTest) }
         nonAppleMain.dependencies { implementation(libs.ktor.client.cio) }
 
-        // iosMain is the default hierarchy's intermediate over iosArm64 + iosSimulatorArm64; both,
-        // plus macosArm64, get the parser. watchosArm64/watchosSimulatorArm64 deliberately do not.
+        // iosMain is the default hierarchy's intermediate over iosArm64 + iosSimulatorArm64; both
+        // get the parser. watchosArm64/watchosSimulatorArm64 deliberately do not.
         iosMain { dependsOn(nonWatchMain) }
-        macosArm64Main { dependsOn(nonWatchMain) }
 
         jvmMain { dependsOn(nonAppleMain) }
         jvmTest {
@@ -83,18 +81,15 @@ kotlin {
             }
         }
         appleMain.dependencies { implementation(libs.ktor.client.darwin) }
-        // nonIosAppleMain — the Apple targets that are NOT the iPhone app: watchOS and macOS.
+        // nonIosAppleMain — the Apple targets that are NOT the iPhone app; today that is watchOS
+        // alone (the native macOS app that also sat here was retired).
         //
         // It exists for exactly one declaration, `SecureTokenStore`. Cluster H2 gives iOS a real
-        // Keychain actual, and an actual in `appleMain` would have to serve watchOS and macOS too
-        // — but the watch has no Keychain item to read (it is provisioned over WatchConnectivity)
-        // and the Mac app deliberately keeps its token in `~/.mux/state`, not the login keychain
-        // (a reinstalled local build changes its designated requirement and the read would block
-        // on an authorization prompt before the first window). So the in-memory stub stays here
-        // for those two, and the Keychain actual lives in `iosMain`.
+        // Keychain actual, and an actual in `appleMain` would have to serve watchOS too — but the
+        // watch has no Keychain item to read (it is provisioned over WatchConnectivity). So the
+        // in-memory stub stays here for the watch, and the Keychain actual lives in `iosMain`.
         val nonIosAppleMain by creating { dependsOn(appleMain.get()) }
         watchosMain { dependsOn(nonIosAppleMain) }
-        macosArm64Main { dependsOn(nonIosAppleMain) }
         androidMain {
             dependsOn(nonAppleMain)
             dependencies { implementation(libs.androidx.security.crypto) }

@@ -20,8 +20,8 @@ import platform.Foundation.NSUserDefaults
  *    not get the Swift value copied back over it.
  *  - **Non-destructive.** A shared key that already holds something is never overwritten, so even a
  *    marker lost to a reinstall-over cannot undo a post-upgrade choice.
- *  - **One-way.** Nothing is deleted from the Swift keys. The SwiftUI shell still ships behind
- *    `COMPOSE_SHELL` until cluster H6, and it must keep working when the flag is flipped off.
+ *  - **One-way.** Nothing is deleted from the Swift keys. The SwiftUI shell that wrote them is
+ *    gone (cluster H6), but a downgrade to a build that still had it must keep working.
  *
  * Reading is here; the MAPPING is [swiftPrefMigrations] in commonMain, where it is unit-tested
  * against the exact payloads the Swift app writes.

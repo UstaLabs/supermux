@@ -134,4 +134,10 @@ test("publish-website includes compose-desktop-macos sha for versions.json", () 
   // The retired SwiftUI DMG's positional arg is gone from the generate-versions-json call.
   expect(publishJob).not.toContain("SHA_DESKTOP_MACOS=")
   expect(publishJob).not.toContain('"$SHA_DESKTOP_MACOS"')
+  // generate-versions-json.ts takes POSITIONAL shas: a reorder here would silently label one
+  // installer with another's checksum, so pin the exact tail of the call (across the `\`
+  // line continuation).
+  expect(publishJob).toMatch(
+    /"\$SHA_ANDROID" "\$SHA_DESKTOP_LINUX" "\$SHA_DESKTOP_WINDOWS" \\\n\s*"\$SHA_COMPOSE_DESKTOP_MACOS" > site\/versions\.json/,
+  )
 })

@@ -42,7 +42,7 @@ final class PredictionAdapter {
     func render(_ ops: [DisplayOp]) {
         for op in ops {
             // SKIE turns the Kotlin sealed `DisplayOp` into an exhaustive Swift switch via
-            // onEnum(of:) — the exact pattern the app uses for `ServerFrame` in BrokerSession.
+            // onEnum(of:).
             switch onEnum(of: op) {
             case .hideCaret:
                 feed(Self.hide)

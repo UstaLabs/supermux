@@ -1,6 +1,6 @@
 import Foundation
 import AVFoundation
-import SwiftUI
+import Combine
 
 /// Process-wide read-aloud: AVSpeechSynthesizer (platform) or ChatGPT via broker /speak.
 @MainActor
@@ -8,7 +8,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     static let shared = MessageSpeech()
 
     private let synth = AVSpeechSynthesizer()
-    private var gen = 0
     private var audioPlayer: AVAudioPlayer?
     /// Holds the playing chunk's delegate alive — `AVAudioPlayer.delegate` is weak.
     private var finishBox: FinishBox?
@@ -66,7 +65,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     /// no longer matches and does nothing.
     func speakText(_ text: String, onDone: @escaping () -> Void) {
         guard !text.isEmpty else { return onDone() }
-        gen &+= 1
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         audioPlayer?.stop()
         audioPlayer = nil
@@ -126,7 +124,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     /// the speaking key and the chunk queue for all three hosts, and reaches this class only
     /// through `speakText` / `playChunk` / `stop`.
     func stop() {
-        gen &+= 1
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         audioPlayer?.stop()
         audioPlayer = nil
