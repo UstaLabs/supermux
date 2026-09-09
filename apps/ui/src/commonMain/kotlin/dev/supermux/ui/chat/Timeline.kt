@@ -126,6 +126,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.github.kdroidfilter.composemediaplayer.VideoPlayerSurface
 import io.github.kdroidfilter.composemediaplayer.rememberVideoPlayerState
+import dev.supermux.chat.previewFilename
 
 // ---------------------------------------------------------------------------
 // Reading width
@@ -1552,7 +1553,9 @@ internal suspend fun saveOrOpenAttachment(
     mime: String?,
     bytes: ByteArray,
 ) {
-    val safeName = name.substringAfterLast('/').ifBlank { "file" }
+    // Give the saved file an extension the host's viewer can identify, or a PDF/log downloaded
+    // under a bare `file_id` opens as an unrecognised blob.
+    val safeName = previewFilename(name.substringAfterLast('/'), mime)
     val type = mime?.ifBlank { null } ?: platform.files.probeMime(safeName)
     if (pointer) {
         platform.files.saveAs(safeName, type, bytes)?.let { platform.files.openSaved(it) }

@@ -110,6 +110,81 @@ class TimelineMergeTest {
         assertTrue(items[1] is TimelineItem.Tool)
     }
 
+    // ---- hideTools (chat detail = low) — iOS ChatBlocksDerivationTests parity ----------------
+
+    /**
+     * Low chat detail must be exactly the full timeline minus its tool rows — nothing reordered,
+     * nothing dropped, no messages lost. If [mergeTimeline] ever gains hideTools-specific
+     * clustering, this fails loudly instead of silently changing what Low shows.
+     */
+    @Test fun hideToolsYieldsExactlyTheMessageSubsetOfTheFullTimeline() {
+        val messages = listOf(
+            msg("m1", "2026-01-01T00:00:00Z"),
+            msg("m2", "2026-01-01T00:00:30Z"),
+            msg("m3", "2026-01-01T00:02:00Z"),
+        )
+        val activity = listOf(
+            tool("2026-01-01T00:00:10Z", callId = "c1", tool = "Read"),
+            result("2026-01-01T00:00:15Z", callId = "c1", phase = "completed"),
+            tool("2026-01-01T00:01:00Z", callId = "c2", tool = "Edit"),
+        )
+
+        val hidden = mergeTimeline(messages, activity, hideTools = true)
+        val filtered = mergeTimeline(messages, activity).filterIsInstance<TimelineItem.Msg>()
+
+        assertEquals(filtered.map { it.entry.id }, hidden.map { (it as TimelineItem.Msg).entry.id })
+        assertEquals(messages.size, hidden.size)
+        assertTrue(hidden.all { it is TimelineItem.Msg })
+    }
+
+    /** With tools hidden, activity alone renders nothing at all — not an empty tool row. */
+    @Test fun hideToolsWithActivityOnlyProducesAnEmptyTimeline() {
+        val items = mergeTimeline(
+            emptyList(),
+            listOf(
+                tool("2026-01-01T00:00:01Z", callId = "c1"),
+                result("2026-01-01T00:00:02Z", callId = "c1", phase = "completed"),
+            ),
+            hideTools = true,
+        )
+        assertTrue(items.isEmpty())
+    }
+
+    /**
+     * The transcript re-derives from the buffer's contents on every append. Re-running the fold
+     * over the grown list must produce the previous timeline plus the new row — a stale or
+     * mis-ordered re-derivation is how a transcript silently freezes mid-conversation.
+     */
+    @Test fun appendingOneMessageRederivesToThePreviousTimelinePlusIt() {
+        val activity = listOf(tool("2026-01-01T00:00:10Z", callId = "c1"))
+        val before = mergeTimeline(listOf(msg("m1", "2026-01-01T00:00:00Z")), activity)
+        assertEquals(2, before.size)
+
+        val after = mergeTimeline(
+            listOf(msg("m1", "2026-01-01T00:00:00Z"), msg("m2", "2026-01-01T00:01:00Z")),
+            activity,
+        )
+        assertEquals(3, after.size)
+        assertEquals(ids(before), ids(after).dropLast(1))
+        assertEquals("m2", (after.last() as TimelineItem.Msg).entry.id)
+
+        // …and the same append under hideTools grows the message-only view by exactly one row.
+        assertEquals(1, mergeTimeline(listOf(msg("m1", "2026-01-01T00:00:00Z")), activity, hideTools = true).size)
+        assertEquals(2, mergeTimeline(
+            listOf(msg("m1", "2026-01-01T00:00:00Z"), msg("m2", "2026-01-01T00:01:00Z")),
+            activity,
+            hideTools = true,
+        ).size)
+    }
+
+    /** Row identity for order comparisons: message id, or the tool's callId/ts. */
+    private fun ids(items: List<TimelineItem>) = items.map {
+        when (it) {
+            is TimelineItem.Msg -> "m:${it.entry.id}"
+            is TimelineItem.Tool -> "t:${it.event.callId ?: it.event.ts}"
+        }
+    }
+
     @Test fun toolWithoutCallIdStaysRunningEvenIfAResultExists() {
         val items = mergeTimeline(
             emptyList(),

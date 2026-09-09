@@ -77,6 +77,7 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.ui.theme.softElevation
+import dev.supermux.ui.sessionPreviewPlainText
 
 /**
  * Labels a session row's right-click / overflow menu offers, by lifecycle section.
@@ -502,7 +503,7 @@ private fun PointerSessionRow(
                     }
 
                     // Preview: last message or workdir fallback.
-                    val previewText = preview?.text?.replace("\n", " ")?.take(80)
+                    val previewText = preview?.text?.let { sessionPreviewPlainText(it) }?.ifBlank { null }?.take(80)
                     if (previewText != null) {
                         Text(
                             previewText,
@@ -720,7 +721,7 @@ private fun TouchSessionRow(
                             }
                             else -> Spacer(Modifier.height(Space.xs))
                         }
-                        val previewText = preview?.text?.replace("\n", " ")?.take(80)
+                        val previewText = preview?.text?.let { sessionPreviewPlainText(it) }?.ifBlank { null }?.take(80)
                         if (previewText != null) {
                             Text(
                                 previewText,

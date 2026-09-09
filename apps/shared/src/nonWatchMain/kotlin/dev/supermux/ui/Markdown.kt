@@ -182,12 +182,16 @@ private fun splitTableRow(line: String): List<String> {
     var esc = false
     for (c in s) {
         when {
-            esc -> { sb.append(c); esc = false }
-            c == '\\' -> { sb.append(c); esc = true }
+            // `\|` is the ONLY escape GFM gives a table cell, so it is the only one consumed:
+            // the backslash is dropped and the pipe becomes literal text. Every other `\x` is
+            // ordinary content (a Windows path, a regex) and keeps its backslash verbatim.
+            esc -> { if (c != '|') sb.append('\\'); sb.append(c); esc = false }
+            c == '\\' -> esc = true
             c == '|' -> { cells.add(sb.toString().trim()); sb.clear() }
             else -> sb.append(c)
         }
     }
+    if (esc) sb.append('\\') // trailing lone backslash
     cells.add(sb.toString().trim())
     return cells
 }

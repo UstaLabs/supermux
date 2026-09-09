@@ -57,12 +57,19 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         state.copy(sessions = sessions, finishJobs = finishJobs)
     }
     is ServerFrame.SessionRemoved -> {
-        if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id)) {
+        // The per-session agent maps have to go with the session. A kill/archive removes the id,
+        // but a resume REUSES it over the same continuous WS with no corrective agent_state frame —
+        // so a stale `dead`/`working` entry left behind here would misreport the healthy resumed
+        // session (a dead badge on a live agent) until the agent next changed state.
+        val hadAgent = state.agentState.containsKey(frame.id) || state.agentErrors.containsKey(frame.id)
+        if (state.sessions.none { it.id == frame.id } && !state.bgTasks.containsKey(frame.id) && !hadAgent) {
             state
         } else {
             state.copy(
                 sessions = state.sessions.filterNot { s -> s.id == frame.id },
                 bgTasks = state.bgTasks - frame.id,
+                agentState = state.agentState - frame.id,
+                agentErrors = state.agentErrors - frame.id,
             )
         }
     }

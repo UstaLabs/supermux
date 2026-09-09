@@ -11,6 +11,7 @@ import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class HostReducerTest {
@@ -87,6 +88,76 @@ class HostReducerTest {
         val out = reduceHostFrame(s, ServerFrame.SessionRemoved(id = "s1"))
         assertEquals(emptyList(), out.sessions)
         assertEquals(emptyMap(), out.bgTasks)
+    }
+
+    // ---- agent_state: dead tracking (iOS AgentDeadStateTests parity) -------------------------
+
+    /**
+     * `state == "dead"` is the badge that tells the user their agent process is gone, so it has to
+     * be observable from the reduced state — and a later live frame has to CLEAR it, otherwise a
+     * recovered agent keeps a dead badge for the rest of the connection.
+     */
+    @Test fun agentStateDeadIsObservableAndClearedByALaterIdleFrame() {
+        val dead = reduceHostFrame(
+            HostState(),
+            ServerFrame.AgentState(session = "s1", phase = "stalled", state = "dead"),
+        )
+        assertEquals("dead", dead.agentState["s1"]?.state)
+
+        val idle = reduceHostFrame(dead, ServerFrame.AgentState(session = "s1", phase = "idle", state = "idle"))
+        assertEquals("idle", idle.agentState["s1"]?.state)
+    }
+
+    /** "working" is not "dead" — the two flags drive different chrome and must not collapse. */
+    @Test fun agentStateWorkingIsNotDead() {
+        val out = reduceHostFrame(
+            HostState(),
+            ServerFrame.AgentState(session = "s1", phase = "running", state = "working", working = true, detail = "running"),
+        )
+        assertEquals("working", out.agentState["s1"]?.state)
+        assertEquals(true, out.agentState["s1"]?.working)
+    }
+
+    /** A snapshot is the reconnect path: per-session dead/idle has to survive it, not just live frames. */
+    @Test fun snapshotCarriesPerSessionDeadAndIdleState() {
+        val out = reduceHostFrame(
+            HostState(),
+            ServerFrame.Snapshot(
+                agentState = mapOf(
+                    "s1" to AgentStatus(phase = "idle", state = "dead"),
+                    "s2" to AgentStatus(phase = "idle", state = "idle"),
+                ),
+            ),
+        )
+        assertEquals("dead", out.agentState["s1"]?.state)
+        assertEquals("idle", out.agentState["s2"]?.state)
+    }
+
+    /**
+     * Kill/archive removes the session — but a resume REUSES the same id over a continuous WS with
+     * no corrective agent_state frame, so a dead flag surviving removal would misreport the healthy
+     * resumed session. The whole per-session agent family has to be pruned with the session.
+     */
+    @Test fun sessionRemovedPrunesAgentStateAndErrors() {
+        val s = reduceHostFrame(
+            HostState(sessions = listOf(sessionFixture("s1"), sessionFixture("s2"))),
+            ServerFrame.AgentState(session = "s1", phase = "stalled", state = "dead"),
+        ).let { reduceHostFrame(it, ServerFrame.AgentError(session = "s1", errorType = "auth")) }
+            .let { reduceHostFrame(it, ServerFrame.AgentState(session = "s2", phase = "idle", state = "idle")) }
+        assertEquals("dead", s.agentState["s1"]?.state)
+
+        val out = reduceHostFrame(s, ServerFrame.SessionRemoved(id = "s1"))
+        assertNull(out.agentState["s1"])
+        assertNull(out.agentErrors["s1"])
+        // …and only that session's entries go.
+        assertEquals("idle", out.agentState["s2"]?.state)
+    }
+
+    /** An id with nothing but a stale agent entry still has to be prunable, not short-circuited. */
+    @Test fun sessionRemovedForAnIdKnownOnlyByItsAgentStatePrunesIt() {
+        val s = HostState(agentState = mapOf("ghost" to AgentStatus(phase = "idle", state = "dead")))
+        val out = reduceHostFrame(s, ServerFrame.SessionRemoved(id = "ghost"))
+        assertEquals(emptyMap(), out.agentState)
     }
 
     @Test fun workspaceRemovedArchives() {
