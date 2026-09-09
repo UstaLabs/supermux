@@ -1,5 +1,10 @@
 import SwiftTerm
-#if COMPOSE_SHELL
+// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared
+// as well would embed the :shared klib twice. The macOS target — which still compiles this file,
+// plus the whole SwiftUI shell under `SupermuxMacUI/` — links Shared directly. H6 replaced the
+// COMPOSE_SHELL flag with this platform test: after the cutover the only non-Compose shell IS the
+// Mac one, so the shell axis and the platform axis are the same axis.
+#if os(iOS)
 import SupermuxKit
 #else
 import Shared

@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 import CoreImage
 
 // Relative "last seen" + ISO parsing shared by the device/usage pages.

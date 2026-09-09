@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// One selectable speech-to-text engine (broker multipart /transcribe).
 private struct SttEngine: Identifiable {

@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 #if os(iOS)
 import UIKit
 #endif

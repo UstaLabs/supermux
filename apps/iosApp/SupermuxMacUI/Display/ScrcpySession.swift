@@ -1,9 +1,5 @@
 import Foundation
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Observable controller around the shared `ScrcpyClient` (H.264 / Android). Mirrors
 /// `TerminalSession`: pumps decoded video frames out to a sink, forwards touch/key/text

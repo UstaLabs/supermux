@@ -1,9 +1,5 @@
 import Foundation
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// The result of an add-host claim (mirrors Android's `AddHostResult`).
 enum AddHostResult {

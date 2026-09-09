@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Per-session strip of scratch terminal tabs. The tab set is rebuilt from the
 /// broker (live tmux) on open so both shells AND tabs survive relaunch. Only the

@@ -1,9 +1,5 @@
 import Foundation
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Observable controller around the shared `VncClient`. Mirrors `TerminalSession`:
 /// pumps decoded framebuffer rects out to a sink, forwards pointer/key input back,

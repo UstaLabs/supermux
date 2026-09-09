@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Owns ONE persistent display stream — the live transport session (VNC or scrcpy WS) plus
 /// the native surface (`MTLTexture` framebuffer / `AVSampleBufferDisplayLayer` decoder) that

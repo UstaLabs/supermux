@@ -1,9 +1,5 @@
 import Foundation
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Per-session LSP control-plane + relay — the Swift half of the bridge, mirroring the web
 /// `stores/lsp.ts`. The broker is a dumb JSON-RPC pipe; the real LSP protocol (initialize,

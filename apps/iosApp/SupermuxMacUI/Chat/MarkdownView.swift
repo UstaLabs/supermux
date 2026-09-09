@@ -4,11 +4,7 @@ import UIKit
 #else
 import AppKit
 #endif
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Agent replies render here. We parse the markdown into blocks and render them
 /// as a vertical stack: runs of "flow" blocks (paragraphs, headings, lists,

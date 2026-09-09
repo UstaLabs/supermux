@@ -1,6 +1,11 @@
 import SwiftUI
 import SwiftTerm
-#if COMPOSE_SHELL
+// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared
+// as well would embed the :shared klib twice. The macOS target — which still compiles this file,
+// plus the whole SwiftUI shell under `SupermuxMacUI/` — links Shared directly. H6 replaced the
+// COMPOSE_SHELL flag with this platform test: after the cutover the only non-Compose shell IS the
+// Mac one, so the shell axis and the platform axis are the same axis.
+#if os(iOS)
 import SupermuxKit
 #else
 import Shared
@@ -12,70 +17,11 @@ import UIKit
 import AppKit
 #endif
 
-/// Owns ONE persistent terminal — the `TerminalSession` (websocket) plus the SwiftTerm
-/// `TerminalView` that holds the emulator buffer. Cached per (session, kind, terminalId)
-/// in `BrokerSession` so the live connection AND on-screen scrollback survive SwiftUI
-/// remounts / pane toggles. Keeping the SAME `TerminalView` instance alive is what
-/// preserves the scrollback; `SwiftTermView` just re-parents it into the new mount.
-@MainActor
-final class TerminalHost {
-    let session: TerminalSession
-    let view: TerminalView
-
-    private let delegate: TerminalCoordinator
-
-    init(broker: BrokerSession, sessionId: String, kind: String, terminalId: String?) {
-        // Build the persistent emulator view (the setup that used to live in
-        // SwiftTermView.makeUIView). This instance must outlive any single mount.
-        let tv = TerminalView(frame: .zero)
-        tv.font = PlatformFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        tv.nativeBackgroundColor = PlatformColor(Theme.terminalBackground)
-        tv.nativeForegroundColor = PlatformColor(Theme.terminalForeground)
-        self.view = tv
-
-        let session = TerminalSession(broker: broker, sessionId: sessionId,
-                                      kind: kind, terminalId: terminalId)
-        self.session = session
-
-        // Coordinator owns the terminal-view delegate (send/sizeChanged → session), the
-        // hardware-keyboard policy, AND the predictive-echo pipeline (engine + adapter),
-        // wired once to the persistent view.
-        let coordinator = TerminalCoordinator(io: session)
-        self.delegate = coordinator
-        tv.terminalDelegate = coordinator
-        coordinator.attach(tv)
-
-        // Feed pty output through the predictive-echo pipeline on the main actor. The engine
-        // reconciles predictions against the authoritative bytes and re-emits them inside a
-        // Passthrough op, so there is NO separate tv.feed here — handleOutput does all the
-        // writing (mirrors the web output handler that dropped its separate term.write).
-        session.onBytes = { [weak coordinator] bytes in
-            coordinator?.handleOutput(bytes)
-        }
-        session.start()
-    }
-
-    func stop() {
-        session.stop()
-        delegate.teardownPrediction()   // drop the engine + adapter (web parity: predictor = null)
-    }
-}
-
-/// Where a terminal's keystrokes and measured grid go. `TerminalSession` (the SwiftUI shell's
-/// websocket controller) is one implementation; `KotlinTerminalIO` (the Compose shell's bridge to
-/// the shared `TerminalClient`) is the other.
-///
-/// It exists so `TerminalCoordinator` — the hardware-keyboard policy, the pan→wheel scroll bridge
-/// and the predictive-echo pipeline, which is the only genuinely hard part of the iOS terminal —
-/// is written ONCE and reused by both shells instead of being forked for H5. @MainActor because
-/// both implementations are, and the coordinator reaches them under `assumeIsolated`.
-@MainActor
 protocol TerminalIO: AnyObject {
     func sendInput(_ bytes: [UInt8])
     func resize(cols: Int, rows: Int)
 }
 
-extension TerminalSession: TerminalIO {}
 
 /// The persistent terminal's delegate + hardware-keyboard policy. Lives in `TerminalHost`
 /// (tied to the long-lived `TerminalView`) rather than a per-mount SwiftUI coordinator, so

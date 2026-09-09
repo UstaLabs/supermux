@@ -1,9 +1,5 @@
 import Foundation
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Finds tappable file-path references in a text run, natively.
 ///

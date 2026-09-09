@@ -55,10 +55,13 @@ targets:
     type: application
     platform: iOS
     sources:
+      # After the H6 cutover this directory holds ONLY what the Compose shell still needs from
+      # Swift: the app delegate + bridge, push, speech/audio, the QR scanner, the pairing env
+      # seed, the SwiftTerm host, and the watch provisioner. The SwiftUI shell it used to hold
+      # lives in `SupermuxMacUI/`, compiled by the Mac target alone.
       - path: Supermux
         excludes:
           - "EditorWeb/**"
-          - "Host/**"
           - "HostResources/**"
       # Bundled CodeMirror 6 editor assets (index.html + cm6.js) as a folder
       # reference so the directory structure is preserved in the .app bundle
@@ -139,12 +142,6 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/Frameworks"
-        # The Compose shell. With it OFF the SwiftUI shell still compiles and runs against
-        # Shared.framework (the `#else` branch of every conditional import), which is what keeps
-        # the old path available until cluster H6 deletes it.
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS:
-          - $(inherited)
-          - COMPOSE_SHELL
       configs:
         Release:
           PROVISIONING_PROFILE_SPECIFIER: "Supermux App Store"
@@ -278,6 +275,10 @@ targets:
           - "EditorWeb/**"
           - "Watch/**"            # WatchConnectivity does not exist on macOS
           - "HostResources/**"
+      # The SwiftUI shell. H6 cut it out of the iOS target and moved it here rather than deleting
+      # it: the Mac app IS this shell, and only two of its ~96 files were dead on macOS. It links
+      # Shared.framework, so every file here imports `Shared` unconditionally now.
+      - path: SupermuxMacUI
       - path: Supermux/EditorWeb
         type: folder
         buildPhase: resources
@@ -401,21 +402,22 @@ targets:
     platform: iOS
     sources:
       - path: SupermuxTests
+        excludes:
+          # Their subjects are the macOS SwiftUI shell (`SupermuxMacUI/`), which the iOS target no
+          # longer compiles: `ForgeTokenTemplate`'s PAT-creation URLs and `BrokerSession`'s
+          # teardown. Both are still exercised by SupermuxMacTests. Neither has a Kotlin
+          # counterpart yet — see the H6 log's parity follow-ups.
+          - "GitHostingSettingsTests.swift"
+          - "BrokerSessionTeardownTests.swift"
     dependencies:
       - target: Supermux
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
-        # Mirrors the host target: these tests are compiled INTO the app's module, so they see the
-        # same framework and must resolve the same conditional imports. (SupermuxMacTests reuses
-        # the same sources against SupermuxMac, which keeps Shared — hence the condition, not a
-        # rename.)
+        # Compiled INTO the app's module, so they resolve the same `import SupermuxKit`.
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/../ios/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS:
-          - $(inherited)
-          - COMPOSE_SHELL
 
   SupermuxMacTests:
     # Mac twin of SupermuxTests: same suite, same @testable import Supermux (SupermuxMac's

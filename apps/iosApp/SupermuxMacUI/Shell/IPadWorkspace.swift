@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Regular-width iPad workspace — the PWA's wide multi-pane layout, native:
 /// Sessions sidebar │ Chat │ (Editor over Terminal) │ Display, every divider drag-resizable

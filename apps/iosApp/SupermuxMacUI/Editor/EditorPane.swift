@@ -1,10 +1,6 @@
 import SwiftUI
 import WebKit
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// The native code-editor pane (PWA-parity, Phase 1): a lazy file tree + unlimited
 /// tabs over a CodeMirror `WKWebView` surface, with filename search and editor

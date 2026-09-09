@@ -1,4 +1,5 @@
-#if COMPOSE_SHELL
+// iOS only: the macOS target has its own SwiftUI shell (SupermuxMacUI/) and no Compose root.
+#if os(iOS)
 import AVFoundation
 import Foundation
 import Speech

@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Curator sub-screen — daily knowledge digest schedule + agent/model/effort
 /// (same knobs as session launch / PA create).

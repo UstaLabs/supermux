@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Sidebar / root list — the merged multi-host fleet (spec §5): grouped (PA + project) sessions
 /// across every paired host, a per-row host badge (All filter only) + an `All · <host…> · +` filter

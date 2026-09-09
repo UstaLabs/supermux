@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 import SwiftTerm
 #if canImport(UIKit)
 import UIKit

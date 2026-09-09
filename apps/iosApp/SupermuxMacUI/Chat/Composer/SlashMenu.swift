@@ -1,10 +1,6 @@
 // apps/iosApp/Supermux/Chat/Composer/SlashMenu.swift
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// The `/command` autocomplete dropdown, shared by both composers. Stateless: the screen
 /// passes the current matches + apply action. `showsActionGlyph` adds the bolt marker for

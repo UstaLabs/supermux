@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Model / reasoning-level switcher: a detented sheet on iOS, a pill-anchored popover on the Mac.
 /// Modern menu chrome (search + hover rows) — stock List looked dated inside the popover.

@@ -1,4 +1,5 @@
-#if COMPOSE_SHELL
+// iOS only: the macOS target has its own SwiftUI shell (SupermuxMacUI/) and no Compose root.
+#if os(iOS)
 import SwiftTerm
 import SupermuxKit
 import UIKit
@@ -45,8 +46,8 @@ final class ComposeTerminalHandle: NSObject, IosTerminalHandle {
     init(onInput: @escaping (KotlinByteArray) -> Void, onSize: @escaping (KotlinInt, KotlinInt) -> Void) {
         let tv = TerminalView(frame: .zero)
         tv.font = PlatformFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        tv.nativeBackgroundColor = PlatformColor(Theme.terminalBackground)
-        tv.nativeForegroundColor = PlatformColor(Theme.terminalForeground)
+        tv.nativeBackgroundColor = PlatformColor(TerminalTheme.background)
+        tv.nativeForegroundColor = PlatformColor(TerminalTheme.foreground)
         self.terminal = tv
 
         let sink = KotlinTerminalIO(onInput: onInput, onSize: onSize)

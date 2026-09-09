@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Leading per-session state, priority order:
 ///  1. working spinner (hides unread — the agent is still busy)

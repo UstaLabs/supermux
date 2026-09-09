@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 import UniformTypeIdentifiers
 
 // MARK: - Pure helpers (Android SessionReorder / web moveId parity)

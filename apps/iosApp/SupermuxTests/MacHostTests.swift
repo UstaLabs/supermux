@@ -1,5 +1,5 @@
 import XCTest
-#if COMPOSE_SHELL
+#if os(iOS)
 import SupermuxKit
 #else
 import Shared

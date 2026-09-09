@@ -1,10 +1,6 @@
 import Foundation
 import Security
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// iOS `HostPersistence` (spec §3.2), the Apple mirror of Android's `AndroidHostPersistence`.
 /// The multi-host fleet is stored SPLIT:

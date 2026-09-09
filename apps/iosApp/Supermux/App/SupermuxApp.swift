@@ -1,10 +1,13 @@
 import SwiftUI
-#if COMPOSE_SHELL
-// The Compose shell links ONE Kotlin framework, SupermuxKit, which re-exports :shared.
-// Linking Shared as well would embed the :shared klib twice — two Kotlin runtimes, two
-// copies of every object. The macOS target and the extensions keep plain `import Shared`,
-// which is why this is a compilation condition and not a rename. Cluster H6 deletes the
-// SwiftUI path and with it the #else branch.
+// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared as
+// well would embed the :shared klib twice — two Kotlin runtimes, two copies of every object. The
+// macOS target links Shared directly.
+//
+// H6 replaced the COMPOSE_SHELL flag with `os(iOS)` throughout this file. The flag existed to say
+// "Compose shell or SwiftUI shell"; after the cutover the SwiftUI shell survives ONLY as the macOS
+// app (its screens now live under `SupermuxMacUI/`, compiled by the Mac target alone), so the shell
+// axis and the platform axis are one axis and the flag had nothing left to say.
+#if os(iOS)
 import SupermuxKit
 #else
 import Shared
@@ -22,7 +25,7 @@ struct SupermuxApp: App {
     #endif
     @State private var paired: Bool
     @AppStorage("appearance") private var appearance = "system"
-    #if COMPOSE_SHELL
+    #if os(iOS)
     // Drives `IosAppState.foreground`, which the shared shell reads to suppress viewing presence
     // (and so keep pushes coming) while the app is in the background.
     @Environment(\.scenePhase) private var scenePhase
@@ -67,14 +70,12 @@ struct SupermuxApp: App {
         // First-run intro cinematic — once ever, never in seeded dev runs (see IntroPolicy).
         _introVisible = State(initialValue: IntroPolicy.shouldShow())
         #else
-        // Under COMPOSE_SHELL the Kotlin root owns the ONE `PairedHostStore` in the process
-        // (`IosHostStores`), and it runs this same migration itself at construction. Running it
-        // here too would build a SECOND store over the same Keychain items: two in-memory copies of
-        // the fleet, each overwriting the other's saves. The env seed above still applies — it
-        // writes the LEGACY pairing, which is exactly what Kotlin's migration then folds in.
-        #if !COMPOSE_SHELL
-        HostStore.migrateFromLegacyIfNeeded()
-        #endif
+        // No `HostStore.migrateFromLegacyIfNeeded()` here on iOS: the Kotlin root owns the ONE
+        // `PairedHostStore` in the process (`IosHostStores`) and runs that same migration itself at
+        // construction. Doing it here as well would build a SECOND store over the same Keychain
+        // items — two in-memory copies of the fleet, each overwriting the other's saves. The env
+        // seed above still applies: it writes the LEGACY pairing, which is exactly what Kotlin's
+        // migration then folds in.
         _paired = State(initialValue: BrokerConfig.isPaired)
         #endif
         #if os(macOS)
@@ -96,7 +97,7 @@ struct SupermuxApp: App {
     }
 
     var body: some Scene {
-        #if COMPOSE_SHELL
+        #if os(iOS)
         // The Compose shell: ONE scene whose content is the shared `SupermuxApp` root inside a
         // navigation controller (see ComposeRootView). Deliberately absent, compared with the
         // SwiftUI branch below:
@@ -137,7 +138,6 @@ struct SupermuxApp: App {
                 if ProcessInfo.processInfo.environment["SM_UITEST_RAIL_FIXTURE"] == "1" {
                     SessionListRailUIFixtureView()
                 } else if paired, let base = BrokerConfig.baseURL {
-                    #if os(macOS)
                     if !macSetupChecked {
                         ProgressView("Checking setup…")
                             .controlSize(.large)
@@ -147,11 +147,7 @@ struct SupermuxApp: App {
                     } else {
                         pairedRoot(base: base)
                     }
-                    #else
-                    pairedRoot(base: base)
-                    #endif
                 } else {
-                    #if os(macOS)
                     if macManualPairing {
                         PairingView { _ in
                             paired = true
@@ -162,13 +158,6 @@ struct SupermuxApp: App {
                     } else {
                         macWizard
                     }
-                    #else
-                    OnboardingView { _ in
-                        paired = true
-                        PhoneWatchProvisioner.shared.pushCurrent()
-                        PushManager.shared.registerIfPaired()
-                    }
-                    #endif
                 }
             }
             .onOpenURL { url in
@@ -178,18 +167,12 @@ struct SupermuxApp: App {
                     ?? PairToken.parse(url.absoluteString, fallbackBaseURL: BrokerConfig.baseURL) {
                     BrokerConfig.pair(p)
                     paired = true
-                    #if os(macOS)
                     macSetupChecked = true
                     macNeedsOnboarding = false
-                    #endif
-                    #if os(iOS)
-                    PhoneWatchProvisioner.shared.pushCurrent()
-                    #endif
                     PushManager.shared.registerIfPaired()
                 }
             }
             .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
-            #if os(macOS)
             // The Mac is always the wide multi-pane workspace (`isRegularWidth` is a constant),
             // so there's no compact fallback — floor the window so the panes can't be crushed.
             .frame(minWidth: 1100, minHeight: 700)
@@ -203,12 +186,8 @@ struct SupermuxApp: App {
                     })
                 }
             }
-            #endif
         }
-        // Menu-bar commands + default size on the main window (separate `#if` from the second
-        // scene below: one `#if` can't both append postfix modifiers here AND introduce a
-        // sibling `WindowGroup` — the parser reads the whole block as a postfix chain).
-        #if os(macOS)
+        // Menu-bar commands + default size on the main window.
         .commands {
             // File ▸ New Session (⌘N). Replaces the default "New" item; posts a notification
             // that RootView routes to the launcher (menu commands can't reach a view binding).
@@ -228,12 +207,10 @@ struct SupermuxApp: App {
             TextEditingCommands()
         }
         .defaultSize(width: 1440, height: 900)
-        #endif
 
         // A detached window per opened session (⌃-click a row ▸ Open in New Window). Each
         // window owns its own BrokerSession — the web-tab model, where every window is an
         // independent broker client (the broker fans out to N clients).
-        #if os(macOS)
         WindowGroup(id: "session", for: String.self) { $sessionId in
             if let sessionId {
                 SessionWindow(sessionId: sessionId)
@@ -246,8 +223,14 @@ struct SupermuxApp: App {
             MacSettingsWindow()
         }
         #endif
-        #endif
     }
+
+    // ── The macOS-only half ──────────────────────────────────────────────────
+    //
+    // Everything below drives the SwiftUI shell, whose screens now live in `SupermuxMacUI/` and are
+    // compiled by the Mac target alone. On iOS these types do not exist, so the guard is a
+    // compile requirement, not a tidy-up.
+    #if os(macOS)
 
     @ViewBuilder
     private func pairedRoot(base: String) -> some View {
@@ -260,15 +243,12 @@ struct SupermuxApp: App {
             paired = false
         })
         .id(base)
-        #if os(macOS)
         .task {
             macOpenNewSessionAfterOnboarding = false
             if MacHostPolicy.shouldAutostart(), macHost.state == .idle { await macHost.start() }
         }
-        #endif
     }
 
-    #if os(macOS)
     private var macWizard: some View {
         MacHostWizard(
             coordinator: macHost,
@@ -305,15 +285,10 @@ struct SupermuxApp: App {
         macNeedsOnboarding = false
         macSetupChecked = true
     }
-    #endif
 
-    private var shouldStartWithNewSession: Bool {
-        #if os(macOS)
-        macOpenNewSessionAfterOnboarding
-        #else
-        false
-        #endif
-    }
+    private var shouldStartWithNewSession: Bool { macOpenNewSessionAfterOnboarding }
+
+    #endif
 }
 
 private func deepLinkPair(_ url: URL) -> PairToken? {

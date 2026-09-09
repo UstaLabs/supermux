@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Collapsed sidebar — a 56-pt vertical rail of session avatars (PWA parity with
 /// `src/web-app/src/components/SidebarRail.vue`). Shown in place of `SessionsListView`

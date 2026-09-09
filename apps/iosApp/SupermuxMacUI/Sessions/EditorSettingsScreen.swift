@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Full-page settings screen for the editor — mirrors `EditorSettingsView.vue` + `editorSettings.ts`.
 ///

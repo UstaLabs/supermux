@@ -28,7 +28,12 @@
 
 import Combine
 import Foundation
-#if COMPOSE_SHELL
+// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared
+// as well would embed the :shared klib twice. The macOS target — which still compiles this file,
+// plus the whole SwiftUI shell under `SupermuxMacUI/` — links Shared directly. H6 replaced the
+// COMPOSE_SHELL flag with this platform test: after the cutover the only non-Compose shell IS the
+// Mac one, so the shell axis and the platform axis are the same axis.
+#if os(iOS)
 import SupermuxKit
 #else
 import Shared
@@ -387,11 +392,11 @@ extension PushAppDelegate: UNUserNotificationCenterDelegate {
     /// User TAPPED a notification → open the session it was about. The NSE stashed the
     /// session id under `sm_session_id` in the decrypted notification's userInfo.
     ///
-    /// Two sinks, because there are two shells. `PushRouter` is the SwiftUI one (`RootView`
-    /// observes it); `IosAppState` is the Compose one, whose shared root resolves the id to a
-    /// workspace view. Under `COMPOSE_SHELL` nothing reads `PushRouter` any more — writing it
-    /// anyway costs a property assignment and keeps the flag-off build's behaviour identical,
-    /// which is the whole point of the flag until H6 deletes the SwiftUI path.
+    /// Two sinks, because there are two shells — but they are now two PLATFORMS. `PushRouter` is
+    /// the SwiftUI one, observed by the macOS `RootView` in `SupermuxMacUI/`; `IosAppState` is the
+    /// Compose one, whose shared root resolves the id to a workspace view. Nothing on iOS reads
+    /// `PushRouter` any more; writing it anyway costs one property assignment and keeps this
+    /// function's shape identical on both platforms.
     ///
     /// Both are set on the main actor, and both are STATE rather than events: a tap can be what
     /// launches the app, and the observer that appears a moment later must still see it.
@@ -401,7 +406,7 @@ extension PushAppDelegate: UNUserNotificationCenterDelegate {
         guard let id = info["sm_session_id"] as? String, !id.isEmpty else { return }
         await MainActor.run {
             PushRouter.shared.pendingSessionId = id
-            #if COMPOSE_SHELL
+            #if os(iOS)
             IosAppState.shared.setPendingPushSessionId(id: id)
             #endif
         }

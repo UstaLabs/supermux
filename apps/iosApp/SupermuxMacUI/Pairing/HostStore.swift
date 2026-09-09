@@ -1,9 +1,5 @@
 import Foundation
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 
 /// Process-wide holder for the multi-host `PairedHostStore` (spec §3.2) plus the one-time migration
 /// from the legacy single-host `(baseURL, token)`. The Apple mirror of Android's `HostStores`.

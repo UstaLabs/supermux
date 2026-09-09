@@ -1,9 +1,5 @@
 import SwiftUI
-#if COMPOSE_SHELL
-import SupermuxKit
-#else
 import Shared
-#endif
 import Combine
 
 /// Adaptive shell: `NavigationSplitView` gives iPad sidebar+detail and folds to a

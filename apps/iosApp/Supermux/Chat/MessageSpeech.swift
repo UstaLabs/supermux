@@ -15,6 +15,9 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     private let synth = AVSpeechSynthesizer()
     private var gen = 0
     private var audioPlayer: AVAudioPlayer?
+    /// Holds the playing chunk's delegate alive — `AVAudioPlayer.delegate` is weak. Used by both
+    /// the Compose chunk path (`playChunk`) and the Mac codex stream, so it lives out here.
+    private var finishBox: FinishBox?
 
     @Published private(set) var speakingKey: String?
 
@@ -125,6 +128,17 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         done?()
     }
 
+    // ── The broker-driven half: macOS only ──────────────────────────────────
+    //
+    // `toggle`, engine resolution and the codex chunk stream all take a `BrokerSession`, which is
+    // the Mac shell's connection type (`SupermuxMacUI/Broker/`). On iOS none of this is reachable:
+    // Kotlin's `MessageTts` in `:ui` owns engine selection, the speaking key and the chunk queue
+    // for all three hosts, and reaches this class only through the three low-level members above
+    // (speak / play a chunk / be quiet). Guarding by platform rather than splitting the class
+    // keeps ONE AVSpeechSynthesizer and ONE audio player in the process, which is the whole
+    // reason `shared` exists.
+    #if os(macOS)
+
     func toggle(rawText: String, broker: BrokerSession?) {
         let plain = Self.plainTextForSpeech(rawText)
         guard !plain.isEmpty else { return }
@@ -142,6 +156,8 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         }
     }
 
+    #endif
+
     func stop() {
         gen &+= 1
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
@@ -153,12 +169,16 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         finishPending()
     }
 
+    #if os(macOS)
+
     private static func resolveEngine(broker: BrokerSession?) async -> String {
         guard let broker else { return "platform" }
         let cfg = await broker.config()
         let e = cfg?.voiceTtsEngine ?? ""
         return e.isEmpty ? "platform" : e
     }
+
+    #endif
 
     private func speakPlatform(_ plain: String) {
         gen &+= 1
@@ -176,6 +196,7 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         synth.speak(u)
     }
 
+    #if os(macOS)
     private func speakCodex(rawText: String, plain: String, broker: BrokerSession) async {
         gen &+= 1
         let myGen = gen
@@ -238,8 +259,6 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         if gen == myGen { speakingKey = nil }
     }
 
-    private var finishBox: FinishBox?
-
     private func playDataAndWait(_ data: Data, myGen: Int) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             do {
@@ -266,6 +285,8 @@ final class MessageSpeech: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in self.utteranceEnded(utterance) }
     }
+
+    #endif
 
     /// One utterance stopped making noise — finished, or cancelled to make way for another.
     ///
@@ -317,60 +338,5 @@ private final class FinishBox: NSObject, AVAudioPlayerDelegate {
         guard !done else { return }
         done = true
         onFinish()
-    }
-}
-
-/// Copy + Read aloud under an agent reply (web/Android parity).
-struct MessageMetaRow: View {
-    let text: String
-    var broker: BrokerSession?
-    @ObservedObject private var speech = MessageSpeech.shared
-    @State private var copied = false
-
-    private var speechKey: String { MessageSpeech.plainTextForSpeech(text) }
-    private var speaking: Bool { speech.isSpeaking(speechKey) }
-
-    var body: some View {
-        HStack(spacing: 2) {
-            metaButton(
-                systemName: copied ? "checkmark" : "doc.on.doc",
-                label: copied ? "Copied" : "Copy response",
-                tinted: copied
-            ) {
-                #if canImport(UIKit)
-                UIPasteboard.general.string = text
-                #else
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                #endif
-                copied = true
-                Task {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    copied = false
-                }
-            }
-            metaButton(
-                systemName: speaking ? "stop.fill" : "speaker.wave.2",
-                label: speaking ? "Stop reading" : "Read aloud",
-                tinted: speaking
-            ) {
-                speech.toggle(rawText: text, broker: broker)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 2)
-    }
-
-    @ViewBuilder
-    private func metaButton(systemName: String, label: String, tinted: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(tinted ? Color.accentColor : Color.secondary.opacity(0.75))
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 }
