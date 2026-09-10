@@ -156,10 +156,43 @@ test("unknown command returns help-ish error", async () => {
   expect(r1.text).toMatch(/unknown command/i)
 })
 
+// `fetchUsage` is stubbed: the live fetcher talks to four provider APIs over the
+// network, which is both slow (past this test's timeout) and non-deterministic.
 test("/usage returns formatted usage text", async () => {
+  ctx.fetchUsage = async () => ({
+    claude: null,
+    codex: {
+      plan: "plus",
+      windows: [{ id: "primary", used: 43, resetsAt: null, resetsAtIso: null, label: "5-hour window", windowSeconds: 18_000 }],
+      models: [{ id: "gpt-6-astra", label: "GPT-6 Astra", available: false, availableAt: null, availableAtIso: null, creditsWouldEnable: true }],
+      credits: null,
+      limitReached: false,
+      resetCredits: 0,
+    },
+    cursor: null,
+    opencode: null,
+    grok: {
+      plan: "GrokPro",
+      percentUsed: 70,
+      used: 3,
+      monthlyLimit: 0,
+      onDemandCap: 0,
+      onDemandUsed: 0,
+      prepaidBalance: 0,
+      periodType: "weekly",
+      products: [],
+      billingPeriodStart: "",
+      billingPeriodEnd: "",
+    },
+    errors: {},
+  })
+
   const r1 = await handleSlash({ command: "usage", rest: "" }, ctx)
-  expect(typeof r1.text).toBe("string")
-  expect(r1.text.length).toBeGreaterThan(0)
+  expect(r1.text).toContain("Codex (plus)")
+  expect(r1.text).toContain("5-hour window: 43% used")
+  expect(r1.text).toContain("GPT-6 Astra: locked · credits would unlock")
+  expect(r1.text).toContain("Grok (GrokPro)")
+  expect(r1.text).toContain("Weekly: 70% used")
 })
 
 test("/show prints recent log entries", async () => {

@@ -1,5 +1,5 @@
-// The three test-id files are hand-mirrored across three languages, so the only
-// thing stopping them from drifting is this test. A journey that looks for
+// The test-id files are hand-mirrored across languages, so the only thing
+// stopping them from drifting is this test. A journey that looks for
 // "composer-input" on web and finds "chat_composer" on Android is not a portable
 // journey, and the drift is invisible until a device lane goes red for a reason
 // that has nothing to do with the change under test.
@@ -9,8 +9,9 @@ import { join } from "path"
 import { TEST_IDS, sessionRowId } from "../src/shared/test-ids"
 
 const ROOT = join(import.meta.dir, "..")
+// Kotlin is the only remaining mirror: the SwiftUI app (and its TestIds.swift)
+// was retired in f185d64a, leaving Compose as the sole iOS/macOS client.
 const KOTLIN = join(ROOT, "apps/shared/src/commonMain/kotlin/dev/supermux/ui/TestIds.kt")
-const SWIFT = join(ROOT, "apps/iosApp/Supermux/DesignSystem/TestIds.swift")
 
 /** Every double-quoted kebab-case literal in a mirror file. */
 function literalsIn(path: string): Set<string> {
@@ -29,10 +30,6 @@ test("the canonical vocabulary is non-empty and kebab-case", () => {
 
 test("TestIds.kt mirrors src/shared/test-ids.ts exactly", () => {
   expect([...literalsIn(KOTLIN)].sort()).toEqual([...canonical].sort())
-})
-
-test("TestIds.swift mirrors src/shared/test-ids.ts exactly", () => {
-  expect([...literalsIn(SWIFT)].sort()).toEqual([...canonical].sort())
 })
 
 test("the per-row id keeps the shared prefix so one selector matches every client", () => {

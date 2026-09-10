@@ -2,7 +2,7 @@ import { randomBytes } from "crypto"
 import { Registry } from "./session-manager/registry"
 import { isPersistentRuntimeSession } from "./session-manager/types"
 import type { MessageStore } from "./session-manager/messages"
-import { fetchAllUsage } from "./usage/index"
+import { fetchAllUsage, type UsageResponse } from "./usage/index"
 import { formatUsageTelegram } from "./usage/format"
 import { getUsageStore } from "./usage/store"
 import { AGENT_KINDS, AgentKind, isAgentKind, spawnCommandForAgent } from "../shared/agents"
@@ -27,6 +27,8 @@ export type CommandCtx = {
   /** Soft-interrupt a running session: stop the current turn, keep it alive. */
   interrupt?: (sessionId: string) => Promise<{ ok: boolean; reason?: string }>
   spawnPA?: (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => Promise<{ name: string; id?: string; workdir?: string; agent?: AgentKind; model?: string }>
+  /** Live provider fetch behind `/usage`. Injectable so tests need no network. */
+  fetchUsage?: () => Promise<UsageResponse>
 }
 
 export type SlashInput = { command: string; rest: string }
@@ -60,7 +62,7 @@ export async function handleSlash(input: SlashInput, ctx: CommandCtx): Promise<S
     case "grant_orchestrate": return cmdGrantOrch(input.rest, ctx)
     case "model":             return cmdModel(input.rest, ctx)
     case "effort":            return cmdEffort(input.rest, ctx)
-    case "usage":            return cmdUsage()
+    case "usage":            return cmdUsage(ctx)
     case "proxy":             return cmdProxy(input.rest, ctx)
     case "unproxy":           return cmdUnproxy(input.rest, ctx)
     case "proxies":           return cmdProxies(ctx)
@@ -285,8 +287,8 @@ function cmdGrantOrch(rest: string, ctx: CommandCtx): SlashReply {
   return { text: `${name}: can_orchestrate = true` }
 }
 
-async function cmdUsage(): Promise<SlashReply> {
-  const data = await fetchAllUsage()
+async function cmdUsage(ctx: CommandCtx): Promise<SlashReply> {
+  const data = await (ctx.fetchUsage ?? fetchAllUsage)()
   getUsageStore().applyResponse(data)
   return { text: formatUsageTelegram(data) }
 }
