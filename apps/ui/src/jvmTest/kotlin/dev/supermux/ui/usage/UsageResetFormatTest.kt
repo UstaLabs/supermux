@@ -1,5 +1,6 @@
 package dev.supermux.ui.usage
 
+import dev.supermux.net.CodexModelUsage
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -124,5 +125,39 @@ class UsageResetFormatTest {
         assertEquals("as of 5m ago", formatFetchedAt("2026-07-09T11:55:00Z", now))
         assertEquals("as of 2h ago", formatFetchedAt("2026-07-09T10:00:00Z", now))
         assertEquals("as of 2d ago", formatFetchedAt("2026-07-07T12:00:00Z", now))
+    }
+
+    // ── codexModelStatus: the per-model gate line (Astra & friends) ───────────────────────────────
+
+    @Test fun codex_model_status_available_model_reads_available() {
+        val model = CodexModelUsage(id = "gpt-6-astra", label = "GPT-6 Astra", available = true)
+        assertEquals("available", codexModelStatus(model, now))
+    }
+
+    @Test fun codex_model_status_locked_with_an_unlock_time_says_when_it_is_back() {
+        // 12:00 -> 15:30 = 3h30m out.
+        val model = CodexModelUsage(
+            id = "gpt-6-astra",
+            label = "GPT-6 Astra",
+            available = false,
+            availableAt = Instant.parse("2026-07-09T15:30:00Z").epochSecond.toDouble(),
+        )
+        assertEquals("locked · back in 3h 30m", codexModelStatus(model, now))
+    }
+
+    @Test fun codex_model_status_locked_without_a_time_falls_back_to_the_credits_hint() {
+        val withCredits = CodexModelUsage(id = "gpt-6-astra", available = false, creditsWouldEnable = true)
+        assertEquals("locked · credits would unlock", codexModelStatus(withCredits, now))
+        val bare = CodexModelUsage(id = "gpt-6-astra", available = false)
+        assertEquals("locked", codexModelStatus(bare, now))
+    }
+
+    // ── grokPeriodLabel: weekly under unified billing, monthly otherwise ──────────────────────────
+
+    @Test fun grok_period_label_names_the_cadence() {
+        assertEquals("Weekly credits", grokPeriodLabel("weekly"))
+        assertEquals("Monthly credits", grokPeriodLabel("monthly"))
+        // An unrecognized future cadence stays generic rather than claiming a wrong one.
+        assertEquals("Credits", grokPeriodLabel("unknown"))
     }
 }

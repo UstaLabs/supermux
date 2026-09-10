@@ -16,10 +16,13 @@ import dev.supermux.net.ClaudeExtraUsage
 import dev.supermux.net.ClaudeUsage
 import dev.supermux.net.ClaudeWindow
 import dev.supermux.net.CodexCredits
+import dev.supermux.net.CodexModelUsage
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
 import dev.supermux.net.CodexWindow
 import dev.supermux.net.CursorUsage
+import dev.supermux.net.GrokProductUsage
+import dev.supermux.net.GrokUsage
 import dev.supermux.net.UsageResponse
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -153,6 +156,66 @@ class UsageScreenTest {
         onNodeWithText("🎟️ Resets banked").assertExists()
         onNodeWithText("Spend").assertExists()
         onNodeWithText("$5.00 / $20.00 included").assertExists()
+    }
+
+    @Test fun codex_card_lists_the_per_model_gates() = runComposeUiTest {
+        val codex = CodexUsage(
+            plan = "plus",
+            windows = listOf(CodexWindow(id = "primary", used = 43.0, resetsAt = null, label = "5-hour window")),
+            models = listOf(
+                CodexModelUsage(id = "gpt-6-astra", label = "GPT-6 Astra", available = false, creditsWouldEnable = true),
+                CodexModelUsage(id = "gpt-6-codex", label = "GPT-6 Codex", available = true),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                CodexUsageCard(codex = codex, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("GPT-6 Astra").assertExists()
+        onNodeWithText("locked · credits would unlock").assertExists()
+        onNodeWithText("GPT-6 Codex").assertExists()
+        onNodeWithText("available").assertExists()
+    }
+
+    @Test fun grok_card_labels_a_weekly_window_and_splits_multi_product_usage() = runComposeUiTest {
+        val grok = GrokUsage(
+            plan = "GrokPro",
+            percentUsed = 70.0,
+            periodType = "weekly",
+            products = listOf(
+                GrokProductUsage(product = "GrokBuild", percentUsed = 70.0),
+                GrokProductUsage(product = "GrokChat", percentUsed = 12.0),
+            ),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GrokUsageCard(grok = grok, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Weekly credits").assertExists()
+        onNodeWithText("GrokBuild").assertExists()
+        onNodeWithText("GrokChat").assertExists()
+        onNodeWithText("12% used").assertExists()
+        onNodeWithText("Monthly credits").assertDoesNotExist()
+    }
+
+    @Test fun grok_card_hides_the_product_rows_when_there_is_only_one_product() = runComposeUiTest {
+        val grok = GrokUsage(
+            plan = "GrokPro",
+            percentUsed = 70.0,
+            periodType = "weekly",
+            products = listOf(GrokProductUsage(product = "GrokBuild", percentUsed = 70.0)),
+        )
+        usageContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                GrokUsageCard(grok = grok, error = null)
+            }
+        }
+        waitForIdle()
+        onNodeWithText("GrokBuild").assertDoesNotExist()
     }
 
     @Test fun back_button_fires_on_back() = runComposeUiTest {

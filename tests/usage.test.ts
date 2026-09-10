@@ -314,6 +314,53 @@ test("fetchCodexUsage returns null when auth missing", async () => {
   expect(result).toBeNull()
 })
 
+// `model_usage` is a per-model gate that sits ON TOP of the 5h/7d windows: a model
+// can be locked while both windows still have room (OpenAI shipped it with Astra).
+test("fetchCodexUsage maps model_usage into per-model gates", async () => {
+  const authPath = join(tmpDir, "auth-models.json")
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "t" } }))
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    plan_type: "plus",
+    rate_limit: { primary_window: { used_percent: 43, limit_window_seconds: 18000, reset_at: 1789056894 } },
+    model_usage: {
+      "gpt-6-astra": { available: false, available_at: 1789056894, credits_would_enable: true },
+      "gpt-6-codex": { available: true, available_at: null, credits_would_enable: false },
+    },
+  }))) as unknown as typeof fetch
+
+  const result = await fetchCodexUsage(authPath)
+  expect(result!.models).toEqual([
+    {
+      id: "gpt-6-astra",
+      label: "GPT-6 Astra",
+      available: false,
+      availableAt: 1789056894,
+      availableAtIso: new Date(1789056894 * 1000).toISOString(),
+      creditsWouldEnable: true,
+    },
+    {
+      id: "gpt-6-codex",
+      label: "GPT-6 Codex",
+      available: true,
+      availableAt: null,
+      availableAtIso: null,
+      creditsWouldEnable: false,
+    },
+  ])
+})
+
+test("fetchCodexUsage returns an empty model list when the payload has no model_usage", async () => {
+  const authPath = join(tmpDir, "auth-no-models.json")
+  writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "t" } }))
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    plan_type: "plus",
+    rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000, reset_at: 1789056894 } },
+  }))) as unknown as typeof fetch
+
+  const result = await fetchCodexUsage(authPath)
+  expect(result!.models).toEqual([])
+})
+
 // ── Cursor ──
 
 test("fetchCursorUsage returns usage from sqlite + API", async () => {
@@ -537,7 +584,116 @@ test("fetchGrokUsage maps monthly credits and plan from cli-chat-proxy", async (
   expect(result!.onDemandUsed).toBe(25)
   expect(result!.billingPeriodEnd).toBe("2026-08-01T00:00:00+00:00")
   expect(result!.billingPeriodEndIso).toBe("2026-08-01T00:00:00.000Z")
+  expect(result!.periodType).toBe("monthly")
+  expect(result!.products).toEqual([])
   expect(seen.some((u) => u.includes("/billing"))).toBe(true)
+})
+
+// Unified billing moved the real quota to a WEEKLY window reported only by
+// `?format=credits`; legacy `/billing` still answers monthly with a zero limit,
+// which would compute 0% while the account is actually at 70%.
+test("fetchGrokUsage prefers the weekly credits period over the legacy monthly billing", async () => {
+  const authPath = join(tmpDir, "grok-weekly.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": {
+      key: "grok-token-weekly",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    },
+  }))
+
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url)
+    if (u.endsWith("/billing") && !u.includes("format=")) {
+      return new Response(JSON.stringify({
+        config: {
+          monthlyLimit: { val: 0 },
+          used: { val: 3 },
+          onDemandCap: { val: 0 },
+          billingPeriodStart: "2026-09-01T00:00:00+00:00",
+          billingPeriodEnd: "2026-10-01T00:00:00+00:00",
+        },
+      }))
+    }
+    if (u.includes("/user?include=subscription")) {
+      return new Response(JSON.stringify({ subscriptionTier: "GrokPro" }))
+    }
+    if (u.includes("format=credits")) {
+      return new Response(JSON.stringify({
+        config: {
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_WEEKLY",
+            start: "2026-09-05T16:28:51.524533+00:00",
+            end: "2026-09-12T16:28:51.524533+00:00",
+          },
+          creditUsagePercent: 70.0,
+          onDemandCap: { val: 0 },
+          onDemandUsed: { val: 0 },
+          productUsage: [{ product: "GrokBuild", usagePercent: 70.0 }],
+          isUnifiedBillingUser: true,
+          prepaidBalance: { val: 0 },
+          billingPeriodStart: "2026-09-05T16:28:51.524533+00:00",
+          billingPeriodEnd: "2026-09-12T16:28:51.524533+00:00",
+        },
+      }))
+    }
+    return new Response("not found", { status: 404 })
+  }) as typeof fetch
+
+  const result = await fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")
+  expect(result!.plan).toBe("GrokPro")
+  expect(result!.periodType).toBe("weekly")
+  expect(result!.percentUsed).toBe(70)
+  expect(result!.billingPeriodStart).toBe("2026-09-05T16:28:51.524533+00:00")
+  expect(result!.billingPeriodEnd).toBe("2026-09-12T16:28:51.524533+00:00")
+  expect(result!.billingPeriodEndIso).toBe(new Date("2026-09-12T16:28:51.524533+00:00").toISOString())
+  expect(result!.products).toEqual([{ product: "GrokBuild", percentUsed: 70 }])
+  // The legacy monthly numbers still ride along — the card hides them at limit 0.
+  expect(result!.used).toBe(3)
+  expect(result!.monthlyLimit).toBe(0)
+})
+
+test("fetchGrokUsage keeps the monthly period when credits report a monthly window", async () => {
+  const authPath = join(tmpDir, "grok-monthly-credits.json")
+  writeFileSync(authPath, JSON.stringify({
+    "https://auth.x.ai::client": {
+      key: "grok-token-monthly",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    },
+  }))
+
+  globalThis.fetch = (async (url: any) => {
+    const u = String(url)
+    if (u.endsWith("/billing") && !u.includes("format=")) {
+      return new Response(JSON.stringify({
+        config: {
+          monthlyLimit: { val: 150000 },
+          used: { val: 30000 },
+          billingPeriodStart: "2026-09-01T00:00:00+00:00",
+          billingPeriodEnd: "2026-10-01T00:00:00+00:00",
+        },
+      }))
+    }
+    if (u.includes("format=credits")) {
+      return new Response(JSON.stringify({
+        config: {
+          currentPeriod: {
+            type: "USAGE_PERIOD_TYPE_MONTHLY",
+            start: "2026-09-01T00:00:00+00:00",
+            end: "2026-10-01T00:00:00+00:00",
+          },
+          prepaidBalance: { val: 500 },
+        },
+      }))
+    }
+    return new Response("not found", { status: 404 })
+  }) as typeof fetch
+
+  const result = await fetchGrokUsage(authPath, "https://cli-chat-proxy.test/v1")
+  expect(result!.periodType).toBe("monthly")
+  // No creditUsagePercent → fall back to the credit-pool ratio.
+  expect(result!.percentUsed).toBe(20)
+  expect(result!.billingPeriodEnd).toBe("2026-10-01T00:00:00+00:00")
+  expect(result!.prepaidBalance).toBe(500)
 })
 
 test("fetchGrokUsage returns null when auth missing", async () => {

@@ -67,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.net.ClaudeUsage
+import dev.supermux.net.CodexModelUsage
 import dev.supermux.net.CodexResetResult
 import dev.supermux.net.CodexUsage
 import dev.supermux.net.CursorUsage
@@ -117,6 +118,30 @@ fun formatResetIso(resetsAt: String?, now: Long = nowMs()): String {
 fun formatResetEpochSeconds(resetsAt: Double?, now: Long = nowMs()): String {
     val secs = resetsAt ?: return ""
     return formatResetFromEpochMillis((secs * 1000.0).toLong(), now)
+}
+
+/**
+ * Status line for one Codex per-model gate. A locked model with a known unlock time reads
+ * "locked · back in 3h 12m"; without one, whether buying credits would lift the gate.
+ */
+fun codexModelStatus(model: CodexModelUsage, now: Long = nowMs()): String {
+    if (model.available) return "available"
+    val back = formatResetEpochSeconds(model.availableAt, now).removePrefix("resets ")
+    return when {
+        back.isNotEmpty() -> "locked · back $back"
+        model.creditsWouldEnable -> "locked · credits would unlock"
+        else -> "locked"
+    }
+}
+
+/**
+ * Label for Grok's quota window. Unified billing bills weekly; older accounts stay monthly,
+ * and a broker that predates the field sends "monthly".
+ */
+fun grokPeriodLabel(periodType: String): String = when (periodType) {
+    "weekly" -> "Weekly credits"
+    "monthly" -> "Monthly credits"
+    else -> "Credits"
 }
 
 /**
@@ -280,9 +305,12 @@ fun UsageWindowRow(label: String, usedPct: Double, resetLine: String) {
     }
 }
 
-/** A footer row separated by a top divider (extra usage / credits / spend). */
+/**
+ * A footer row separated by a top divider (extra usage / credits / spend). [valueColor] tints
+ * the value when it carries a status ("available" / "locked"); null keeps the plain onSurface.
+ */
 @Composable
-fun UsageFooterRow(label: String, value: String) {
+fun UsageFooterRow(label: String, value: String, valueColor: Color? = null) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(top = Space.sm)) {
         HorizontalDivider(color = cs.outlineVariant)
@@ -291,7 +319,7 @@ fun UsageFooterRow(label: String, value: String) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(label, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
-            Text(value, color = cs.onSurface, fontSize = 12.sp)
+            Text(value, color = valueColor ?: cs.onSurface, fontSize = 12.sp)
         }
     }
 }
@@ -349,6 +377,7 @@ fun CodexUsageCard(
     onRedeemed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
+    val semantics = LocalSemantics.current
     val scope = rememberCoroutineScope()
     // NOT keyed to `codex`: a successful redeem swaps the caller's `codex` for a refreshed value
     // (see UsageScreen's KDoc) — the note must survive that swap so "✓ Reset — cleared N window(s)"
@@ -387,6 +416,14 @@ fun CodexUsageCard(
                     window.label.ifBlank { "Usage window" },
                     window.used,
                     formatResetEpochSeconds(window.resetsAt, now),
+                )
+            }
+            // Per-model gates (e.g. Astra), independent of the windows above.
+            codex.models.forEach { model ->
+                UsageFooterRow(
+                    model.label.ifBlank { model.id },
+                    codexModelStatus(model, now),
+                    valueColor = if (model.available) semantics.success else semantics.warning,
                 )
             }
             codex.credits?.takeIf { it.hasCredits }?.let { cr ->
@@ -539,7 +576,13 @@ fun GrokUsageCard(
         if (grok == null) {
             Text(error ?: "Not available", color = cs.onSurfaceVariant, fontSize = 12.sp)
         } else {
-            UsageWindowRow("Monthly credits", grok.percentUsed, formatResetIso(grok.billingPeriodEnd, now))
+            UsageWindowRow(grokPeriodLabel(grok.periodType), grok.percentUsed, formatResetIso(grok.billingPeriodEnd, now))
+            // Only worth their own rows when xAI splits the pool across more than one product.
+            if (grok.products.size > 1) {
+                grok.products.forEach { product ->
+                    UsageFooterRow(product.product, "${product.percentUsed.roundToInt()}% used")
+                }
+            }
             if (grok.monthlyLimit > 0) {
                 UsageFooterRow("Credits", "${grok.used.toLong()} / ${grok.monthlyLimit.toLong()}")
             }
@@ -680,6 +723,7 @@ fun UsageScreen(
     onRedeemed: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
+    val semantics = LocalSemantics.current
     val scope = rememberCoroutineScope()
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     val barOwned = (standalone || compact) && !topBarShown

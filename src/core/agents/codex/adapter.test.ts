@@ -106,6 +106,7 @@ test("account/rateLimits/updated maps params and calls onUsageUpdate", () => {
     getPrevUsage: () => ({
       plan: "prev",
       windows: [],
+      models: [],
       credits: null,
       limitReached: false,
       resetCredits: 4,

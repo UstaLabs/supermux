@@ -10,10 +10,14 @@ interface UsageWindow { used: number; resetsAt: string | number | null; resetsAt
 interface ClaudeExtraUsage { enabled: boolean; monthlyLimit: number; usedCredits: number; currency: string }
 interface ClaudeUsage { fiveHour: UsageWindow; sevenDay: UsageWindow; sevenDaySonnet: UsageWindow | null; sevenDayFable: UsageWindow | null; extraUsage: ClaudeExtraUsage | null }
 interface CodexWindow extends UsageWindow { id: string; label: string; windowSeconds: number | null }
-interface CodexUsage { plan: string; windows: CodexWindow[]; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
+// Per-model gate from the payload's `model_usage` — a model can be locked while
+// the 5h/7d windows still have room. Absent on a snapshot cached by an older broker.
+interface CodexModelUsage { id: string; label: string; available: boolean; availableAt: number | null; availableAtIso: string | null; creditsWouldEnable: boolean }
+interface CodexUsage { plan: string; windows: CodexWindow[]; models?: CodexModelUsage[]; credits: { hasCredits: boolean; balance: string } | null; limitReached: boolean; resetCredits: number }
 interface CursorUsage { totalPercentUsed: number; totalSpendCents: number; includedCents: number; limitCents: number; spendAvailable: boolean; billingCycleStart: string; billingCycleEnd: string; billingCycleEndIso?: string | null }
 interface OpenCodeUsage { sessions: number; messages: number; totalCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
-interface GrokUsage { plan: string; percentUsed: number; used: number; monthlyLimit: number; onDemandCap: number; onDemandUsed: number; prepaidBalance: number; billingPeriodStart: string; billingPeriodEnd: string; billingPeriodEndIso?: string | null }
+interface GrokProductUsage { product: string; percentUsed: number }
+interface GrokUsage { plan: string; percentUsed: number; used: number; monthlyLimit: number; onDemandCap: number; onDemandUsed: number; prepaidBalance: number; periodType?: "weekly" | "monthly" | "unknown"; products?: GrokProductUsage[]; billingPeriodStart: string; billingPeriodEnd: string; billingPeriodEndIso?: string | null }
 interface UsageResponse {
   claude: ClaudeUsage | null
   codex: CodexUsage | null
@@ -80,6 +84,15 @@ function clamp(v: number): number {
   return Math.max(0, Math.min(100, v))
 }
 
+// Codex per-model gate status line. A locked model with a known unlock time
+// reads "locked · back in 3h 12m"; without one, whether credits would lift it.
+function modelStatus(m: CodexModelUsage): string {
+  if (m.available) return "available"
+  const when = formatReset(m.availableAtIso, m.availableAt, "unix-s")
+  if (when) return `locked · ${when.replace(/^resets /, "back ")}`
+  return m.creditsWouldEnable ? "locked · credits would unlock" : "locked"
+}
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M"
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K"
@@ -129,6 +142,20 @@ const codex = computed(() => data.value?.codex ?? null)
 const cursor = computed(() => data.value?.cursor ?? null)
 const opencode = computed(() => data.value?.opencode ?? null)
 const grok = computed(() => data.value?.grok ?? null)
+const codexModels = computed(() => codex.value?.models ?? [])
+// xAI's unified billing bills a weekly window; older accounts are still monthly,
+// and a snapshot from an older broker carries no cadence at all.
+const grokPeriodLabel = computed(() => {
+  const type = grok.value?.periodType
+  if (type === "weekly") return "Weekly credits"
+  if (type === "unknown") return "Credits"
+  return "Monthly credits"
+})
+// Only worth its own rows when xAI splits the pool across more than one product.
+const grokProducts = computed(() => {
+  const products = grok.value?.products ?? []
+  return products.length > 1 ? products : []
+})
 const errors = computed(() => data.value?.errors ?? {})
 
 const confirmingReset = ref(false)
@@ -280,8 +307,15 @@ async function useReset() {
               </div>
               <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(window.resetsAtIso, window.resetsAt, 'unix-s') }}</p>
             </div>
+            <!-- Per-model gates (e.g. Astra), independent of the windows above -->
+            <div v-if="codexModels.length" class="pt-2 border-t border-border">
+              <div v-for="model in codexModels" :key="model.id" class="flex items-center justify-between text-xs py-0.5">
+                <span class="text-muted-foreground">{{ model.label }}</span>
+                <span :class="model.available ? 'text-emerald-500' : 'text-yellow-500'">{{ modelStatus(model) }}</span>
+              </div>
+            </div>
             <!-- Credits -->
-            <div v-if="codex.credits && codex.credits.hasCredits" class="pt-2 border-t border-border">
+            <div v-if="codex.credits && codex.credits.hasCredits" class="pt-2 mt-2 border-t border-border">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-muted-foreground">Credits balance</span>
                 <span>{{ codex.credits.balance }} credits</span>
@@ -397,7 +431,7 @@ async function useReset() {
           <p v-else class="text-xs text-muted-foreground">{{ errors.opencode || 'Not available' }}</p>
         </div>
 
-        <!-- Grok card — SuperGrok subscription monthly credit pool -->
+        <!-- Grok card — SuperGrok subscription credit pool (weekly under unified billing) -->
         <div class="rounded-xl border border-border bg-card p-4" :class="{ 'opacity-50': !grok }">
           <div class="flex items-center justify-between mb-3">
             <div>
@@ -412,7 +446,7 @@ async function useReset() {
           <template v-if="grok">
             <div class="mb-3">
               <div class="flex items-center justify-between text-xs mb-1">
-                <span class="text-muted-foreground">Monthly credits</span>
+                <span class="text-muted-foreground">{{ grokPeriodLabel }}</span>
                 <span>{{ Math.round(grok.percentUsed) }}% used</span>
               </div>
               <div class="h-2 rounded-full bg-muted overflow-hidden">
@@ -420,7 +454,13 @@ async function useReset() {
               </div>
               <p class="text-[11px] text-muted-foreground mt-1">{{ formatReset(grok.billingPeriodEndIso, grok.billingPeriodEnd, 'iso') }}</p>
             </div>
-            <div v-if="grok.monthlyLimit > 0" class="pt-2 border-t border-border">
+            <div v-if="grokProducts.length" class="pt-2 border-t border-border">
+              <div v-for="product in grokProducts" :key="product.product" class="flex items-center justify-between text-xs py-0.5">
+                <span class="text-muted-foreground">{{ product.product }}</span>
+                <span>{{ Math.round(product.percentUsed) }}% used</span>
+              </div>
+            </div>
+            <div v-if="grok.monthlyLimit > 0" class="pt-2 mt-2 border-t border-border">
               <div class="flex items-center justify-between text-xs">
                 <span class="text-muted-foreground">Credits</span>
                 <span>{{ Math.round(grok.used) }} / {{ Math.round(grok.monthlyLimit) }}</span>

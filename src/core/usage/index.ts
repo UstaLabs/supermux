@@ -35,9 +35,23 @@ export interface ClaudeUsage {
   extraUsage: ClaudeExtraUsage | null
 }
 
+// A per-model gate from the payload's `model_usage` map, independent of the
+// 5h/7d windows: a model can be locked out while both windows still have room
+// (this is what OpenAI shipped the Astra models with). `availableAt` is the raw
+// unix-seconds value; clients read `availableAtIso`.
+export interface CodexModelUsage {
+  id: string
+  label: string
+  available: boolean
+  availableAt: number | null
+  availableAtIso: string | null
+  creditsWouldEnable: boolean
+}
+
 export interface CodexUsage {
   plan: string
   windows: CodexUsageWindow[]
+  models: CodexModelUsage[]
   credits: { hasCredits: boolean; balance: string } | null
   limitReached: boolean
   resetCredits: number
@@ -69,6 +83,14 @@ export interface OpenCodeUsage {
 
 // Grok Build (xAI SuperGrok) subscription credits via cli-chat-proxy.
 // Vals are opaque credit units from the billing API (not USD cents).
+
+/** Cadence of the quota window xAI is currently billing against. Unified billing
+ *  moved accounts from monthly to weekly, so this is no longer a constant. */
+export type GrokPeriodType = "weekly" | "monthly" | "unknown"
+
+/** One row of the `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
+export interface GrokProductUsage { product: string; percentUsed: number }
+
 export interface GrokUsage {
   plan: string
   percentUsed: number
@@ -77,6 +99,11 @@ export interface GrokUsage {
   onDemandCap: number
   onDemandUsed: number
   prepaidBalance: number
+  /** Cadence of billingPeriodStart/End below — "weekly" under unified billing. */
+  periodType: GrokPeriodType
+  /** Per-product percentages; empty on accounts the breakdown is not reported for. */
+  products: GrokProductUsage[]
+  /** Start of the ACTIVE quota window (the weekly one when xAI reports one). */
   billingPeriodStart: string
   /** Raw ISO string from the Grok API. Clients read billingPeriodEndIso. */
   billingPeriodEnd: string
@@ -208,6 +235,23 @@ export async function fetchClaudeUsage(
 
 // ── Codex ──
 
+// `model_usage` keys are API model slugs ("gpt-6-astra"); turn one into a card
+// label ("GPT-6 Astra"). A digits-only segment stays hyphenated to the segment
+// before it so version numbers read as one token.
+export function codexModelLabel(id: string): string {
+  const parts = id.split("-").filter((p) => p !== "")
+  if (parts.length === 0) return id
+  let label = ""
+  for (const part of parts) {
+    const word = /^(gpt|api|ai|o\d+)$/i.test(part)
+      ? part.toUpperCase()
+      : part.charAt(0).toUpperCase() + part.slice(1)
+    if (label === "") label = word
+    else label += /^\d+$/.test(part) ? `-${word}` : ` ${word}`
+  }
+  return label
+}
+
 export async function fetchCodexUsage(
   authPath: string = CODEX_AUTH,
 ): Promise<CodexUsage | null> {
@@ -260,12 +304,28 @@ export async function fetchCodexUsage(
     ? { hasCredits: data.credits.has_credits ?? false, balance: data.credits.balance ?? "0" }
     : null
 
+  const models: CodexModelUsage[] = Object.entries(data.model_usage ?? {})
+    .filter(([, m]) => m != null && typeof m === "object")
+    .map(([id, m]: [string, any]) => {
+      const rawAt = m.available_at ?? m.availableAt ?? null
+      const availableAt = rawAt == null ? null : Number(rawAt)
+      return {
+        id,
+        label: codexModelLabel(id),
+        available: m.available ?? false,
+        availableAt: availableAt != null && Number.isFinite(availableAt) ? availableAt : null,
+        availableAtIso: isoFromUnixSeconds(rawAt),
+        creditsWouldEnable: m.credits_would_enable ?? m.creditsWouldEnable ?? false,
+      }
+    })
+
   return {
     plan: data.plan_type ?? data.plan ?? "unknown",
     windows: [
       mapWindow("primary", rl.primary_window, "5-hour window"),
       mapWindow("secondary", rl.secondary_window, "7-day window"),
     ].filter((window): window is CodexUsageWindow => window != null),
+    models,
     credits,
     limitReached: rl.limit_reached ?? false,
     resetCredits: data.rate_limit_reset_credits?.available_count ?? 0,
@@ -411,10 +471,24 @@ export async function fetchOpenCodeUsage(
 // SuperGrok subscription credit pool lives on the Grok Build cli-chat-proxy, not
 // api.x.ai. Auth is the OIDC access token in ~/.grok/auth.json (any entry's
 // `key` field). Two companion GETs:
-//   /billing                        → monthly used / limit + billing period
+//   /billing                        → legacy monthly used / limit + billing period
 //   /user?include=subscription      → plan name (subscriptionTier, singular)
-//   /billing?format=credits         → prepaid balance + on-demand caps
-// All three are best-effort; billing alone is enough for a card.
+//   /billing?format=credits         → the LIVE quota under unified billing —
+//        `currentPeriod` (weekly), `creditUsagePercent`, `productUsage`, plus
+//        prepaid balance and on-demand caps
+// All three are best-effort; billing alone is enough for a card. On a unified
+// account the legacy monthly limit is 0, so the credits percentage is the only
+// truthful number — see fetchGrokUsage.
+
+/** `USAGE_PERIOD_TYPE_WEEKLY` → "weekly". An unrecognized future cadence reports
+ *  "unknown" so clients label the window generically instead of lying "monthly". */
+function grokPeriodType(raw: unknown): GrokPeriodType {
+  if (typeof raw !== "string" || raw === "") return "monthly"
+  const t = raw.toUpperCase()
+  if (t.includes("WEEK")) return "weekly"
+  if (t.includes("MONTH")) return "monthly"
+  return "unknown"
+}
 
 function grokMoneyVal(v: any): number {
   if (v == null) return 0
@@ -511,6 +585,15 @@ export async function fetchGrokUsage(
   let prepaidBalance = 0
   let onDemandCap = grokMoneyVal(cfg.onDemandCap)
   let onDemandUsed = grokMoneyVal(cfg.onDemandUsed)
+  // Unified billing reports the live quota only on the credits format: a
+  // `currentPeriod` (weekly for unified accounts) plus a straight percentage.
+  // Legacy `/billing` keeps answering monthly with a zero limit there, which
+  // would read as 0% used, so the credits values win whenever they are present.
+  let periodType: GrokPeriodType = "monthly"
+  let periodStart: string | null = null
+  let periodEnd: string | null = null
+  let creditPercent: number | null = null
+  let products: GrokProductUsage[] = []
   if (creditsRes && creditsRes.ok) {
     try {
       const credits = (await creditsRes.json()) as any
@@ -519,6 +602,32 @@ export async function fetchGrokUsage(
       // credits format is the authoritative source for on-demand when present
       if (ccfg.onDemandCap != null) onDemandCap = grokMoneyVal(ccfg.onDemandCap)
       if (ccfg.onDemandUsed != null) onDemandUsed = grokMoneyVal(ccfg.onDemandUsed)
+
+      const period = ccfg.currentPeriod ?? null
+      if (period && typeof period === "object") {
+        periodType = grokPeriodType(period.type)
+        if (typeof period.start === "string" && period.start) periodStart = period.start
+        if (typeof period.end === "string" && period.end) periodEnd = period.end
+      }
+      // Falls back to the credits config's own billingPeriod* — same window as
+      // currentPeriod on every payload seen so far, but present on older ones.
+      if (periodStart == null && typeof ccfg.billingPeriodStart === "string") periodStart = ccfg.billingPeriodStart
+      if (periodEnd == null && typeof ccfg.billingPeriodEnd === "string") periodEnd = ccfg.billingPeriodEnd
+
+      // `!= null` first: Number(null) is 0, which would report a full pool as 0% used.
+      if (ccfg.creditUsagePercent != null) {
+        const pct = Number(ccfg.creditUsagePercent)
+        if (Number.isFinite(pct)) creditPercent = pct
+      }
+
+      if (Array.isArray(ccfg.productUsage)) {
+        products = ccfg.productUsage
+          .filter((p: any) => p != null && typeof p === "object")
+          .map((p: any) => ({
+            product: String(p.product ?? ""),
+            percentUsed: Number.isFinite(Number(p.usagePercent)) ? Number(p.usagePercent) : 0,
+          }))
+      }
     } catch {
       // ignore credits parse failures
     }
@@ -527,7 +636,14 @@ export async function fetchGrokUsage(
   const used = grokMoneyVal(cfg.used)
   const monthlyLimit = grokMoneyVal(cfg.monthlyLimit)
   const percentUsed =
-    monthlyLimit > 0 ? Math.min(100, (used / monthlyLimit) * 100) : 0
+    creditPercent != null
+      ? Math.max(0, Math.min(100, creditPercent))
+      : monthlyLimit > 0
+        ? Math.min(100, (used / monthlyLimit) * 100)
+        : 0
+
+  const billingPeriodStart = periodStart ?? cfg.billingPeriodStart ?? ""
+  const billingPeriodEnd = periodEnd ?? cfg.billingPeriodEnd ?? ""
 
   return {
     plan,
@@ -537,9 +653,11 @@ export async function fetchGrokUsage(
     onDemandCap,
     onDemandUsed,
     prepaidBalance,
-    billingPeriodStart: cfg.billingPeriodStart ?? "",
-    billingPeriodEnd: cfg.billingPeriodEnd ?? "",
-    billingPeriodEndIso: isoFromIsoLike(cfg.billingPeriodEnd),
+    periodType,
+    products,
+    billingPeriodStart,
+    billingPeriodEnd,
+    billingPeriodEndIso: isoFromIsoLike(billingPeriodEnd),
   }
 }
 

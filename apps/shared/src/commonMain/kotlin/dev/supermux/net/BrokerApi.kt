@@ -369,10 +369,26 @@ data class CodexWindow(
 @Serializable
 data class CodexCredits(val hasCredits: Boolean = false, val balance: String = "")
 
+/**
+ * A per-model gate from the payload's `model_usage` map (this is what shipped with the
+ * Astra models). Independent of the 5h/7d windows: a model can be locked while both
+ * windows still have room. [availableAt] is epoch SECONDS, like [CodexWindow.resetsAt].
+ */
+@Serializable
+data class CodexModelUsage(
+    val id: String = "",
+    val label: String = "",
+    val available: Boolean = false,
+    val availableAt: Double? = null,
+    val creditsWouldEnable: Boolean = false,
+)
+
 @Serializable
 data class CodexUsage(
     val plan: String = "",
     val windows: List<CodexWindow> = emptyList(),
+    /** Per-model gates; empty on a broker that predates `model_usage`. */
+    val models: List<CodexModelUsage> = emptyList(),
     val credits: CodexCredits? = null,
     val limitReached: Boolean = false,
     val resetCredits: Int = 0,
@@ -400,7 +416,15 @@ data class OpenCodeUsage(
     val cacheWriteTokens: Long = 0,
 )
 
-/** SuperGrok subscription credit pool from cli-chat-proxy `/billing`. */
+/** One row of Grok's `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
+@Serializable
+data class GrokProductUsage(val product: String = "", val percentUsed: Double = 0.0)
+
+/**
+ * SuperGrok subscription credit pool from cli-chat-proxy `/billing`. Unified billing moved
+ * the quota to a WEEKLY window, so [periodType] names the cadence of the period below —
+ * "weekly" | "monthly" | "unknown", and "monthly" on a broker that predates the field.
+ */
 @Serializable
 data class GrokUsage(
     val plan: String = "",
@@ -410,6 +434,8 @@ data class GrokUsage(
     val onDemandCap: Double = 0.0,
     val onDemandUsed: Double = 0.0,
     val prepaidBalance: Double = 0.0,
+    val periodType: String = "monthly",
+    val products: List<GrokProductUsage> = emptyList(),
     val billingPeriodStart: String? = null,
     val billingPeriodEnd: String? = null,
 )

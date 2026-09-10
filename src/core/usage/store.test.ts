@@ -279,7 +279,7 @@ test("noteActivity: stale last-live refreshes immediately; fresh last-live arms 
 
 test("applyResponse feeds live data and records errors without wiping other providers", () => {
   const store = makeStore({ now: () => Date.parse("2026-07-01T00:00:00.000Z") })
-  store.apply("codex", { plan: "plus", windows: [], credits: null, limitReached: false, resetCredits: 2 }, "agent", new Date("2026-06-01T00:00:00.000Z"))
+  store.apply("codex", { plan: "plus", windows: [], models: [], credits: null, limitReached: false, resetCredits: 2 }, "agent", new Date("2026-06-01T00:00:00.000Z"))
 
   const res: UsageResponse = {
     claude: claude(5),
@@ -297,6 +297,7 @@ test("applyResponse feeds live data and records errors without wiping other prov
   expect(snap.codex).toEqual({
     plan: "plus",
     windows: [],
+    models: [],
     credits: null,
     limitReached: false,
     resetCredits: 2,
