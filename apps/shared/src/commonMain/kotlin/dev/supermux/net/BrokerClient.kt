@@ -56,7 +56,7 @@ class BrokerClient(
                 val wsUrl = wsBaseUrl(baseUrl)
                 http.webSocket(
                     urlString = "$wsUrl/ws",
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { if (token.isNotBlank()) header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0
                     println("[BrokerClient] connected")

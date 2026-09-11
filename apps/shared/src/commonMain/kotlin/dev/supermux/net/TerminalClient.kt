@@ -99,7 +99,7 @@ class TerminalClient(
                 _status.value = TerminalStatus.CONNECTING
                 http.webSocket(
                     urlString = termWsUrl(baseUrl, sessionId, kind, terminalId, workspaceId),
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { if (token.isNotBlank()) header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0
                     liveSession = this

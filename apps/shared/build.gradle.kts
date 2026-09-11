@@ -15,6 +15,15 @@ kotlin {
 
     jvm()
     androidTarget()
+    // Browser client (plan 1 of the web→KMP migration). `browser()` only — no Node target. The
+    // wasm test task is disabled: every commonTest already runs on the JVM, and headless-Chromium
+    // Karma is wired for `:web` alone (its tests are the browser-only ones).
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            testTask { enabled = false }
+        }
+    }
     // Apple targets are declared so the appleMain/iosMain/watchosMain source sets +
     // Apple actuals exist; their compile/link tasks run on a Mac (Spec 2). On this
     // Linux host they are disabled (see kotlin.native.ignoreDisabledTargets in
@@ -69,6 +78,21 @@ kotlin {
         // iosMain is the default hierarchy's intermediate over iosArm64 + iosSimulatorArm64; both
         // get the parser. watchosArm64/watchosSimulatorArm64 deliberately do not.
         iosMain { dependsOn(nonWatchMain) }
+
+        // wasmJs sits under nonWatchMain (it renders markdown) but NOT nonAppleMain (java.time,
+        // CIO): the browser has its own clock/format/HTTP actuals in wasmJsMain.
+        wasmJsMain {
+            dependsOn(nonWatchMain)
+            // `js("…")`, external declarations and JsAny are all still behind this opt-in in 2.3.
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+            dependencies {
+                implementation(libs.ktor.client.js)
+                // kotlinx.browser / org.w3c / org.khronos.webgl — no longer in the wasm stdlib.
+                implementation(libs.kotlinx.browser)
+                // zlib for the RFB ZRLE decoder — synchronous, which DecompressionStream is not.
+                implementation(npm("pako", "2.1.0"))
+            }
+        }
 
         jvmMain { dependsOn(nonAppleMain) }
         jvmTest {

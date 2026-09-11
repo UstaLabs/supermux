@@ -75,7 +75,7 @@ class VncClient(
                 _status.value = VncStatus.CONNECTING
                 http.webSocket(
                     urlString = "${wsBaseUrl(baseUrl)}/ws/display?id=$streamId",
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { if (token.isNotBlank()) header("Authorization", "Bearer $token") },
                 ) {
                     liveSession = this
                     rolling = RollingBuffer()

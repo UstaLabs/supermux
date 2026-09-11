@@ -39,6 +39,7 @@ jbrApi = "1.10.1"
 # desktop/build.gradle.kts in lockstep: JCEF's Java/native ABI is a compatibility unit.
 jcef = "137.0.17-gf354b0e-chromium-137.0.7151.104-api-1.20-253-b13"
 markdown = "0.7.6"
+kotlinxBrowser = "0.5.0"
 # 3.4.0, NOT 3.5.0, and pinned by the Kotlin version rather than by taste: coil 3.5.0's
 # Kotlin/Native klibs are built with Kotlin 2.4 (klib abi_version 2.4.0), and a 2.3.21 compiler
 # refuses to read them — ":ui:compileKotlinIosSimulatorArm64" fails with "can consume libraries
@@ -64,6 +65,7 @@ ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-js = { module = "io.ktor:ktor-client-js", version.ref = "ktor" }
 ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
@@ -98,6 +100,8 @@ jcef = { module = "org.jetbrains.intellij.deps.jcef:jcef", version.ref = "jcef" 
 # GFM markdown parser (multiplatform). Used by the Android + desktop chat renderers; iOS uses its
 # own native MarkdownView, so Kotlin/Native dead-code-strips this from the Apple framework.
 markdown = { module = "org.jetbrains:markdown", version.ref = "markdown" }
+# Kotlin/Wasm dropped kotlinx.browser + org.w3c + org.khronos.webgl from the stdlib; this is where they live now.
+kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.ref = "kotlinxBrowser" }
 # Async image loading for inline markdown images (Android). ktor3 backend matches our ktor client.
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-ktor3 = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil" }

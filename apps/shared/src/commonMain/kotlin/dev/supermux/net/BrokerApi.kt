@@ -1198,7 +1198,14 @@ class BrokerApi(
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private fun bearerHeader() = "Bearer $token"
+    /**
+     * Attach `Authorization: Bearer …` — unless the token is blank, which is the browser (cookie
+     * session; the broker resolves `cookieToken(req) || bearerToken(req)`). A literal `Bearer `
+     * would not match the broker's regex anyway, but sending nothing is the honest shape.
+     */
+    private fun io.ktor.client.request.HttpRequestBuilder.authHeader() {
+        if (token.isNotBlank()) header("Authorization", "Bearer $token")
+    }
 
     /**
      * Read [resp] into [T] WITHOUT ever aborting the app on failure.
@@ -1232,7 +1239,7 @@ class BrokerApi(
     }
 
     private suspend inline fun <reified T> getJson(url: String): T =
-        decode(http.get(url) { header("Authorization", bearerHeader()) })
+        decode(http.get(url) { authHeader() })
 
     /**
      * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
@@ -1254,7 +1261,7 @@ class BrokerApi(
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
         ensureMutationSuccess(http.post(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1262,7 +1269,7 @@ class BrokerApi(
 
     private suspend inline fun <reified B> putJson(url: String, body: B) {
         ensureMutationSuccess(http.put(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1270,7 +1277,7 @@ class BrokerApi(
 
     private suspend inline fun <reified B> patchJson(url: String, body: B) {
         ensureMutationSuccess(http.patch(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1279,7 +1286,7 @@ class BrokerApi(
     /** POST a JSON body and decode the JSON response (for endpoints that return data). */
     private suspend inline fun <reified B, reified T> postReturningJson(url: String, body: B): T =
         decode(http.post(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1409,14 +1416,14 @@ class BrokerApi(
     /** DELETE /sessions/<id> */
     suspend fun kill(id: String) {
         http.delete("$httpBase/sessions/$id") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
     /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
     suspend fun reorderSessions(orderedIds: List<String>) {
         http.patch("$httpBase/sessions/reorder") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(ReorderSessionsBody(orderedIds)))
         }
@@ -1429,7 +1436,7 @@ class BrokerApi(
     /** POST /workspaces */
     suspend fun createWorkspace(body: CreateWorkspaceBody): WorkspaceDto =
         decode(http.post("$httpBase/workspaces") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1437,7 +1444,7 @@ class BrokerApi(
     /** PATCH /workspaces/{id} — name, layout, or active view. */
     suspend fun patchWorkspace(id: String, body: PatchWorkspaceBody): WorkspaceDto =
         decode(http.patch("$httpBase/workspaces/$id") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1445,7 +1452,7 @@ class BrokerApi(
     /** DELETE /workspaces/{id} — archives it and its chat sessions. */
     suspend fun archiveWorkspace(id: String) {
         ensureMutationSuccess(http.delete("$httpBase/workspaces/$id") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1456,13 +1463,13 @@ class BrokerApi(
     /** POST /workspaces/{id}/restore — unarchives the workspace and resumes its chats. */
     suspend fun restoreWorkspace(id: String): WorkspaceDto =
         decode(http.post("$httpBase/workspaces/$id/restore") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
 
     /** PATCH /workspaces/reorder */
     suspend fun reorderWorkspaces(orderedIds: List<String>) {
         ensureMutationSuccess(http.patch("$httpBase/workspaces/reorder") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(ReorderWorkspacesBody(orderedIds)))
         })
@@ -1471,7 +1478,7 @@ class BrokerApi(
     /** POST /workspaces/{id}/views */
     suspend fun addView(workspaceId: String, body: AddViewBody): ViewDto =
         decode(http.post("$httpBase/workspaces/$workspaceId/views") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1479,7 +1486,7 @@ class BrokerApi(
     /** PATCH /workspaces/{wid}/views/{vid} */
     suspend fun patchView(workspaceId: String, viewId: String, body: PatchViewBody): ViewDto =
         decode(http.patch("$httpBase/workspaces/$workspaceId/views/$viewId") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1493,14 +1500,14 @@ class BrokerApi(
      */
     suspend fun closeView(workspaceId: String, viewId: String) {
         ensureMutationSuccess(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
     /** POST /views/{id}/move */
     suspend fun moveView(viewId: String, body: MoveViewBody) {
         ensureMutationSuccess(http.post("$httpBase/views/$viewId/move") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1509,7 +1516,7 @@ class BrokerApi(
     /** POST /sessions */
     suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })
@@ -1570,7 +1577,7 @@ class BrokerApi(
         onChunk: (ByteArray) -> Unit,
     ) {
         val resp = http.post("$httpBase/speak") {
-            header("Authorization", bearerHeader())
+            authHeader()
             header(HttpHeaders.Accept, "application/x-ndjson")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
@@ -1615,7 +1622,7 @@ class BrokerApi(
      * an intentionally blank soul — critical so a failed load never becomes a blank Save.
      */
     suspend fun getSoul(): String {
-        val resp = http.get("$httpBase/settings/soul") { header("Authorization", bearerHeader()) }
+        val resp = http.get("$httpBase/settings/soul") { authHeader() }
         if (resp.status.isSuccess()) return resp.bodyAsText()
         val text = try {
             resp.bodyAsText()
@@ -1631,7 +1638,7 @@ class BrokerApi(
     /** PUT /settings/soul (text/plain body) → true on success. */
     suspend fun putSoul(text: String): Boolean {
         val resp = http.put("$httpBase/settings/soul") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Text.Plain)
             setBody(text)
         }
@@ -1647,7 +1654,7 @@ class BrokerApi(
     /** POST /agents/<kind>/install → start (or resume) the broker-owned install job. */
     suspend fun startAgentInstall(kind: String): AgentInstallJob {
         val response = http.post("$httpBase/agents/${urlEncode(kind)}/install") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(EmptyBody()))
         }
@@ -1678,7 +1685,7 @@ class BrokerApi(
     /** POST /agents/<kind>/login/cancel — abort an in-progress login. */
     suspend fun cancelAgentLogin(kind: String) {
         http.post("$httpBase/agents/${urlEncode(kind)}/login/cancel") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -1711,7 +1718,7 @@ class BrokerApi(
      *  Partial: only the named server's `enabled` is changed. */
     suspend fun setLspEnabled(id: String, enabled: Boolean): EditorSettingsResponse =
         decode(http.put("$httpBase/settings/editor") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(LspTogglePatch(LspEnablePatch(mapOf(id to LspServerEnable(enabled))))))
         })
@@ -1738,7 +1745,7 @@ class BrokerApi(
     /** DELETE /settings/editor/lsp/custom/<id> → { ok, error?, lsp? }. */
     suspend fun removeCustomEditorLsp(id: String): LspMutationResult =
         decode(http.delete("$httpBase/settings/editor/lsp/custom/${urlEncode(id)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
 
     // ── System: restart + update status ────────────────────────────────────────
@@ -1750,7 +1757,7 @@ class BrokerApi(
      */
     suspend fun restartBroker() {
         ensureMutationSuccess(
-            http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) },
+            http.post("$httpBase/system/restart") { authHeader() },
         )
     }
 
@@ -1765,7 +1772,7 @@ class BrokerApi(
      * client Recheck buttons so they don't only re-read a stale cache.
      */
     suspend fun checkUpdate(): UpdateStatus {
-        val resp = http.post("$httpBase/api/update/check") { header("Authorization", bearerHeader()) }
+        val resp = http.post("$httpBase/api/update/check") { authHeader() }
         return decode(resp)
     }
 
@@ -1777,7 +1784,7 @@ class BrokerApi(
      *  Empty / uninformative non-2xx bodies (e.g. `500 {}`) get a synthetic `error` so
      *  clients never treat "nothing happened" as success. */
     suspend fun runUpdate(): RunUpdateResult {
-        val resp = http.post("$httpBase/api/update/run") { header("Authorization", bearerHeader()) }
+        val resp = http.post("$httpBase/api/update/run") { authHeader() }
         val text = resp.bodyAsText()
         val decoded = try {
             json.decodeFromString<RunUpdateResult>(text)
@@ -1802,7 +1809,7 @@ class BrokerApi(
     /** PUT /settings/curator → updated {config, nextRun} */
     suspend fun saveCuratorSettings(config: CuratorConfig): CuratorSettingsResponse =
         decode(http.put("$httpBase/settings/curator") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(config))
         })
@@ -1810,7 +1817,7 @@ class BrokerApi(
     /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
     suspend fun runCuratorNow() {
         ensureMutationSuccess(http.post("$httpBase/settings/curator/run-now") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1833,7 +1840,7 @@ class BrokerApi(
     /** POST /devices {name} → { url, name }: a one-time pairing URL for the device */
     suspend fun addDevice(name: String): AddDeviceResponse =
         decode(http.post("$httpBase/devices") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AddDeviceBody(name)))
         })
@@ -1841,7 +1848,7 @@ class BrokerApi(
     /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */
     suspend fun revokeDevice(name: String) {
         ensureMutationSuccess(http.delete("$httpBase/devices/${urlEncode(name)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1852,14 +1859,14 @@ class BrokerApi(
     /** POST /sessions/<id>/resume */
     suspend fun resume(id: String) {
         http.post("$httpBase/sessions/$id/resume") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
     /** POST /sessions/<id>/interrupt — soft-stop the running agent */
     suspend fun interrupt(id: String) {
         http.post("$httpBase/sessions/$id/interrupt") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -1869,7 +1876,7 @@ class BrokerApi(
 
     private suspend fun gitOp(id: String, op: String): GitOpResult =
         decode(http.post("$httpBase/sessions/$id/git/$op") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     suspend fun gitFetch(id: String): GitOpResult = gitOp(id, "fetch")
     suspend fun gitPublish(id: String): GitOpResult = gitOp(id, "publish")
@@ -1896,7 +1903,7 @@ class BrokerApi(
         prRequiresGreen: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(
                 action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
@@ -1918,7 +1925,7 @@ class BrokerApi(
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
         http.post("$httpBase/sessions/$id/message") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(MessageBody(text)))
         }
@@ -1938,7 +1945,7 @@ class BrokerApi(
     /** POST /proxies {sessionName, port, domain?} */
     suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse =
         decode(http.post("$httpBase/proxies") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CreateProxyBody(sessionName, port, domain)))
         })
@@ -1950,7 +1957,7 @@ class BrokerApi(
     /** DELETE /proxies/<domain> — non-2xx throws (same contract as [revokeDevice]/postJson). */
     suspend fun removeProxy(domain: String) {
         ensureMutationSuccess(http.delete("$httpBase/proxies/${urlEncode(domain)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1976,7 +1983,7 @@ class BrokerApi(
         kind: String? = null,
     ): UploadResponse {
         val resp = http.post("$httpBase/upload") {
-            header(HttpHeaders.Authorization, "Bearer $token")
+            authHeader()
             header("X-Mux-Session", session)
             header("X-Mux-Mime", mime)
             header("X-Mux-Filename", percentEncode(filename))
@@ -2031,7 +2038,7 @@ class BrokerApi(
     ): UploadResponse {
         // 1) init
         val init: InitResponse = decode(http.post("$httpBase/upload/init") {
-            header(HttpHeaders.Authorization, bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(InitRequest(session, mime, filename, kind, total)))
         })
@@ -2047,7 +2054,7 @@ class BrokerApi(
             val chunk = source.read(offset, len)
             try {
                 val resp = http.patch("$httpBase/upload/$uploadId") {
-                    header(HttpHeaders.Authorization, bearerHeader())
+                    authHeader()
                     header("Upload-Offset", offset.toString())
                     contentType(ContentType.Application.OctetStream)
                     setBody(chunk)
@@ -2082,7 +2089,7 @@ class BrokerApi(
      *  upload is unknown (never created, or already finalized/GC'd). */
     private suspend fun headUpload(uploadId: String): Long? {
         val resp = http.head("$httpBase/upload/$uploadId") {
-            header(HttpHeaders.Authorization, bearerHeader())
+            authHeader()
         }
         return if (resp.status.value == 200) resp.headers["Upload-Offset"]?.toLongOrNull() else null
     }
@@ -2090,7 +2097,7 @@ class BrokerApi(
     /** GET /files/<urlencoded file_id> — raw bytes of a stored attachment. */
     suspend fun fileBytes(fileId: String): ByteArray? {
         val resp = http.get("$httpBase/files/${urlEncode(fileId)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
@@ -2111,7 +2118,7 @@ class BrokerApi(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
     ): TranscribeResponse {
         val resp = http.post(transcribePath(sessionId)) {
-            header(HttpHeaders.Authorization, "Bearer $token")
+            authHeader()
             setBody(MultiPartFormDataContent(formData {
                 append("audio", bytes, Headers.build {
                     append(HttpHeaders.ContentType, mime)
@@ -2135,7 +2142,7 @@ class BrokerApi(
     /** PUT /config/voice-glossary { glossary } → the persisted list. */
     suspend fun updateGlossary(terms: List<String>): List<String> =
         decode<GlossaryResponse>(http.put("$httpBase/config/voice-glossary") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(GlossaryBody(terms)))
         }).glossary
@@ -2151,7 +2158,7 @@ class BrokerApi(
     /** POST /paths/validate {path} → {ok, path?, error?}. Resolves ~ and checks existence. */
     suspend fun validatePath(path: String): PathValidation =
         decode(http.post("$httpBase/paths/validate") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(PathBody(path)))
         })
@@ -2198,7 +2205,7 @@ class BrokerApi(
     /** DELETE /forge/connections/<id> — disconnect a forge account. */
     suspend fun removeForge(id: String) {
         http.delete("$httpBase/forge/connections/${urlEncode(id)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -2211,7 +2218,7 @@ class BrokerApi(
     /** GET /sessions/<id>/fs/read?path=<rel> → file text. Throws FsException on non-2xx (413 too large / 415 binary). */
     suspend fun fsRead(sessionId: String, path: String): String {
         val resp = http.get("$httpBase/sessions/$sessionId/fs/read?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
         if (!resp.status.isSuccess()) {
             val body = resp.bodyAsText()
@@ -2223,7 +2230,7 @@ class BrokerApi(
     /** PUT /sessions/<id>/fs/write?path=<rel> (text/plain body) → true on success. */
     suspend fun fsWrite(sessionId: String, path: String, content: String): Boolean {
         val resp = http.put("$httpBase/sessions/$sessionId/fs/write?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Text.Plain)
             setBody(content)
         }
@@ -2256,7 +2263,7 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/read?path=<rel> */
     suspend fun workspaceFsRead(workspaceId: String, path: String): String {
         val resp = http.get("$httpBase/workspaces/$workspaceId/fs/read?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
         if (!resp.status.isSuccess()) {
             val body = resp.bodyAsText()
@@ -2268,7 +2275,7 @@ class BrokerApi(
     /** PUT /workspaces/<id>/fs/write?path=<rel> (text/plain body) */
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean {
         val resp = http.put("$httpBase/workspaces/$workspaceId/fs/write?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Text.Plain)
             setBody(content)
         }
@@ -2298,7 +2305,7 @@ class BrokerApi(
     /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
     suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {
         val resp = http.patch("$httpBase/sessions/$sessionId/review/comments/${urlEncode(commentId)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(patch))
         }
@@ -2318,7 +2325,7 @@ class BrokerApi(
     /** POST /displays {sessionName, provider?, device?, width?, height?} → the started stream. */
     suspend fun startDisplay(sessionName: String, provider: String? = null, device: String? = null, width: Int? = null, height: Int? = null): DisplayStream =
         decode(http.post("$httpBase/displays") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(StartDisplayBody(sessionName, provider, device, width, height)))
         })
@@ -2326,7 +2333,7 @@ class BrokerApi(
     /** DELETE /displays/<id> */
     suspend fun stopDisplay(id: String) {
         http.delete("$httpBase/displays/${urlEncode(id)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 

@@ -49,7 +49,7 @@ class ScrcpyClient(
                 _status.value = ScrcpyStatus.CONNECTING
                 http.webSocket(
                     urlString = "${wsBaseUrl(baseUrl)}/ws/scrcpy?id=$streamId",
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { if (token.isNotBlank()) header("Authorization", "Bearer $token") },
                 ) {
                     attempt = 0
                     liveSession = this
