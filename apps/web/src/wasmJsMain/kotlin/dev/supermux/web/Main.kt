@@ -84,7 +84,10 @@ fun main() {
     // read, `SupervisorJob` so one failed collector cannot tear the app's state down. Never
     // cancelled — this scope's lifetime IS the document's.
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    val session = CookieSession(http = deps.httpFactory(null))
+    // A 10 s timeout, unlike every other client this page builds: the probe runs BEFORE
+    // `ComposeViewport`, so a broker that accepts the connection and never answers would leave the
+    // splash on screen forever with no way back. A timeout turns that into `Offline` + "Check again".
+    val session = CookieSession(http = deps.httpFactory(10_000))
     // Unpairing the origin host has to end the cookie session too — see [WebHostStores]. Wired
     // before anything reads the store, because the hook lives on its persistence.
     WebHostStores.init(session, appScope)
@@ -116,29 +119,42 @@ fun main() {
                 // iOS documents around its onboarding branch.
                 val g = gate
                 if (g !is SessionState.Paired) {
-                    val reason = when (g) {
-                        is SessionState.Unpaired -> g.reason
-                        is SessionState.Offline -> "the broker did not answer: ${g.error}"
-                    }
-                    WebPairScreen(reason = reason, onRetry = { appScope.launch { gate = session.probe() } })
+                    var checking by remember { mutableStateOf(false) }
+                    WebPairScreen(
+                        state = g,
+                        checking = checking,
+                        onRetry = {
+                            // In-flight state, because `probe()` can take the full 10 s timeout and
+                            // a button that does nothing visible invites a queue of retries.
+                            checking = true
+                            appScope.launch {
+                                gate = session.probe()
+                                checking = false
+                            }
+                        },
+                    )
                     return@WebTheme
                 }
 
                 val fleet = remember {
                     // The record's hostId/platform/version are backfilled from `GET /host` by the
                     // fleet's own probe; all it needs up front is a URL to connect to.
-                    WebHostStores.ensureOriginHost(displayName = window.location.host)
+                    WebHostStores.ensureOriginHost()
                     buildFleet(deps, appScope)
                 }
                 val ui = remember {
                     ShellUiState().apply {
                         sidebarCollapsed = shellSeed.sidebarCollapsed
                         setSidebarWidth(shellSeed.sidebarWidthDp.dp)
-                        // Unlike a phone, a browser tab reopens on the chat it was last in —
-                        // hence this AND `persistSelection = true` below, desktop's behaviour.
-                        // The URL wins over it a moment later if the address bar names a session.
-                        selectedId = shellSeed.selectedSession
                         collapsedProjectPaths = collapsedPathsSeed
+                        // Desktop's sidebar theme toggle reads this off the shell state, so it has
+                        // to start where the stored appearance is.
+                        this.appearance = appearance
+                        // NO `selectedId = shellSeed.selectedSession`: the ADDRESS BAR is this
+                        // app's memory of which chat was open, and `UrlSync`'s initial apply of a
+                        // bare `/` clears the selection a frame later anyway. `persistSelection =
+                        // true` below still writes the stored id (the URL is derived from it), so
+                        // nothing is lost — it is simply read back from the URL, not from settings.
                     }
                 }
                 var groupByProject by remember {

@@ -1312,6 +1312,19 @@ for the shell itself to render.
    normalise loop; pair links are accepted from ANY origin by extracting the token and replaying it
    against this origin (the broker mints links on the relay/public origin).
 
+Follow-ups applied after the review, in the same branch: the probe client gets a 10 s timeout (a
+broker that accepts and never answers used to leave the splash up forever), the pair screen renders
+a distinct "Can't reach the broker" state for `Offline` (no pairing copy, no paste field) and a
+"Checking…" retry button while a probe is in flight, the origin host is seeded with the
+legacy-shaped name `"This host"` so the broker's real name replaces it on the first `/host`
+backfill, and the dead `selectedId` seed was dropped — the address bar is this app's memory of the
+open chat, and `UrlSync`'s initial apply of `/` cleared the seeded id a frame later anyway.
+Re-verified in the browser afterwards: unpaired → pair screen (`r1-unpaired.png`), `/pair?t=` →
+paired with the session list (`r2-paired.png`), the record's name and hostId backfilled from
+`/host` (`"This host"` → the broker's identity), and a stubbed `503` on `/me` → the new
+"Can't reach the broker" screen with only "Check again", the claim leg never attempted
+(`r3-offline.png`).
+
 ### Browser scenarios (screenshots under the session scratchpad `…/scratchpad/plan2/`)
 
 | # | Scenario | Result | Shot |
@@ -1341,6 +1354,24 @@ socket opens; harmless but worth a look in plan 3. Two tofu glyphs render inside
 | `:web:stageForBroker` (index.html only) | 16 s |
 | `:web:wasmJsBrowserTest` (Karma, ChromeHeadless) | 1 m 43 s, 35 tests |
 | Bundle after the real app lands | 5 980 KB gzip staged (plan 1's hello world: ≈4.1 MB) |
+
+### Carry-forward for plan 3 (from the Task 6 review)
+
+- **The `"cookie"` sentinel has a second cost beyond ugliness.** Every request now carries
+  `Authorization: Bearer cookie`. While the cookie is valid it is ignored (cookie wins). Once the
+  cookie EXPIRES, each fetch is a failed bearer auth and counts against the broker's brute-force
+  limiter (16 failures / 5 min → the IP is throttled → `/me` answers 429 → the gate correctly reads
+  that as `Offline`), so an expired session shows "Can't reach the broker" for five minutes instead
+  of the pair screen. Proper fix: an ambient-credential flag on `PairedHost` in `:shared`, and
+  `FleetStore.sync` dialling such a host despite a blank token — **plan 3, task 1**.
+- **A mid-session 401 has no route back to the gate.** The pairing verdict is taken once, before
+  the viewport mounts; if the cookie expires while the tab is open, the sockets fail and the shell
+  simply looks broken. Needs an auth-failure signal out of `HostStore`/`FleetStore` that re-runs
+  `CookieSession.probe()` and drops back to the pair screen.
+- **Push-tap handling is simplified next to iOS.** `Main.kt` selects the session as soon as
+  `pendingPushSessionId` appears; iOS gates on `pushTapHandleDecision`/`resolvePushTap` and calls
+  `setActiveView` for the owning workspace. When plan 4 wires `sw.js`, the web needs the same
+  workspaces-ready gate or a cold-start tap will land before the fleet has any workspace to open.
 
 ### Not verified
 

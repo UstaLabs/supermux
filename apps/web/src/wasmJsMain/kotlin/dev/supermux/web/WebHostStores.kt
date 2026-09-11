@@ -13,9 +13,9 @@ import kotlinx.coroutines.launch
  * The browser's host registry — the web twin of `IosHostStores`.
  *
  * There is exactly ONE host here and there can never be a second: the origin that served this
- * page, whose credential is the HttpOnly session cookie. Its record therefore has a blank token
- * (`bearer("")` sends no header) and a fixed [RECORD_ID], so a reload finds the same record rather
- * than minting a new one and orphaning the snapshot cache keyed by it.
+ * page, whose credential is the HttpOnly session cookie — not the record's token, which is the
+ * [COOKIE_TOKEN] sentinel. The record id is fixed, so a reload finds the same record rather than
+ * minting a new one and orphaning the snapshot cache keyed by it.
  */
 object WebHostStores {
     const val RECORD_ID = "web-origin"
@@ -54,11 +54,16 @@ object WebHostStores {
     }
 
     /**
-     * Make sure the origin host exists (first paired launch). An existing record is left alone —
-     * its `hostId`/`platform`/`version` are backfilled from `GET /host` by `FleetStore`'s probe,
-     * and its display name may be a rename the user made.
+     * Make sure the origin host exists (first paired launch). An existing record is left alone: its
+     * `hostId`/`platform`/`version` — and its NAME — are backfilled from `GET /host` by
+     * `FleetStore`'s probe.
+     *
+     * The seed name is deliberately the legacy-shaped `"This host"`, which
+     * `PairedHostStore.resolvedIdentityName` treats as "no name yet" and replaces with the broker's
+     * real one on that first backfill. Seeding `window.location.host` instead would look like a
+     * name the USER chose, and the browser would show `127.0.0.1:9898` forever.
      */
-    fun ensureOriginHost(displayName: String, hostId: String? = null, platform: String? = null, version: String? = null) {
+    fun ensureOriginHost(displayName: String = "This host", hostId: String? = null, platform: String? = null, version: String? = null) {
         if (store.list().any { it.recordId == RECORD_ID }) return
         store.add(
             displayName = displayName,

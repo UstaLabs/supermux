@@ -45,8 +45,21 @@ import kotlinx.browser.window
  */
 private val PAIR_LINK = Regex("""^(?:[a-zA-Z][\w+.-]*://[^/]+)?/pair\?(?:.*&)?t=([^&#]+)""")
 
+/**
+ * @param state the gate's verdict. [SessionState.Unpaired] is a broker that ANSWERED and refused —
+ *   the pairing copy and the paste field belong there. [SessionState.Offline] is a broker that did
+ *   not answer, where "this broker is already set up" would be a lie and a pairing link cannot
+ *   help; that path gets its own headline and nothing but "Check again".
+ * @param checking a `probe()` is in flight — the retry button says so and refuses a second one.
+ */
 @Composable
-fun WebPairScreen(reason: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+fun WebPairScreen(
+    state: SessionState,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    checking: Boolean = false,
+) {
+    val offline = state is SessionState.Offline
     var link by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     fun go() {
@@ -64,26 +77,45 @@ fun WebPairScreen(reason: String, onRetry: () -> Unit, modifier: Modifier = Modi
                 verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("Pair this browser", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "This broker is already set up ($reason). From a paired device open Settings › Devices, " +
-                        "add a device, and open the link it shows here — or paste it below.",
+                    if (offline) "Can't reach the broker" else "Pair this browser",
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    when (state) {
+                        is SessionState.Offline ->
+                            "The broker did not answer (${state.error}). It may be starting up, asleep or " +
+                                "unreachable from this network — nothing is wrong with this browser."
+                        is SessionState.Unpaired ->
+                            "This broker is already set up (${state.reason}). From a paired device open " +
+                                "Settings › Devices, add a device, and open the link it shows here — or " +
+                                "paste it below."
+                        is SessionState.Paired -> ""
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                OutlinedTextField(
-                    value = link,
-                    onValueChange = { link = it; error = null },
-                    label = { Text("Pairing link") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = error != null,
-                    supportingText = error?.let { { Text(it) } },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { go() }),
-                )
+                // No paste field when the broker is unreachable: a pairing link cannot be checked,
+                // let alone redeemed, by a broker that is not answering.
+                if (!offline) {
+                    OutlinedTextField(
+                        value = link,
+                        onValueChange = { link = it; error = null },
+                        label = { Text("Pairing link") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = error != null,
+                        supportingText = error?.let { { Text(it) } },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { go() }),
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = ::go, enabled = link.isNotBlank()) { Text("Open link") }
-                    TextButton(onClick = onRetry) { Text("Check again") }
+                    if (!offline) {
+                        Button(onClick = ::go, enabled = link.isNotBlank()) { Text("Open link") }
+                    }
+                    TextButton(onClick = onRetry, enabled = !checking) {
+                        Text(if (checking) "Checking…" else "Check again")
+                    }
                 }
             }
         }

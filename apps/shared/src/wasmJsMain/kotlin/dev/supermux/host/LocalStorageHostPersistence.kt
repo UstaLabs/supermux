@@ -13,9 +13,11 @@ import org.w3c.dom.set
  * It reuses the SAME commonMain codec every other platform uses ([HostMetaCodec]) rather than
  * serialising [PairedHost] directly, so the split-storage guarantee of spec §3.2 holds here too:
  * the metadata blob structurally cannot contain a token. There is exactly one host — the page
- * origin — and its token is blank (the HttpOnly cookie is the credential), so the token side is
- * an ordinary `localStorage` map and is, in practice, always empty strings. Corrupt or missing
- * JSON loads as empty, which the caller reads as "not set up yet".
+ * origin — and the REAL credential is the HttpOnly cookie, so the token side holds no secret: it
+ * carries `WebHostStores.COOKIE_TOKEN`, the `"cookie"` sentinel that exists only because
+ * `FleetStore.sync` refuses to dial a host whose token is blank (plan 3 replaces it with an
+ * ambient-credential flag in `:shared`). Corrupt or missing JSON loads as empty, which the caller
+ * reads as "not set up yet".
  */
 /**
  * @param onEmptied run when the LAST host is forgotten. On the web that is the sign-out gesture:
