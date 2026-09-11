@@ -18,10 +18,12 @@ function guessMime(p: string): string {
   if (p.endsWith(".webmanifest")) return "application/manifest+json"
   if (p.endsWith(".ico"))  return "image/x-icon"
   if (p.endsWith(".woff2")) return "font/woff2"
+  if (p.endsWith(".wasm")) return "application/wasm"
+  if (p.endsWith(".mjs"))  return "application/javascript"
   return "application/octet-stream"
 }
 
-const COMPRESSIBLE = /\.(html|js|css|json|svg|webmanifest)$/
+const COMPRESSIBLE = /\.(html|js|mjs|css|json|svg|webmanifest|wasm)$/
 const gzipCache = new Map<string, { body: Buffer; mtime: number }>()
 
 function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined): { body: Buffer | Uint8Array; encoding?: string } {

@@ -43,4 +43,17 @@ describe("serveStatic (dual-mode)", () => {
     expect(serveStatic({ staticDir: dir, embedded: {}, path: "/../secret.txt" })).toBeNull()
     expect(serveStatic({ staticDir: dir, embedded: {}, path: "/a/../../b" })).toBeNull()
   })
+
+  test("wasm assets get application/wasm, immutable caching and gzip", async () => {
+    const dir = tmp()
+    const { mkdirSync } = await import("fs")
+    mkdirSync(join(dir, "assets"))
+    writeFileSync(join(dir, "assets", "app-0123abcd.wasm"), Buffer.alloc(4096, 0))
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/assets/app-0123abcd.wasm", acceptEncoding: "gzip, br" })
+    expect(res).not.toBeNull()
+    expect(res!.headers.get("content-type")).toBe("application/wasm")
+    expect(res!.headers.get("cache-control")).toContain("immutable")
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+
 })

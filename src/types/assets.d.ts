@@ -54,3 +54,5 @@ declare module "*.svg" { const path: string; export default path }
 declare module "*.ico" { const path: string; export default path }
 declare module "*.webmanifest" { const path: string; export default path }
 declare module "*.js" { const path: string; export default path }
+declare module "*.wasm" { const path: string; export default path }
+declare module "*.mjs" { const path: string; export default path }
