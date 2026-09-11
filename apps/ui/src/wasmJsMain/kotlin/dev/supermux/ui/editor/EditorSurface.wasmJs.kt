@@ -5,9 +5,13 @@
 package dev.supermux.ui.editor
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.viewinterop.HtmlElementView
 import dev.supermux.ui.editor.engine.EditorEngine
 import dev.supermux.ui.widgets.KeepAlivePanel
@@ -41,6 +45,10 @@ private class AttachState {
  * document at a non-zero size — the same trap the desktop actual documents for JCEF: an iframe
  * mounted into a detached or 0×0 container can sit there loading forever.
  *
+ * `update` runs once at attach time — BEFORE the wrapper has been sized — and thereafter only when
+ * a snapshot state it reads changes, so `sized` (written from `onGloballyPositioned`) is what
+ * brings it back for the real attach. A plain flag would leave the engine never attached.
+ *
  * `visible = false` keeps the element (and the engine's document) alive and merely hides it, which
  * [KeepAlivePanel] reinforces by laying the pane out at 0×0.
  */
@@ -48,9 +56,10 @@ private class AttachState {
 actual fun EditorEngineHost(engine: EditorEngine, visible: Boolean, modifier: Modifier) {
     val dom = engine as? DomEditorEngine ?: return
     val state = remember(dom) { AttachState() }
+    var sized by remember(dom) { mutableStateOf(false) }
     KeepAlivePanel(visible = visible) {
         HtmlElementView<HTMLDivElement>(
-            modifier = modifier,
+            modifier = modifier.onGloballyPositioned { sized = it.size.width > 0 },
             factory = {
                 (document.createElement("div") as HTMLDivElement).also { div ->
                     div.style.width = "100%"
@@ -61,7 +70,7 @@ actual fun EditorEngineHost(engine: EditorEngine, visible: Boolean, modifier: Mo
             },
             update = {
                 it.style.visibility = if (visible) "visible" else "hidden"
-                if (!state.attached && it.isConnected && it.clientWidth > 0) {
+                if (sized && !state.attached && it.isConnected && it.clientWidth > 0) {
                     state.attached = true
                     dom.attach(it)
                 }

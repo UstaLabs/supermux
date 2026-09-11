@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -34,17 +35,20 @@ internal fun PointerAnchoredMenu(
 ) {
     var open by remember { mutableStateOf(false) }
     var at by remember { mutableStateOf(DpOffset.Zero) }
+    var width by remember { mutableStateOf(0) }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     Box(
-        modifier = Modifier.pointerInput(rtl) {
+        modifier = Modifier.onSizeChanged { width = it.width }.pointerInput(rtl) {
             awaitPointerEventScope {
                 while (true) {
                     val down = awaitPointerEvent(PointerEventPass.Initial)
                     if (!down.isSecondaryButtonPress()) continue
                     val position = down.changes.firstOrNull()?.position ?: continue
-                    // DropdownMenu mirrors its offset's x in RTL, so pre-negate to land on the
-                    // pointer rather than its mirror image.
-                    at = DpOffset(position.x.toDp().let { if (rtl) -it else it }, position.y.toDp())
+                    // material3's MenuPosition measures the offset from the anchor's START edge,
+                    // which in RTL is its RIGHT edge (x = anchorLeft + anchorWidth - menuWidth -
+                    // offset.x), so the pointer sits at `anchorWidth - x` there, not at `-x`.
+                    val x = if (rtl) width - position.x else position.x
+                    at = DpOffset(x.toDp(), position.y.toDp())
                     open = true
                     down.changes.forEach { it.consume() }
                     do {
