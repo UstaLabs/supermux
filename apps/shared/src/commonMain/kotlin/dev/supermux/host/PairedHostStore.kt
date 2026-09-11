@@ -23,7 +23,9 @@ class PairedHostStore(
     /** Add a host, or — if a record with this non-blank [hostId] already exists — update THAT record
      *  in place (fresh token + URLs + platform/version) and return it, so re-adding a host already in
      *  the fleet never creates a duplicate. A rename the user made is preserved (the existing display
-     *  name wins unless it was blank). A blank/null [hostId] always adds (can't be deduped yet). */
+     *  name wins unless it was blank). A blank/null [hostId] always adds (can't be deduped yet).
+     *  Deliberately takes no `ambientAuth`: this is the token-pairing path, and a merge preserves
+     *  whatever flag the existing record already carries. */
     fun addOrUpdate(displayName: String, token: String, relayUrl: String? = null,
                     directUrl: String? = null, hostId: String? = null,
                     platform: String? = null, version: String? = null): PairedHost {
@@ -95,6 +97,11 @@ class PairedHostStore(
             else -> unwrappedCurrent
         }
     }
+
+    /** Convert a record to ambient credentials: blank token, [PairedHost.ambientAuth] set. The web
+     *  host calls this to repair records written before the flag existed, which carried a sentinel
+     *  token that `sync` would otherwise keep spending against the broker's brute-force budget. */
+    fun markAmbient(recordId: String) = mutate(recordId) { it.copy(token = "", ambientAuth = true) }
 
     fun rename(recordId: String, name: String) = mutate(recordId) { it.copy(displayName = name) }
     fun updateSeen(recordId: String, at: Long) = mutate(recordId) { it.copy(lastSeenAt = at) }

@@ -51,7 +51,14 @@ object WebHostStores {
      * name the USER chose, and the browser would show `127.0.0.1:9898` forever.
      */
     fun ensureOriginHost(displayName: String = "This host", hostId: String? = null, platform: String? = null, version: String? = null) {
-        if (store.list().any { it.recordId == RECORD_ID }) return
+        val existing = store.list().firstOrNull { it.recordId == RECORD_ID }
+        if (existing != null) {
+            // Repair a record written before `ambientAuth` existed: it carries the old `"cookie"`
+            // sentinel token, which `FleetStore.sync` would send as a Bearer and burn against the
+            // broker's brute-force budget. Blank + ambient is what this record always meant.
+            if (existing.token.isNotBlank()) store.markAmbient(RECORD_ID)
+            return
+        }
         store.add(
             displayName = displayName,
             token = "",
