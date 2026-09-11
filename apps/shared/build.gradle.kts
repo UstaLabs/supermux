@@ -16,8 +16,9 @@ kotlin {
     jvm()
     androidTarget()
     // Browser client (plan 1 of the web→KMP migration). `browser()` only — no Node target. The
-    // wasm test task is disabled: every commonTest already runs on the JVM, and headless-Chromium
-    // Karma is wired for `:web` alone (its tests are the browser-only ones).
+    // commonTest suite is still COMPILED for wasm (so a test that cannot build for the browser
+    // fails the build) but only EXECUTED on the JVM: headless-Chromium Karma is wired for `:web`
+    // alone, whose tests are the browser-only ones.
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {
         browser {

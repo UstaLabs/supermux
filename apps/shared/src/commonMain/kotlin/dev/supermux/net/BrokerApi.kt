@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.head
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
@@ -1198,14 +1199,8 @@ class BrokerApi(
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /**
-     * Attach `Authorization: Bearer …` — unless the token is blank, which is the browser (cookie
-     * session; the broker resolves `cookieToken(req) || bearerToken(req)`). A literal `Bearer `
-     * would not match the broker's regex anyway, but sending nothing is the honest shape.
-     */
-    private fun io.ktor.client.request.HttpRequestBuilder.authHeader() {
-        if (token.isNotBlank()) header("Authorization", "Bearer $token")
-    }
+    /** This client's bearer, or nothing at all when the token is blank — see [bearer]. */
+    private fun HttpRequestBuilder.authHeader() = bearer(token)
 
     /**
      * Read [resp] into [T] WITHOUT ever aborting the app on failure.
