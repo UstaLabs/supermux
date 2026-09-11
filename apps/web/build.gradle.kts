@@ -18,6 +18,12 @@ kotlin {
             commonWebpackConfig {
                 outputFileName = "app.js"
             }
+            // Browser-only tests (URL sync, localStorage stores, the cookie bootstrap) run in
+            // headless Chrome through Karma. CHROME_BIN must point at a WasmGC-capable Chrome;
+            // this host has /usr/bin/google-chrome. `:shared`/`:ui` keep their wasm test task off.
+            testTask {
+                useKarma { useChromeHeadless() }
+            }
         }
         binaries.executable()
     }
@@ -42,6 +48,8 @@ kotlin {
         wasmJsTest.dependencies {
             implementation(kotlin("test"))
             implementation(libs.coroutines.test)
+            // MockEngine: the browser-side bootstrap tests drive BrokerApi without a broker.
+            implementation(libs.ktor.client.mock)
         }
     }
 }

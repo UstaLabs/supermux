@@ -74,6 +74,18 @@ data class PairClaimResult(
     val name: String = "",
 )
 
+/** POST /pair/claim body with no secret — trust-on-first-connect from a browser. */
+@Serializable
+data class SecretlessClaimBody(val name: String)
+
+/**
+ * `POST /pair/claim` WITHOUT a secret (src/channels/web/index.ts:1741) — a different shape from
+ * [PairClaimResult]: no host, no bearer (the broker answers with a session cookie instead).
+ * `paired=false` + [error] is what a broker that already has a device says, via 403.
+ */
+@Serializable
+data class SecretlessClaimResult(val paired: Boolean = false, val name: String = "", val error: String? = null)
+
 @Serializable
 data class AppConfigDto(
     val paName: String = "",
@@ -1352,6 +1364,37 @@ class BrokerApi(
      */
     suspend fun pairClaim(claimSecret: String, deviceName: String): PairClaimResult =
         postReturningJson("$httpBase/pair/claim", PairClaimBody(claimSecret, deviceName))
+
+    /** POST /logout — expire the browser's `cmux_token` cookie. Native hosts never call it. */
+    suspend fun logout() {
+        http.post("$httpBase/logout") { authHeader() }
+    }
+
+    /**
+     * POST /pair/claim with NO claim secret — trust-on-first-connect on a brand-new broker. The
+     * broker answers `{paired:true,name}` and sets the session cookie; once any device exists (or
+     * onboarding finished) it answers 403 with `{error}`. Unlike every other call here a non-2xx
+     * is NOT a failure — "someone already owns this broker" is the answer the browser bootstrap
+     * asked for — so this one decodes the body itself instead of going through [decode].
+     */
+    suspend fun claimSecretless(deviceName: String): SecretlessClaimResult {
+        val res = http.post("$httpBase/pair/claim") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SecretlessClaimBody(deviceName)))
+        }
+        val text = try {
+            res.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            println("[BrokerApi] secretless claim body unreadable: ${e.message?.take(160)}")
+            ""
+        }
+        return runCatching { json.decodeFromString<SecretlessClaimResult>(text) }
+            .getOrElse { SecretlessClaimResult(paired = false, error = "HTTP ${res.status.value}") }
+            .let { if (!res.status.isSuccess() && it.error == null) it.copy(paired = false, error = "HTTP ${res.status.value}") else it }
+    }
 
     /** GET /sessions/<id>/models */
     suspend fun models(id: String): ModelsResponse =
