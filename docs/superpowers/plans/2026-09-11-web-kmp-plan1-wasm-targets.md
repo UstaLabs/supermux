@@ -1142,3 +1142,54 @@ Claude-Session: https://claude.ai/code/session_017Wc3ny1VJY4ZkcLD3ka54n"
 ## Not in this plan (next plans)
 
 Plan 2: `WebPlatform`, `CookieSession`, `UrlSync`, localStorage stores, the real `SupermuxApp` root. Plan 3: xterm/CodeMirror/VNC/uploads/mic/TTS. Plan 4: setup wizard, `WebPushRegistrar`, `sw.ts`, manifest, icons. Plan 5: Playwright, CI/Docker, cm6 lockfile, delete `src/web-app`.
+
+## Carry-forward notes for later plans (found during plan 1 review)
+
+- **Plan 3 (web host):** suppress the browser's native context menu on the Compose canvas
+  (`document.addEventListener("contextmenu") { it.preventDefault() }` in `apps/web` Main) or the
+  Material `DropdownMenu` from `RowContextMenu`/`ComposerContextMenu` appears underneath it.
+- **Plan 3:** the `takeOutput()` pako drain in `Inflate.wasmJs.kt` reads pako 2.1.0 internals
+  (`chunks`, `strm.output/next_out/avail_out`); it is pinned by the lockfile. The first VNC/ZRLE
+  session in the browser is where it gets exercised — verify visually, and re-verify on any pako bump.
+- **Plan 3:** `BlobChunkSource`'s sync-XHR read (status 200 or 0 + exact length) is untested until
+  the first browser upload; check a >5 MB file goes through the resumable path chunk by chunk.
+- **Follow-up (any time after wasm is green):** fold the three identical Skia `VncFramebuffer`
+  actuals (jvm/ios/wasm) and the `SecondaryClick` trio into a hand-wired `skikoMain` intermediate.
+- **Watch:** `coil-core-wasm-js:3.4.0` pulls skiko 0.9.22.2 while CMP 1.11.1 wants 0.144.6; Gradle
+  resolves to the newer one and the compile is clean, but a runtime mismatch would show up as a
+  Skiko init failure in the browser — check the console on first load.
+- **Toolchain facts:** Kotlin 2.3's wasm stdlib has no `kotlinx.browser`/`org.w3c`/`org.khronos.webgl`
+  (→ `kotlinx-browser` 0.5.0); `kotlin.js.Date` does not exist on wasm (use `js()` helpers);
+  `BrowserCursor` is internal in CMP 1.11.1 (→ `PointerIcon.fromKeyword`, experimental); a Kotlin
+  lambda cannot be a property on an `external` class (not `JsAny`); the yarn lockfile lives at
+  `apps/kotlin-js-store/wasm/yarn.lock`.
+
+## Results (2026-09-11, hermetic broker via `scripts/test-broker.sh`, headless Google Chrome on this host)
+
+Commits: `f2534ddb` (broker MIME) · `bbeb5b5b`+`106a46f8`+`fbbd14ee` (:shared) · `77d1a398`+`c6b61cef`+`90ad7d4d` (:ui) · `97062cb5` (apps/web).
+
+| Asset | gzip on the wire | decoded |
+|---|---|---|
+| `assets/skiko-<hash>.wasm` | 3,383 KB | 8,653 KB |
+| `assets/supermux-apps-web-<hash>.wasm` | 669 KB | 2,044 KB |
+| `assets/app-<hash>.js` | 101 KB | 535 KB |
+| **Total** | **≈4.1 MB** | ≈11.2 MB |
+
+Headers verified: index `text/html` + `no-cache`; js `application/javascript` + `immutable` + gzip; wasm
+`application/wasm` + `immutable` + gzip; unknown paths SPA-fallback to index (200 text/html); fonts under
+`composeResources/` served (as `application/octet-stream` — add `font/ttf` to `guessMime` in plan 5).
+
+Timing (localhost, so network cost is ~0 — this is decode + instantiate + first frame):
+
+| | load event | splash removed | canvas painted |
+|---|---|---|---|
+| cold context | 274 ms | 1,022 ms | 1,027 ms |
+| second context | 326 ms | 1,168 ms | 1,185 ms |
+
+End to end: `/pair?t=` sets the cookie server-side, the Compose page renders, and the "GET /host" button
+returns the authenticated `/host` body (name/platform/version are only sent to an authenticated caller)
+through Ktor's Js engine with no bearer — the cookie session works. Console: no errors; only WebGL
+driver performance warnings from the headless GPU.
+
+Known follow-ups recorded above (source map at the static root, fonts under the no-cache rule, Skiko
+is 82 % of the download).
