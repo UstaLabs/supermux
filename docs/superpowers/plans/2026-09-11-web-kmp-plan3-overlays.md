@@ -118,7 +118,7 @@ plus `@file:JsModule("@xterm/addon-fit") external class FitAddon : JsAny { fun f
 
 **Files:** `apps/web/src/wasmJsMain/resources/editor-shim.js`, `apps/web/src/wasmJsMain/kotlin/dev/supermux/web/editor/{WebEditorEngine,WebEditorEngineFactory}.kt`, `WebPlatform.kt` (`editorEngine`), test `apps/web/src/wasmJsTest/kotlin/dev/supermux/web/EditorBridgeIframeTest.kt`.
 
-- [ ] **Step 1: The shim** (`editor-shim.js`, loaded before `cm6.js` inside the iframe):
+- [x] **Step 1: The shim** (`editor-shim.js`, loaded before `cm6.js` inside the iframe):
 
 ```js
 // Host bridge for the iframe editor. The bundle talks to `window.AndroidEditor` (10 hooks) and
@@ -143,11 +143,11 @@ plus `@file:JsModule("@xterm/addon-fit") external class FitAddon : JsAny { fun f
 ```
 Check `bridgeShimJs(queryFn)` in EditorBridge.kt: if it already defines `window.AndroidEditor` in terms of `window[queryFn]`, DROP the `ae`/`webkit` parts of this shim and only provide `window.smxEditorQuery` — the desktop engine evals `bridgeShimJs(QUERY_FN) + initScript(...)` and that shim will do the wiring. Read it and pick the smaller shim; record which.
 
-- [ ] **Step 2: Engine** (`WebEditorEngine : DomEditorEngine`) — mirrors `DesktopEditorEngine` with: `attach(container)` creates `<iframe src="editor/index.html" style="width:100%;height:100%;border:0;background:#282c34">`, appends, on `load` evals `bridgeShimJs(QUERY_FN) + initScript(QUERY_FN, content, filename, lineWrap, fontSize)` through `postEval(code)` = `iframe.contentWindow.postMessage("__smxEval:" + code, origin)`; a `window` `message` listener filtered by `ev.source === iframe.contentWindow` feeds `parseBridgeEvent(ev.data)`; `pendingEvaluations: MutableMap<Long, (String) -> Unit>` + `nextId` for `getContent`/`readScrollTop` via `evalResultJs`; ready timeout 8 s → `failed`; `detach()` removes the iframe and listener; `dispose()` likewise. Every `EditorEngine` method delegates to the planner/bridge exactly as desktop does (copy the method bodies; only `executeJavaScript` → `postEval`).
-- [ ] **Step 3: Factory** — `WebEditorEngineFactory : EditorEngineFactory` with `state` `Initializing` → `Ready` once `editor/index.html` is fetchable (a HEAD via Ktor in `ensureInit()`, or simply `Ready` immediately — the iframe load itself reports failure); `create(lineWrap, fontSize) = WebEditorEngine(...)`. `WebPlatform.editorEngine = WebEditorEngineFactory()`.
-- [ ] **Step 4: Test** (`EditorBridgeIframeTest`, Karma; Karma serves only the test page, so the iframe must be `srcdoc`): build an iframe with `srcdoc` = the shim + a stub `window.cmInit = function(){ window.AndroidEditor.onReady(""); }`, attach `WebEditorEngine` to it, assert `ready` flips true within 8 s and that `getContent` round-trips a stubbed `cmGetContent()`.
-- [ ] **Step 5: Verify** — stage + hermetic broker + headless Chrome: open the fixture session, open the editor pane, open a file from the fixture workdir (the fixture has files; find the file-tree affordance), assert the iframe exists and its `.cm-content` contains the file's first line; screenshot; type a character and confirm `onChange` reached Kotlin (the tab shows a dirty marker or `getContent` differs).
-- [ ] **Step 6: Commit** — `feat(web): CodeMirror editor engine over a same-origin iframe, desktop's bridge protocol verbatim`.
+- [x] **Step 2: Engine** (`WebEditorEngine : DomEditorEngine`) — mirrors `DesktopEditorEngine` with: `attach(container)` creates `<iframe src="editor/index.html" style="width:100%;height:100%;border:0;background:#282c34">`, appends, on `load` evals `bridgeShimJs(QUERY_FN) + initScript(QUERY_FN, content, filename, lineWrap, fontSize)` through `postEval(code)` = `iframe.contentWindow.postMessage("__smxEval:" + code, origin)`; a `window` `message` listener filtered by `ev.source === iframe.contentWindow` feeds `parseBridgeEvent(ev.data)`; `pendingEvaluations: MutableMap<Long, (String) -> Unit>` + `nextId` for `getContent`/`readScrollTop` via `evalResultJs`; ready timeout 8 s → `failed`; `detach()` removes the iframe and listener; `dispose()` likewise. Every `EditorEngine` method delegates to the planner/bridge exactly as desktop does (copy the method bodies; only `executeJavaScript` → `postEval`).
+- [x] **Step 3: Factory** — `WebEditorEngineFactory : EditorEngineFactory` with `state` `Initializing` → `Ready` once `editor/index.html` is fetchable (a HEAD via Ktor in `ensureInit()`, or simply `Ready` immediately — the iframe load itself reports failure); `create(lineWrap, fontSize) = WebEditorEngine(...)`. `WebPlatform.editorEngine = WebEditorEngineFactory()`.
+- [x] **Step 4: Test** (`EditorBridgeIframeTest`, Karma; Karma serves only the test page, so the iframe must be `srcdoc`): build an iframe with `srcdoc` = the shim + a stub `window.cmInit = function(){ window.AndroidEditor.onReady(""); }`, attach `WebEditorEngine` to it, assert `ready` flips true within 8 s and that `getContent` round-trips a stubbed `cmGetContent()`.
+- [x] **Step 5: Verify** — stage + hermetic broker + headless Chrome: open the fixture session, open the editor pane, open a file from the fixture workdir (the fixture has files; find the file-tree affordance), assert the iframe exists and its `.cm-content` contains the file's first line; screenshot; type a character and confirm `onChange` reached Kotlin (the tab shows a dirty marker or `getContent` differs).
+- [x] **Step 6: Commit** — `feat(web): CodeMirror editor engine over a same-origin iframe, desktop's bridge protocol verbatim`.
 
 ---
 
@@ -222,3 +222,66 @@ Screenshots: session scratchpad `plan3/` — `3a-add-menu.png` (the pane "+" pop
 5. Prediction never ENGAGES on localhost (RTT ≪ the 40 ms `latencyThresholdMs` gate), by design —
    the renderer is covered by the Karma tests instead. `XtermPredictionPipeline` is desktop's
    `PredictionPipeline` minus the monitor (wasm is single-threaded and has no `synchronized`).
+
+---
+
+## Results — Task 4 (CodeMirror editor engine, 2026-09-12)
+
+The committed cm6 bundle runs in the browser host, in a same-origin iframe, over **desktop's bridge
+protocol unchanged**. Nothing in `:ui` or `:shared` had to move.
+
+| Check | Result |
+|---|---|
+| `:web:compileKotlinWasmJs` | green (4 s incremental) |
+| Karma (`:web:wasmJsBrowserTest`) | **42 tests** green (40 before + 2 `EditorBridgeIframeTest`), 1 m 42 s |
+| `stageForBroker` | green (10 m 37 s cold); `editor/` = `index.html` + `cm6.js` + `editor-shim.js`, and the staged page loads the shim BEFORE `cm6.js` |
+| Open a file from the tree (`notes.txt`) | the iframe is at `…/editor/index.html` and its `.cm-content` reads `hello from the fixture\nsecond line\nthird line` — the file's real first line |
+| Type `ZZ` → cm6 `onChange` → Kotlin | `.cm-content` becomes `hello from the fixtureZZ`, the pane tab flips to `notes.txt ✓ ✕` (the save affordance appears — Kotlin's dirty state) |
+| Ctrl+S → `onSave` → Kotlin → broker → disk | `/…/workdir/notes.txt` on disk becomes `hello from the fixtureZZ`. Both bridge directions proved by a file write, not a DOM read |
+| Console | no `pageerror`, no console errors, in any phase |
+
+Screenshots: session scratchpad `plan3/` — `e2-add-menu.png` (the pane "+" popover: Chat / Terminal /
+Files / Changes / Display), `e3-files-pane.png` (the file tree split right), `e4-editor-open.png`
+(CodeMirror painting the file), `e5-typed.png` + `e5-strip.png` (the edited doc; the strip crop shows
+the dirty/save affordance), `e6-saved.png`.
+
+**The shim is the SMALL variant** (`apps/web/editor/editor-shim.js`, ~20 lines of code). The plan's
+Step 1 offered a big one that defines `window.AndroidEditor`'s ten hooks and
+`window.webkit.messageHandlers.lsp`; that is unnecessary, because `:ui`'s `bridgeShimJs(queryFn)`
+ALREADY defines both of those in terms of `window[queryFn]`, and this engine evals
+`bridgeShimJs(QUERY_FN) + cmInit(...)` into the frame exactly as desktop's JCEF engine does. So the
+page only has to supply the two ends of the TRANSPORT that JCEF's message router gives desktop for
+free: `window.smxEditorQuery({request})` → `parent.postMessage`, and a `message` listener that runs
+`"__smxEval:"`-prefixed code through `(0, eval)`. One shared, unit-tested definition of the ten hooks
+for all four hosts; the web page owns no copy that could drift.
+
+**Findings:**
+
+1. **A `srcdoc` frame's `location.origin` may be opaque.** The Karma test cannot load `editor/`
+   (Karma serves only its own page), so it mounts the shim in a `srcdoc` frame — where
+   `location.origin` can be the string `"null"` and a `postMessage` pinned to it would be silently
+   dropped. The shim falls back to `"*"` for exactly that case and pins to the real origin
+   otherwise; the parent→frame direction always pins to the app's origin, which a `srcdoc` frame
+   inherits. Documented in the shim.
+2. **`MessageEvent.source`/`.data` and `Window.postMessage` are not on kotlinx-browser 0.5.0**, nor
+   is `ChildNode.remove`. Each crossing is a one-line `js(…)` helper at the bottom of
+   `WebEditorEngine.kt` — the same shape `Xterm.kt` uses. Kotlin lambdas again worked fine as
+   `js(…)` PARAMETERS (`setTimeout(cb, ms)`), and `addEventListener` takes a plain `(Event) -> Unit`.
+3. **The engine is desktop's, minus the threading.** Wasm is single-threaded, so every `onEdt`
+   marshal collapses to a direct call and `AtomicLong`/`@Volatile` are plain `var`s. The only real
+   substitutions are `executeJavaScript` → `postEval` and JCEF's load handler → the iframe's `load`
+   event. `EditorPushPlanner` does the rest: the document queued BEFORE the page loaded is flushed
+   by `cmInit`, which the browser run confirms (the first `getContent` returns it).
+4. **`WebEditorEngineFactory.state` is permanently `Ready`.** There is no runtime to start — the
+   host already is a browser. A page that fails to load reports itself through
+   `WebEditorEngine.failed`, whose 8 s ready timeout names the URL; a pre-flight HEAD would only
+   move an equivalent failure earlier.
+5. **KNOWN ISSUE, the editor shows it too:** the ~32 px pane tab strip above an interop element
+   paints solid black (plan 3 Task 3 finding 2). It is NOT permanent here — while typing, the strip
+   repainted correctly (`e5-strip.png` shows the real tab), then went black again after the save
+   (`e6-saved.png`). So it is a stale-clear artifact that any Compose-side invalidation fixes, which
+   matches the interop-hole diagnosis. No time spent; awaiting the reviewer's fix.
+6. **The fixture workdir is EMPTY** (`scripts/test-broker.sh` creates it and nothing else), contrary
+   to the plan's note — the run seeded `notes.txt`, `main.rs` and `src/lib.ts` into it first. A
+   future plan may want the seed script to drop a couple of files there for exactly this kind of
+   check.
