@@ -39,8 +39,10 @@ class BlobChunkSource(private val blob: Blob) : ChunkSource {
             xhr.open("GET", url, async = false)
             xhr.overrideMimeType("text/plain; charset=x-user-defined")
             xhr.send()
-            // A blob: URL always answers 200; anything else means the slice never arrived.
-            if (xhr.status.toInt() != 200) {
+            // A blob: URL answers 200 in Chrome/Firefox and 0 in engines that report non-HTTP
+            // schemes that way; the exact-length check below is what proves the slice arrived.
+            val status = xhr.status.toInt()
+            if (status != 200 && status != 0) {
                 error("BlobChunkSource: XHR ${xhr.status} reading $offset..$end")
             }
             val text = xhr.responseText

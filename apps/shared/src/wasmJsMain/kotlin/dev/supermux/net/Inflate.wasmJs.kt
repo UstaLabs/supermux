@@ -29,8 +29,10 @@ actual class ZlibInflater actual constructor() {
         val ok = inflater.push(input.asUByteArray().toUint8Array(), Z_SYNC_FLUSH)
         // A ZRLE connection shares ONE zlib stream for its whole life, so a failed push means every
         // later byte is garbage too. Fail loudly, exactly as the JVM/Apple actuals do.
-        if (!ok && inflater.err != 0) {
-            throw IllegalStateException("pako inflate failed: ${inflater.err} ${inflater.msg}")
+        // `push` also returns false forever once the stream has ENDED (err stays 0), which for a
+        // never-ending RFB stream is just as fatal — so any false is an error.
+        if (!ok) {
+            throw IllegalStateException("pako inflate failed: ${inflater.err} ${inflater.msg ?: "(stream ended)"}")
         }
         val produced = takeOutput(inflater)
         if (produced != null && produced.length > 0) pending.addLast(produced.toUByteArray().asByteArray())
@@ -66,6 +68,10 @@ private fun takeOutput(inflater: JsAny): Uint8Array? = js(
             parts.push(s.output.slice(0, s.next_out));
             s.avail_out = 0;
         }
+        // On Z_STREAM_END pako's onEnd has already flattened `chunks` into `result` and cleared
+        // `chunks`, so the final block lives only there. Never reached by a live RFB stream.
+        var r = inflater.result;
+        if (r && r.length) parts.push(r);
         inflater.result = null;
         if (parts.length === 0) return null;
         if (parts.length === 1) return parts[0];
