@@ -33,13 +33,13 @@ external object Xterm {
         fun write(data: JsAny, callback: () -> Unit)
         fun loadAddon(addon: JsAny)
         fun focus()
-        fun blur()
         fun dispose()
-        fun clear()
         val cols: Int
         val rows: Int
 
-        /** `buffer.active` is read through the [xtermCursor]/[xtermReadCell] helpers, not typed here. */
+        /** `buffer.active` is read through the [xtermCursorRow]/[xtermCursorCol]/[xtermReadCell]
+         *  helpers rather than typed here — the nested `IBuffer`/`IBufferLine`/`IBufferCell` chain
+         *  would be three more external classes for three property reads. */
         val buffer: JsAny
         val element: HTMLElement?
     }

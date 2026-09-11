@@ -46,7 +46,20 @@ class XtermPredictionSink(private val term: Terminal) : PredictionSink {
 
     override val available: Boolean = true
 
-    /** Current caret, viewport-relative and 0-based on both axes (matches CUP after the `+ 1`). */
+    /**
+     * Current caret, viewport-relative and 0-based on both axes (matches CUP after the `+ 1`).
+     *
+     * TIMING: `term.write` is ASYNCHRONOUS — xterm queues the data and its parser drains it on a
+     * later task — so this reads the caret as of the last DRAINED write, which can lag bytes
+     * already queued. That is the old PWA adapter's behaviour verbatim (`xterm-adapter.ts` read
+     * `buffer.active` the same way) and desktop's too (reads are synchronous against a buffer the
+     * emulator thread writes asynchronously), so the three clients mispredict identically and the
+     * engine's own reconcile is what corrects it: a wrong prediction is rolled back from the
+     * STORED snapshot on the next server batch, never from a re-read. If this ever needs to be
+     * exact, gate [XtermPredictionPipeline.handleInput] on the `write(data, callback)` overload —
+     * at the cost of pushing every keystroke's echo a task later, which is the latency prediction
+     * exists to hide.
+     */
     override fun cursor(): CursorPos = CursorPos(row = xtermCursorRow(term), col = xtermCursorCol(term))
 
     override fun render(ops: List<DisplayOp>) {

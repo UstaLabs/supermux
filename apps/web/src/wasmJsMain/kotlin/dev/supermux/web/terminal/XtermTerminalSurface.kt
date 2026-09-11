@@ -74,6 +74,11 @@ private class XtermSurface(
 private class XtermAttachState {
     var attached = false
     var observer: JsAny? = null
+
+    /** The WebGL renderer, held so it can be disposed: every live WebGL context counts against the
+     *  browser's per-page cap (the Compose canvas already owns one), and a leaked one survives the
+     *  pane. Null when the machine has no WebGL2 and xterm stayed on its canvas renderer. */
+    var webgl: WebglAddon? = null
 }
 
 /**
@@ -140,7 +145,17 @@ private fun XtermTerminalView(
             // pty; the real size is re-sent when it comes back.
             if (cols > 0 && rows > 0) scope.launch { client.get().resize(cols, rows) }
         }
-        onDispose { pred.teardown() }
+        onDispose {
+            // Order matters: drop the prediction engine (which writes to the terminal) BEFORE the
+            // terminal goes away, then dispose the emulator. `onRelease` cannot own this — it fires
+            // when the DOM node is released, which is not necessarily when this composition ends,
+            // and a terminal disposed there could still be written to by an in-flight op batch.
+            pred.teardown()
+            state.webgl?.dispose()
+            state.webgl = null
+            state.attached = false
+            term.dispose()
+        }
     }
 
     LaunchedEffect(client) { client.get().run() }
@@ -158,9 +173,13 @@ private fun XtermTerminalView(
     // Kept-alive terminals stay connected when hidden; the foreground pane explicitly owns the
     // shared pty geometry so another warm client cannot pin its size. `foreground` is the
     // document's visibility (WebAppState), the browser's answer to desktop's window focus.
+    // ONE predicate for both halves: the broker is told this pane owns the geometry exactly when
+    // the grid also takes the keyboard (`attached` only gates the DOM call, which needs a terminal
+    // that has been opened — the attach path focuses it itself).
     LaunchedEffect(client, active, foreground) {
-        client.get().focus(active && foreground)
-        if (active && foreground && state.attached) term.focus()
+        val focused = active && foreground
+        client.get().focus(focused)
+        if (focused && state.attached) term.focus()
     }
 
     // The pty ended server-side (the broker's explicit frame). A dropped socket does not land here
@@ -169,6 +188,13 @@ private fun XtermTerminalView(
         client.get().exit.collect { onExit?.invoke() }
     }
 
+    // NOTE (measured, do not "fix" by adding a clip or a zIndex — both were tried and neither
+    // moves it): Compose punches the interop "hole" — the transparent rect its DOM element shows
+    // through — at the WRONG Y. For this element at (320,32 880×768) the hole lands at
+    // (320,0 880×768): one vertical translation short, so it eats the 32 px pane tab strip ABOVE
+    // the terminal and index.html's #0b0b0b body shows through there. The strip still WORKS (its
+    // clicks land), it is only invisible. See the plan-3 Results for the repro and the two failed
+    // attempts.
     HtmlElementView<HTMLDivElement>(
         modifier = modifier.fillMaxSize().onGloballyPositioned { sized = it.size.width > 0 },
         factory = {
@@ -187,7 +213,15 @@ private fun XtermTerminalView(
                 term.loadAddon(fit)
                 // GPU renderer where it exists; a machine without WebGL2 throws on load and xterm
                 // keeps its canvas renderer — a terminal that renders slightly slower beats none.
-                runCatching { term.loadAddon(WebglAddon()) }
+                // The context can also be lost later (a GPU reset, too many contexts on the page):
+                // dispose the addon then, which is exactly how xterm falls back at runtime.
+                runCatching {
+                    WebglAddon().also { addon ->
+                        term.loadAddon(addon)
+                        state.webgl = addon
+                        addon.onContextLoss { state.webgl = null; addon.dispose() }
+                    }
+                }
                 runCatching { fit.fit() }
                 // `fit` only emits onResize when the geometry CHANGED, and the very first fit may
                 // land on xterm's default 80×24 — send the size once explicitly so the pty is sized
@@ -198,14 +232,22 @@ private fun XtermTerminalView(
                 // Compose does not re-run `update` when the pane merely changes pixel size, so the
                 // reflow is driven by the DOM itself.
                 state.observer = observeResize(div) { runCatching { fit.fit() } }
-                if (active) term.focus()
+                if (active && foreground) term.focus()
             }
         },
         onRelease = {
+            // The DOM node is going away; the terminal itself is disposed with the composition
+            // (see the DisposableEffect above).
             state.observer?.let { disconnectResizeObserver(it) }
             state.observer = null
             state.attached = false
-            term.dispose()
+        },
+        onReset = {
+            // The node is being REUSED for another surface. Forget the attach so `update`
+            // cannot `open()` a terminal that has already been disposed into it.
+            state.observer?.let { disconnectResizeObserver(it) }
+            state.observer = null
+            state.attached = false
         },
     )
 }

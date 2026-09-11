@@ -205,12 +205,8 @@ Screenshots: session scratchpad `plan3/` — `3a-add-menu.png` (the pane "+" pop
    therefore wrong for wasm; `Xterm.kt`/`FitAddon.kt`/`WebglAddon.kt` carry the corrected shape and
    the reason. Kotlin lambdas DID work as `external` function PARAMETERS (`onData`, `ResizeObserver`
    through a `js()` helper) — only external *properties* reject them.
-2. **The Compose canvas above an `HtmlElementView` stops painting.** With a terminal mounted, the
-   pane's tab strip (the 32 px above the element) renders solid black, though the element's own rect
-   is correct (`320,32 880×768`) and the strip still WORKS — clicking "Chat" at (350,16) switches
-   tabs and the xterm is removed from the DOM. So it is a paint artifact of the interop hole (note
-   the root canvas is 1200×**805** for an 800 px viewport), not a layout bug in the surface. Task 4's
-   editor pane will show the same band; worth one look at CMP's interop clear-rect before plan 5.
+2. **The Compose canvas above an `HtmlElementView` stops painting — UNFIXED, measured precisely.**
+   See "The interop hole" below.
 3. `.xterm-rows` is EMPTY with the canvas/WebGL renderer — DOM text assertions are impossible
    without `screenReaderMode`. The browser check reads the tmux pane instead
    (`tmux -L muxterm capture-pane`), which is stronger evidence anyway (it proves the bytes reached
@@ -285,3 +281,56 @@ for all four hosts; the web page owns no copy that could drift.
    to the plan's note — the run seeded `notes.txt`, `main.rs` and `src/lib.ts` into it first. A
    future plan may want the seed script to drop a couple of files there for exactly this kind of
    check.
+
+### The interop hole (C1) — measured, two fixes attempted, both ineffective
+
+**Repro (2 min, no code):** stage the bundle, open the fixture session in headless Chrome, run
+`document.body.style.background = "#ff00ff"`, add a Terminal through the pane "+", screenshot.
+
+**Measurement (magenta = the page body showing through a transparent canvas):**
+
+| | rect |
+|---|---|
+| interop element (`.xterm`'s host div, and CMP's wrapper) | `320,32 880×768` — **correct** |
+| visible hole in the Compose canvas | `320,0 880×32` — the pane tab strip, magenta on every pixel of rows 0–31 |
+
+So the hole is the element's rect **one vertical translation short**: CMP clears at the parent
+Column's origin instead of the element's placed position, which is exactly the `PaneTabStrip` band.
+Normally it is invisible-ish because `index.html`'s body is `#0b0b0b` — it reads as "the strip went
+black". The strip still WORKS: clicking "Chat" at (350,16) switches tabs and the xterm leaves the
+DOM. It is purely a paint bug.
+
+**Attempt 1 — `Modifier.zIndex(1f)` on `PaneTabStrip` (PaneHost.kt:644).** Staged and re-measured:
+the hole is still `320,0 880×32`, in pointer mode AND with touch emulation. z-order does not move a
+clear-rect that is drawn at the wrong coordinates. **Not kept**, and not only because it is
+ineffective: with that one line the FULL `:ui:jvmTest` suite goes red on
+`DragReorderTest.anOverwrittenOrderDoesNotWedgeTheRestOfTheGesture` (3/3 runs), while HEAD is green
+(2/2) and a no-op recompile of the same file is green (1/1). It passes in isolation and in a
+`panes.*`+`session.*` run, and that test composes no pane code at all — a whole-suite timing
+coupling in a test that documents its own past flakes. Shipping a line that fixes nothing and
+reddens the suite was the wrong trade; the one-liner is trivial to re-apply if the upstream fix
+turns out to need it.
+
+**Attempt 2 — wrapping the interop node in `Box(Modifier.fillMaxSize().clipToBounds())`.** Staged
+and re-measured: hole unchanged (`320,0 880×32`). The clear-rect is not subject to our subtree's
+clip.
+
+**Where that leaves it:** a CMP 1.11.1 `HtmlElementView` bug, reproducible in two lines of JS, worth
+an upstream issue with the numbers above. The surface carries a NOTE next to `HtmlElementView` so
+nobody re-tries the same two fixes. Task 4's editor pane mounts its iframe the same way and will
+show the same band above it. Cosmetic mitigations that would work without upstream: paint the body
+the theme's strip colour (hides the band, still hides the tabs) or inset the element by the strip
+height (moves the hole into a deliberate gap) — neither is worth it.
+
+### Review follow-ups also in this commit
+
+`WebglAddon` is held in the attach state, registers `onContextLoss { dispose() }` (xterm then falls
+back to its canvas renderer) and is disposed with the composition — a leaked WebGL context counts
+against the per-page cap the Compose canvas already spends one of. Disposal is ordered in the
+terminal's own `DisposableEffect`: `pred.teardown()` → `webgl.dispose()` → `term.dispose()`, and
+`onRelease`/`onReset` only clear the observer and the attach flag, so a REUSED DOM node can never
+`open()` a disposed terminal. `cursor()` documents that `term.write` is asynchronous, so the caret
+can lag queued output exactly as the old PWA adapter's did (the engine rolls back from the stored
+snapshot, never from a re-read). Focus is one predicate (`active && foreground`, `attached` gating
+only the DOM call). Karma is **44** tests (+2: `Passthrough` with a multi-byte glyph, and the
+`HideCaret`/`ShowCaret` bracket).

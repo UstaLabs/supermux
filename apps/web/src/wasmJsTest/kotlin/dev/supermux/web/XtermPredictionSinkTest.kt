@@ -5,8 +5,11 @@
 package dev.supermux.web
 
 import dev.supermux.net.DrawDim
+import dev.supermux.net.HideCaret
 import dev.supermux.net.MoveCaret
+import dev.supermux.net.Passthrough
 import dev.supermux.net.RestoreCell
+import dev.supermux.net.ShowCaret
 import dev.supermux.web.terminal.Terminal
 import dev.supermux.web.terminal.XtermPredictionSink
 import dev.supermux.web.terminal.xtermCursorCol
@@ -106,6 +109,40 @@ class XtermPredictionSinkTest {
             term.flush()
             assertEquals(1, xtermCursorCol(term), "MoveCaret is an absolute, 0-based reposition")
             assertEquals(0, xtermCursorRow(term))
+        } finally {
+            unmount(term, div)
+        }
+    }
+
+    @Test
+    fun passthroughWritesServerBytesVerbatim() = runTest {
+        val (term, div) = mount()
+        try {
+            // Includes a multi-byte glyph: Passthrough hands xterm the RAW bytes, so the emulator
+            // does the UTF-8 decoding (the reason the op carries a ByteArray and not a String).
+            XtermPredictionSink(term).render(listOf(Passthrough("héllo".encodeToByteArray())))
+            term.flush()
+            assertEquals("h", xtermReadCell(term, 0, 0))
+            assertEquals("é", xtermReadCell(term, 0, 1))
+            assertEquals("o", xtermReadCell(term, 0, 4))
+        } finally {
+            unmount(term, div)
+        }
+    }
+
+    @Test
+    fun caretBracketHidesAndShowsWithoutDisturbingTheScreen() = runTest {
+        val (term, div) = mount()
+        try {
+            term.write("abc".toJsString())
+            term.flush()
+            val sink = XtermPredictionSink(term)
+            // The bracket the engine wraps a reconcile batch in: DECTCEM off, paint, DECTCEM on.
+            sink.render(listOf(HideCaret, DrawDim(id = 2, row = 0, col = 3, char = "q"), ShowCaret))
+            term.flush()
+            assertEquals("q", xtermReadCell(term, 0, 3), "the bracketed draw still lands")
+            assertEquals("abc", (0..2).joinToString("") { xtermReadCell(term, 0, it) })
+            assertEquals(4, xtermCursorCol(term), "the caret ends after the painted cell")
         } finally {
             unmount(term, div)
         }

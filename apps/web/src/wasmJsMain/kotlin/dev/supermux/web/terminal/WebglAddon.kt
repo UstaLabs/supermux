@@ -8,6 +8,9 @@ package dev.supermux.web.terminal
 @JsModule("@xterm/addon-webgl")
 external object WebglAddonModule {
     class WebglAddon : JsAny {
+        /** Fires when the browser drops the GL context (GPU reset, too many contexts on the page).
+         *  Disposing the addon from here is xterm's documented fallback to the canvas renderer. */
+        fun onContextLoss(cb: () -> Unit)
         fun dispose()
     }
 }
