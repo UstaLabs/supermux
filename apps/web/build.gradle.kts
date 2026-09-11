@@ -73,10 +73,13 @@ val brokerStaticDir: File = rootProject.projectDir.resolve("../src/channels/web/
 val distDir = layout.buildDirectory.dir("dist/wasmJs/productionExecutable")
 
 // Ceiling on the gzipped download (spec §8): app + skiko wasm + loader js under assets/.
-// Measured breakdown at plan 3 / task 2: Skiko ≈3.4 MB is the immovable floor, the whole `:ui`
-// app ≈2.5 MB, xterm.js ≈0.3 MB on top. 8 MiB is a bloat catch with headroom for the remaining
-// panes of this plan — NOT a target to grow into. The staged `editor/` bundle (CodeMirror, 1.3 MB
-// raw) sits outside assets/ and is deliberately not counted: it is a separate, lazily-loaded page.
+// MEASURED on this branch, gzipped: skiko.wasm 3.18 MiB (the immovable floor), the app wasm — all
+// of `:ui` + `:shared` — 2.58 MiB, the webpack loader app.js 0.20 MiB; 5.94 MiB (6085 KiB) total,
+// of which xterm.js is 0.10 MiB — the same tree measured 5981 KiB before task 3 bundled it.
+// 8 MiB is a bloat catch with roughly 2 MiB of headroom for the
+// remaining panes of this plan — NOT a target to grow into. The staged `editor/` bundle
+// (CodeMirror, 1.3 MB raw) sits outside assets/ and is deliberately not counted: it is a separate,
+// lazily-loaded page.
 val maxGzipBytes = 8L * 1024 * 1024
 
 fun sha8(bytes: ByteArray): String =
@@ -88,11 +91,34 @@ fun gzipSize(bytes: ByteArray): Long {
     return bos.size().toLong()
 }
 
+// Extra sources `stageForBroker` copies in beside the webpack dist. Hoisted out of the task action
+// so they can be declared as INPUTS: editing the CodeMirror bundle or bumping xterm must re-run the
+// task, not leave a stale copy published under an up-to-date check.
+//
+// xterm.js's stylesheet is a real npm file that webpack never bundles, so it is lifted straight out
+// of KGP's yarn workspace. The editor bundle's single source of truth is the committed android
+// assets dir (desktop reads the same files).
+val xtermCssFile: File = rootProject.layout.buildDirectory
+    .file("wasm/node_modules/@xterm/xterm/css/xterm.css").get().asFile
+val editorSrcDir: File = rootProject.projectDir.resolve("android/src/main/assets/editor")
+
+// NOT under `src/wasmJsMain/resources/`: everything there is copied to the webpack dist root, where
+// the hashing pass below would rename it into `assets/editor-shim-<hash>.js` and rewrite its bare
+// name inside app.js — the iframe page would then ask for a file that no longer exists at that name.
+// This lives outside the Kotlin source set precisely so the build treats it as a plain data file.
+val editorShimFile: File = layout.projectDirectory.file("editor/editor-shim.js").asFile
+
 val stageForBroker by tasks.registering {
     group = "distribution"
     description = "Build the wasm bundle and stage it (content-hashed) into src/channels/web/static"
     dependsOn(tasks.named("wasmJsBrowserDistribution"))
     inputs.dir(distDir)
+    // `files(...).optional()` rather than `file(...)`: a missing input must fail in the task action
+    // with its own explanatory message, not as an opaque Gradle snapshotting error. The shim is
+    // genuinely optional until task 4 creates it.
+    inputs.files(xtermCssFile).withPropertyName("xtermCss").optional()
+    inputs.dir(editorSrcDir).withPropertyName("editorBundle")
+    inputs.files(editorShimFile).withPropertyName("editorShim").optional()
     inputs.property("maxGzipBytes", maxGzipBytes)
     outputs.dir(brokerStaticDir)
 
@@ -158,39 +184,39 @@ val stageForBroker by tasks.registering {
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
 
-        // xterm.js's stylesheet. It is a real npm file, not something webpack bundles, so it is
-        // copied out of KGP's yarn workspace into the root of the served tree (no-cache, ~4 KB) and
-        // index.html links it by name. Deliberately unhashed: cheap to revalidate, and one fewer
-        // rewrite rule. Fail loudly if the dependency moved rather than shipping a terminal with no CSS.
-        val xtermCss = rootProject.layout.buildDirectory
-            .file("wasm/node_modules/@xterm/xterm/css/xterm.css").get().asFile
-        check(xtermCss.isFile) { "xterm.css not found at $xtermCss — did the npm dependency change?" }
-        xtermCss.copyTo(staging.resolve("xterm.css"), overwrite = true)
+        // xterm.js's stylesheet, at the root of the served tree (no-cache, ~5 KB); index.html links
+        // it by name. Deliberately unhashed: cheap to revalidate, and one fewer rewrite rule. Fail
+        // loudly if the dependency moved rather than shipping a terminal with no CSS.
+        check(xtermCssFile.isFile) { "xterm.css not found at $xtermCssFile — did the npm dependency change?" }
+        xtermCssFile.copyTo(staging.resolve("xterm.css"), overwrite = true)
 
-        // The CodeMirror editor bundle. Single source of truth is the committed android assets dir
-        // (desktop reads the same files); it is staged at `editor/` in the ROOT, not under assets/:
-        // the page references `cm6.js` by a relative bare name, so content-hashing would break it.
-        // 1.3 MB revalidated per editor open is acceptable (plan 5 may hash the pair together).
-        // Being outside assets/ also keeps it out of the hashing pass AND out of the gzip guard.
-        val editorSrc = rootProject.projectDir.resolve("android/src/main/assets/editor")
-        check(editorSrc.resolve("index.html").isFile && editorSrc.resolve("cm6.js").isFile) {
-            "editor bundle missing from $editorSrc"
+        // The CodeMirror editor bundle, staged at `editor/` in the ROOT, not under assets/: the page
+        // references `cm6.js` by a relative bare name, so content-hashing would break it. 1.3 MB
+        // revalidated per editor open is acceptable (plan 5 may hash the pair together). Being
+        // outside assets/ also keeps it out of the hashing pass AND out of the gzip guard.
+        check(editorSrcDir.resolve("index.html").isFile && editorSrcDir.resolve("cm6.js").isFile) {
+            "editor bundle missing from $editorSrcDir"
         }
         val editorOut = staging.resolve("editor").apply { mkdirs() }
-        editorSrc.resolve("cm6.js").copyTo(editorOut.resolve("cm6.js"), overwrite = true)
+        editorSrcDir.resolve("cm6.js").copyTo(editorOut.resolve("cm6.js"), overwrite = true)
         // The iframe shim republishes the bundle's `window.AndroidEditor` / webkit hooks as
         // postMessage to the parent frame. It arrives in a later task of this plan; until then the
         // editor page is staged exactly as Android ships it.
-        val shim = layout.projectDirectory.file("src/wasmJsMain/resources/editor-shim.js").asFile
-        val editorHtml = editorSrc.resolve("index.html").readText()
+        val editorHtml = editorSrcDir.resolve("index.html").readText()
         editorOut.resolve("index.html").writeText(
-            if (shim.isFile) {
-                shim.copyTo(editorOut.resolve("editor-shim.js"), overwrite = true)
+            if (editorShimFile.isFile) {
+                editorShimFile.copyTo(editorOut.resolve("editor-shim.js"), overwrite = true)
                 // Must load BEFORE cm6.js: the bundle looks its host objects up at evaluation time.
-                editorHtml.replace(
+                val injected = editorHtml.replace(
                     "<script src=\"cm6.js\">",
                     "<script src=\"editor-shim.js\"></script><script src=\"cm6.js\">",
                 )
+                // A silent no-op here ships an editor whose bridge is never installed, and the only
+                // symptom is an iframe that never reports ready. Fail the build instead.
+                check(injected != editorHtml) {
+                    "editor/index.html no longer contains `<script src=\"cm6.js\">` — the shim injection point moved"
+                }
+                injected
             } else {
                 editorHtml
             }

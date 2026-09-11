@@ -53,10 +53,12 @@ object WebHostStores {
     fun ensureOriginHost(displayName: String = "This host", hostId: String? = null, platform: String? = null, version: String? = null) {
         val existing = store.list().firstOrNull { it.recordId == RECORD_ID }
         if (existing != null) {
-            // Repair a record written before `ambientAuth` existed: it carries the old `"cookie"`
-            // sentinel token, which `FleetStore.sync` would send as a Bearer and burn against the
-            // broker's brute-force budget. Blank + ambient is what this record always meant.
-            if (existing.token.isNotBlank()) store.markAmbient(RECORD_ID)
+            // Repair a record written before `ambientAuth` existed. Two shapes need it: the old
+            // `"cookie"` sentinel token, which `FleetStore.sync` would send as a Bearer and burn
+            // against the broker's brute-force budget; and a record whose token map was lost or
+            // corrupt, which loads blank AND unflagged — `sync` skips that one outright and the
+            // origin host silently vanishes from the fleet. Blank + ambient is what it always meant.
+            if (existing.token.isNotBlank() || !existing.ambientAuth) store.markAmbient(RECORD_ID)
             return
         }
         store.add(

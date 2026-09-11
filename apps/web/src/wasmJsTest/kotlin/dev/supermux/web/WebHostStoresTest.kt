@@ -34,6 +34,11 @@ class WebHostStoresTest {
             ),
         )
 
+        // Prove the seed is what the store will actually load. `WebHostStores.store` is a lazy on an
+        // `object`: if some earlier test in this Karma realm had already forced it, the assertions
+        // below would pass against a store that never saw the sentinel and prove nothing.
+        assertEquals("cookie", WebHostStores.store.list().single().token)
+
         WebHostStores.ensureOriginHost()
 
         val host = WebHostStores.store.list().single()
