@@ -12,9 +12,11 @@ class PairedHostStore(
 
     fun add(displayName: String, token: String, relayUrl: String? = null,
             directUrl: String? = null, hostId: String? = null,
-            platform: String? = null, version: String? = null): PairedHost {
+            platform: String? = null, version: String? = null,
+            ambientAuth: Boolean = false): PairedHost {
         val h = PairedHost(recordId = newId(), hostId = hostId, displayName = displayName,
-            token = token, relayUrl = relayUrl, directUrl = directUrl, platform = platform, version = version)
+            token = token, relayUrl = relayUrl, directUrl = directUrl, platform = platform, version = version,
+            ambientAuth = ambientAuth)
         hosts.add(h); flush(); return h
     }
 

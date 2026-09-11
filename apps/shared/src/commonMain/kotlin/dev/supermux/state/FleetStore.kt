@@ -360,7 +360,9 @@ class FleetStore(
     /**
      * Reconcile live connections against [hosts]: open one [HostStore] per newly-added host, close
      * the one for each removed host, rebuild a host whose effective URL or token changed.
-     * Idempotent. Hosts with a blank token or no reachable URL are kept in the store but not dialed.
+     * Idempotent. Hosts with no reachable URL, or with a blank token and no [PairedHost.ambientAuth]
+     * (i.e. "not configured yet"), are kept in the store but not dialed — an ambient-credential host
+     * (the browser, whose HttpOnly cookie IS the credential) dials with a blank token.
      *
      * The DECISION is made under [lock]; building a `HostStore` (which dials) and tearing a socket
      * down are alien, blocking calls and run outside it. Holding a lock across either is how a
@@ -373,8 +375,8 @@ class FleetStore(
      */
     internal fun sync(hosts: List<PairedHost>) {
         val plan = synchronized(lock) {
-            val wanted = hosts.mapNotNull { h -> effectiveUrl(h)?.let { url -> Triple(h.recordId, url, h.token) } }
-                .filter { it.third.isNotBlank() }
+            val wanted = hosts.filter { it.token.isNotBlank() || it.ambientAuth }
+                .mapNotNull { h -> effectiveUrl(h)?.let { url -> Triple(h.recordId, url, h.token) } }
             val wantedIds = wanted.map { it.first }.toSet()
             val stale = (conns.keys - wantedIds).toList() +
                 wanted.filter { (id, url, _) -> conns[id]?.app?.baseUrl?.let { it != url } == true }

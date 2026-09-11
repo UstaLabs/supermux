@@ -131,4 +131,32 @@ class FleetStoreTest {
         assertTrue(f.hostViews.value.map { it.recordId } == listOf("h2"))
         f.close()
     }
+
+    /**
+     * The browser host authenticates with an HttpOnly cookie, so its record carries NO bearer
+     * token — `ambientAuth` says the transport already carries the credential. `sync` must dial it
+     * anyway, while a plain blank-token record still means "not configured yet" and is skipped.
+     */
+    @Test fun syncDialsAnAmbientAuthHostWithoutAToken_butSkipsABlankTokenOne() = runTest {
+        val dialed = mutableListOf<Pair<String, String>>()
+        val s = store(
+            PairedHost(recordId = "web", displayName = "Browser", token = "", ambientAuth = true,
+                directUrl = "https://box.example"),
+            PairedHost(recordId = "unset", displayName = "Unconfigured", token = "",
+                directUrl = "https://other.example"),
+        )
+        val f = FleetStore(
+            store = s,
+            scope = this,
+            deps = testDeps(),
+            appFactory = { url, token, onConn ->
+                dialed += url to token
+                HostStore(url, token, this@runTest, testDeps(), connectOnInit = false, onConnectionChange = onConn)
+            },
+        )
+        assertEquals(listOf("https://box.example" to ""), dialed,
+            "only the ambient-credential host may be dialled with a blank token")
+        assertTrue(f.appForRecord("unset") == null, "a blank-token, non-ambient host stays undialled")
+        f.close()
+    }
 }

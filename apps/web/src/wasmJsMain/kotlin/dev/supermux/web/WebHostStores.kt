@@ -13,26 +13,13 @@ import kotlinx.coroutines.launch
  * The browser's host registry — the web twin of `IosHostStores`.
  *
  * There is exactly ONE host here and there can never be a second: the origin that served this
- * page, whose credential is the HttpOnly session cookie — not the record's token, which is the
- * [COOKIE_TOKEN] sentinel. The record id is fixed, so a reload finds the same record rather than
- * minting a new one and orphaning the snapshot cache keyed by it.
+ * page, whose credential is the HttpOnly session cookie. The record therefore carries NO token at
+ * all — it is flagged `ambientAuth`, which is how `FleetStore.sync` knows the transport already
+ * carries the credential and dials a blank-token host. The record id is fixed, so a reload finds
+ * the same record rather than minting a new one and orphaning the snapshot cache keyed by it.
  */
 object WebHostStores {
     const val RECORD_ID = "web-origin"
-
-    /**
-     * The origin host's stored token — a SENTINEL, not a credential.
-     *
-     * The browser's real credential is the HttpOnly `cmux_token` cookie, and `bearer()` is written
-     * to send no header when the token is blank, which is the honest shape. But `FleetStore.sync`
-     * refuses to dial a host whose token is blank (FleetStore.kt:377) — that check is how every
-     * other platform says "this record is not configured yet" — so a blank-token record is never
-     * connected and the session list stays empty forever. Until `:shared` learns about the
-     * cookie-credential host (see the plan's Results), the record carries this sentinel: the
-     * broker resolves `cookieToken(req) || bearerToken(req)`, so the COOKIE wins on every HTTP
-     * request and the header is ignored, and a browser cannot set headers on a WS upgrade at all.
-     */
-    private const val COOKIE_TOKEN = "cookie"
 
     /**
      * What to run when the registry is emptied — i.e. the user unpaired the origin host from the
@@ -67,12 +54,16 @@ object WebHostStores {
         if (store.list().any { it.recordId == RECORD_ID }) return
         store.add(
             displayName = displayName,
-            token = COOKIE_TOKEN,
+            token = "",
             relayUrl = null,
             directUrl = window.location.origin,
             hostId = hostId,
             platform = platform,
             version = version,
+            // The HttpOnly `cmux_token` cookie IS the credential: `bearer()` sends no header for a
+            // blank token, and a browser cannot set headers on a WS upgrade anyway. Never a
+            // sentinel token — that would spend the broker's brute-force budget once it expires.
+            ambientAuth = true,
         )
     }
 }

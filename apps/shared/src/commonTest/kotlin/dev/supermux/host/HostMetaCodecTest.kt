@@ -64,4 +64,25 @@ class HostMetaCodecTest {
         assertEquals(emptyList(), HostMetaCodec.decode("") { "t" })
         assertEquals(emptyList(), HostMetaCodec.decode("not json at all") { "t" })
     }
+
+    @Test fun ambientAuth_roundTrips_andIsNotACredential() {
+        val web = PairedHost(
+            recordId = "web-origin", displayName = "This host",
+            directUrl = "https://box.example", token = "", ambientAuth = true,
+        )
+        val json = HostMetaCodec.encodeMeta(listOf(web))
+        assertTrue(json.contains("ambientAuth"), "ambientAuth must be persisted with the metadata: $json")
+        val decoded = HostMetaCodec.decode(json) { null }
+        assertEquals(listOf(web), decoded)
+        assertTrue(decoded[0].ambientAuth)
+        assertEquals("", decoded[0].token, "ambientAuth is metadata, never a stand-in credential")
+    }
+
+    @Test fun decode_legacyMetadataWithoutAmbientAuth_defaultsToFalse() {
+        // Metadata written before ambient-credential hosts existed — the key is simply absent.
+        val legacy = """[{"recordId":"r1","displayName":"MacBook","directUrl":"http://192.168.1.2:9898"}]"""
+        val decoded = HostMetaCodec.decode(legacy) { "secret-1" }
+        assertEquals(1, decoded.size)
+        assertFalse(decoded[0].ambientAuth, "an old record must not suddenly dial without a token")
+    }
 }
