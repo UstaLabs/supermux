@@ -1,6 +1,7 @@
 package dev.supermux.web.auth
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,49 +36,55 @@ import kotlinx.browser.window
  * exists for a pairing link pasted while the browser is ALREADY paired ("add another host", the
  * same door `Platform.pendingScans()` opens on iOS), not for this screen.
  *
- * Links for another origin are refused with a notice rather than silently sending the token
- * elsewhere.
+ * A pasted link may carry ANY origin: the broker mints its pairing links on the relay/public
+ * origin (`${relayUrl ?? publicUrl}/pair?t=…`), so a browser reached over the LAN or a tunnel is
+ * handed a link whose host is not this one. Only the TOKEN is taken out of what was pasted and it
+ * is always replayed against THIS origin — never a navigation to the foreign host, which would
+ * hand the token to a broker this page is not talking to. A token that is not this broker's is
+ * simply refused by `/pair`, which is the only place that can judge it.
  */
+private val PAIR_LINK = Regex("""^(?:[a-zA-Z][\w+.-]*://[^/]+)?/pair\?(?:.*&)?t=([^&#]+)""")
+
 @Composable
 fun WebPairScreen(reason: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     var link by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     fun go() {
-        val origin = window.location.origin
-        val trimmed = link.trim()
-        when {
-            trimmed.startsWith("$origin/pair?t=") -> window.location.href = trimmed
-            trimmed.startsWith("/pair?t=") -> window.location.href = origin + trimmed
-            else -> error =
-                "That link is for a different host. Open it in this browser, or paste the link this broker generated."
+        val token = PAIR_LINK.find(link.trim())?.groupValues?.get(1)
+        if (token == null) {
+            error = "That does not look like a pairing link. It should end in /pair?t=<token>."
+            return
         }
+        window.location.href = "${window.location.origin}/pair?t=$token"
     }
     Surface(modifier.fillMaxSize()) {
-        Column(
-            Modifier.fillMaxSize().padding(24.dp).widthIn(max = 480.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text("Pair this browser", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "This broker is already set up ($reason). From a paired device open Settings › Devices, " +
-                    "add a device, and open the link it shows here — or paste it below.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            OutlinedTextField(
-                value = link,
-                onValueChange = { link = it; error = null },
-                label = { Text("Pairing link") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                isError = error != null,
-                supportingText = error?.let { { Text(it) } },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { go() }),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = ::go, enabled = link.isNotBlank()) { Text("Open link") }
-                TextButton(onClick = onRetry) { Text("Check again") }
+        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Column(
+                Modifier.widthIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Pair this browser", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "This broker is already set up ($reason). From a paired device open Settings › Devices, " +
+                        "add a device, and open the link it shows here — or paste it below.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = link,
+                    onValueChange = { link = it; error = null },
+                    label = { Text("Pairing link") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = error != null,
+                    supportingText = error?.let { { Text(it) } },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { go() }),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = ::go, enabled = link.isNotBlank()) { Text("Open link") }
+                    TextButton(onClick = onRetry) { Text("Check again") }
+                }
             }
         }
     }

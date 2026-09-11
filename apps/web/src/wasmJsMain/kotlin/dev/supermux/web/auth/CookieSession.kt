@@ -35,6 +35,10 @@ sealed interface SessionState {
  * answer ("not paired — try claiming"), and only a thrown transport error is [Offline].
  * [BrokerApi.claimSecretless] already reports a 403 as `paired=false` without throwing, so the
  * claim leg does go through [BrokerApi].
+ *
+ * Only 401/403 are treated as "not paired". A 429 (the broker throttles `/me`), a 5xx, or a 2xx
+ * whose body is not the broker's are all [Offline] — a screen that says "retry", not one that says
+ * "this browser may never pair".
  */
 class CookieSession(baseUrl: String = window.location.origin, private val http: HttpClient) {
     private val base = baseUrl.trimEnd('/')
@@ -42,12 +46,29 @@ class CookieSession(baseUrl: String = window.location.origin, private val http: 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     suspend fun probe(deviceName: String = "browser"): SessionState {
-        val me = try {
+        val me: MeResult? = try {
             val res = http.get("$base/me")
-            if (res.status.value in 200..299) {
-                runCatching { json.decodeFromString<MeResult>(res.bodyAsText()) }.getOrNull()
-            } else {
-                null // 401/403 (or anything else the broker answered): not paired — try to claim.
+            val code = res.status.value
+            when {
+                code in 200..299 -> {
+                    // A 2xx whose body is not a MeResult means something OTHER than the broker
+                    // answered (a captive portal, a proxy error page): that is not a verdict about
+                    // pairing, so it is Offline rather than "unpaired, go claim".
+                    val body = res.bodyAsText()
+                    try {
+                        json.decodeFromString<MeResult>(body)
+                    } catch (c: CancellationException) {
+                        throw c
+                    } catch (_: Throwable) {
+                        return SessionState.Offline("unreadable /me response")
+                    }
+                }
+                // The ONLY two statuses that mean "no credential — try the secretless claim".
+                code == 401 || code == 403 -> null
+                // Everything else is transport-shaped, and one of them is load-bearing: the broker
+                // RATE-LIMITS /me (429), and a throttled browser that got treated as unpaired
+                // would be sent to the pair screen — or worse, to a claim it must not attempt.
+                else -> return SessionState.Offline("HTTP $code")
             }
         } catch (c: CancellationException) {
             throw c

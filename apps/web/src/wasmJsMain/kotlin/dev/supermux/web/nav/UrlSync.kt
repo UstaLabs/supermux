@@ -35,7 +35,10 @@ fun applyTarget(ui: ShellUiState, target: UrlTarget) {
         is UrlTarget.Screen -> when (val r = target.route) {
             Route.Home -> {
                 ui.navigate(Route.Home)
+                // BOTH selections, because the sidebar's archived fold is a second highlight:
+                // leaving it set would paint an archived workspace as "open" on a bare `/`.
                 ui.selectedId = null
+                ui.selectedArchivedWorkspaceId = null
             }
             is Route.Settings -> ui.openSettings(r.section)
             is Route.NewSession -> ui.openLauncher(r.draftId.ifBlank { null })
@@ -46,7 +49,8 @@ fun applyTarget(ui: ShellUiState, target: UrlTarget) {
 
 /**
  * Two-way binding between the address bar and [ShellUiState]. The shell's back stack stays the
- * source of truth; the URL mirrors it (`pushState` on change) and `popstate` (browser
+ * source of truth; the URL mirrors it (`pushState` on a new destination, `replaceState` when the
+ * path is only being normalised) and `popstate` (browser
  * back/forward, a `sw.js` click, a typed URL) applies the parsed target back onto the shell.
  *
  * Two loops have to be broken:
@@ -71,7 +75,14 @@ fun UrlSync(ui: ShellUiState) {
     LaunchedEffect(ui, initialApplied) {
         if (!initialApplied) return@LaunchedEffect
         snapshotFlow { pathFor(ui.currentRoute, ui.selectedId) }.distinctUntilChanged().collect { path ->
-            if (currentPath() != path) window.history.pushState(null, "", path)
+            val current = currentPath()
+            if (current == path) return@collect
+            // NORMALISATION (`/settings` → `/settings/agents`, `/nope` → `/`, `/s/a?x=1` → `/s/a`)
+            // must REPLACE the entry, not push one: the typed URL and the canonical URL are the
+            // same destination, and pushing would put the un-normalised path one step back — so
+            // Back would re-apply it, the mirror would push again, and Back would be trapped.
+            if (parsePath(current) == parsePath(path)) window.history.replaceState(null, "", path)
+            else window.history.pushState(null, "", path)
         }
     }
 
