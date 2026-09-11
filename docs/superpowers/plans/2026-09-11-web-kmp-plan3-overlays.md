@@ -75,7 +75,7 @@
 
 **Files:** `apps/web/src/wasmJsMain/kotlin/dev/supermux/web/terminal/{Xterm.kt,XtermTerminalSurface.kt,XtermPrediction.kt}`, `WebPlatform.kt` (`terminalView()` + `WEB_CAPS.terminal = true`), test `apps/web/src/wasmJsTest/kotlin/dev/supermux/web/XtermPredictionSinkTest.kt`.
 
-- [ ] **Step 1: Externals** (`Xterm.kt`):
+- [x] **Step 1: Externals** (`Xterm.kt`):
 
 ```kotlin
 @file:JsModule("@xterm/xterm")
@@ -96,7 +96,7 @@ external class Terminal(options: JsAny? = definedExternally) : JsAny {
 ```
 plus `@file:JsModule("@xterm/addon-fit") external class FitAddon : JsAny { fun fit() }` and `WebglAddon` in their own files (one `@file:JsModule` per file). Kotlin lambdas as `onData` callbacks: pass through a `js()` helper if the compiler rejects a Kotlin function type on an external member (`fun onData(term: Terminal, cb: (String) -> Unit): Unit = js("term.onData(cb)")`). Read `cursorX/cursorY` with `private fun cursor(term: Terminal): JsAny = js("({row: term.buffer.active.cursorY, col: term.buffer.active.cursorX})")` and unpack.
 
-- [ ] **Step 2: Surface + factory** (`XtermTerminalSurface.kt`) — copy desktop's `rememberTerminalSurface` shape; `Content(modifier, active, onExit)`:
+- [x] **Step 2: Surface + factory** (`XtermTerminalSurface.kt`) — copy desktop's `rememberTerminalSurface` shape; `Content(modifier, active, onExit)`:
   - `KeepAlivePanel(visible = active-or-mounted…)`: NO — `TerminalTabs` already wraps `Content` in `KeepAlivePanel`; `Content` just renders `HtmlElementView<HTMLDivElement>(modifier.fillMaxSize(), factory = { div with `style.setProperty("overflow","hidden")`, background `#0b0b0b` }, update = { attach-once when sized (the plan-1 `onGloballyPositioned` pattern) → `term.open(div)`, `loadAddon(fit)`, try `loadAddon(webgl)` in `runCatching` (falls back to canvas renderer), `fit.fit()`, install a `ResizeObserver` on the div → `fit.fit()` }, onRelease = { observer.disconnect(); term.dispose() })`.
   - output: `LaunchedEffect(client) { client.get().output.collect { bytes -> prediction.handleOutput(bytes) { term.write(bytes.toUint8Array()) } } }`.
   - input: `term.onData { s -> val bytes = s.encodeToByteArray(); keys.applyArmedModifiers(bytes)?.let { client.get().sendInput(it) } ?: run { prediction.handleInput(bytes); client.get().sendInput(bytes) } }` — read `apps/android/.../terminal/TermlibTerminalView.kt` (or wherever Android applies `applyArmedModifiers`) and mirror its order exactly.
@@ -106,11 +106,11 @@ plus `@file:JsModule("@xterm/addon-fit") external class FitAddon : JsAny { fun f
   - `keys = rememberTerminalKeySink { bytes -> client.get().sendInput(bytes) }`; `available = true`.
   - Wheel/touch scroll: xterm handles both (tmux `mouse on` gets SGR reports from xterm's own mouse handling); do NOT port `TerminalScroll`.
   - Mount rule: the div must ignore Compose pointer input under it (the canvas is below the DOM node, so pointer events reach xterm first — verify; if Compose steals wheel events, `style.setProperty("pointer-events","auto")` on the div and `Modifier.pointerInput { }` consuming nothing).
-- [ ] **Step 3: Prediction** (`XtermPrediction.kt`) — `class XtermPredictionSink(term: Terminal) : PredictionSink` rendering ops as ANSI written to the terminal, ported from the old `src/web-app/src/lib/predictive-echo/` xterm adapter (read it first; it is the exact behaviour spec: `DrawDim` = save cursor, CUP to row/col (1-based in ANSI!), `ESC[2m` + char + `ESC[22m`, restore; `RestoreCell` = rewrite the original cell — read it from `term.buffer.active.getLine(row)?.getCell(col)` via a js() helper; `MoveCaret` = CUP; `Passthrough` = write bytes; `Hide/ShowCaret` = `ESC[?25l/h`). Pipeline = `PredictionPipeline` minus the lock: `handleInput(bytes)`, `handleOutput(bytes, fallback)`, `teardown()`. Latency estimate from RTT of the last keystroke. `available = true`.
+- [x] **Step 3: Prediction** (`XtermPrediction.kt`) — `class XtermPredictionSink(term: Terminal) : PredictionSink` rendering ops as ANSI written to the terminal, ported from the old `src/web-app/src/lib/predictive-echo/` xterm adapter (read it first; it is the exact behaviour spec: `DrawDim` = save cursor, CUP to row/col (1-based in ANSI!), `ESC[2m` + char + `ESC[22m`, restore; `RestoreCell` = rewrite the original cell — read it from `term.buffer.active.getLine(row)?.getCell(col)` via a js() helper; `MoveCaret` = CUP; `Passthrough` = write bytes; `Hide/ShowCaret` = `ESC[?25l/h`). Pipeline = `PredictionPipeline` minus the lock: `handleInput(bytes)`, `handleOutput(bytes, fallback)`, `teardown()`. Latency estimate from RTT of the last keystroke. `available = true`.
   - Test (`XtermPredictionSinkTest`, Karma): mount a real xterm into a detached div (xterm requires an attached element — attach to `document.body`), write "abc", call `render(listOf(DrawDim(1,0,3,'x')))` and assert the cell at (0,3) reads `x` via `getLine(0).getCell(3).getChars()`; `RestoreCell` clears it; `MoveCaret` moves `cursorX`.
-- [ ] **Step 4: Wire** — `WebPlatform.terminalView() = XtermTerminalViewFactory` (single instance), `WEB_CAPS.terminal = true`.
-- [ ] **Step 5: Verify** — `:web:compileKotlinWasmJs`, Karma lane; then stage + hermetic broker + headless Chrome: open the fixture session, add a terminal tab (the `+` in the pane strip / the Native toggle — find the affordance in `TerminalTabs`), type `echo hello-web` + Enter through `page.keyboard`, assert the DOM (`.xterm-rows` text or the accessibility tree) contains `hello-web`; screenshot. Also verify resize (set viewport 800×600 → 1200×800) reflows.
-- [ ] **Step 6: Commit** — `feat(web): xterm.js terminal surface with the shared predictive echo`.
+- [x] **Step 4: Wire** — `WebPlatform.terminalView() = XtermTerminalViewFactory` (single instance), `WEB_CAPS.terminal = true`.
+- [x] **Step 5: Verify** — `:web:compileKotlinWasmJs`, Karma lane; then stage + hermetic broker + headless Chrome: open the fixture session, add a terminal tab (the `+` in the pane strip / the Native toggle — find the affordance in `TerminalTabs`), type `echo hello-web` + Enter through `page.keyboard`, assert the DOM (`.xterm-rows` text or the accessibility tree) contains `hello-web`; screenshot. Also verify resize (set viewport 800×600 → 1200×800) reflows.
+- [x] **Step 6: Commit** — `feat(web): xterm.js terminal surface with the shared predictive echo`.
 
 ---
 
@@ -174,3 +174,51 @@ Check `bridgeShimJs(queryFn)` in EditorBridge.kt: if it already defines `window.
 ## Not in this plan
 
 Setup wizard, web push + `sw.js`, manifest/icons, `Caps.setupWizard` → plan 4. Playwright journey rewrite, CI/Docker, cm6 lockfile, Vue deletion, `font/ttf` + hashed editor bundle → plan 5. scrcpy/WebCodecs → later spec.
+
+---
+
+## Results — Task 3 (xterm.js terminal, 2026-09-12)
+
+Browser terminal works end to end against a hermetic broker: a real pty through tmux, typed with
+`page.keyboard`, resized both ways by the pane.
+
+| Check | Result |
+|---|---|
+| `:web:compileKotlinWasmJs` | green (4 s incremental) |
+| Karma (`:web:wasmJsBrowserTest`) | **40 tests** green (36 before + 4 `XtermPredictionSinkTest`), 1 m 44 s |
+| `echo hello-web` typed into the pane | `hello-web` on screen AND in the tmux pane's own scrollback |
+| `tput cols` at 1200×800 → 800×600 → 1200×800 | **123 → 66 → 123** (the resize reaches the remote pty, not just the DOM) |
+| Bundle | 6 085 KB gzip staged (plan 2: 5 980 KB) — **+105 KB** for xterm + fit + webgl, inlined into `app.js` |
+| Console | no `pageerror`; only the known WebGL driver warnings and `[BrokerClient] send dropped (not connected)` |
+
+Screenshots: session scratchpad `plan3/` — `3a-add-menu.png` (the pane "+" popover), `3-terminal-open.png`
+(shell prompt in the pane), `5-echoed.png` (`echo hello-web` → `hello-web`), `6-narrow.png` (800×600),
+`7-wide-again.png`, plus `s1..s3` for the tab-strip probe.
+
+**Interop findings (read before Task 4 — the editor iframe will hit the same two):**
+
+1. **`@JsModule` on a top-level external class resolves to the module's DEFAULT export on wasm.**
+   `@JsModule("@xterm/xterm") external class Terminal` compiled fine and died in the browser with
+   `_ref_….default is not a constructor`. The working shape is `:shared`'s `Pako` shape: an
+   external OBJECT per module with the class NESTED inside (that resolves as `ns.Terminal`, the real
+   named export), plus a `typealias` for call sites. The plan's Step-1 sketch (`@file:JsModule`) is
+   therefore wrong for wasm; `Xterm.kt`/`FitAddon.kt`/`WebglAddon.kt` carry the corrected shape and
+   the reason. Kotlin lambdas DID work as `external` function PARAMETERS (`onData`, `ResizeObserver`
+   through a `js()` helper) — only external *properties* reject them.
+2. **The Compose canvas above an `HtmlElementView` stops painting.** With a terminal mounted, the
+   pane's tab strip (the 32 px above the element) renders solid black, though the element's own rect
+   is correct (`320,32 880×768`) and the strip still WORKS — clicking "Chat" at (350,16) switches
+   tabs and the xterm is removed from the DOM. So it is a paint artifact of the interop hole (note
+   the root canvas is 1200×**805** for an 800 px viewport), not a layout bug in the surface. Task 4's
+   editor pane will show the same band; worth one look at CMP's interop clear-rect before plan 5.
+3. `.xterm-rows` is EMPTY with the canvas/WebGL renderer — DOM text assertions are impossible
+   without `screenReaderMode`. The browser check reads the tmux pane instead
+   (`tmux -L muxterm capture-pane`), which is stronger evidence anyway (it proves the bytes reached
+   the pty). Karma's `XtermPredictionSinkTest` reads cells through xterm's own buffer API.
+4. The fixture (`scripts/test-broker.sh`) stubs `tmux` with an exit-0 script, so a web terminal
+   cannot spawn there as-is; the run symlinks the real `/usr/bin/tmux` into the fixture's `stubbin`
+   for the duration and kills ONLY the tmux sessions it created (the host's live `muxterm` server
+   shares that socket). A future plan may want a `MUX_TEST_REAL_TMUX=1` switch in the script.
+5. Prediction never ENGAGES on localhost (RTT ≪ the 40 ms `latencyThresholdMs` gate), by design —
+   the renderer is covered by the Karma tests instead. `XtermPredictionPipeline` is desktop's
+   `PredictionPipeline` minus the monitor (wasm is single-threaded and has no `synchronized`).

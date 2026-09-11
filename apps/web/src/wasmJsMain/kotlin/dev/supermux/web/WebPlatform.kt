@@ -19,7 +19,6 @@ import dev.supermux.ui.platform.PushRegistrar
 import dev.supermux.ui.platform.TtsEngine
 import dev.supermux.ui.platform.WindowHostController
 import dev.supermux.ui.terminal.TerminalViewFactory
-import dev.supermux.ui.terminal.UnavailableTerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import dev.supermux.web.seams.NoWebMic
@@ -27,18 +26,19 @@ import dev.supermux.web.seams.WebClipboard
 import dev.supermux.web.seams.WebFiles
 import dev.supermux.web.seams.WebTts
 import dev.supermux.web.seams.pickFilesViaInput
+import dev.supermux.web.terminal.XtermTerminalViewFactory
 import kotlinx.browser.window
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.onEach
 
-/** What the browser can do. Plan 3 turns on terminal/clipboardImages; plan 4 turns on push. */
+/** What the browser can do. Plan 3 turns on terminal (xterm.js) and clipboardImages; plan 4 push. */
 val WEB_CAPS = Caps(
     push = false, camera = false, tray = false, externalDisplay = true, hardwareVideoDecode = false,
     localBroker = false, multiWindow = false, fileSystem = false,
     clipboardImages = false, saveAs = true, walkthrough = true, appearanceControls = true,
-    dynamicColor = false, appUpdate = false, terminal = false, scrcpy = false,
+    dynamicColor = false, appUpdate = false, terminal = true, scrcpy = false,
 )
 
 /**
@@ -71,7 +71,8 @@ class WebPlatform : Platform {
      *  very instance to `NoticeOverlay`, which takes the concrete bus. */
     override val notices: FlowNotices = FlowNotices()
 
-    override fun terminalView(): TerminalViewFactory = UnavailableTerminalViewFactory
+    /** xterm.js behind the shared seam — one instance, like every other host's factory object. */
+    override fun terminalView(): TerminalViewFactory = XtermTerminalViewFactory
     override fun videoDecoder(): VideoSurfaceFactory? = null
     override val updates: AppUpdater = NoAppUpdater
     override val notifications: NotificationManager = NoopNotificationManager
