@@ -11,9 +11,10 @@ import kotlinx.browser.window
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.khronos.webgl.Int8Array
 import org.khronos.webgl.toInt8Array
+import org.w3c.dom.AddEventListenerOptions
 import org.w3c.dom.HTMLAnchorElement
 import org.w3c.dom.HTMLInputElement
-import org.w3c.dom.AddEventListenerOptions
+import org.w3c.dom.events.Event
 import org.w3c.dom.url.URL
 import org.w3c.files.Blob
 import org.w3c.files.get
@@ -28,7 +29,15 @@ private fun makeBlob(data: Int8Array, mime: String): Blob = js("new Blob([data],
 
 private fun blobOf(bytes: ByteArray, mime: String): Blob = makeBlob(bytes.toInt8Array(), mime)
 
-/** "Save as…" is a download; "open with" is a new tab on a blob URL. Nothing touches a real path. */
+/**
+ * "Save as…" is a download; "open with" is a new tab on a blob URL. Nothing touches a real path.
+ *
+ * BOTH are gesture-bound: a browser only honours a synthetic download click or a `window.open`
+ * when it runs in the SAME TICK as the user gesture that caused it. These are `suspend` functions,
+ * so a caller that awaits anything (a fetch, a decode) before calling them resumes on a later tick
+ * and the popup blocker eats the result silently — no exception, no download. Callers must do
+ * their awaiting BEFORE the gesture hands over. The same applies to `WebPlatform.openUrl`.
+ */
 object WebFiles : FileAccess {
     override suspend fun saveAs(name: String, mime: String, bytes: ByteArray): SavedFile? {
         val url = URL.createObjectURL(blobOf(bytes, mime))
@@ -68,13 +77,17 @@ suspend fun pickFilesViaInput(kind: PickKind): List<PickedFile> = suspendCancell
     }
     input.style.display = "none"
     document.body?.appendChild(input)
+
     var done = false
+    var dropFocusWatch: () -> Unit = {}
     fun finish(files: List<PickedFile>) {
         if (done) return
         done = true
+        dropFocusWatch()
         input.parentNode?.removeChild(input)
         cont.resume(files)
     }
+
     input.addEventListener("change", {
         val list = input.files
         finish(
@@ -87,12 +100,32 @@ suspend fun pickFilesViaInput(kind: PickKind): List<PickedFile> = suspendCancell
             },
         )
     })
-    // No reliable cancel event; the next focus-in after the dialog closes with no change means cancel.
-    window.addEventListener(
-        "focus",
-        { window.setTimeout({ finish(emptyList()); null }, 500); Unit },
-        AddEventListenerOptions(once = true),
-    )
+
     input.click()
-    cont.invokeOnCancellation { input.parentNode?.removeChild(input) }
+
+    // There is no cancel event, so a cancel is inferred from "the window got focus back and the
+    // input is still empty". Three things keep that heuristic from eating a REAL pick, because
+    // [finish] is one-shot and a wrong empty answer would drop the user's files silently:
+    //  - the watch is armed on the next tick, AFTER `click()`, so the focus the click itself
+    //    steals does not arm-and-fire it immediately;
+    //  - it waits a full second, which covers a slow picker dismissal (iOS/Safari, a transcode);
+    //  - it only concludes "cancelled" when `input.files` is still empty. The file list is
+    //    populated BEFORE `change` dispatches, so a pick that is merely late to fire its event is
+    //    still visible here and the timer stands down.
+    window.setTimeout({
+        val onFocus: (Event) -> Unit = {
+            window.setTimeout({ if ((input.files?.length ?: 0) == 0) finish(emptyList()); null }, 1000)
+            Unit
+        }
+        dropFocusWatch = { window.removeEventListener("focus", onFocus) }
+        window.addEventListener("focus", onFocus, AddEventListenerOptions(once = true))
+        null
+    }, 0)
+
+    // `done` first: the input is about to go away, and a `change` that lands between the removal
+    // and the flag would otherwise resume a cancelled continuation.
+    cont.invokeOnCancellation {
+        done = true
+        input.parentNode?.removeChild(input)
+    }
 }

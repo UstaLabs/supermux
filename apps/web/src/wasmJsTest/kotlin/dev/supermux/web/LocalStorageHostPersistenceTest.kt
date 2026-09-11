@@ -8,6 +8,7 @@ import kotlinx.browser.localStorage
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class LocalStorageHostPersistenceTest {
     @BeforeTest fun clear() = localStorage.clear()
@@ -28,5 +29,29 @@ class LocalStorageHostPersistenceTest {
     @Test fun corruptJsonLoadsEmpty() {
         localStorage.setItem("supermux:hosts", "{not json")
         assertEquals(emptyList(), LocalStorageHostPersistence().loadAll())
+    }
+
+    /** Signing out must leave no supermux keys behind, not an empty "[]" that reads as "set up". */
+    @Test fun forgettingTheLastHostClearsBothKeys() {
+        val p = LocalStorageHostPersistence()
+        p.saveAll(listOf(PairedHost(recordId = "web", displayName = "origin", token = "")))
+        p.saveAll(emptyList())
+        assertNull(localStorage.getItem("supermux:hosts"))
+        assertNull(localStorage.getItem("supermux:hostTokens"))
+        assertEquals(emptyList(), LocalStorageHostPersistence().loadAll())
+    }
+
+    /**
+     * A corrupt token map costs the TOKENS, never the fleet: the hosts still load (blank tokens,
+     * re-pairable) exactly as a missing Keychain item behaves on iOS.
+     */
+    @Test fun corruptTokenMapKeepsHostsWithBlankTokens() {
+        LocalStorageHostPersistence().saveAll(
+            listOf(PairedHost(recordId = "web", displayName = "origin", token = "t")),
+        )
+        localStorage.setItem("supermux:hostTokens", "{not json")
+        val loaded = LocalStorageHostPersistence().loadAll()
+        assertEquals(listOf("web"), loaded.map { it.recordId })
+        assertEquals(listOf(""), loaded.map { it.token })
     }
 }

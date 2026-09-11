@@ -47,6 +47,8 @@ val WEB_CAPS = Caps(
  */
 class WebPlatform : Platform {
     override val caps: Caps = WEB_CAPS
+    /** Gesture-bound: `window.open` off the gesture's own tick is popup-blocked silently (see
+     *  [dev.supermux.web.seams.WebFiles]), so never await anything before calling this. */
     override fun openUrl(url: String) { window.open(url, "_blank", "noopener") }
     override fun copyToClipboard(text: String) { copyTextJs(text) }
     override suspend fun pickFiles(kind: PickKind, requester: String): List<PickedFile> = pickFilesViaInput(kind)

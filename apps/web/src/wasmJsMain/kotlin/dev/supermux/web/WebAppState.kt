@@ -26,8 +26,15 @@ object WebAppState {
     fun setPendingPairLink(url: String?) { _pendingPairLink.value = url }
     fun consumePendingPairLink() { _pendingPairLink.value = null }
 
-    /** Install the DOM listeners once, from `main()`. */
+    private var installed = false
+
+    /**
+     * Install the DOM listeners once, from `main()`. Idempotent: a second call (a re-mount, a hot
+     * reload) would otherwise stack a second visibility and message listener on the same targets.
+     */
     fun install() {
+        if (installed) return
+        installed = true
         _foreground.value = !documentHidden()
         document.addEventListener("visibilitychange", { _foreground.value = !documentHidden() })
         // sw.js (plan 4) posts {type:"navigate", to:"/s/<id>"} on notification click. There may be
@@ -37,6 +44,11 @@ object WebAppState {
             val to = navigateTarget(ev)?.toString()
             if (to != null) setPendingPushSessionId(to.removePrefix("/s/"))
         })
+        // REQUIRED, not belt-and-braces: a ServiceWorkerContainer's message queue starts DISABLED
+        // and is only released by assigning `onmessage` or by calling `startMessages()`. With
+        // `addEventListener` alone every notification-click message would sit in the queue
+        // forever, and plan 4's push navigation would silently never arrive.
+        startSwMessages()
     }
 }
 
@@ -48,6 +60,9 @@ private fun documentHidden(): Boolean = js("document.visibilityState === 'hidden
 
 /** `navigator.serviceWorker` as a plain [EventTarget], or null where the browser has none. */
 private fun serviceWorkerContainer(): EventTarget? = js("navigator.serviceWorker || null")
+
+/** Release the container's queued messages — see [WebAppState.install]. */
+private fun startSwMessages(): Unit = js("{ if (navigator.serviceWorker) navigator.serviceWorker.startMessages(); }")
 
 /** The `/s/<id>` target of a service-worker navigate message, or null for anything else. */
 @Suppress("UNUSED_PARAMETER")

@@ -28,6 +28,14 @@ class LocalStorageHostPersistence(
     }
 
     override fun saveAll(hosts: List<PairedHost>) {
+        // Forgetting the last host REMOVES both keys rather than storing "[]"/"{}" — an empty
+        // registry and a registry that was never written must be indistinguishable, so a signed-out
+        // browser leaves no supermux keys behind for the next user of the machine to find.
+        if (hosts.isEmpty()) {
+            localStorage.removeItem(tokenKey)
+            localStorage.removeItem(metaKey)
+            return
+        }
         // Tokens first, metadata last — the same write order as the Keychain/DataStore hosts, so a
         // crash between the two leaves a token with no host (pruned next save) and never a host
         // that looks paired but cannot connect.
