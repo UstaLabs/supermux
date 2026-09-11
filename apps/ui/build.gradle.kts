@@ -28,6 +28,15 @@ kotlin {
     // this module; a second framework would embed the klibs twice.
     iosArm64()
     iosSimulatorArm64()
+    // Browser (plan 1 of web→KMP). Same reasoning as :shared: no Node target; the wasm test task
+    // is disabled (jvmTest covers commonMain; commonTest still COMPILES for wasm) and :web owns
+    // the browser-only tests.
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser {
+            testTask { enabled = false }
+        }
+    }
     // Explicit, matching `:shared`: iosMain sits under the default apple/native hierarchy, and
     // naming the template keeps that wiring stable if an intermediate source set is ever added.
     applyDefaultHierarchyTemplate()
@@ -83,6 +92,14 @@ kotlin {
             // exposes the Nav3 back stack and `FullPaneOverlaySceneStrategy` is a `SceneStrategy`
             // in this module's own public signatures.
             api(libs.jetbrains.navigation3.ui)
+        }
+        wasmJsMain {
+            // `js("…")`, external declarations and JsAny are all still behind this opt-in in 2.3.
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+            dependencies {
+                // kotlinx.browser / org.w3c — no longer in the wasm stdlib.
+                implementation(libs.kotlinx.browser)
+            }
         }
         jvmTest.dependencies {
             implementation(kotlin("test"))

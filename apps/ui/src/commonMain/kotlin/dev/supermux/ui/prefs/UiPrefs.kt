@@ -158,7 +158,10 @@ class UiPrefs(private val settings: SettingsStore) {
         }
 
     suspend fun putLauncherPrefs(prefs: LauncherPrefs) =
-        settings.putString(SettingsKeys.LAUNCHER_PREFS, prefsJson.encodeToString(prefs))
+        settings.putString(
+            SettingsKeys.LAUNCHER_PREFS,
+            prefsJson.encodeToString(LauncherPrefs.serializer(), prefs),
+        )
 
     /** The in-progress new-session draft. Unparsable JSON reads as an empty draft. */
     val launcherDraft: Flow<LauncherDraft> =
@@ -171,7 +174,7 @@ class UiPrefs(private val settings: SettingsStore) {
     suspend fun putLauncherDraft(draft: LauncherDraft) =
         settings.putString(
             SettingsKeys.LAUNCHER_DRAFT,
-            if (draft == LauncherDraft()) null else prefsJson.encodeToString(draft),
+            if (draft == LauncherDraft()) null else prefsJson.encodeToString(LauncherDraft.serializer(), draft),
         )
 
     /** Drop the draft — the launcher calls this once a session is actually created. */
