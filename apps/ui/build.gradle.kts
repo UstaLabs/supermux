@@ -28,9 +28,9 @@ kotlin {
     // this module; a second framework would embed the klibs twice.
     iosArm64()
     iosSimulatorArm64()
-    // Browser (plan 1 of web→KMP). Same reasoning as :shared: no Node target; the wasm test task
-    // is disabled (jvmTest covers commonMain; commonTest still COMPILES for wasm) and :web owns
-    // the browser-only tests.
+    // Browser (plan 1 of web→KMP). Same reasoning as :shared: no Node target, and the wasm test
+    // task is disabled — this module has no commonTest at all (jvmTest covers commonMain) and
+    // :web owns the browser-only tests.
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {
         browser {

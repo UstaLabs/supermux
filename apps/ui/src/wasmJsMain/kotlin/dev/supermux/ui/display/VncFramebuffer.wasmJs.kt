@@ -22,6 +22,8 @@ import org.jetbrains.skia.ImageInfo
  * desktop — freed only whenever Skiko's cleaner eventually runs.
  * Each update installs pixels into THIS instance and only wraps a fresh (cheap, no native alloc)
  * `asComposeImageBitmap` so Compose's state sees a changed identity.
+ *
+ * TODO: fold the jvm/ios/wasm copies into a `skikoMain` intermediate source set once wasm is green.
  */
 actual class VncFramebuffer actual constructor() {
     private var buffer = ByteArray(0)

@@ -153,11 +153,14 @@ class UiPrefs(private val settings: SettingsStore) {
     /** Sticky launcher agent/model/effort choices. Unparsable JSON reads as the defaults. */
     val launcherPrefs: Flow<LauncherPrefs> =
         settings.string(SettingsKeys.LAUNCHER_PREFS).map { raw ->
-            raw?.let { runCatching { prefsJson.decodeFromString<LauncherPrefs>(it) }.getOrNull() }
+            raw?.let { runCatching { prefsJson.decodeFromString(LauncherPrefs.serializer(), it) }.getOrNull() }
                 ?: LauncherPrefs()
         }
 
     suspend fun putLauncherPrefs(prefs: LauncherPrefs) =
+        // Explicit serializer, like the collapsed-paths pair below: the reified
+        // `encodeToString(value)` extension is not resolvable on wasm, where the call binds to the
+        // two-argument `StringFormat` member instead and fails to compile.
         settings.putString(
             SettingsKeys.LAUNCHER_PREFS,
             prefsJson.encodeToString(LauncherPrefs.serializer(), prefs),
@@ -166,12 +169,14 @@ class UiPrefs(private val settings: SettingsStore) {
     /** The in-progress new-session draft. Unparsable JSON reads as an empty draft. */
     val launcherDraft: Flow<LauncherDraft> =
         settings.string(SettingsKeys.LAUNCHER_DRAFT).map { raw ->
-            raw?.let { runCatching { prefsJson.decodeFromString<LauncherDraft>(it) }.getOrNull() }
+            raw?.let { runCatching { prefsJson.decodeFromString(LauncherDraft.serializer(), it) }.getOrNull() }
                 ?: LauncherDraft()
         }
 
     /** An EMPTY draft clears the key rather than storing `{}` — both stores did this before. */
     suspend fun putLauncherDraft(draft: LauncherDraft) =
+        // Explicit serializer for the same reason as putLauncherPrefs: the reified extension does
+        // not resolve on wasm.
         settings.putString(
             SettingsKeys.LAUNCHER_DRAFT,
             if (draft == LauncherDraft()) null else prefsJson.encodeToString(LauncherDraft.serializer(), draft),

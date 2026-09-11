@@ -5,6 +5,7 @@
 package dev.supermux.ui.editor
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.HtmlElementView
@@ -27,9 +28,26 @@ interface DomEditorEngine : EditorEngine {
     fun detach()
 }
 
+/** A plain (non-state) flag: `update` must not invalidate the composition merely to record that
+ *  the engine has already been attached. */
+private class AttachState {
+    var attached = false
+}
+
+/**
+ * Hosts the engine's DOM container over the Compose canvas.
+ *
+ * [DomEditorEngine.attach] fires from `update`, not `factory`, and only once the element is in the
+ * document at a non-zero size — the same trap the desktop actual documents for JCEF: an iframe
+ * mounted into a detached or 0×0 container can sit there loading forever.
+ *
+ * `visible = false` keeps the element (and the engine's document) alive and merely hides it, which
+ * [KeepAlivePanel] reinforces by laying the pane out at 0×0.
+ */
 @Composable
 actual fun EditorEngineHost(engine: EditorEngine, visible: Boolean, modifier: Modifier) {
     val dom = engine as? DomEditorEngine ?: return
+    val state = remember(dom) { AttachState() }
     KeepAlivePanel(visible = visible) {
         HtmlElementView<HTMLDivElement>(
             modifier = modifier,
@@ -37,10 +55,21 @@ actual fun EditorEngineHost(engine: EditorEngine, visible: Boolean, modifier: Mo
                 (document.createElement("div") as HTMLDivElement).also { div ->
                     div.style.width = "100%"
                     div.style.height = "100%"
-                    dom.attach(div)
+                    // `overflow` has no typed accessor in kotlinx-browser's CSSStyleDeclaration.
+                    div.style.setProperty("overflow", "hidden")
                 }
             },
-            onRelease = { dom.detach() },
+            update = {
+                it.style.visibility = if (visible) "visible" else "hidden"
+                if (!state.attached && it.isConnected && it.clientWidth > 0) {
+                    state.attached = true
+                    dom.attach(it)
+                }
+            },
+            onRelease = {
+                state.attached = false
+                dom.detach()
+            },
         )
     }
 }

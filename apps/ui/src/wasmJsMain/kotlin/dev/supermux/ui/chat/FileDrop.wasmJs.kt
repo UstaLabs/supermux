@@ -1,25 +1,23 @@
 package dev.supermux.ui.chat
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
-import androidx.compose.ui.unit.DpOffset
 import dev.supermux.chat.mimeForFileName
 import dev.supermux.net.BlobChunkSource
 import dev.supermux.ui.platform.PickedFile
+import dev.supermux.ui.widgets.PointerAnchoredMenu
 import kotlinx.browser.document
+import kotlinx.browser.window
 import org.w3c.dom.DragEvent
+import org.w3c.dom.HTMLCanvasElement
 import org.w3c.dom.events.Event
 import org.w3c.files.FileList
 import org.w3c.files.get
@@ -36,42 +34,106 @@ private fun pickedFilesFrom(list: FileList): List<PickedFile> =
     }
 
 /**
- * Listens for an OS file drag on the WHOLE document rather than on this node's box.
+ * A drag position in Compose window coordinates, or null when there is no Compose canvas yet.
  *
- * The Compose canvas is one `<canvas>` element: there is no DOM node per composable to attach a
- * drop target to, so the document is the target. That matches desktop, where the drag-over
- * highlight also lights up for a drag anywhere over the window — the composer is the only drop
- * consumer in the app either way.
+ * The DOM reports `clientX/clientY` in CSS pixels relative to the viewport; Compose's canvas is
+ * sized `cssPixels * devicePixelRatio`, and its window coordinates are in those device pixels — the
+ * same conversion `ComposeViewport` applies to real pointer events.
+ */
+private fun dragPositionInWindow(event: DragEvent): Offset? {
+    val canvas = document.querySelector("canvas") as? HTMLCanvasElement ?: return null
+    val rect = canvas.getBoundingClientRect()
+    val scale = window.devicePixelRatio
+    return Offset(
+        ((event.clientX - rect.left) * scale).toFloat(),
+        ((event.clientY - rect.top) * scale).toFloat(),
+    )
+}
+
+/**
+ * Accepts an OS file drag over THIS node's bounds.
  *
- * `dragover` must `preventDefault()` or the browser refuses the drop and navigates to the file.
+ * The listeners are on the document because the Compose canvas is a single `<canvas>` element —
+ * there is no DOM node per composable to hang a drop target on — but every event is then hit-tested
+ * against the node's own `boundsInWindow()`, so a second chat pane does not stage the same drop a
+ * second time, and a hidden pane (laid out 0×0 by [dev.supermux.ui.widgets.KeepAlivePanel], yet
+ * still composed) is inert without any extra bookkeeping.
+ *
+ * The highlight tracks that hit test rather than `dragleave`, which fires on every DOM-internal
+ * crossing and would flicker; `dragend`/`drop`, plus a `dragleave` that lands outside the bounds
+ * (what leaving the window looks like), guarantee it cannot stick.
+ *
+ * `dragenter` and `dragover` must both `preventDefault()` or the browser refuses the drop and
+ * navigates to the file instead.
  */
 private class DomFileDropNode(
     var onDragOver: (Boolean) -> Unit,
     var onFiles: (List<PickedFile>) -> Unit,
-) : Modifier.Node() {
+) : Modifier.Node(), GlobalPositionAwareModifierNode {
+    private var bounds: Rect = Rect.Zero
+    private var inside = false
+
+    override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        bounds = coordinates.boundsInWindow()
+    }
+
+    private fun isOver(event: Event): Boolean {
+        val drag = event as? DragEvent ?: return false
+        val at = dragPositionInWindow(drag) ?: return false
+        return !bounds.isEmpty && bounds.contains(at)
+    }
+
+    /** Edge-triggered: the composer only hears about a change, never a repeat of the same state. */
+    private fun setInside(value: Boolean) {
+        if (inside == value) return
+        inside = value
+        onDragOver(value)
+    }
+
     // Held in fields so removeEventListener gets the SAME function instances addEventListener got.
+    private val onDragEnterEvent: (Event) -> Unit = { event ->
+        event.preventDefault()
+        setInside(isOver(event))
+    }
     private val onDragOverEvent: (Event) -> Unit = { event ->
         event.preventDefault()
-        onDragOver(true)
+        val over = isOver(event)
+        // Tell the OS this is a copy, so the cursor shows the right affordance over our bounds.
+        if (over) (event as? DragEvent)?.dataTransfer?.dropEffect = "copy"
+        setInside(over)
     }
-    private val onDragLeaveEvent: (Event) -> Unit = { onDragOver(false) }
+    private val onDragLeaveEvent: (Event) -> Unit = { event ->
+        // Only a leave OUTSIDE our bounds ends the drag for us — leaving the window reports a
+        // position of (0, 0), while a crossing between two elements inside the pane does not.
+        if (!isOver(event)) setInside(false)
+    }
+    private val onDragEndEvent: (Event) -> Unit = { setInside(false) }
     private val onDropEvent: (Event) -> Unit = { event ->
         event.preventDefault()
-        onDragOver(false)
-        val files = (event as? DragEvent)?.dataTransfer?.files?.let(::pickedFilesFrom).orEmpty()
-        if (files.isNotEmpty()) onFiles(files)
+        val over = isOver(event)
+        setInside(false)
+        if (over) {
+            val files = (event as? DragEvent)?.dataTransfer?.files?.let(::pickedFilesFrom).orEmpty()
+            if (files.isNotEmpty()) onFiles(files)
+        }
     }
 
     override fun onAttach() {
+        document.addEventListener("dragenter", onDragEnterEvent)
         document.addEventListener("dragover", onDragOverEvent)
         document.addEventListener("dragleave", onDragLeaveEvent)
+        document.addEventListener("dragend", onDragEndEvent)
         document.addEventListener("drop", onDropEvent)
     }
 
     override fun onDetach() {
+        document.removeEventListener("dragenter", onDragEnterEvent)
         document.removeEventListener("dragover", onDragOverEvent)
         document.removeEventListener("dragleave", onDragLeaveEvent)
+        document.removeEventListener("dragend", onDragEndEvent)
         document.removeEventListener("drop", onDropEvent)
+        // A pane torn down mid-drag must not leave the composer highlighted forever.
+        setInside(false)
     }
 }
 
@@ -99,8 +161,11 @@ actual fun Modifier.externalFileDropTarget(
 }
 
 /**
- * Right-click "Paste image", as a material3 [DropdownMenu] at the pointer — foundation's
- * `ContextMenuArea` (the desktop actual) has no web target.
+ * Right-click "Paste image" around the composer card.
+ *
+ * Unlike desktop's `ContextMenuArea` — which shows an EMPTY menu (i.e. none at all) when there is
+ * nothing on the clipboard — the item is always present here and merely `enabled = pasteEnabled`,
+ * because a `DropdownMenu` with no items would open as an empty sliver.
  */
 @Composable
 actual fun ComposerContextMenu(
@@ -108,33 +173,14 @@ actual fun ComposerContextMenu(
     onPasteImage: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    var open by remember { mutableStateOf(false) }
-    var at by remember { mutableStateOf(DpOffset.Zero) }
-    Box(
-        Modifier.pointerInput(Unit) {
-            awaitPointerEventScope {
-                while (true) {
-                    val ev = awaitPointerEvent()
-                    if (ev.type == PointerEventType.Press && ev.buttons.isSecondaryPressed) {
-                        val p = ev.changes.first().position
-                        at = DpOffset(p.x.toDp(), p.y.toDp())
-                        open = true
-                        ev.changes.forEach { it.consume() }
-                    }
-                }
-            }
-        },
-    ) {
-        content()
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, offset = at) {
-            DropdownMenuItem(
-                text = { Text("Paste image") },
-                enabled = pasteEnabled,
-                onClick = {
-                    open = false
-                    onPasteImage()
-                },
-            )
-        }
+    PointerAnchoredMenu(content = content) { dismiss ->
+        DropdownMenuItem(
+            text = { Text("Paste image") },
+            enabled = pasteEnabled,
+            onClick = {
+                dismiss()
+                onPasteImage()
+            },
+        )
     }
 }
