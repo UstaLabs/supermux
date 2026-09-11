@@ -17,9 +17,17 @@ import org.w3c.dom.set
  * an ordinary `localStorage` map and is, in practice, always empty strings. Corrupt or missing
  * JSON loads as empty, which the caller reads as "not set up yet".
  */
+/**
+ * @param onEmptied run when the LAST host is forgotten. On the web that is the sign-out gesture:
+ *   the only host is the page origin, and the credential behind it is an HttpOnly cookie this code
+ *   cannot clear — so forgetting the record has to be paired with `POST /logout`. The hook is
+ *   here, rather than at the Devices screen's button, because every path that empties the registry
+ *   (`FleetStore.removeHost`, a future "reset this browser") must end the session.
+ */
 class LocalStorageHostPersistence(
     private val metaKey: String = "supermux:hosts",
     private val tokenKey: String = "supermux:hostTokens",
+    private val onEmptied: () -> Unit = {},
 ) : HostPersistence {
 
     override fun loadAll(): List<PairedHost> {
@@ -34,6 +42,7 @@ class LocalStorageHostPersistence(
         if (hosts.isEmpty()) {
             localStorage.removeItem(tokenKey)
             localStorage.removeItem(metaKey)
+            onEmptied()
             return
         }
         // Tokens first, metadata last — the same write order as the Keychain/DataStore hosts, so a

@@ -1280,3 +1280,70 @@ Claude-Session: https://claude.ai/code/session_017Wc3ny1VJY4ZkcLD3ka54n"
 ## Not in this plan
 
 Terminal (xterm), CodeMirror engine, VNC panel wiring, mic, clipboard images, audio TTS chunks, uploads beyond the picker → plan 3. Setup wizard, web push, `sw.js`, manifest/icons → plan 4. Playwright journey, CI/Docker, Vue deletion → plan 5.
+
+---
+
+## Results (2026-09-11, tasks 1–6; hermetic broker via `scripts/test-broker.sh`, headless Google Chrome 148 + Playwright)
+
+The shared `SupermuxApp` runs in a browser. Pairing gate, fleet, chat, settings, URL sync and the
+persisted shell state all work against a real broker; nothing in `:ui` or `:shared` had to change
+for the shell itself to render.
+
+### What the browser run found (all fixed here unless said otherwise)
+
+1. **The fleet never dialled.** `FleetStore.sync` skips every host whose token is blank
+   (`FleetStore.kt:377` — that check is how every other platform says "this record is not
+   configured yet"), so the cookie-credential origin host was stored, shown and never connected:
+   an empty session list forever, no `/host` probe, no WebSocket. Worked around INSIDE `:web`:
+   `WebHostStores.COOKIE_TOKEN` (`"cookie"`) is stored as the record's token. It is not a
+   credential — the broker resolves `cookieToken(req) || bearerToken(req)` (`channels/web/cookies.ts`),
+   so the cookie wins on every HTTP request and the bogus bearer is ignored, and a browser cannot
+   set headers on a WS upgrade at all. **Carry-forward for plan 3:** this belongs in `:shared` —
+   `PairedHost` should be able to say "my credential is ambient" (a flag, or a blank-token host
+   that is dialled when `directUrl` is the page origin) instead of a sentinel string.
+2. **Every nested deep link loaded nothing.** `index.html` referenced the bundle relatively
+   (`<script src="assets/app-<hash>.js">`), so `/settings/voice` asked for
+   `/settings/assets/app-*.js`, got the SPA fallback (HTML, 404 for the sub-resource) and painted
+   a permanent splash. Fixed with `<base href="/">` in `apps/web/src/wasmJsMain/resources/index.html`,
+   which also fixes Compose's own relative `assets/composeResources/…` fetches at depth. Scenario 4
+   failed before this and passes after.
+3. Review follow-ups on tasks 4–5, committed separately (`f935762e`): `/me` 429/5xx/undecodable →
+   `Offline`, not `Unpaired`; `replaceState` for URL normalisation so Back is not trapped in a
+   normalise loop; pair links are accepted from ANY origin by extracting the token and replaying it
+   against this origin (the broker mints links on the relay/public origin).
+
+### Browser scenarios (screenshots under the session scratchpad `…/scratchpad/plan2/`)
+
+| # | Scenario | Result | Shot |
+|---|---|---|---|
+| 1 | `$URL/` with no cookie | Pair screen, "already set up — use normal pairing". `/me` 401 → secretless claim 403, exactly as designed. First paint ~3.9 s. | `1-unpaired.png` |
+| 2 | `$URL/pair?t=$TOKEN` | 302 → `/`, cookie set, app paints, WS connects (`[BrokerClient] connected`, `rx Snapshot`), sidebar shows workspace `workdir` › session `test-journey`. No `pageerror`. Ready ~6.8 s. | `2-paired.png` |
+| 3 | Click the session row; reload | URL becomes `/s/00000000-0000-4000-8000-000000000001`; reloading that URL reopens the same chat (composer, suggestions, `workdir / test-journey` breadcrumb). | `3-session.png`, `3-session-reloaded.png` |
+| 4 | `$URL/settings/voice` | Settings hub opens on the Voice section (speech engine / read aloud / cleanup / glossary). | `4-settings-voice.png` |
+| 5 | Back | In-app gear → `/settings/agents`, browser Back → `/`; session row → `/s/…`, Back → `/`. No loop, no stuck entry. | `5a-settings-inapp.png`, `5b-back-home.png` |
+| 6 | Sidebar width | Divider DRAGGED (320 → `459.875`), `supermux:shell:sidebarWidthDp` written, reload re-paints the wide sidebar and keeps the value. | `6a-dragged.png`, `6b-after-reload.png` |
+
+### Console noise
+
+No `pageerror` in any scenario. Expected: two `console.error`s on the unpaired path (the 401 `/me`
+and the 403 claim — the fetches Chrome logs, not app errors), and WebGL driver performance warnings
+from the headless GPU (`GPU stall due to ReadPixels`, `WEBGL_debug_renderer_info not enabled`).
+`[BrokerClient] send dropped (not connected)` fires once per page load — a queued frame before the
+socket opens; harmless but worth a look in plan 3. Two tofu glyphs render inside the Voice chips
+(a missing icon glyph in the bundled font) — cosmetic, plan 3.
+
+### Timings
+
+| Step | Time |
+|---|---|
+| `:web:compileKotlinWasmJs` (incremental) | 5–8 s |
+| `:web:stageForBroker` (cold, includes webpack + dist) | 8 m 50 s |
+| `:web:stageForBroker` (index.html only) | 16 s |
+| `:web:wasmJsBrowserTest` (Karma, ChromeHeadless) | 1 m 43 s, 35 tests |
+| Bundle after the real app lands | 5 980 KB gzip staged (plan 1's hello world: ≈4.1 MB) |
+
+### Not verified
+
+Sign-out (`LocalStorageHostPersistence(onEmptied)` → `CookieSession.logout()` → reload) is wired and
+compiles but was not exercised in the browser — the Devices-screen unpair gesture needs a click path
+this run did not drive. Terminal/editor/VNC/mic remain on their "unavailable" no-ops (plan 3).

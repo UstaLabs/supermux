@@ -1,38 +1,72 @@
 package dev.supermux.web
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
+import dev.supermux.host.HostSnapshotStore
+import dev.supermux.proto.ServerFrame
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.state.LocalStorageSettingsStore
+import dev.supermux.state.WalkthroughSeam
 import dev.supermux.state.jsHttpFactory
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
+import dev.supermux.ui.chat.MessageTts
+import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.prefs.seedShellState
+import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.settings.FleetSettingsExtra
+import dev.supermux.ui.settings.FleetSettingsSection
+import dev.supermux.ui.shell.ShellUiState
+import dev.supermux.ui.shell.SupermuxApp
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.web.auth.CookieSession
+import dev.supermux.web.auth.SessionState
+import dev.supermux.web.auth.WebPairScreen
+import dev.supermux.web.nav.UrlSync
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.configureWebResources
 
 /**
- * Plan 1: proves the toolchain end to end — Compose paints, Ktor's Js engine reaches the broker
- * on the page's own origin with the session cookie. Plan 2 replaces [HelloScreen] with the shared
- * `SupermuxApp` root behind `WebPlatform`.
+ * The browser half of the walkthrough seam — `:shared`'s [WalkthroughSeam] over `:ui`'s
+ * [WalkthroughState]. Identical to `IosWalkthroughSeam`/`AndroidWalkthroughSeam`, and kept beside
+ * the DI that installs it because the store's generic parameter is chosen per app.
+ *
+ * Not optional here: `WEB_CAPS.walkthrough` is true, so the shell READS the walkthrough holder, and
+ * a `HostStore` built without a seam throws when it does.
+ */
+object WebWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
+    override fun create(sessionId: String) = WalkthroughState(sessionId)
+    override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
+}
+
+/** Group the session list by project — a per-BROWSER view preference, like iOS's NSUserDefaults one. */
+private const val GROUP_BY_PROJECT_KEY = "web:groupByProject"
+
+/**
+ * The browser's entry point, mirroring `MainViewController.kt` — deps → seeds → pairing gate →
+ * fleet → `SupermuxApp` — with the two changes the platform forces:
+ *
+ *  1. **No `runBlocking`.** wasm has none, so the seeds (and the pairing probe, which is a network
+ *     round trip and could never have been blocking anyway) are awaited in a coroutine and the
+ *     viewport is mounted once, inside it. Nothing paints before the seeds land, which is the
+ *     property iOS gets from `runBlocking`: no frame with the sidebar at the wrong width.
+ *  2. **Pairing is decided by the broker, not by a local store.** The credential is an HttpOnly
+ *     cookie, so `isPaired()` cannot be answered here — [CookieSession.probe] asks `/me`.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
@@ -41,34 +75,162 @@ fun main() {
     // stageForBroker puts the Compose resource tree under assets/ so it inherits the broker's
     // immutable cache rule; the runtime must look for it there. The two MUST agree.
     configureWebResources { resourcePathMapping { path -> "assets/$path" } }
-    ComposeViewport(document.body!!) { HelloScreen() }
-}
+    WebAppState.install()
 
-@Composable
-private fun HelloScreen() {
-    // Hold the splash until Compose has actually painted: removing it before ComposeViewport mounts
-    // leaves one blank frame. requestAnimationFrame runs after the first composition's frame.
-    LaunchedEffect(Unit) { window.requestAnimationFrame { document.getElementById("splash")?.remove() } }
-    val scope = rememberCoroutineScope()
-    val http = remember { jsHttpFactory()(null) }
-    var host by remember { mutableStateOf("(not asked yet)") }
-    MaterialTheme(colorScheme = darkColorScheme()) {
-        Surface(Modifier.fillMaxSize()) {
-            Column(
-                Modifier.fillMaxSize().padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("Supermux — Compose for Web", style = MaterialTheme.typography.headlineSmall)
-                Text("origin: ${window.location.origin}")
-                Button(onClick = {
-                    scope.launch {
-                        host = runCatching { http.get("${window.location.origin}/host").bodyAsText() }
-                            .getOrElse { "error: $it" }
+    val settings = LocalStorageSettingsStore()
+    val deps = HostStoreDeps(httpFactory = jsHttpFactory(), settings = settings)
+    val uiPrefs = UiPrefs(settings)
+    // The page's own scope: `Dispatchers.Main` because everything it drives ends in a Compose state
+    // read, `SupervisorJob` so one failed collector cannot tear the app's state down. Never
+    // cancelled — this scope's lifetime IS the document's.
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    val session = CookieSession(http = deps.httpFactory(null))
+    // Unpairing the origin host has to end the cookie session too — see [WebHostStores]. Wired
+    // before anything reads the store, because the hook lives on its persistence.
+    WebHostStores.init(session, appScope)
+    // ONE platform for the page: `FlowNotices` is a bus, and a second instance would mean notices
+    // shown on one and rendered from another.
+    val platform = WebPlatform()
+
+    appScope.launch {
+        val appearanceSeed = uiPrefs.appearance(AppearanceMode.SYSTEM).first()
+        val textScaleSeed = uiPrefs.textScale.first()
+        // Nothing to drain — the browser had no pre-KMP store under these keys (the Vue app's
+        // were different keys entirely, and spec §10 chose not to migrate them), so this reads
+        // back whatever this app itself last wrote.
+        val shellSeed = uiPrefs.seedShellState()
+        val collapsedPathsSeed = uiPrefs.collapsedProjectPaths.first()
+        var gate by mutableStateOf(session.probe())
+
+        ComposeViewport(document.body!!) {
+            val appearance by uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(appearanceSeed)
+            val textScale by uiPrefs.textScale.collectAsState(textScaleSeed)
+            // Hold the splash until Compose has actually painted: removing it before the first
+            // frame leaves one blank frame.
+            LaunchedEffect(Unit) { window.requestAnimationFrame { document.getElementById("splash")?.remove() } }
+
+            WebTheme(platform, appearance, textScale, uiPrefs) {
+                // The gate, and the reason the fleet below is built INSIDE it: `FleetStore`'s
+                // initialiser snapshots the host list once, so a store built before the origin
+                // host exists would connect to nothing for the life of the page. Same invariant
+                // iOS documents around its onboarding branch.
+                val g = gate
+                if (g !is SessionState.Paired) {
+                    val reason = when (g) {
+                        is SessionState.Unpaired -> g.reason
+                        is SessionState.Offline -> "the broker did not answer: ${g.error}"
                     }
-                }) { Text("GET /host") }
-                Text(host, style = MaterialTheme.typography.bodySmall)
+                    WebPairScreen(reason = reason, onRetry = { appScope.launch { gate = session.probe() } })
+                    return@WebTheme
+                }
+
+                val fleet = remember {
+                    // The record's hostId/platform/version are backfilled from `GET /host` by the
+                    // fleet's own probe; all it needs up front is a URL to connect to.
+                    WebHostStores.ensureOriginHost(displayName = window.location.host)
+                    buildFleet(deps, appScope)
+                }
+                val ui = remember {
+                    ShellUiState().apply {
+                        sidebarCollapsed = shellSeed.sidebarCollapsed
+                        setSidebarWidth(shellSeed.sidebarWidthDp.dp)
+                        // Unlike a phone, a browser tab reopens on the chat it was last in —
+                        // hence this AND `persistSelection = true` below, desktop's behaviour.
+                        // The URL wins over it a moment later if the address bar names a session.
+                        selectedId = shellSeed.selectedSession
+                        collapsedProjectPaths = collapsedPathsSeed
+                    }
+                }
+                var groupByProject by remember {
+                    mutableStateOf(settings.stringNow(GROUP_BY_PROJECT_KEY) != "false")
+                }
+                val foreground by WebAppState.foreground.collectAsState()
+
+                // Silence read-aloud when the tab goes to the background, the way Android stops it
+                // on ON_STOP: nothing else would ever stop it, since the composition stays alive.
+                LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
+
+                // The address bar IS this app's back stack. Exactly once, and only here: it reads
+                // `window.location` on its first composition.
+                UrlSync(ui)
+
+                // A push tap (plan 4's `sw.js` posts the session id; inert until then).
+                val pendingPush by WebAppState.pendingPushSessionId.collectAsState()
+                LaunchedEffect(pendingPush) {
+                    val sid = pendingPush ?: return@LaunchedEffect
+                    ui.selectSession(sid)
+                    WebAppState.consumePendingPushSessionId()
+                }
+
+                SupermuxApp(
+                    fleet = fleet,
+                    ui = ui,
+                    appearance = appearance,
+                    onToggleTheme = {
+                        appScope.launch {
+                            uiPrefs.putAppearance(
+                                if (appearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK,
+                            )
+                        }
+                    },
+                    appForeground = foreground,
+                    // A tab reopens where it was, and the URL says where that is.
+                    persistSelection = true,
+                    defaultDeviceName = "Browser",
+                    sessionListMode = SessionListMode.Fleet,
+                    groupByProject = groupByProject,
+                    onGroupByProjectChange = { value ->
+                        groupByProject = value
+                        appScope.launch { settings.putString(GROUP_BY_PROJECT_KEY, value.toString()) }
+                    },
+                    settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
+                    settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+                )
             }
         }
     }
+}
+
+/**
+ * The multi-host store, wired exactly as iOS's `buildFleet` wires its own — one host here, but the
+ * snapshot collector still earns its keep: the sidebar paints this host's last-known session list
+ * before the socket opens (spec §5), which on a cold browser tab is the difference between a list
+ * and an empty screen.
+ */
+private fun buildFleet(deps: HostStoreDeps, scope: CoroutineScope): FleetStore {
+    val snapshots: HostSnapshotStore = WebHostStores.snapshots
+    val fleet = FleetStore(
+        store = WebHostStores.store,
+        scope = scope,
+        deps = deps,
+        snapshots = snapshots,
+        appFactory = { url, token, onConn ->
+            HostStore(
+                url, token, scope, deps,
+                onConnectionChange = onConn,
+                walkthroughSeam = WebWalkthroughSeam,
+                // Read-aloud's BROKER half, bound per host exactly as iOS/Android bind it:
+                // `MessageTts` holds them as process-wide function references, and the active
+                // host's config is the one that decides.
+                bindTts = { resolve, speak ->
+                    MessageTts.resolveEngine = resolve
+                    MessageTts.speakRemoteStream = speak
+                },
+            )
+        },
+    )
+    fleet.bindMessageTts()
+    scope.launch {
+        combine(fleet.sessions, fleet.sessionHost) { sessions, owners -> sessions to owners }
+            .collect { (sessions, owners) ->
+                val records = fleet.store.list()
+                snapshots.retainOnly(records.map { it.recordId })
+                val now = deps.nowMs()
+                records.forEach { host ->
+                    val mine = sessions.filter { owners[it.id] == host.recordId }
+                    if (mine.isNotEmpty()) snapshots.replace(host.recordId, mine, now, host.version)
+                }
+            }
+    }
+    return fleet
 }
