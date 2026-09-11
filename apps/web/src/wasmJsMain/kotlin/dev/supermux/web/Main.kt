@@ -10,6 +10,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +27,7 @@ import io.ktor.client.statement.bodyAsText
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.configureWebResources
 
 /**
  * Plan 1: proves the toolchain end to end — Compose paints, Ktor's Js engine reaches the broker
@@ -36,12 +38,17 @@ import kotlinx.coroutines.launch
 fun main() {
     // The app draws its own context menus (spec carry-forward); the native one would cover them.
     document.addEventListener("contextmenu", { it.preventDefault() })
-    document.getElementById("splash")?.remove()
+    // stageForBroker puts the Compose resource tree under assets/ so it inherits the broker's
+    // immutable cache rule; the runtime must look for it there. The two MUST agree.
+    configureWebResources { resourcePathMapping { path -> "assets/$path" } }
     ComposeViewport(document.body!!) { HelloScreen() }
 }
 
 @Composable
 private fun HelloScreen() {
+    // Hold the splash until Compose has actually painted: removing it before ComposeViewport mounts
+    // leaves one blank frame. requestAnimationFrame runs after the first composition's frame.
+    LaunchedEffect(Unit) { window.requestAnimationFrame { document.getElementById("splash")?.remove() } }
     val scope = rememberCoroutineScope()
     val http = remember { jsHttpFactory()(null) }
     var host by remember { mutableStateOf("(not asked yet)") }

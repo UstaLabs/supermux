@@ -70,17 +70,27 @@ fun gzipSize(bytes: ByteArray): Long {
 val stageForBroker by tasks.registering {
     group = "distribution"
     description = "Build the wasm bundle and stage it (content-hashed) into src/channels/web/static"
-    dependsOn("wasmJsBrowserDistribution")
+    dependsOn(tasks.named("wasmJsBrowserDistribution"))
     inputs.dir(distDir)
+    inputs.property("maxGzipBytes", maxGzipBytes)
     outputs.dir(brokerStaticDir)
 
     doLast {
         val src = distDir.get().asFile
         val out = brokerStaticDir
-        // Wipe everything the previous build (Vite or ours) left; the broker reads disk-first.
-        out.deleteRecursively()
-        out.mkdirs()
-        val assets = out.resolve("assets").apply { mkdirs() }
+        // The publish below deletes `out` wholesale, and `out` is a relative hop out of the Gradle
+        // root into the Bun repo. Prove it still points at the broker's web channel before anyone
+        // reorganises either tree and this quietly wipes the wrong directory.
+        check(out.parentFile.resolve("static-serve.ts").isFile) {
+            "brokerStaticDir resolved to $out, which is not the broker's web channel dir"
+        }
+
+        // Stage into build/ first and publish at the end: the size guard must be able to FAIL
+        // without having already replaced what the broker is serving.
+        val staging = layout.buildDirectory.dir("brokerStage").get().asFile
+        staging.deleteRecursively()
+        staging.mkdirs()
+        val assets = staging.resolve("assets").apply { mkdirs() }
 
         // Pass 1: hash every binary/script asset, remember old→new names.
         val renames = linkedMapOf<String, String>()
@@ -94,7 +104,10 @@ val stageForBroker by tasks.registering {
         fun stage(file: File, content: ByteArray): String {
             val hashed = "${file.nameWithoutExtension}-${sha8(content)}.${file.extension}"
             assets.resolve(hashed).writeBytes(content)
-            renames[file.name] = "assets/$hashed"
+            // `renames` is keyed by BASE name because that is how the bundle references these files.
+            // Two dist files sharing one base name would collide here, and the rewrite would silently
+            // point every reference at whichever won — fail instead.
+            check(renames.put(file.name, "assets/$hashed") == null) { "duplicate asset basename: ${file.name}" }
             return hashed
         }
         wasmFiles.forEach { stage(it, it.readBytes()) }
@@ -113,20 +126,27 @@ val stageForBroker by tasks.registering {
         }
         jsFiles.forEach { f -> stage(f, rewrite(f.readText(), "assets").toByteArray()) }
 
-        // Pass 2: everything else copies as-is (index.html gets its references rewritten; other
-        // files — icons, manifest, fonts, sw.js in plan 4 — keep their names and the no-cache rule).
+        // Pass 2: everything else. index.html gets its references rewritten and stays at the root
+        // (no-cache, so a redeploy is picked up immediately). Compose's resource tree moves UNDER
+        // assets/ to inherit the immutable cache rule — Main.kt's `configureWebResources
+        // { resourcePathMapping { "assets/$it" } }` is the other half of that and MUST agree.
         src.walkTopDown().filter { it.isFile && it !in hashable }.forEach { f ->
-            val rel = f.relativeTo(src).path
-            val dst = out.resolve(rel)
+            val rel = f.relativeTo(src).invariantSeparatorsPath
+            val dst = if (rel.startsWith("composeResources/")) staging.resolve("assets/$rel") else staging.resolve(rel)
             dst.parentFile.mkdirs()
             if (f.name == "index.html") dst.writeText(rewrite(f.readText(), "")) else f.copyTo(dst, overwrite = true)
         }
 
-        // Size guard.
+        // Guards, BEFORE anything is published.
         val gz = assets.listFiles()!!.filter { it.extension == "wasm" || it.extension == "js" || it.extension == "mjs" }
             .sumOf { gzipSize(it.readBytes()) }
-        println("stageForBroker: ${renames.size} hashed assets, gzip total ${gz / 1024} KB → $out")
         check(gz <= maxGzipBytes) { "web bundle gzip total ${gz / 1024} KB exceeds the ${maxGzipBytes / 1024} KB ceiling" }
-        check(out.resolve("index.html").exists()) { "index.html missing from the staged bundle" }
+        check(staging.resolve("index.html").exists()) { "index.html missing from the staged bundle" }
+
+        // Publish: wipe whatever the previous build (Vite or ours) left — the broker reads disk-first.
+        out.deleteRecursively()
+        out.mkdirs()
+        staging.copyRecursively(out, overwrite = true)
+        println("stageForBroker: ${renames.size} hashed assets, gzip total ${gz / 1024} KB → $out")
     }
 }
