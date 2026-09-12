@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
 import dev.supermux.host.HostSnapshotStore
+import dev.supermux.host.workspaceForSession
 import dev.supermux.proto.ServerFrame
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
@@ -21,15 +22,22 @@ import dev.supermux.state.HostStoreDeps
 import dev.supermux.state.LocalStorageSettingsStore
 import dev.supermux.state.WalkthroughSeam
 import dev.supermux.state.jsHttpFactory
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.editor.WalkthroughState
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.prefs.seedShellState
+import dev.supermux.ui.push.PushTapHandle
+import dev.supermux.ui.push.notificationCancelSessionIds
+import dev.supermux.ui.push.pushTapHandleDecision
+import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
+import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.web.auth.CookieSession
 import dev.supermux.web.auth.SessionState
@@ -37,11 +45,13 @@ import dev.supermux.web.auth.WebPairScreen
 import dev.supermux.web.nav.UrlSync
 import dev.supermux.web.push.WebPushBanner
 import dev.supermux.web.push.WebPushRegistrar
+import dev.supermux.workspace.toDomainOrNull
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -59,6 +69,20 @@ object WebWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
     override fun create(sessionId: String) = WalkthroughState(sessionId)
     override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
 }
+
+/**
+ * The viewing keep-alive interval, in milliseconds.
+ *
+ * 60 s by default, matching the Vue app and leaving four re-assertions of head-room inside the
+ * broker's 5-minute presence TTL. `window.__smxHeartbeatMs` is a TEST HOOK — the browser test sets
+ * it to a couple of seconds before the bundle loads so a heartbeat can be observed on the wire
+ * without a minute-long wait. Read once, at startup: nothing in the app changes it at runtime.
+ */
+private val heartbeatMs: Int by lazy { heartbeatMsOverride() }
+
+@Suppress("UNUSED_PARAMETER")
+private fun heartbeatMsOverride(): Int =
+    js("(typeof window.__smxHeartbeatMs === 'number' && window.__smxHeartbeatMs > 0) ? window.__smxHeartbeatMs : 60000")
 
 /** Group the session list by project — a per-BROWSER view preference, like iOS's NSUserDefaults one. */
 private const val GROUP_BY_PROJECT_KEY = "web:groupByProject"
@@ -182,12 +206,81 @@ fun main() {
                 // `window.location` on its first composition.
                 UrlSync(ui)
 
-                // A push tap (plan 4's `sw.js` posts the session id; inert until then).
+                val workspaces by fleet.workspaces.collectAsState()
+                val sessionHost by fleet.sessionHost.collectAsState()
+                val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
+
+                // Withdraw the notifications for every chat that is now on screen — the user is
+                // looking at it, so a banner about it is noise. Same rule and the same shared
+                // helpers as `MainActivity`/`MainViewController`; gated on [foreground] because a
+                // hidden tab keeps its composition alive, so "selected" there does not mean "read".
+                LaunchedEffect(ui.selectedId, workspaces, compact, foreground) {
+                    val sid = ui.selectedId ?: return@LaunchedEffect
+                    if (!foreground) return@LaunchedEffect
+                    val ws = workspaceForSession(workspaces, sid)
+                    val visibleIds = ws?.let {
+                        visibleWorkspaceChatIdsAt(compact, it, it.layout.toDomainOrNull())
+                    }.orEmpty()
+                    for (id in notificationCancelSessionIds(visibleIds, sid)) {
+                        platform.push?.cancelForSession(id)
+                    }
+                }
+
+                // A tapped notification carries the chat id (`sw.js` posts `{type:"navigate",
+                // to:"/s/<id>"}`, which [WebAppState] turns into this flow). Resolve the owning
+                // workspace and activate that chat view without PATCHing the layout; an old broker
+                // or a session in no workspace falls back to the session-only screen. The id is
+                // consumed only once the workspace list has arrived, so a tap that opens a COLD
+                // tab still lands after the fleet connects. Byte-for-byte Android's logic
+                // (`MainActivity.kt`) — the divergence this replaces (a bare `selectSession`) lost
+                // the workspace view and could not tell a spent tap from a fresh one.
+                var handledPushSessionId by remember { mutableStateOf<String?>(null) }
                 val pendingPush by WebAppState.pendingPushSessionId.collectAsState()
-                LaunchedEffect(pendingPush) {
-                    val sid = pendingPush ?: return@LaunchedEffect
+                LaunchedEffect(ui.selectedId) { if (ui.selectedId == null) handledPushSessionId = null }
+                LaunchedEffect(pendingPush, workspaces) {
+                    val decision =
+                        pushTapHandleDecision(pendingPush, handledPushSessionId, workspaces.isNotEmpty())
+                    // Skip means "this tap is spent" — usually because it names the chat already
+                    // open. The id must STILL be cleared: `handledPushSessionId` resets whenever the
+                    // selection goes back to null, so a pending id left in the flow would be found
+                    // again by the next workspaces emission and drag the user back into the chat
+                    // they had just left. (iOS documents the same trap.)
+                    if (decision == PushTapHandle.Skip) {
+                        if (pendingPush != null) WebAppState.consumePendingPushSessionId()
+                        return@LaunchedEffect
+                    }
+                    val sid = pendingPush!!
+                    val hostId = sessionHost[sid] ?: fleet.activeHost.value
+                    val owned = hostId?.let { fleet.workspaceForSession(it, sid) }
+                    val tap = resolvePushTap(sid, owned?.let { listOf(it) } ?: workspaces)
                     ui.selectSession(sid)
-                    WebAppState.consumePendingPushSessionId()
+                    // Locals, not a smart cast: `PushTapResolution` is `:ui`'s, and Kotlin will not
+                    // smart-cast a public property declared in another module.
+                    val tappedWorkspace = tap.workspaceId
+                    val tappedView = tap.activeViewId
+                    if (tappedWorkspace != null && tappedView != null) {
+                        fleet.setActiveView(tappedWorkspace, tappedView)
+                    }
+                    if (decision == PushTapHandle.ApplyConsume) {
+                        handledPushSessionId = sid
+                        WebAppState.consumePendingPushSessionId()
+                    }
+                }
+
+                // Keep this tab's viewing presence alive. The broker forgets a device's viewing
+                // entry 5 minutes after it last heard about it
+                // (`src/core/push/viewing-tracker.ts:22`), so a user who reads one long, quiet turn
+                // would start getting pushes for the chat they are staring at. The Vue app
+                // re-asserted every 60 s (`src/web-app/src/composables/useViewing.ts:7`) and this is
+                // the same cadence, driven from the HOST because the browser is where a throttled
+                // or bfcache-restored tab can leave `HostStore`'s own timer un-fired for minutes.
+                // Only while [foreground]: a hidden tab has already sent `Viewing(null, false)` and
+                // has no presence to keep.
+                LaunchedEffect(foreground) {
+                    while (foreground) {
+                        delay(heartbeatMs.toLong())
+                        fleet.reassertViewing()
+                    }
                 }
 
                 // Push, exactly where iOS registers it (`MainViewController.kt`): once, after the

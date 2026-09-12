@@ -471,6 +471,27 @@ class HostStore(
         }
     }
 
+    /**
+     * Re-send the last viewing frame(s) verbatim, without changing any state.
+     *
+     * The broker forgets a device's viewing entry 5 minutes after it last heard about it
+     * (`src/core/push/viewing-tracker.ts:22`), so a client that sits in one chat has to keep
+     * saying so. [ensureViewingHeartbeat] does that from this store's own timer; this is the
+     * same assertion exposed to a HOST that wants to drive the cadence itself — the browser,
+     * whose tab can be throttled or restored from bfcache with a coroutine timer that never
+     * fired. Nothing is sent before a first [updateViewing]/[updateViewingSessions]: there is
+     * no presence to keep alive yet. No dedupe, deliberately — re-asserting the frame the
+     * broker already has IS the point.
+     */
+    fun reassertViewing() {
+        val frames = lastSentViewing ?: return
+        stateScope.launch {
+            for (frame in frames) {
+                runApi("viewing re-assert") { sendFrame(frame) }
+            }
+        }
+    }
+
     /** Re-assert the viewing frame every 60s so the broker's 5-min TTL never lapses while the user
      *  reads a long, quiet turn. Only refreshes while visible; [close] cancels it via [stateScope]. */
     private fun ensureViewingHeartbeat() {

@@ -704,6 +704,16 @@ class FleetStore(
         lastViewingHost = owner
     }
 
+    /**
+     * Re-assert the active host's viewing presence against the broker's 5-minute TTL
+     * (`src/core/push/viewing-tracker.ts:22`). Only the ACTIVE app: the viewing snapshot is
+     * single-workspace, and [updateViewing] has already cleared every other host's entry, so
+     * re-asserting on the rest would resurrect presence the fleet deliberately dropped.
+     */
+    fun reassertViewing() {
+        activeApp()?.reassertViewing()
+    }
+
     private fun applyViewingFrame(app: HostStore, frame: ClientFrame.Viewing) {
         val sessions = frame.sessions
         when {
