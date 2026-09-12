@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 
@@ -39,7 +40,10 @@ import kotlinx.coroutines.Dispatchers
 @OptIn(ExperimentalTestApi::class)
 class SetupPhoneStepTest {
 
-    private class FakeDevices {
+    private class FakeDevices(
+        /** When set, `deviceAdd` suspends on this before the broker "creates" the device. */
+        val gate: CompletableDeferred<Unit>? = null,
+    ) {
         val mints = CopyOnWriteArrayList<String>()
         val revokes = CopyOnWriteArrayList<String>()
         /** What `devicesLoad` reports for the minted device; `null` = never seen. */
@@ -51,6 +55,7 @@ class SetupPhoneStepTest {
                 mints.map { DeviceDto(name = it, last_seen_at = lastSeen.get()) }
             },
             deviceAdd = { name ->
+                gate?.await()
                 val minted = "$name-${mintCounter.incrementAndGet()}"
                 mints.add(minted)
                 AddDeviceResponse(url = "https://broker.test/pair/$minted", name = minted)
@@ -157,9 +162,12 @@ class SetupPhoneStepTest {
     }
 
     /**
-     * The regression the `rememberUpdatedState` version got wrong: Refresh mints a SECOND code, and
-     * leaving right after must revoke that one — not re-revoke the first, which Refresh already
-     * cleaned up.
+     * Refresh mints a SECOND code; leaving right after must revoke exactly that one, and must not
+     * re-revoke the first — Refresh already cleaned that up.
+     *
+     * An exactly-once guard on the observable contract, NOT a reproduction of the stale-read this
+     * replaced: the test necessarily recomposes between the refresh and the dispose (it waits for
+     * the new URL to appear), which is the one thing that kept `rememberUpdatedState` honest.
      */
     @Test fun refresh_then_leaving_revokes_the_new_code_exactly_once() = runComposeUiTest {
         val fake = FakeDevices()
@@ -176,6 +184,32 @@ class SetupPhoneStepTest {
         waitForIdle()
         eventually { assertTrue(fake.revokes.size >= 2) }
         assertEquals(listOf("phone-1", "phone-2"), fake.revokes.toList())
+    }
+
+    /**
+     * The hole `cancel()` left: `POST /devices` can reach the broker just as the step goes away.
+     * Cancelling the mint would drop the response — and with it any record of the device that now
+     * exists. Dispose here while `deviceAdd` is suspended, then let it return: the step is long
+     * gone, but the device it created is still revoked, once.
+     */
+    @Test fun a_mint_still_in_flight_at_dispose_is_joined_then_revoked() = runComposeUiTest {
+        val gate = CompletableDeferred<Unit>()
+        val fake = FakeDevices(gate = gate)
+        var visible by mutableStateOf(true)
+        phoneStep(fake) {
+            if (visible) SetupPhoneStep(fake.actions, scope = hostScope())
+        }
+        eventually { onNodeWithTag("setup_phone_loading").assertIsDisplayed() }
+        assertEquals(0, fake.mintCounter.get())
+
+        visible = false
+        waitForIdle()
+        assertEquals(emptyList(), fake.revokes.toList())
+
+        gate.complete(Unit)
+        eventually { assertTrue(fake.revokes.isNotEmpty()) }
+        assertEquals(listOf("phone-1"), fake.revokes.toList())
+        assertEquals(1, fake.mintCounter.get())
     }
 
     @Test fun copy_link_puts_the_pairing_url_on_the_clipboard() = runComposeUiTest {

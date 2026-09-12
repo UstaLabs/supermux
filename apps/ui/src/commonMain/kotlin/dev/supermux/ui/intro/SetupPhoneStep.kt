@@ -46,7 +46,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +79,11 @@ private const val COPIED_MS = 1_500L
 /** QR side — bigger than the settings dialog's: this one is meant to be scanned across a desk. */
 private val PhoneQrSize = 240.dp
 
+/** The in-flight mint, held across recompositions. Not state: nothing renders from it. */
+private class MintJobHolder {
+    var job: Job? = null
+}
+
 /**
  * Revoke [name] only if the broker still lists it as never-seen.
  *
@@ -100,15 +104,16 @@ private suspend fun revokeIfUnused(devices: DevicesSettingsActions, name: String
  *   it has to survive both this composable and whatever removed it: a `rememberCoroutineScope()`
  *   taken here is already cancelled by then, and even the enclosing wizard's own scope dies the
  *   instant the host swaps the wizard out on `onboarded=true` — mid-revoke, which is two requests
- *   (a list, then a DELETE). An un-revoked pairing link is a host-wide bearer credential, so the
- *   default here exists only for previews and tests; [SetupWizardScreen] takes the same scope as a
- *   required parameter and passes it straight through.
+ *   (a list, then a DELETE). An un-revoked pairing link is a host-wide bearer credential, so there
+ *   is deliberately NO default: a `rememberCoroutineScope()` fallback would be a silent footgun
+ *   for the next caller. [SetupWizardScreen] takes the same scope as a required parameter and
+ *   passes it straight through.
  */
 @Composable
 fun SetupPhoneStep(
     devices: DevicesSettingsActions,
+    scope: CoroutineScope,
     modifier: Modifier = Modifier,
-    scope: CoroutineScope = rememberCoroutineScope(),
 ) {
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
@@ -121,8 +126,8 @@ fun SetupPhoneStep(
     val pairedState = remember { mutableStateOf(false) }
     var pairing by pairingState
     var paired by pairedState
-    /** The in-flight refresh/retry mint, so `onDispose` can stop it before cleaning up. */
-    val mintJob = remember { mutableStateOf<Job?>(null) }
+    /** The in-flight mint (initial, refresh or retry) — `onDispose` waits for it, see below. */
+    val minting = remember { MintJobHolder() }
     var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -148,7 +153,12 @@ fun SetupPhoneStep(
         busy = false
     }
 
-    LaunchedEffect(Unit) { mint(refresh = false) }
+    // The first mint runs on [scope], not on this effect's: `POST /devices` may reach the broker
+    // just as the step goes away, and a mint cancelled with the composable would leave a live
+    // pairing link nobody knows about. `LaunchedEffect(Unit)` still triggers it exactly once.
+    LaunchedEffect(Unit) {
+        if (minting.job == null) minting.job = scope.launch { mint(refresh = false) }
+    }
 
     // Poll for the phone actually using the link. A failed load is skipped, never surfaced: a
     // transient blip must not replace a perfectly usable QR with an error.
@@ -171,14 +181,20 @@ fun SetupPhoneStep(
     // so a "Refresh code" — which does its own revoke — does not also trip this one, and reading
     // the state objects directly so whatever is on screen AT dispose is what gets cleaned up.
     //
-    // Cancel first: a mint still in flight would otherwise land after this and leave a pairing link
-    // nobody will ever revoke. The revoke itself goes on [scope], which outlives this composable —
+    // JOIN the in-flight mint rather than cancelling it: cancelling stops the state write, not the
+    // device the broker may already have created, and that one would never be revoked. Waiting
+    // costs nothing (the mint is one request) and leaves `pairingState` holding whatever was
+    // actually minted. `revokeIfUnused` is confirm-first, so a code the phone grabbed in the
+    // meantime survives. The whole thing runs on [scope], which outlives this composable —
     // launched on a scope taken here it would be cancelled before it ever dispatched.
     DisposableEffect(Unit) {
         onDispose {
-            mintJob.value?.cancel()
-            val name = pairingState.value?.name
-            if (name != null && !pairedState.value) scope.launch { revokeIfUnused(devices, name) }
+            val inFlight = minting.job
+            scope.launch {
+                inFlight?.join()
+                val name = pairingState.value?.name
+                if (name != null && !pairedState.value) revokeIfUnused(devices, name)
+            }
         }
     }
 
@@ -225,7 +241,7 @@ fun SetupPhoneStep(
                 )
                 Spacer(Modifier.height(Space.sm))
                 OutlinedButton(
-                    onClick = { mintJob.value = scope.launch { mint(refresh = true) } },
+                    onClick = { minting.job = scope.launch { mint(refresh = true) } },
                     enabled = !busy,
                     modifier = Modifier.testTag("setup_phone_another"),
                 ) { Text("Connect another phone") }
@@ -321,7 +337,7 @@ fun SetupPhoneStep(
                                 Text(if (copied > 0) "Copied" else "Copy pairing link")
                             }
                             TextButton(
-                                onClick = { mintJob.value = scope.launch { mint(refresh = true) } },
+                                onClick = { minting.job = scope.launch { mint(refresh = true) } },
                                 enabled = !busy,
                                 modifier = Modifier.testTag("setup_phone_refresh"),
                             ) {
@@ -354,7 +370,7 @@ fun SetupPhoneStep(
                     )
                     if (url == null) {
                         OutlinedButton(
-                            onClick = { mintJob.value = scope.launch { mint(refresh = false) } },
+                            onClick = { minting.job = scope.launch { mint(refresh = false) } },
                             enabled = !busy,
                             modifier = Modifier.testTag("setup_phone_retry"),
                         ) { Text("Try again") }

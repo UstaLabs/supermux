@@ -41,7 +41,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -180,8 +179,12 @@ fun SetupWizardScreen(
                     onStatusesChanged = { agentsCanProceed = setupAgentsCanProceed(it) },
                 )
                 STEP_FORGES -> GitHostingScreen(actions = forges, topBarShown = true)
-                STEP_PHONE -> SetupPhoneStep(devices, scope = scope)
-                else -> SetupDoneStep(onFinish = onFinish, onCreateFirstSession = onCreateFirstSession)
+                STEP_PHONE -> SetupPhoneStep(devices, scope)
+                else -> SetupDoneStep(
+                    onFinish = onFinish,
+                    onCreateFirstSession = onCreateFirstSession,
+                    scope = scope,
+                )
             }
         }
 
@@ -256,13 +259,19 @@ private fun SetupWelcomeStep() {
     }
 }
 
+/**
+ * @param scope the app scope, for the same reason the phone step needs it: a successful [onFinish]
+ *   flips `onboarded`, the host swaps the wizard out on that flip, and a `rememberCoroutineScope()`
+ *   here would be cancelled between the write landing and [onCreateFirstSession] running — leaving
+ *   the user in the shell with no session and no idea setup had finished.
+ */
 @Composable
 private fun SetupDoneStep(
     onFinish: suspend () -> Boolean,
     onCreateFirstSession: () -> Unit,
+    scope: CoroutineScope,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
     var finishing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
