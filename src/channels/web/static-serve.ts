@@ -32,7 +32,7 @@ function guessMime(p: string): string {
 }
 
 const COMPRESSIBLE = /\.(html|js|mjs|css|json|svg|webmanifest|wasm|ttf|otf|xml|txt)$/
-const gzipCache = new Map<string, { body: Buffer; mtime: number }>()
+const gzipCache = new Map<string, { body: Buffer; mtimeMs: number | undefined }>()
 let gzipCacheHits = 0
 
 // TEST-ONLY: lets static-serve.test.ts assert cache growth/hits without
@@ -45,24 +45,25 @@ function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | und
   if (!acceptEncoding?.includes("gzip") || !COMPRESSIBLE.test(candidate)) return { body }
   // Cache content-addressed /assets/ files (hashed filenames change with
   // content) and /editor/ (cm6.js is 1.3 MB and was re-gzipped per editor
-  // open otherwise — its filename isn't hashed, so the cache key folds in
-  // mtimeMs to invalidate when the file on disk changes). Entry points
-  // (index.html, sw.js) are small and may change on live-deploy without a
-  // mtime we're keying on here, so always re-compress them.
+  // open otherwise — its filename isn't hashed, so we key on the path alone
+  // and compare mtimeMs on lookup: a redeployed file's stale entry is
+  // overwritten in place rather than orphaned under a new key (which would
+  // otherwise leak one stale ~400 KB entry per deploy). Embedded
+  // (compiled-binary) files have no mtime, so mtimeMs is undefined for them —
+  // stable as long as the embedded map itself doesn't change underneath us.
+  // Entry points (index.html, sw.js) are small and may change on live-deploy,
+  // so they stay out of this cache and are always re-compressed.
   const cacheable = candidate.startsWith("/assets/") || candidate.startsWith("/editor/")
-  // Embedded (compiled-binary) files have no mtime to key on — fall back to
-  // the path alone, as before.
-  const cacheKey = cacheable ? (mtimeMs !== undefined ? `${candidate}:${mtimeMs}` : candidate) : candidate
   if (cacheable) {
-    const cached = gzipCache.get(cacheKey)
-    if (cached) {
+    const cached = gzipCache.get(candidate)
+    if (cached && cached.mtimeMs === mtimeMs) {
       gzipCacheHits++
       return { body: cached.body, encoding: "gzip" }
     }
   }
   const compressed = Bun.gzipSync(new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength))
   if (compressed.byteLength < body.byteLength * 0.85) {
-    if (cacheable) gzipCache.set(cacheKey, { body: Buffer.from(compressed), mtime: mtimeMs ?? Date.now() })
+    if (cacheable) gzipCache.set(candidate, { body: Buffer.from(compressed), mtimeMs })
     return { body: compressed, encoding: "gzip" }
   }
   return { body }

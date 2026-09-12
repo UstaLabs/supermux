@@ -144,7 +144,7 @@ describe("serveStatic /editor/ gzip cache", () => {
     expect(afterSecond.hits).toBe(before.hits + 1) // served from cache
   })
 
-  test("the cache invalidates when the file's mtime changes", () => {
+  test("the cache invalidates when the file's mtime changes, replacing the entry in place", async () => {
     const dir = tmp()
     mkdirSync(join(dir, "editor"))
     const filePath = join(dir, "editor", "cm6.js")
@@ -157,9 +157,14 @@ describe("serveStatic /editor/ gzip cache", () => {
     writeFileSync(filePath, "z".repeat(200_000))
     utimesSync(filePath, future, future)
 
-    serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    const res2 = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
     const afterSecond = _gzipCacheStats()
-    // A new entry was recompressed and cached rather than reusing the stale one.
-    expect(afterSecond.size).toBe(afterFirst.size + 1)
+    // The stale entry was overwritten in place, not orphaned under a new key.
+    expect(afterSecond.size).toBe(afterFirst.size)
+    expect(res2!.headers.get("content-encoding")).toBe("gzip")
+    // The bytes served are the new content, not the stale cached ones.
+    const { gunzipSync } = await import("zlib")
+    const decompressed = gunzipSync(Buffer.from(await res2!.arrayBuffer())).toString()
+    expect(decompressed).toBe("z".repeat(200_000))
   })
 })
