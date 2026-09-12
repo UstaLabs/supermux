@@ -47,7 +47,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +64,7 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.qrBitmap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -96,11 +96,13 @@ private suspend fun revokeIfUnused(devices: DevicesSettingsActions, name: String
 /**
  * Mint a one-time pairing code for a phone, show it, and watch for the phone to use it.
  *
- * @param scope where the leave-the-step cleanup runs. It MUST outlive this composable — the revoke
- *   is launched from `onDispose`, and a `rememberCoroutineScope()` taken HERE is already cancelled
- *   by then, so the code would never be revoked. The default is only a safe fallback for a preview
- *   or a test that does not care; real hosts pass a scope that survives the step (the wizard passes
- *   its own, which lives as long as the whole flow).
+ * @param scope MUST be the app scope. The leave-the-step revoke is launched from `onDispose`, so
+ *   it has to survive both this composable and whatever removed it: a `rememberCoroutineScope()`
+ *   taken here is already cancelled by then, and even the enclosing wizard's own scope dies the
+ *   instant the host swaps the wizard out on `onboarded=true` — mid-revoke, which is two requests
+ *   (a list, then a DELETE). An un-revoked pairing link is a host-wide bearer credential, so the
+ *   default here exists only for previews and tests; [SetupWizardScreen] takes the same scope as a
+ *   required parameter and passes it straight through.
  */
 @Composable
 fun SetupPhoneStep(
@@ -111,8 +113,16 @@ fun SetupPhoneStep(
     val cs = MaterialTheme.colorScheme
     val platform = LocalPlatform.current
 
-    var pairing by remember { mutableStateOf<AddDeviceResponse?>(null) }
-    var paired by remember { mutableStateOf(false) }
+    // Held as the MutableState objects, not just `by` delegates: `onDispose` below must read the
+    // CURRENT pairing, and `rememberUpdatedState` only refreshes on recomposition — a refresh
+    // immediately followed by leaving the step would hand the old (already revoked) name to the
+    // cleanup and leak the newly minted one.
+    val pairingState = remember { mutableStateOf<AddDeviceResponse?>(null) }
+    val pairedState = remember { mutableStateOf(false) }
+    var pairing by pairingState
+    var paired by pairedState
+    /** The in-flight refresh/retry mint, so `onDispose` can stop it before cleaning up. */
+    val mintJob = remember { mutableStateOf<Job?>(null) }
     var loading by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -146,21 +156,29 @@ fun SetupPhoneStep(
     LaunchedEffect(watched) {
         if (watched == null) return@LaunchedEffect
         while (!paired) {
+            // Check FIRST, then wait: a phone that scanned the code before this effect restarted
+            // should flip the step without a dead second on screen.
+            val listed = devices.devicesLoad()
+            if (listed?.firstOrNull { it.name == watched }?.last_seen_at != null) {
+                paired = true
+                break
+            }
             delay(PAIR_POLL_MS)
-            val listed = devices.devicesLoad() ?: continue
-            if (listed.firstOrNull { it.name == watched }?.last_seen_at != null) paired = true
         }
     }
 
     // Leaving the step with an unused code revokes it (Vue's `onBeforeUnmount`). Keyed on `Unit`
-    // with the live values read through `rememberUpdatedState`, so a "Refresh code" — which does
-    // its own revoke — does not also trip this one.
-    val livePairing by rememberUpdatedState(pairing)
-    val livePaired by rememberUpdatedState(paired)
+    // so a "Refresh code" — which does its own revoke — does not also trip this one, and reading
+    // the state objects directly so whatever is on screen AT dispose is what gets cleaned up.
+    //
+    // Cancel first: a mint still in flight would otherwise land after this and leave a pairing link
+    // nobody will ever revoke. The revoke itself goes on [scope], which outlives this composable —
+    // launched on a scope taken here it would be cancelled before it ever dispatched.
     DisposableEffect(Unit) {
         onDispose {
-            val name = livePairing?.name
-            if (name != null && !livePaired) scope.launch { revokeIfUnused(devices, name) }
+            mintJob.value?.cancel()
+            val name = pairingState.value?.name
+            if (name != null && !pairedState.value) scope.launch { revokeIfUnused(devices, name) }
         }
     }
 
@@ -207,7 +225,7 @@ fun SetupPhoneStep(
                 )
                 Spacer(Modifier.height(Space.sm))
                 OutlinedButton(
-                    onClick = { scope.launch { mint(refresh = true) } },
+                    onClick = { mintJob.value = scope.launch { mint(refresh = true) } },
                     enabled = !busy,
                     modifier = Modifier.testTag("setup_phone_another"),
                 ) { Text("Connect another phone") }
@@ -239,6 +257,12 @@ fun SetupPhoneStep(
                             color = cs.primary,
                             modifier = Modifier.testTag("setup_phone_loading"),
                         )
+                        Text(
+                            "Creating a secure pairing code…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = cs.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
                     }
                     url != null -> {
                         // `qrBitmap` throws only on input past the version-40 capacity; a pairing URL
@@ -248,7 +272,16 @@ fun SetupPhoneStep(
                             runCatching { qrBitmap(url, sizePx = 480) }.getOrNull()
                         }
                         Spacer(Modifier.height(Space.sm))
-                        if (qr != null) {
+                        if (qr == null) {
+                            Text(
+                                "Couldn't render the QR — copy the link below and open it on " +
+                                    "your phone.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = cs.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.testTag("setup_phone_qr_fallback"),
+                            )
+                        } else {
                             Image(
                                 bitmap = qr,
                                 contentDescription = "Phone pairing QR code",
@@ -288,7 +321,7 @@ fun SetupPhoneStep(
                                 Text(if (copied > 0) "Copied" else "Copy pairing link")
                             }
                             TextButton(
-                                onClick = { scope.launch { mint(refresh = true) } },
+                                onClick = { mintJob.value = scope.launch { mint(refresh = true) } },
                                 enabled = !busy,
                                 modifier = Modifier.testTag("setup_phone_refresh"),
                             ) {
@@ -321,7 +354,7 @@ fun SetupPhoneStep(
                     )
                     if (url == null) {
                         OutlinedButton(
-                            onClick = { scope.launch { mint(refresh = false) } },
+                            onClick = { mintJob.value = scope.launch { mint(refresh = false) } },
                             enabled = !busy,
                             modifier = Modifier.testTag("setup_phone_retry"),
                         ) { Text("Try again") }

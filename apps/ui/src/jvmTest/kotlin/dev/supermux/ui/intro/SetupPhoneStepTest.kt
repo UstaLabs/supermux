@@ -3,6 +3,7 @@ package dev.supermux.ui.intro
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -58,8 +59,13 @@ class SetupPhoneStepTest {
         )
     }
 
-    /** A scope that OUTLIVES the composable — what the host must pass for the revoke to land. */
-    private fun hostScope() = CoroutineScope(Dispatchers.Unconfined)
+    /**
+     * The app scope stand-in: OUTLIVES the composable (nothing cancels it when the step leaves),
+     * which is what the host must pass for the revoke to land. `remember`ed so a recomposition
+     * does not hand the step a different scope each frame.
+     */
+    @Composable
+    private fun hostScope(): CoroutineScope = remember { CoroutineScope(Dispatchers.Unconfined) }
 
     private fun ComposeUiTest.phoneStep(
         fake: FakeDevices,
@@ -148,6 +154,28 @@ class SetupPhoneStepTest {
         eventually { onNodeWithTag("setup_phone_qr").assertIsDisplayed() }
         assertEquals(2, fake.mintCounter.get())
         assertEquals(emptyList(), fake.revokes.toList())
+    }
+
+    /**
+     * The regression the `rememberUpdatedState` version got wrong: Refresh mints a SECOND code, and
+     * leaving right after must revoke that one — not re-revoke the first, which Refresh already
+     * cleaned up.
+     */
+    @Test fun refresh_then_leaving_revokes_the_new_code_exactly_once() = runComposeUiTest {
+        val fake = FakeDevices()
+        var visible by mutableStateOf(true)
+        phoneStep(fake) {
+            if (visible) SetupPhoneStep(fake.actions, scope = hostScope())
+        }
+        eventually { onNodeWithTag("setup_phone_qr").assertIsDisplayed() }
+        onNodeWithText("Refresh code").performClick()
+        eventually { onNodeWithText("https://broker.test/pair/phone-2").assertIsDisplayed() }
+        assertEquals(listOf("phone-1"), fake.revokes.toList())
+
+        visible = false
+        waitForIdle()
+        eventually { assertTrue(fake.revokes.size >= 2) }
+        assertEquals(listOf("phone-1", "phone-2"), fake.revokes.toList())
     }
 
     @Test fun copy_link_puts_the_pairing_url_on_the_clipboard() = runComposeUiTest {

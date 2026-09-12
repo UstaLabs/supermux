@@ -1,6 +1,7 @@
 package dev.supermux.ui.intro
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -18,6 +19,7 @@ import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.settings.AgentSettingsActions
+import dev.supermux.ui.settings.AgentSettingsScreen
 import dev.supermux.ui.settings.DevicesSettingsActions
 import dev.supermux.ui.settings.GitHostingActions
 import dev.supermux.ui.theme.AppearanceMode
@@ -26,7 +28,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 
 /**
  * The first-run [SetupWizardScreen] — the port of the Vue `SetupView` flow.
@@ -61,13 +66,16 @@ class SetupWizardScreenTest {
         onFinish: suspend () -> Boolean = { true },
         onCreateFirstSession: () -> Unit = {},
         devicesActions: DevicesSettingsActions = devices(),
+        agentsActions: AgentSettingsActions = agents(statuses),
         content: @Composable () -> Unit = {
             SetupWizardScreen(
-                agents = agents(statuses),
+                agents = agentsActions,
                 forges = forges(),
                 devices = devicesActions,
                 onFinish = onFinish,
                 onCreateFirstSession = onCreateFirstSession,
+                // The app scope the host must supply: nothing here cancels it when the wizard goes.
+                scope = remember { CoroutineScope(Dispatchers.Unconfined) },
             )
         },
     ) = setPlatformContent(
@@ -128,6 +136,72 @@ class SetupWizardScreenTest {
         advanceTo(1)
         eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
         eventually { onNodeWithTag("setup_next").assertIsEnabled() }
+    }
+
+    @Test fun a_broker_with_no_agents_keeps_next_disabled() = runComposeUiTest {
+        wizard(agentsActions = AgentSettingsActions(agentStatuses = { emptyList() }))
+        advanceTo(1)
+        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithTag("setup_next").assertIsNotEnabled() }
+    }
+
+    @Test fun a_failed_status_load_keeps_next_disabled() = runComposeUiTest {
+        wizard(agentsActions = AgentSettingsActions(agentStatuses = { null }))
+        advanceTo(1)
+        eventually { onNodeWithText("Step 2 of 5 — Agents").assertIsDisplayed() }
+        eventually { onNodeWithTag("setup_next").assertIsNotEnabled() }
+    }
+
+    /**
+     * The hoisted callback is the wizard's only view of the statuses, so it must fire ONLY for a
+     * list that actually loaded — an Empty or Error load reporting `emptyList()` would un-gate a
+     * screen that had legitimately gated.
+     */
+    @Test fun statuses_are_reported_only_for_a_real_load() = runComposeUiTest {
+        val reported = CopyOnWriteArrayList<List<AgentInstallStatus>>()
+        setPlatformContent(
+            platform = FakePlatform(),
+            pointer = true,
+            widthClass = WindowWidthClass.Expanded,
+        ) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AgentSettingsScreen(
+                    actions = AgentSettingsActions(agentStatuses = { emptyList() }),
+                    topBarShown = true,
+                    onStatusesChanged = { reported.add(it) },
+                )
+            }
+        }
+        eventually { onNodeWithTag("agent_settings_screen").assertIsDisplayed() }
+        waitForIdle()
+        assertTrue(reported.isEmpty(), "empty load must not report statuses")
+    }
+
+    @Test fun statuses_are_reported_for_a_non_empty_load() = runComposeUiTest {
+        val reported = CopyOnWriteArrayList<List<AgentInstallStatus>>()
+        setPlatformContent(
+            platform = FakePlatform(),
+            pointer = true,
+            widthClass = WindowWidthClass.Expanded,
+        ) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                AgentSettingsScreen(
+                    actions = AgentSettingsActions(agentStatuses = { authedAgent }),
+                    topBarShown = true,
+                    onStatusesChanged = { reported.add(it) },
+                )
+            }
+        }
+        eventually { assertTrue(reported.isNotEmpty()) }
+        assertEquals(authedAgent, reported.first())
+    }
+
+    @Test fun the_free_tier_rule_matches_vues() {
+        assertTrue(setupAgentsCanProceed(listOf(AgentInstallStatus("opencode", installed = true))))
+        assertFalse(setupAgentsCanProceed(listOf(AgentInstallStatus("opencode", installed = false))))
+        assertFalse(setupAgentsCanProceed(listOf(AgentInstallStatus("claude", installed = true))))
+        assertTrue(setupAgentsCanProceed(listOf(AgentInstallStatus("claude", installed = true, authed = true))))
+        assertFalse(setupAgentsCanProceed(emptyList()))
     }
 
     @Test fun git_hosting_is_step_three_and_skippable() = runComposeUiTest {

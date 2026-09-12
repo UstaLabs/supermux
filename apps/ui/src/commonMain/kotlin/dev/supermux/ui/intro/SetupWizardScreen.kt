@@ -59,6 +59,7 @@ import dev.supermux.ui.settings.GitHostingActions
 import dev.supermux.ui.settings.GitHostingScreen
 import dev.supermux.ui.theme.IconSize
 import dev.supermux.ui.theme.Space
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -87,6 +88,12 @@ private const val FREE_TIER_KIND = "opencode"
  * kind, and [dev.supermux.ui.settings.statusLabel] already labels it "Ready · free tier" on the
  * same test). If the broker ever marks a second kind usable-without-auth, decode `capabilities`
  * into `AgentInstallStatus` and read it here.
+ *
+ * An EMPTY list is `false`, and so is a list the screen never managed to load: a broker that
+ * reports no agents at all leaves Next disabled, by design and in parity with Vue — the screen
+ * offers Install for every kind it knows, and there is nothing to set up past this step without
+ * one. `AgentSettingsScreen` only reports lists it actually loaded, so a failed `GET
+ * /agents/status` keeps the last answer (and its own auto-retry recovers) instead of un-gating.
  */
 internal fun setupAgentsCanProceed(statuses: List<AgentInstallStatus>): Boolean =
     statuses.any { it.authed || (it.installed && it.kind == FREE_TIER_KIND) }
@@ -105,6 +112,13 @@ internal fun setupAgentsCanProceed(statuses: List<AgentInstallStatus>): Boolean 
  *   shell the route guard would bounce them out of on the next load.
  * @param onCreateFirstSession called only after [onFinish] succeeds — the host routes to its new
  *   session screen (Vue's `router.push("/new")`).
+ * @param scope MUST be the app scope — a scope that outlives this whole screen. It carries
+ *   [SetupPhoneStep]'s leave-the-step revoke of an unused pairing link, and that link is a
+ *   host-wide bearer credential, so the revoke must survive the two things that kill a scope taken
+ *   HERE: the host swapping the wizard out the instant `onboarded` flips to `true` (mid-revoke —
+ *   it is two requests, a list then a DELETE), and Compose running the phone step's `onDispose`
+ *   BEFORE cancelling the wizard's own scope on teardown, which would cancel the launched revoke
+ *   before it ever dispatched. Deliberately has no default for that reason.
  */
 @Composable
 fun SetupWizardScreen(
@@ -113,10 +127,10 @@ fun SetupWizardScreen(
     devices: DevicesSettingsActions,
     onFinish: suspend () -> Boolean,
     onCreateFirstSession: () -> Unit,
+    scope: CoroutineScope,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
     var step by rememberSaveable { mutableStateOf(STEP_WELCOME) }
     // Not saveable: it is re-derived from the next `onStatusesChanged` the Agents step emits, and a
     // restored `true` against a broker that has since lost its credential would un-gate wrongly.
