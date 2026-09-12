@@ -128,7 +128,7 @@ class DictationController(
     // Rebound every recomposition by rememberDictation so they never go stale (chat re-wires the
     // session-bound closures + draft sink whenever the active session switches).
     var transcribeDraft: suspend (String) -> String? = { null }
-    var transcribeAudio: suspend (ByteArray, String) -> String? = { _, _ -> null }
+    var transcribeAudio: suspend (ByteArray, String, String) -> String? = { _, _, _ -> null }
     var onAppend: (String) -> Unit = {}
 
     /** The in-flight transcribe coroutine, or null when idle. Tracked so [cancelMic] can cancel a
@@ -240,7 +240,7 @@ class DictationController(
                 fail("Didn't catch that")
                 return
             }
-            runTranscription(rawFallback = null) { transcribeAudio(audio.bytes, audio.filename) }
+            runTranscription(rawFallback = null) { transcribeAudio(audio.bytes, audio.filename, audio.mime) }
         }
     }
 
@@ -296,7 +296,7 @@ fun rememberDictation(
     resetKey: Any,
     loadGlossary: suspend () -> List<String> = { emptyList() },
     transcribeDraft: suspend (String) -> String? = { null },
-    transcribeAudio: suspend (ByteArray, String) -> String?,
+    transcribeAudio: suspend (ByteArray, String, String) -> String?,
     onAppend: (String) -> Unit,
     mic: MicCapture = LocalPlatform.current.mic,
 ): DictationController {

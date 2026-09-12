@@ -69,7 +69,7 @@ class LauncherActions(
     val fetchGlossary: suspend () -> List<String> = { emptyList() },
     /** Clean up a typed draft (no session yet → the broker's id-less /transcribe). */
     val transcribeDraft: suspend (draft: String) -> String? = { null },
-    val transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
+    val transcribeAudio: suspend (bytes: ByteArray, filename: String, mime: String) -> String? = { _, _, _ -> null },
     /**
      * Spawn + send the first message. Returns the new session id and THROWS the broker's own
      * message on refusal (bad workdir, spawn 4xx) — the launchers show that text inline.
@@ -125,7 +125,7 @@ fun rememberLauncherActions(
             createForge = { cid, name -> app.createForge(cid, name) },
             fetchGlossary = { app.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> app.transcribeDraft(null, draft)?.text },
-            transcribeAudio = { bytes, name -> app.transcribeAudio(null, bytes, name)?.text },
+            transcribeAudio = { bytes, name, mime -> app.transcribeAudio(null, bytes, name, mime)?.text },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace ->
                 app.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,
@@ -165,7 +165,7 @@ fun rememberLauncherActions(
             createForge = { cid, name -> fleet.createForge(cid, name) },
             fetchGlossary = { fleet.fetchGlossary().orEmpty() },
             transcribeDraft = { draft -> fleet.transcribeDraft(null, draft) },
-            transcribeAudio = { bytes, name -> fleet.transcribeAudio(null, bytes, name) },
+            transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(null, bytes, name, mime) },
             createSessionWithFirstMessage = { wd, agent, model, level, text, staged, wt, base, replace ->
                 fleet.createSessionWithFirstMessageOrThrow(
                     wd, agent, model, level, text, staged, wt, base, replaceDraftId = replace,

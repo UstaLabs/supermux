@@ -162,7 +162,7 @@ class ChatActions(
     val interrupt: () -> Unit = {},
     /** Chat uploads go against the LIVE session (unlike the launcher's pre-spawn staging). */
     val upload: (suspend (ChunkSource, String, String, String?, (Long, Long) -> Unit) -> String?)? = null,
-    val transcribeAudio: (suspend (ByteArray, String) -> String?)? = null,
+    val transcribeAudio: (suspend (ByteArray, String, String) -> String?)? = null,
     val loadBytes: suspend (String) -> ByteArray? = { null },
     /** The composer's non-hot seams (drafts, slash cleanup, glossary, pending-first, git ops). */
     val composer: ComposerActions = ComposerActions(),
@@ -193,7 +193,7 @@ fun rememberChatActions(
             upload = { source, name, mime, kind, onProgress ->
                 app.uploadResumable(session.id, source, name, mime, kind, onProgress)
             },
-            transcribeAudio = { bytes, name -> app.transcribeAudio(session.id, bytes, name)?.text },
+            transcribeAudio = { bytes, name, mime -> app.transcribeAudio(session.id, bytes, name, mime)?.text },
             loadBytes = { id -> app.fileBytes(id) },
             composer = composerActions,
             loadModels = { app.sessionModels(session.id) },

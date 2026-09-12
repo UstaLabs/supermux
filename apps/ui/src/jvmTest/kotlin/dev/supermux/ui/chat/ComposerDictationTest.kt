@@ -52,7 +52,7 @@ class ComposerDictationTest {
                 agentWorking = false,
                 onSend = { _, _ -> },
                 onInterrupt = {},
-                onTranscribeAudio = { _, _ -> "hello from the mic" },
+                onTranscribeAudio = { _, _, _ -> "hello from the mic" },
             )
         }
         onNodeWithTag("composer-mic").performClick() // start
@@ -68,7 +68,7 @@ class ComposerDictationTest {
             Composer(
                 draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
-                onTranscribeAudio = { _, _ -> "more text" },
+                onTranscribeAudio = { _, _, _ -> "more text" },
             )
         }
         onNodeWithTag("composer-mic").performClick()
@@ -83,7 +83,7 @@ class ComposerDictationTest {
             Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
-                onTranscribeAudio = { _, _ -> "x" },
+                onTranscribeAudio = { _, _, _ -> "x" },
             )
         }
         onNodeWithTag("composer-mic").performClick()
@@ -110,7 +110,7 @@ class ComposerDictationTest {
             Composer(
                 draft = "", onDraftChange = {}, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
-                onTranscribeAudio = { _, _ -> "never" },
+                onTranscribeAudio = { _, _, _ -> "never" },
             )
         }
         onNodeWithTag("composer-mic").performClick()
@@ -129,7 +129,7 @@ class ComposerDictationTest {
             Composer(
                 draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
-                onTranscribeAudio = { _, _ -> audioCalls++; "from audio" },
+                onTranscribeAudio = { _, _, _ -> audioCalls++; "from audio" },
                 actions = ComposerActions(transcribeDraft = { "cleaned on device text" }),
             )
         }
@@ -157,7 +157,7 @@ class ComposerDictationTest {
                 agentWorking = false,
                 onSend = { _, _ -> },
                 onInterrupt = {},
-                onTranscribeAudio = { _, _ -> "cleaned from file" },
+                onTranscribeAudio = { _, _, _ -> "cleaned from file" },
                 externalDictate = ComposerExternalDictate(byteArrayOf(1, 2, 3), "m5v.wav"),
                 onExternalDictateConsumed = { consumed = true },
             )
@@ -176,7 +176,7 @@ class ComposerDictationTest {
             Composer(
                 draft = draft, onDraftChange = { draft = it }, sending = false, agentWorking = false,
                 onSend = { _, _ -> }, onInterrupt = {},
-                onTranscribeAudio = { _, _ -> "should not be called" },
+                onTranscribeAudio = { _, _, _ -> "should not be called" },
                 // The host could not read the path — a null-bytes request.
                 externalDictate = ComposerExternalDictate(null, "nope.wav"),
                 onExternalDictateConsumed = { consumed = true },

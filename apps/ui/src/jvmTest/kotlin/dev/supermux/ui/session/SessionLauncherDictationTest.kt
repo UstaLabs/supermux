@@ -46,7 +46,7 @@ class SessionLauncherDictationTest {
 
     @Composable
     private fun Harness(
-        transcribeAudio: suspend (ByteArray, String) -> String? = { _, _ -> null },
+        transcribeAudio: suspend (ByteArray, String, String) -> String? = { _, _, _ -> null },
         micCapture: MicCapture = ScriptedMicCapture(startsOk = true, wav = byteArrayOf(1)),
         draft: LauncherDraft = LauncherDraft(),
         onSubmit: suspend (
@@ -95,7 +95,7 @@ class SessionLauncherDictationTest {
     }
 
     @Test fun clicking_mic_then_stop_appends_cleaned_text_into_the_message_field() = runComposeUiTest {
-        pointerContent { Harness(transcribeAudio = { _, _ -> "dictated task text" }) }
+        pointerContent { Harness(transcribeAudio = { _, _, _ -> "dictated task text" }) }
         waitForIdle()
         onNodeWithTag("launcher_mic").performClick() // start
         onNodeWithTag("launcher_mic").performClick() // stop -> transcribe
@@ -139,7 +139,7 @@ class SessionLauncherDictationTest {
         pointerContent {
             Harness(
                 // A transcribe that yields nothing → DictationController.fail("Transcription failed").
-                transcribeAudio = { _, _ -> null },
+                transcribeAudio = { _, _, _ -> null },
                 draft = LauncherDraft(workdir = "/proj/x", text = "do it"),
                 onSubmit = { _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("spawn refused") },
             )
@@ -161,7 +161,7 @@ class SessionLauncherDictationTest {
 
     /** Touch has no inline error at all — the takeover banner is the one transient line there. */
     @Test fun a_touch_host_shows_no_inline_mic_error() = runComposeUiTest {
-        touchContent { Harness(transcribeAudio = { _, _ -> null }) }
+        touchContent { Harness(transcribeAudio = { _, _, _ -> null }) }
         waitForIdle()
         onNodeWithTag("launcher_mic").performClick()
         onNodeWithTag("voice_stop").performClick()

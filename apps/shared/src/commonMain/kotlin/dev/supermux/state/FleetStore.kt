@@ -1001,9 +1001,14 @@ class FleetStore(
         onProgress: (Long, Long) -> Unit,
     ): String? = appFor(sessionId)?.uploadResumable(sessionId, source, name, mime, kind, onProgress)
 
-    /** Dictation: a session id routes to its host, null (the launcher) to the active host. */
-    suspend fun transcribeAudio(sessionId: String?, bytes: ByteArray, filename: String): String? =
-        (sessionId?.let(::appFor) ?: activeApp())?.transcribeAudio(sessionId, bytes, filename)?.text
+    /** Dictation: a session id routes to its host, null (the launcher) to the active host.
+     *  [mime] is the RECORDED container (desktop WAV, Android/iOS mp4, the browser's
+     *  `audio/webm;codecs=opus`) and becomes the multipart part's content-type, so the broker's
+     *  ffmpeg pass sees the real container instead of a default that lies. */
+    suspend fun transcribeAudio(
+        sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/wav",
+    ): String? =
+        (sessionId?.let(::appFor) ?: activeApp())?.transcribeAudio(sessionId, bytes, filename, mime)?.text
     suspend fun transcribeDraft(sessionId: String?, draft: String): String? =
         (sessionId?.let(::appFor) ?: activeApp())?.transcribeDraft(sessionId, draft)?.text
 

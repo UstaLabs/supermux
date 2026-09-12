@@ -87,7 +87,7 @@ fun SessionChatFallback(
             onBack = onBack,
             onSendWith = { text, atts -> vm.fleet.sendWith(session.id, text, atts) },
             onUpload = { source, name, mime, kind, onProgress -> vm.fleet.uploadResumable(session.id, source, name, mime, kind, onProgress) },
-            transcribeAudio = { bytes, name -> vm.fleet.transcribeAudio(session.id, bytes, name) },
+            transcribeAudio = { bytes, name, mime -> vm.fleet.transcribeAudio(session.id, bytes, name, mime) },
             transcribeDraft = { draft -> vm.fleet.transcribeDraft(session.id, draft) },
             loadGlossary = { vm.fleet.fetchGlossary().orEmpty() },
             onRename = { vm.fleet.rename(session.id, it) },

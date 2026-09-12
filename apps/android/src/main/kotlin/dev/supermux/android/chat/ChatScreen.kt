@@ -157,7 +157,7 @@ fun ChatScreen(
     onBack: () -> Unit,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
     onUpload: suspend (source: ChunkSource, name: String, mime: String, kind: String?, onProgress: (Long, Long) -> Unit) -> String?,
-    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
+    transcribeAudio: suspend (bytes: ByteArray, filename: String, mime: String) -> String? = { _, _, _ -> null },
     transcribeDraft: suspend (draft: String) -> String? = { null },
     loadGlossary: suspend () -> List<String> = { emptyList() },
     onRename: (String) -> Unit = {},

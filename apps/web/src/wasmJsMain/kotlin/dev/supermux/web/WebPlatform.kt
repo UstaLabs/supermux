@@ -21,9 +21,9 @@ import dev.supermux.ui.terminal.TerminalViewFactory
 import dev.supermux.ui.theme.Haptics
 import dev.supermux.ui.theme.NoHaptics
 import dev.supermux.web.editor.WebEditorEngineFactory
-import dev.supermux.web.seams.NoWebMic
 import dev.supermux.web.seams.WebClipboard
 import dev.supermux.web.seams.WebFiles
+import dev.supermux.web.seams.WebMic
 import dev.supermux.web.seams.WebTts
 import dev.supermux.web.seams.pickFilesViaInput
 import dev.supermux.web.terminal.XtermTerminalViewFactory
@@ -37,7 +37,7 @@ import kotlinx.coroutines.flow.onEach
 val WEB_CAPS = Caps(
     push = false, camera = false, tray = false, externalDisplay = true, hardwareVideoDecode = false,
     localBroker = false, multiWindow = false, fileSystem = false,
-    clipboardImages = false, saveAs = true, walkthrough = true, appearanceControls = true,
+    clipboardImages = true, saveAs = true, walkthrough = true, appearanceControls = true,
     dynamicColor = false, appUpdate = false, terminal = true, scrcpy = false,
 )
 
@@ -64,7 +64,7 @@ class WebPlatform : Platform {
 
     override val clipboard: ClipboardAccess = WebClipboard
     override val files: FileAccess = WebFiles
-    override val mic: MicCapture = NoWebMic
+    override val mic: MicCapture = WebMic
     override val tts: TtsEngine = WebTts
 
     /** Typed [FlowNotices], not [dev.supermux.ui.platform.NoticeChannel]: `WebTheme` hands this

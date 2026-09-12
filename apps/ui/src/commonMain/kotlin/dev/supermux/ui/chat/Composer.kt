@@ -121,6 +121,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.DEFAULT_MODEL_ID
+import dev.supermux.chat.mimeForFileName
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
@@ -518,7 +519,7 @@ fun Composer(
         kind: String?,
         onProgress: (Long, Long) -> Unit,
     ) -> String?)? = null,
-    onTranscribeAudio: (suspend (bytes: ByteArray, filename: String) -> String?)? = null,
+    onTranscribeAudio: (suspend (bytes: ByteArray, filename: String, mime: String) -> String?)? = null,
     commands: List<SlashCommand> = emptyList(),
     commandsResolved: Boolean = true,
     /**
@@ -803,7 +804,7 @@ fun Composer(
         resetKey = sessionKey,
         loadGlossary = actions.loadGlossary,
         transcribeDraft = actions.transcribeDraft,
-        transcribeAudio = { bytes, name -> onTranscribeAudio?.invoke(bytes, name) },
+        transcribeAudio = { bytes, name, mime -> onTranscribeAudio?.invoke(bytes, name, mime) },
         onAppend = { cleaned -> setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft)) },
         mic = micCapture ?: platform.mic,
     )
@@ -814,7 +815,10 @@ fun Composer(
         val request = externalDictate ?: return@LaunchedEffect
         val bytes = request.bytes
         if (onTranscribeAudio != null && bytes != null) {
-            val cleaned = onTranscribeAudio.invoke(bytes, request.filename)?.trim()
+            // The headless hook has a file, not a recording: its container is whatever the
+            // filename says (the harness writes a WAV), which is exactly what the mic would pass.
+            val mime = mimeForFileName(request.filename) ?: "audio/wav"
+            val cleaned = onTranscribeAudio.invoke(bytes, request.filename, mime)?.trim()
             if (!cleaned.isNullOrEmpty()) {
                 setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft))
             }

@@ -8,7 +8,14 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.client.request.HttpRequestData
+import io.ktor.http.content.OutgoingContent
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readRemaining
+import io.ktor.utils.io.writer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.io.readByteArray
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -17,6 +24,14 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+
+/** The multipart body as Latin-1 text, so a PART's own content-type header can be asserted. */
+private suspend fun multipartText(req: HttpRequestData): String {
+    val content = req.body as OutgoingContent.WriteChannelContent
+    val channel = CoroutineScope(Dispatchers.Unconfined).writer { content.writeTo(channel) }.channel
+    return channel.readRemaining().readByteArray()
+        .joinToString("") { (it.toInt() and 0xFF).toChar().toString() }
+}
 
 /**
  * M5-1 Task 1: [HostStore.transcribeAudio] — the desktop mic-dictation HTTP wrapper. Mirrors
@@ -71,6 +86,28 @@ class DesktopDictationTest {
         app.transcribeAudio(null, byteArrayOf(1, 2, 3), "dictation.wav")
 
         assertEquals("/transcribe", recorded.single().path)
+    }
+
+    /** The mime the mic recorded has to survive the wrapper (the browser sends webm/opus, not the
+     *  `audio/wav` default this signature keeps for desktop). */
+    @Test fun transcribe_audio_passes_the_recorded_mime_through_to_the_multipart_part() = runTest {
+        val bodies = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            bodies.add(multipartText(req))
+            respond(
+                ByteReadChannel("""{"text":"ok"}"""), HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val app = HostStore(
+            baseUrl = "ws://test:9898", token = "t", scope = TestScope(UnconfinedTestDispatcher()),
+            deps = testDeps(), connectOnInit = false,
+            apiOverride = BrokerApi("ws://test:9898", "t", HttpClient(engine)),
+        )
+
+        app.transcribeAudio("s1", byteArrayOf(1, 2, 3), "dictation.webm", "audio/webm;codecs=opus")
+
+        assertTrue("audio/webm;codecs=opus" in bodies.single(), bodies.single())
     }
 
     @Test fun transcribe_audio_returns_null_on_a_5xx() = runTest {

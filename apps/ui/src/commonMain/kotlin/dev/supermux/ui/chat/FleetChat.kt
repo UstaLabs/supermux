@@ -53,7 +53,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             upload = { source, name, mime, kind, onProgress ->
                 fleet.uploadResumable(sessionId, source, name, mime, kind, onProgress)
             },
-            transcribeAudio = { bytes, name -> fleet.transcribeAudio(sessionId, bytes, name) },
+            transcribeAudio = { bytes, name, mime -> fleet.transcribeAudio(sessionId, bytes, name, mime) },
             loadBytes = { fleet.fileBytes(it) },
             composer = ComposerActions(
                 loadDraft = { fleet.loadDraft(it) },

@@ -18,12 +18,14 @@ import kotlin.test.assertTrue
 private class FakeMicCapture(
     private val startsOk: Boolean = true,
     private val wavOnStop: ByteArray? = byteArrayOf(9, 9, 9),
+    private val filename: String = "dictation.wav",
+    private val mime: String = "audio/wav",
 ) : MicCapture {
     var startCalls = 0; var stopCalls = 0; var cancelCalls = 0
     override fun start(): Boolean { startCalls++; return startsOk }
     override fun stop(): CapturedAudio? {
         stopCalls++
-        return wavOnStop?.let { CapturedAudio(it, "dictation.wav", "audio/wav") }
+        return wavOnStop?.let { CapturedAudio(it, filename, mime) }
     }
     override fun cancel() { cancelCalls++ }
     override suspend fun requestPermission(): Boolean = true
@@ -54,6 +56,20 @@ class DictationControllerTest {
         assertEquals(1, fake.startCalls)
     }
 
+    /** The browser records `audio/webm;codecs=opus`, not WAV: the recorded container has to reach
+     *  the transcribe POST, or the broker's ffmpeg pass is told a lie about the bytes it got. */
+    @Test fun stop_mic_passes_the_recorded_filename_and_mime_to_transcribe() {
+        val fake = FakeMicCapture(filename = "dictation.webm", mime = "audio/webm;codecs=opus")
+        var seen: Pair<String, String>? = null
+        val ctrl = controller(fake)
+        ctrl.transcribeAudio = { _, name, mime -> seen = name to mime; "cleaned text" }
+        ctrl.startMic()
+
+        ctrl.stopMic()
+
+        assertEquals("dictation.webm" to "audio/webm;codecs=opus", seen)
+    }
+
     @Test fun start_mic_sets_mic_unavailable_when_the_line_fails_to_open() {
         val ctrl = controller(FakeMicCapture(startsOk = false))
 
@@ -68,7 +84,7 @@ class DictationControllerTest {
         var appended: String? = null
         var capturedBytes: ByteArray? = null
         val ctrl = controller(fake)
-        ctrl.transcribeAudio = { bytes, _ -> capturedBytes = bytes; "cleaned text" }
+        ctrl.transcribeAudio = { bytes, _, _ -> capturedBytes = bytes; "cleaned text" }
         ctrl.onAppend = { appended = it }
         ctrl.startMic()
 
@@ -83,7 +99,7 @@ class DictationControllerTest {
     @Test fun stop_mic_with_nothing_captured_sets_an_error_and_never_calls_transcribe() {
         var transcribeCalled = false
         val ctrl = controller(FakeMicCapture(wavOnStop = null))
-        ctrl.transcribeAudio = { _, _ -> transcribeCalled = true; "x" }
+        ctrl.transcribeAudio = { _, _, _ -> transcribeCalled = true; "x" }
         ctrl.startMic()
 
         ctrl.stopMic()
@@ -95,7 +111,7 @@ class DictationControllerTest {
     @Test fun a_blank_or_null_transcription_result_sets_a_failed_error_and_does_not_append() {
         var appendCalled = false
         val ctrl = controller(FakeMicCapture())
-        ctrl.transcribeAudio = { _, _ -> "   " }
+        ctrl.transcribeAudio = { _, _, _ -> "   " }
         ctrl.onAppend = { appendCalled = true }
         ctrl.startMic()
 
@@ -109,7 +125,7 @@ class DictationControllerTest {
         val fake = FakeMicCapture()
         var transcribeCalled = false
         val ctrl = controller(fake)
-        ctrl.transcribeAudio = { _, _ -> transcribeCalled = true; "x" }
+        ctrl.transcribeAudio = { _, _, _ -> transcribeCalled = true; "x" }
         ctrl.startMic()
 
         ctrl.cancelMic()
@@ -158,7 +174,7 @@ class DictationControllerTest {
         var pastAwait = false
         var appended: String? = null
         // Session A's binding: a transcribe that hangs until the (fake) POST resolves.
-        ctrl.transcribeAudio = { _, _ -> gate.await(); pastAwait = true; "session A dictation" }
+        ctrl.transcribeAudio = { _, _, _ -> gate.await(); pastAwait = true; "session A dictation" }
         ctrl.onAppend = { appended = it }
 
         ctrl.startMic()
