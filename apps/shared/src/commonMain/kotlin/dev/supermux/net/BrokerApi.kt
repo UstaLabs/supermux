@@ -2463,9 +2463,20 @@ class BrokerApi(
 
     /**
      * POST /push/subscribe `{"endpoint":…,"keys":{"p256dh":…,"auth":…}}` — idempotent upsert
-     * keyed by the calling device. Returns whether the broker accepted it.
+     * keyed by the calling device.
+     *
+     * TRI-STATE on purpose, unlike [pushUnsubscribe]:
+     *  - `true`  — the broker stored it.
+     *  - `false` — the broker ANSWERED and refused (401/404/503). It will never push to this
+     *              subscription, so the caller should drop it locally and re-subscribe later.
+     *  - `null`  — the call never completed (offline, DNS, a suspended tab). The subscription is
+     *              still perfectly good and the next launch reconciles it; a caller that treated
+     *              this as a refusal would throw away a working subscription on a network blip.
+     *
+     * That third case is exactly what the browser registrar needs, and it is why this method does
+     * not follow the `Boolean` shape of its neighbours.
      */
-    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String): Boolean = try {
+    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String): Boolean? = try {
         http.post("$httpBase/push/subscribe") {
             authHeader()
             contentType(ContentType.Application.Json)
@@ -2474,8 +2485,8 @@ class BrokerApi(
     } catch (c: CancellationException) {
         throw c
     } catch (e: Throwable) {
-        println("[BrokerApi] push subscribe failed: ${e.message?.take(160)}")
-        false
+        println("[BrokerApi] push subscribe did not complete: ${e.message?.take(160)}")
+        null
     }
 
     /** DELETE /push/subscribe — drop this device's browser subscription. */

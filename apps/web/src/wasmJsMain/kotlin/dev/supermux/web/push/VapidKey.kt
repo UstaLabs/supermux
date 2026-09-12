@@ -23,6 +23,10 @@ package dev.supermux.web.push
 fun vapidKeyBytes(b64url: String): ByteArray {
     val cleaned = b64url.trim().trimEnd('=')
     if (cleaned.isEmpty()) return ByteArray(0)
+    // A base64 group is 4 characters = 3 bytes, so an unpadded tail of 2 or 3 characters is legal
+    // (1 or 2 bytes) but a tail of ONE is not: 6 bits cannot encode a byte. Such a string is
+    // truncated, not merely unpadded, and decoding it would silently drop the last character.
+    if (cleaned.length % 4 == 1) return ByteArray(0)
     var acc = 0
     var bits = 0
     val out = ArrayList<Byte>(cleaned.length * 3 / 4 + 2)
@@ -35,8 +39,10 @@ fun vapidKeyBytes(b64url: String): ByteArray {
             out.add(((acc shr bits) and 0xFF).toByte())
         }
     }
-    // A trailing group of 6 leftover bits is the padding remainder, and it must be zero — a
-    // non-zero remainder means the string was truncated mid-byte, not merely unpadded.
+    // The leftover 2 or 4 bits are padding and MUST be zero. A non-zero remainder means the
+    // encoder and this decoder disagree about where the bytes end — reject rather than hand
+    // `subscribe()` a key that is subtly not the one the broker signs with.
+    if (bits > 0 && (acc and ((1 shl bits) - 1)) != 0) return ByteArray(0)
     return out.toByteArray()
 }
 

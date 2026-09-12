@@ -37,8 +37,10 @@ function isSessionPath(url, sessionId) {
 
 // iOS Safari REVOKES the push subscription when a delivered push shows no notification, so
 // every `push` event must end in a `showNotification` — including the ones we cannot read.
+// "Supermux" is the app's own name as `index.html`'s <title> spells it; the manifest keeps the
+// lowercase form for install-label parity with the Vue app, and these two are allowed to differ.
 function fallbackNotification() {
-  return self.registration.showNotification("supermux", { body: "New activity" })
+  return self.registration.showNotification("Supermux", { body: "New activity" })
 }
 
 self.addEventListener("push", (event) => {
@@ -55,7 +57,8 @@ self.addEventListener("push", (event) => {
   }
 
   event.waitUntil(
-    self.registration.showNotification(data.session, {
+    // A payload with no `session` would title the notification "undefined".
+    self.registration.showNotification(data.session ?? "Supermux", {
       body: data.text ?? "New message",
       icon: "/icons/icon-192.png",
       badge: "/icons/icon-192.png",

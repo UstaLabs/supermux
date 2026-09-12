@@ -195,6 +195,11 @@ fun main() {
                 // until the user has granted the permission — the banner above asks for that.
                 LaunchedEffect(Unit) { platform.push?.registerIfPaired() }
 
+                // The push banner belongs to the SHELL branch and nowhere else. Plan 4 task 6
+                // renders the setup wizard INSTEAD of `SupermuxApp` inside this same gate, and a
+                // permission strip floating over the wizard's Connect-your-phone step would sit on
+                // top of the QR code. Keep this `Box` wrapped around `SupermuxApp` only — never
+                // hoisted to the gate.
                 Box(Modifier.fillMaxSize()) {
                     SupermuxApp(
                         fleet = fleet,

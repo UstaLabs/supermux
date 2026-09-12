@@ -7,6 +7,7 @@ import dev.supermux.net.BrokerApi
 import dev.supermux.ui.platform.PushRegistrar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,6 +17,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.khronos.webgl.Int8Array
 import org.khronos.webgl.toInt8Array
+import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 
 // ── js() helpers ──────────────────────────────────────────────────────────────
@@ -59,6 +61,24 @@ private fun swReadyJs(onDone: (JsAny?) -> Unit): Unit = js(
       try {
         if (!("serviceWorker" in navigator)) { onDone(null); return; }
         navigator.serviceWorker.ready.then(function (r) { onDone(r || null); }, function () { onDone(null); });
+      } catch (e) { onDone(null); }
+    }""",
+)
+
+/**
+ * `navigator.serviceWorker.getRegistration()` — the registration if one EXISTS, null otherwise.
+ *
+ * Deliberately not [swReadyJs]: `navigator.serviceWorker.ready` never resolves at all when no
+ * worker is registered (it is a promise for "the active worker", not a probe), so every caller
+ * that must not hang on a page without a service worker uses this instead. [register]'s subscribe
+ * path still wants `ready` — it genuinely needs an ACTIVE worker to subscribe against.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun swRegistrationNowJs(onDone: (JsAny?) -> Unit): Unit = js(
+    """{
+      try {
+        if (!("serviceWorker" in navigator)) { onDone(null); return; }
+        navigator.serviceWorker.getRegistration().then(function (r) { onDone(r || null); }, function () { onDone(null); });
       } catch (e) { onDone(null); }
     }""",
 )
@@ -175,7 +195,7 @@ class WebPushRegistrar(
 
     override fun cancelForSession(sessionId: String) {
         scope.launch {
-            val reg = swReady() ?: return@launch
+            val reg = swRegistrationNow() ?: return@launch
             // The tag `sw.js` writes: one notification per chat, so closing the tag closes the lot.
             suspendCancellableCoroutine { cont ->
                 closeNotificationsJs(reg, "cmux:$sessionId") { if (cont.isActive) cont.resume(Unit) }
@@ -206,58 +226,94 @@ class WebPushRegistrar(
      * it (a restored profile, a re-installed broker), and re-POSTing is a cheap upsert. A 401/404
      * means the broker will not accept this device at all, so the local subscription is dropped and
      * the banner comes back; any other failure is transient and the subscription is kept.
+     *
+     * @return whether this browser now holds a subscription the BROKER knows about. False is
+     *   ordinary on a launch where the permission was never granted (the banner's job), but after
+     *   an explicit grant it means the enable actually failed — which is the one place a user is
+     *   waiting on an answer, so [WebPushBanner] turns it into a notice instead of vanishing.
      */
-    suspend fun register() {
-        if (!supported) return
+    suspend fun register(): Boolean {
+        if (!supported) return false
         _permission.value = notificationPermissionJs()
-        // Not granted → say nothing. The BANNER asks; a silent permission prompt on every load is
-        // exactly the pattern browsers punish.
-        if (_permission.value != "granted") return
-        val broker = api() ?: return
-        val reg = swReady() ?: return
+        // Not granted → never PROMPT. The banner asks; a silent permission prompt on every load is
+        // exactly the pattern browsers punish. But "not granted" is not the same as "nothing to
+        // do": the user can revoke the permission in site settings at any time, and the broker
+        // would go on pushing to an endpoint that can no longer show anything — which is precisely
+        // what makes WebKit revoke the subscription outright. So a leftover subscription is torn
+        // down on both sides first. (Vue's `probe()` reconciled for any non-denied permission; this
+        // reconciles for any non-granted one, which is the same idea seen from the other side.)
+        if (_permission.value != "granted") {
+            disableIfSubscribed()
+            return false
+        }
+        val broker = api() ?: return false
+        val reg = swReady() ?: return false
 
         val existing = parse(getSubscription(reg))
         if (existing != null) {
             val ok = quietly { broker.pushSubscribe(existing.endpoint, existing.keys.p256dh, existing.keys.auth) }
             // Three outcomes, and the difference matters:
             //   true  — reconciled, done.
-            //   false — the broker ANSWERED and refused (401/404/503). `pushSubscribe` collapses
-            //           every non-2xx into false, so this cannot tell "not authorised" from "no
-            //           push store"; either way the broker will not push to this subscription, so
-            //           it is dropped and the next load re-subscribes from scratch. That is the
-            //           Vue `probe()`'s 401/404 branch, widened by the Boolean this plan specified.
-            //   null  — the call never completed (offline, tab suspended). Keep the subscription:
-            //           it is still valid, and the next launch reconciles it. Same as Vue.
+            //   false — the broker ANSWERED and refused. `pushSubscribe` collapses every non-2xx
+            //           into false, so this cannot tell "not authorised" from "no push store";
+            //           either way the broker will not push here, so the subscription is dropped
+            //           and the next load re-subscribes from scratch. That is Vue `probe()`'s
+            //           401/404 branch, widened to every refusal the Boolean cannot separate.
+            //   null  — the call never completed (offline, tab suspended). KEEP the subscription:
+            //           it is still valid and the next launch reconciles it. Vue's "network blip —
+            //           assume subscribed", and the whole reason `pushSubscribe` is tri-state.
             if (ok == false) unsubscribeLocally(reg)
-            return
+            // `null` kept the subscription but the broker has no confirmed record of it, so only
+            // an accepted re-POST counts as "registered".
+            return ok == true
         }
 
         val keyB64 = quietly { broker.pushVapidPublicKey() }
         if (keyB64.isNullOrBlank()) {
             // The broker has no VAPID keys. Not an error — this deployment simply has no push.
             println("[push] broker has no VAPID key; staying unsubscribed")
-            return
+            return false
         }
         val bytes = vapidKeyBytes(keyB64)
         if (bytes.isEmpty()) {
             println("[push] VAPID key did not decode")
-            return
+            return false
         }
         val fresh = parse(subscribe(reg, bytes))
         if (fresh == null) {
             println("[push] pushManager.subscribe() produced no subscription")
-            return
+            return false
         }
-        val ok = quietly { broker.pushSubscribe(fresh.endpoint, fresh.keys.p256dh, fresh.keys.auth) }
-        if (ok != true) {
-            println("[push] broker rejected the subscription; dropping it locally")
-            unsubscribeLocally(reg)
+        return when (quietly { broker.pushSubscribe(fresh.endpoint, fresh.keys.p256dh, fresh.keys.auth) }) {
+            true -> true
+            // Answered and refused: the broker has no record, so a local subscription is dead
+            // weight — and keeping it would make the next launch take the reconcile branch and
+            // never retry a fresh subscribe.
+            false -> {
+                println("[push] broker rejected the subscription; dropping it locally")
+                unsubscribeLocally(reg)
+                false
+            }
+            // Never completed. KEEP it: the subscription is valid and the next launch reconciles.
+            null -> {
+                println("[push] could not reach the broker to register the subscription")
+                false
+            }
         }
+    }
+
+    /** Tear down a subscription on both sides. Used when the permission is gone — see [register]. */
+    private suspend fun disableIfSubscribed() {
+        val reg = swRegistrationNow() ?: return
+        if (parse(getSubscription(reg)) == null) return
+        println("[push] notification permission is no longer granted; dropping the subscription")
+        unsubscribeLocally(reg)
+        api()?.let { quietly { it.pushUnsubscribe() } }
     }
 
     /** Turn push off: drop the browser subscription AND the broker's record of it. */
     suspend fun disable() {
-        val reg = swReady()
+        val reg = swRegistrationNow()
         if (reg != null) unsubscribeLocally(reg)
         api()?.let { quietly { it.pushUnsubscribe() } }
     }
@@ -266,6 +322,10 @@ class WebPushRegistrar(
 
     private suspend fun swReady(): JsAny? = suspendCancellableCoroutine { cont ->
         swReadyJs { r -> if (cont.isActive) cont.resume(r) }
+    }
+
+    private suspend fun swRegistrationNow(): JsAny? = suspendCancellableCoroutine { cont ->
+        swRegistrationNowJs { r -> if (cont.isActive) cont.resume(r) }
     }
 
     private suspend fun getSubscription(reg: JsAny): String = suspendCancellableCoroutine { cont ->
@@ -286,13 +346,20 @@ class WebPushRegistrar(
         return sub.takeIf { it.endpoint.isNotBlank() && it.keys.p256dh.isNotBlank() && it.keys.auth.isNotBlank() }
     }
 
-    /** Run a broker call whose only interesting failure is "it did not happen". */
+    /**
+     * Run a broker call whose only interesting failure is "it did not happen".
+     *
+     * The three push methods answer a failed call with `null`/`false` and rethrow
+     * `CancellationException` untouched, so — unlike most of `BrokerApi`, which reports transport
+     * failures AS cancellation — the only cancellation reaching here is a REAL one: the page scope
+     * going away. That has to propagate, or [register] would carry on issuing calls on a dead
+     * scope. `isActive` is what tells the two apart.
+     */
     private suspend fun <T> quietly(block: suspend () -> T): T? = try {
         block()
     } catch (c: CancellationException) {
-        // BrokerApi reports EVERY transport/decode failure as cancellation (see its `decode`), so
-        // this is the ordinary "the call failed" path here, not a real coroutine cancel.
-        println("[push] broker call failed")
+        if (!coroutineContext.isActive) throw c
+        println("[push] broker call reported cancellation")
         null
     } catch (e: Throwable) {
         println("[push] broker call failed: ${e.message?.take(160)}")

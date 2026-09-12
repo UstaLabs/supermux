@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.supermux.ui.platform.LocalPlatform
 import kotlinx.browser.localStorage
 import org.w3c.dom.get
 import org.w3c.dom.set
@@ -51,6 +52,7 @@ fun WebPushBanner(registrar: WebPushRegistrar, modifier: Modifier = Modifier) {
     var dismissed by remember { mutableStateOf(localStorage[BANNER_DISMISSED_KEY] == "1") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val notices = LocalPlatform.current.notices
 
     if (dismissed || !registrar.supported || permission != "default") return
 
@@ -77,7 +79,13 @@ fun WebPushBanner(registrar: WebPushRegistrar, modifier: Modifier = Modifier) {
                     // before `register()` reads `Notification.permission`, and two launches would
                     // race the grant.
                     scope.launch {
-                        if (registrar.requestPermissionNow() == "granted") registrar.register()
+                        // A REFUSAL is silent on purpose — the browser already showed the user its
+                        // own dialog and the strip disappears, which is answer enough. A failure
+                        // AFTER a grant is not: the user clicked Enable, said yes, and would
+                        // otherwise watch the strip vanish with nothing turned on.
+                        if (registrar.requestPermissionNow() == "granted" && !registrar.register()) {
+                            notices.show("Couldn't enable notifications")
+                        }
                         busy = false
                     }
                 },

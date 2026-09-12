@@ -77,7 +77,7 @@ class BrokerApiWebPushTest {
     @Test fun subscribe_posts_exact_body() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
         val api = captured(body = """{"ok":true}""", sink = reqs)
-        assertTrue(api.pushSubscribe("https://fcm.googleapis.com/x", "p256", "auth1"))
+        assertEquals(true, api.pushSubscribe("https://fcm.googleapis.com/x", "p256", "auth1"))
         assertEquals(1, reqs.size)
         assertEquals(HttpMethod.Post, reqs[0].method)
         assertEquals("http://h/push/subscribe", reqs[0].url.toString())
@@ -87,10 +87,22 @@ class BrokerApiWebPushTest {
         )
     }
 
+    /** The broker ANSWERED and refused — a definite "I will not push to this". */
     @Test fun subscribe_returns_false_on_non_2xx() = runTest {
         val reqs = mutableListOf<HttpRequestData>()
         val api = captured(body = "push not configured", status = HttpStatusCode.ServiceUnavailable, sink = reqs)
-        assertFalse(api.pushSubscribe("e", "p", "a"))
+        assertEquals(false, api.pushSubscribe("e", "p", "a"))
+    }
+
+    /**
+     * The call never completed. This MUST be distinguishable from a refusal: the browser registrar
+     * drops its local subscription on `false`, and a network blip that answered `false` would throw
+     * away a perfectly good subscription (the Vue app kept it — "network blip, assume subscribed").
+     */
+    @Test fun subscribe_returns_null_when_the_transport_fails() = runTest {
+        val engine = MockEngine { throw io.ktor.utils.io.errors.IOException("connection refused") }
+        val api = BrokerApi("http://h", "tok", HttpClient(engine))
+        assertNull(api.pushSubscribe("e", "p", "a"))
     }
 
     // ── DELETE /push/subscribe ────────────────────────────────────────────────

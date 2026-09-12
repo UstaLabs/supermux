@@ -63,6 +63,27 @@ class WebPushTest {
         assertEquals(4.toByte(), bytes[0])
     }
 
+    /**
+     * A base64 group is 4 characters = 3 bytes; a leftover tail of ONE character carries 6 bits,
+     * which cannot be a byte. Such a string is TRUNCATED, and decoding it would silently drop the
+     * last character and hand `subscribe()` a key that is not the one the broker signs with.
+     */
+    @Test fun a_tail_of_one_character_is_rejected() {
+        assertEquals(0, vapidKeyBytes("Zm9vY").size)
+        assertEquals(0, vapidKeyBytes("Z").size)
+        // The valid neighbours either side stay valid, so this is not just "short input fails".
+        assertEquals("foo", vapidKeyBytes("Zm9v").decodeToString())
+        assertEquals("foob", vapidKeyBytes("Zm9vYg").decodeToString())
+    }
+
+    /** Leftover padding bits must be zero: a non-zero remainder means the encoders disagree. */
+    @Test fun a_non_zero_padding_remainder_is_rejected() {
+        // "Zm9vYh": 'h' = 33 = 100001, so the 4 leftover bits are 0001 — not padding.
+        assertEquals(0, vapidKeyBytes("Zm9vYh").size)
+        // The same length with a clean remainder decodes.
+        assertEquals("foob", vapidKeyBytes("Zm9vYg").decodeToString())
+    }
+
     @Test fun garbage_and_empty_decode_to_nothing_rather_than_throwing() {
         assertEquals(0, vapidKeyBytes("").size)
         assertEquals(0, vapidKeyBytes("   ").size)
