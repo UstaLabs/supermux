@@ -256,6 +256,13 @@ sealed interface ServerFrame {
         val workspaces: List<WorkspaceDto> = emptyList(),
         /** Archived workspaces for the desktop sidebar fold. Empty on older brokers. */
         val archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+        /**
+         * Has the broker been through first-run setup? Sent on every snapshot
+         * (`src/channels/web/index.ts`); a broker too old to send it reads as `false`.
+         * Hosts that own a setup surface (the browser) gate the first-run wizard on it —
+         * see `HostStore.onboarded`, which distinguishes "no snapshot yet" as null.
+         */
+        val onboarded: Boolean = false,
     ) : ServerFrame
 
     @Serializable @SerialName("session_added")

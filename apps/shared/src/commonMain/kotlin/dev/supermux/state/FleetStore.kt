@@ -324,6 +324,19 @@ class FleetStore(
     private val _usageSnapshot = MutableStateFlow<UsageResponse?>(null)
     val usageSnapshot: StateFlow<UsageResponse?> = _usageSnapshot.asStateFlow()
 
+    /**
+     * The ACTIVE host's `onboarded` flag (null until that host's first snapshot). Per-broker like
+     * [usageSnapshot], so it FOLLOWS the active host rather than merging across the fleet: a
+     * second, already-onboarded broker must not hide the first one's setup wizard. Assembled with
+     * `flatMapLatest` (not the [Publication] fold) because it is a plain passthrough of one host's
+     * own StateFlow — nothing to merge, nothing to key by recordId.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val onboarded: StateFlow<Boolean?> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .flatMapLatest { app -> app?.onboarded ?: flowOf(null) }
+            .stateIn(fleetScope, SharingStarted.Eagerly, null)
+
 
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.
@@ -1221,6 +1234,8 @@ class FleetStore(
     // settings keys, one owner, so the shared launcher does not care which store built its actions.
 
     suspend fun appConfig(): AppConfigDto? = activeApp()?.appConfig()
+    /** PUT the active host's `onboarded` flag; false when there is no host or the write failed. */
+    suspend fun setOnboarded(value: Boolean): Boolean = activeApp()?.setOnboarded(value) == true
     suspend fun usage(): UsageResponse? {
         val target = synchronized(lock) { activeRecordId() }
         return activeApp()?.usage()?.also { publishUsage(target, it) }

@@ -181,4 +181,22 @@ class FramesTest {
         assertEquals("agent", c.author)
         assertEquals("c0", c.parentId)
     }
+
+    // The broker's snapshot carries `onboarded` (src/channels/web/index.ts:980) — the first-run
+    // setup wizard is gated on it. Absent (older broker) reads as `false`; the host treats
+    // "no snapshot yet" as null on its own flow, not here.
+    @Test fun parses_snapshot_onboarded_false() {
+        val f = json.decodeFromString<ServerFrame>(
+            """{"type":"snapshot","sessions":[],"onboarded":false}""",
+        )
+        assertTrue(f is ServerFrame.Snapshot)
+        assertEquals(false, (f as ServerFrame.Snapshot).onboarded)
+    }
+
+    @Test fun parses_snapshot_onboarded_true_and_defaults_to_false_when_absent() {
+        val on = json.decodeFromString<ServerFrame>("""{"type":"snapshot","onboarded":true}""")
+        assertEquals(true, (on as ServerFrame.Snapshot).onboarded)
+        val absent = json.decodeFromString<ServerFrame>("""{"type":"snapshot","sessions":[]}""")
+        assertEquals(false, (absent as ServerFrame.Snapshot).onboarded)
+    }
 }

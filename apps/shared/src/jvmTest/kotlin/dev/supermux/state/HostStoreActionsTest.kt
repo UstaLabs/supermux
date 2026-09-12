@@ -167,6 +167,43 @@ class HostStoreActionsTest {
         s.close()
     }
 
+    // ── onboarded (the broker's snapshot flag that gates the first-run wizard) ─────────────
+    // Null until the first snapshot: the web host must show a spinner rather than flash the shell
+    // or the wizard before the broker has told it which one to render.
+
+    @Test fun onboardedIsNullUntilASnapshotThenMirrorsIt() = runTest(UnconfinedTestDispatcher()) {
+        val s = fixture(this).store
+        assertEquals(null, s.onboarded.value)
+        s.reduce(ServerFrame.Snapshot(onboarded = false))
+        assertEquals(false, s.onboarded.value)
+        s.reduce(ServerFrame.Snapshot(onboarded = true))
+        assertEquals(true, s.onboarded.value)
+        s.close()
+    }
+
+    @Test fun setOnboardedPutsThePartialConfigPatchAndFlipsTheFlow() = runBlocking {
+        val f = fixture(httpScope())
+        f.store.reduce(ServerFrame.Snapshot(onboarded = false))
+        assertTrue(f.store.setOnboarded(true))
+        assertTrue(f.seen.any { it == "PUT /settings/config" }, f.seen.toString())
+        assertTrue(f.bodies.any { it == """{"onboarded":true}""" }, f.bodies.toString())
+        assertEquals(true, f.store.onboarded.value)
+        f.store.close()
+    }
+
+    @Test fun setOnboardedLeavesTheFlowAloneWhenTheBrokerRejectsIt() = runBlocking {
+        val http = HttpClient(MockEngine { respond("nope", HttpStatusCode.InternalServerError) })
+        val s = HostStore(
+            "http://h", "t", httpScope(), testDeps(http = http),
+            connectOnInit = false,
+            apiOverride = BrokerApi("http://h", "t", http),
+        )
+        s.reduce(ServerFrame.Snapshot(onboarded = false))
+        assertFalse(s.setOnboarded(true))
+        assertEquals(false, s.onboarded.value)
+        s.close()
+    }
+
     private suspend fun waitUntil(timeoutMs: Long = 5_000, pred: () -> Boolean) {
         val start = System.currentTimeMillis()
         while (!pred()) {

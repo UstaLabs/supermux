@@ -116,4 +116,57 @@ class FleetStoreActionsTest {
         assertFalse(host.projectionsActive)
         fleet.close()
     }
+
+    // ── onboarded mirrors the ACTIVE host (per-broker flag, like usageSnapshot — not a merge) ──
+
+    @Test fun onboardedFollowsTheActiveHostAndSetOnboardedDelegates() = runTest(UnconfinedTestDispatcher()) {
+        val seen = mutableListOf<String>()
+        val bodies = mutableListOf<String>()
+        val http = HttpClient(MockEngine { req ->
+            seen += "${req.method.value} ${req.url.encodedPath}"
+            bodies += (req.body as? io.ktor.http.content.TextContent)?.text.orEmpty()
+            respond("{}", HttpStatusCode.OK, headersOf(io.ktor.http.HttpHeaders.ContentType, "application/json"))
+        })
+        val s = store(
+            PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "https://h-a.relay.supermux.dev"),
+            PairedHost(recordId = "h2", displayName = "B", token = "t", relayUrl = "https://h-b.relay.supermux.dev"),
+        )
+        val fleet = FleetStore(
+            store = s, scope = this, deps = testDeps(http = http),
+            appFactory = { url, token, onConn ->
+                HostStore(
+                    url, token, this, testDeps(http = http), connectOnInit = false,
+                    onConnectionChange = onConn, apiOverride = BrokerApi(url, token, http),
+                )
+            },
+        )
+        assertEquals(null, fleet.onboarded.value)
+        fleet.setActiveHost("h1")
+        fleet.appForRecord("h1")!!.reduce(dev.supermux.proto.ServerFrame.Snapshot(onboarded = false))
+        fleet.appForRecord("h2")!!.reduce(dev.supermux.proto.ServerFrame.Snapshot(onboarded = true))
+        // `flatMapLatest` hands the inner flow's value downstream over a channel, so the derived
+        // StateFlow catches up on the next dispatch — not inside the caller's stack frame.
+        advanceUntilIdle()
+        assertEquals(false, fleet.onboarded.value)
+        fleet.setActiveHost("h2")
+        advanceUntilIdle()
+        assertEquals(true, fleet.onboarded.value)
+
+        fleet.setActiveHost("h1")
+        advanceUntilIdle()
+        assertEquals(false, fleet.onboarded.value)
+        assertTrue(fleet.setOnboarded(true))
+        assertTrue(seen.any { it == "PUT /settings/config" }, seen.toString())
+        assertTrue(bodies.any { it == """{"onboarded":true}""" }, bodies.toString())
+        // The PUT's continuation resumes off the test scheduler, so the derived flow catches up in
+        // real time rather than on `advanceUntilIdle` — poll, like `refreshArchivedFansOutAndMerges`.
+        val start = System.currentTimeMillis()
+        while (fleet.onboarded.value != true) {
+            if (System.currentTimeMillis() - start > 5_000) {
+                throw AssertionError("fleet.onboarded stayed ${fleet.onboarded.value}")
+            }
+            withContext(Dispatchers.Default) { delay(20) }
+        }
+        fleet.close()
+    }
 }

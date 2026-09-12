@@ -306,6 +306,15 @@ class HostStore(
     private val _usage = MutableStateFlow<UsageResponse?>(null)
     val usageSnapshot: StateFlow<UsageResponse?> = _usage
 
+    /**
+     * Has this broker finished first-run setup? `null` until the first snapshot arrives — a host
+     * that gates a setup wizard on this must not decide while it is null (it would flash the wizard
+     * or the shell before the broker has spoken). Live: every snapshot republishes it, and
+     * [setOnboarded] flips it on a successful write.
+     */
+    private val _onboarded = MutableStateFlow<Boolean?>(null)
+    val onboarded: StateFlow<Boolean?> = _onboarded.asStateFlow()
+
     /** Whether the client has a fresh snapshot from the broker (i.e. we're synced/connected). */
     val connected: Boolean get() = client.sync.synced
 
@@ -367,6 +376,7 @@ class HostStore(
     private fun onFrameEffects(frame: ServerFrame) {
         when (frame) {
             is ServerFrame.Snapshot -> {
+                _onboarded.value = frame.onboarded
                 lastSentViewing = null
                 sendViewingIfChanged()
             }
@@ -764,6 +774,14 @@ class HostStore(
     /** GET /settings/config. Null on failure. */
     suspend fun appConfig(): AppConfigDto? =
         runApi("appConfig") { api.getConfig() }
+
+    /** PUT /settings/config {"onboarded": v} (partial patch). False on failure, flow unchanged. */
+    suspend fun setOnboarded(value: Boolean): Boolean =
+        runApi("setOnboarded") {
+            api.saveConfig(onboarded = value)
+            _onboarded.value = value
+            true
+        } ?: false
 
     /** Persist STT engine (null = broker default). False on failure. */
     suspend fun saveVoiceStt(engine: String?): Boolean =

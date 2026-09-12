@@ -189,6 +189,8 @@ const val DEFAULT_REQUESTER: String = "default"
  * @property walkthrough the app builds its `HostStore` with a `WalkthroughSeam`, so the diff pane
  *   can offer the walkthrough slideshow. False on a host that never installs the seam — reading a
  *   walkthrough holder there would throw.
+ * @property setupWizard the host runs the first-run setup wizard when the broker reports
+ *   `onboarded=false`; only the browser, which is the broker's setup surface, sets it.
  */
 data class Caps(
     val push: Boolean,
@@ -207,6 +209,7 @@ data class Caps(
     val appUpdate: Boolean = false,
     val terminal: Boolean = false,
     val scrcpy: Boolean = false,
+    val setupWizard: Boolean = false,
 )
 
 /**
