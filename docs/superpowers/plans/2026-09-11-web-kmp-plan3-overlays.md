@@ -52,10 +52,10 @@
 
 **Files:** `PairedHost.kt`, `HostMetaCodec.kt`, `FleetStore.kt:363–378`, `PairedHostStore.kt` (`add`), `apps/web/.../WebHostStores.kt`, `LocalStorageHostPersistence.kt` (KDoc), tests `apps/shared/src/commonTest/kotlin/dev/supermux/host/HostMetaCodecTest.kt` (extend or create) and `apps/shared/src/jvmTest/.../state/FleetStoreSyncTest.kt` (find the existing sync test file by grepping `wanted`/`sync` in `apps/shared/src/jvmTest/kotlin/dev/supermux/state`).
 
-- [ ] **Step 1: Failing tests** — codec round-trips `ambientAuth=true` (and defaults false for old metadata JSON without the key); `FleetStore.sync` dials a host with `token=""`, `ambientAuth=true`, `directUrl` set (assert via the existing fake `appFactory` that a `HostStore` is created for it) and still skips `token=""`, `ambientAuth=false`.
-- [ ] **Step 2: Implement** — `val ambientAuth: Boolean = false` on `PairedHost` (KDoc: "the transport carries the credential itself — the browser's HttpOnly cookie — so a blank token still dials"); `Meta.ambientAuth` in the codec (encode + decode, default false); `sync` filter becomes `hosts.filter { it.token.isNotBlank() || it.ambientAuth }.mapNotNull { … }` keeping the KDoc accurate; `PairedHostStore.add(..., ambientAuth: Boolean = false)` threads it; `WebHostStores.ensureOriginHost` passes `token = "", ambientAuth = true` and deletes `COOKIE_TOKEN`; fix the KDocs that mention the sentinel; `LocalStorageHostPersistence` needs no change (tokens map stays, values blank).
-- [ ] **Step 3: Verify** — `./gradlew :shared:jvmTest :shared:compileKotlinWasmJs :ui:jvmTest --console=plain` green (run `:ui:jvmTest` under `xvfb-run -a`); `:web:compileKotlinWasmJs`; Karma lane (35) green. Grep `"cookie"` under apps/web → no sentinel left.
-- [ ] **Step 4: Commit** — `feat(shared): ambient-credential hosts — FleetStore dials the browser's cookie session without a token sentinel`.
+- [x] **Step 1: Failing tests** — codec round-trips `ambientAuth=true` (and defaults false for old metadata JSON without the key); `FleetStore.sync` dials a host with `token=""`, `ambientAuth=true`, `directUrl` set (assert via the existing fake `appFactory` that a `HostStore` is created for it) and still skips `token=""`, `ambientAuth=false`.
+- [x] **Step 2: Implement** — `val ambientAuth: Boolean = false` on `PairedHost` (KDoc: "the transport carries the credential itself — the browser's HttpOnly cookie — so a blank token still dials"); `Meta.ambientAuth` in the codec (encode + decode, default false); `sync` filter becomes `hosts.filter { it.token.isNotBlank() || it.ambientAuth }.mapNotNull { … }` keeping the KDoc accurate; `PairedHostStore.add(..., ambientAuth: Boolean = false)` threads it; `WebHostStores.ensureOriginHost` passes `token = "", ambientAuth = true` and deletes `COOKIE_TOKEN`; fix the KDocs that mention the sentinel; `LocalStorageHostPersistence` needs no change (tokens map stays, values blank).
+- [x] **Step 3: Verify** — `./gradlew :shared:jvmTest :shared:compileKotlinWasmJs :ui:jvmTest --console=plain` green (run `:ui:jvmTest` under `xvfb-run -a`); `:web:compileKotlinWasmJs`; Karma lane (35) green. Grep `"cookie"` under apps/web → no sentinel left.
+- [x] **Step 4: Commit** — `feat(shared): ambient-credential hosts — FleetStore dials the browser's cookie session without a token sentinel`.
 
 ---
 
@@ -63,11 +63,11 @@
 
 **Files:** `apps/web/build.gradle.kts`, `apps/web/src/wasmJsMain/resources/editor/` (populated at build time), `apps/gradle/libs.versions.toml` (no change unless a version ref is wanted).
 
-- [ ] **Step 1: Optimise** — in `wasmJs { … }` add `applyBinaryen()` (KGP DSL; if the accessor is missing on this KGP, use `compilerOptions { freeCompilerArgs.addAll("-Xwasm-debug-info=false") }` and the `kotlin.wasm.debug=false` property instead, and say so). Measure before/after with `./gradlew :web:stageForBroker` (the task prints the gzip total). Record both numbers.
-- [ ] **Step 2: Ceiling** — set `maxGzipBytes = 8L * 1024 * 1024` with a comment quoting the measured breakdown (Skiko ≈3.4 MB is the floor; the whole `:ui` app ≈2.5 MB; xterm.js ≈0.3 MB). The number stays a bloat catch, not a target.
-- [ ] **Step 3: xterm deps** — `wasmJsMain.dependencies { implementation(npm("@xterm/xterm", "5.5.0")); implementation(npm("@xterm/addon-fit", "0.10.0")); implementation(npm("@xterm/addon-webgl", "0.18.0")) }`; run `./gradlew kotlinWasmUpgradeYarnLock`; commit the lockfile. xterm's CSS (`node_modules/@xterm/xterm/css/xterm.css`) must reach the page: copy it into `apps/web/src/wasmJsMain/resources/xterm.css` via a Gradle `processResources`-style copy from the KGP node_modules dir (`rootProject.layout.buildDirectory.dir("wasm/node_modules/@xterm/xterm/css")`) and add `<link rel="stylesheet" href="xterm.css">` to `index.html` (root, no-cache rule — 4 KB, fine).
-- [ ] **Step 4: Editor bundle** — a `Copy` of `${rootProject.projectDir}/android/src/main/assets/editor/{index.html,cm6.js}` into `apps/web/src/wasmJsMain/resources/editor/` is NOT the shape (resources are committed); instead have `stageForBroker` copy them from the android assets dir straight into the staged tree at **`editor/`** (root, no-cache rule, excluded from hashing — the page references `cm6.js` relatively and a rename would break it; 1.3 MB revalidated per load is acceptable, plan 5 may hash it) and overlay `apps/web/src/wasmJsMain/resources/editor-shim.js` next to it, then rewrite the staged `editor/index.html` to load `editor-shim.js` BEFORE `cm6.js` (a one-line `replace("<script src=\"cm6.js\">", "<script src=\"editor-shim.js\"></script><script src=\"cm6.js\">")` in the task). Single source of truth stays `apps/android/src/main/assets/editor/`, as desktop does.
-- [ ] **Step 5: Verify + commit** — `stageForBroker` twice → identical; `ls src/channels/web/static/editor` shows the three files; `curl` through a hermetic broker shows `editor/index.html` served `text/html` + `no-cache`. Commit `build(web): binaryen, 8 MiB ceiling, xterm deps, editor bundle staged at /editor`.
+- [x] **Step 1: Optimise** — in `wasmJs { … }` add `applyBinaryen()` (KGP DSL; if the accessor is missing on this KGP, use `compilerOptions { freeCompilerArgs.addAll("-Xwasm-debug-info=false") }` and the `kotlin.wasm.debug=false` property instead, and say so). Measure before/after with `./gradlew :web:stageForBroker` (the task prints the gzip total). Record both numbers.
+- [x] **Step 2: Ceiling** — set `maxGzipBytes = 8L * 1024 * 1024` with a comment quoting the measured breakdown (Skiko ≈3.4 MB is the floor; the whole `:ui` app ≈2.5 MB; xterm.js ≈0.3 MB). The number stays a bloat catch, not a target.
+- [x] **Step 3: xterm deps** — `wasmJsMain.dependencies { implementation(npm("@xterm/xterm", "5.5.0")); implementation(npm("@xterm/addon-fit", "0.10.0")); implementation(npm("@xterm/addon-webgl", "0.18.0")) }`; run `./gradlew kotlinWasmUpgradeYarnLock`; commit the lockfile. xterm's CSS (`node_modules/@xterm/xterm/css/xterm.css`) must reach the page: copy it into `apps/web/src/wasmJsMain/resources/xterm.css` via a Gradle `processResources`-style copy from the KGP node_modules dir (`rootProject.layout.buildDirectory.dir("wasm/node_modules/@xterm/xterm/css")`) and add `<link rel="stylesheet" href="xterm.css">` to `index.html` (root, no-cache rule — 4 KB, fine).
+- [x] **Step 4: Editor bundle** — a `Copy` of `${rootProject.projectDir}/android/src/main/assets/editor/{index.html,cm6.js}` into `apps/web/src/wasmJsMain/resources/editor/` is NOT the shape (resources are committed); instead have `stageForBroker` copy them from the android assets dir straight into the staged tree at **`editor/`** (root, no-cache rule, excluded from hashing — the page references `cm6.js` relatively and a rename would break it; 1.3 MB revalidated per load is acceptable, plan 5 may hash it) and overlay `apps/web/src/wasmJsMain/resources/editor-shim.js` next to it, then rewrite the staged `editor/index.html` to load `editor-shim.js` BEFORE `cm6.js` (a one-line `replace("<script src=\"cm6.js\">", "<script src=\"editor-shim.js\"></script><script src=\"cm6.js\">")` in the task). Single source of truth stays `apps/android/src/main/assets/editor/`, as desktop does.
+- [x] **Step 5: Verify + commit** — `stageForBroker` twice → identical; `ls src/channels/web/static/editor` shows the three files; `curl` through a hermetic broker shows `editor/index.html` served `text/html` + `no-cache`. Commit `build(web): binaryen, 8 MiB ceiling, xterm deps, editor bundle staged at /editor`.
 
 ---
 
@@ -155,19 +155,19 @@ Check `bridgeShimJs(queryFn)` in EditorBridge.kt: if it already defines `window.
 
 **Files:** `seams/WebMic.kt` (replace `NoWebMic`), `seams/WebTts.kt`, `seams/WebClipboard.kt`, `WebPlatform.kt` (`WEB_CAPS.clipboardImages = true`, `mic = WebMic`), and the mime pass-through: `apps/ui/.../chat/Dictation.kt:131,243`, `apps/shared/.../state/FleetStore.kt:~1003`, `HostStore.kt:~1714`, `BrokerApi.kt:~2155` (+ their existing tests).
 
-- [ ] **Step 1: Mime pass-through (TDD in `:shared` jvmTest)** — `transcribeAudio(bytes, filename, mime)` end to end; default stays for callers that don't pass it; the multipart part's content-type equals the passed mime (assert with MockEngine).
-- [ ] **Step 2: `WebMic`** — `available = true` iff `navigator.mediaDevices?.getUserMedia` exists; `requestPermission()` = `getUserMedia({audio:true})` (keep the stream); `start()` = new `MediaRecorder(stream, {mimeType: first supported of ["audio/webm;codecs=opus","audio/webm","audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/ogg;codecs=opus"]})`, `ondataavailable` collects blobs, `start()`; `stop()` must be synchronous by contract but `MediaRecorder.stop()` delivers the final blob asynchronously → collect chunks on `dataavailable` with `start(250)` (timeslice) so `stop()` can return what has been gathered so far plus flush the last blob via `requestData()` before `stop()`; read blob bytes through `BlobChunkSource` (sync XHR) — document the ≤250 ms tail loss; `CapturedAudio(bytes, "dictation.webm" (extension from the mime), mime)`; `cancel()` stops without returning; `liveTranscript = null`.
-- [ ] **Step 3: `WebTts.playAudioChunk`** — one `AudioContext` (created lazily inside `speak`/first chunk; browsers require a gesture to start it — call `resume()`), `decodeAudioData(bytes.buffer)` → `BufferSource` → `start()` and `suspendCancellableCoroutine` resumed on `onended`; `stop()` stops the current source and clears the queue; `shutdown()` closes the context.
-- [ ] **Step 4: `WebClipboard`** — `hasImage() = navigator.clipboard?.read exists`; `readImages()`: call `navigator.clipboard.read()` synchronously (before any suspension) and await the promise; for each item with an `image/*` type → `getType` → `Blob` → `PickedFile("pasted.<ext>", type, BlobChunkSource(blob))`. `WEB_CAPS.clipboardImages = true`.
-- [ ] **Step 5: Verify** — Karma unit tests where feasible (`WebTts` decode of a tiny embedded MP3 is optional); headless Chrome with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`: tap the mic in the composer, stop, assert a `/transcribe` request left with `audio/webm` content-type (Playwright `page.on("request")`); upload check: attach a generated 12 MB file via the picker (`page.setInputFiles` on the hidden input) and assert `POST /upload/init` + ≥2 `PATCH` requests (chunked path) before send.
-- [ ] **Step 6: Commit** — `feat(web): MediaRecorder dictation, AudioContext read-aloud, clipboard image paste; mime passes through to /transcribe`.
+- [x] **Step 1: Mime pass-through (TDD in `:shared` jvmTest)** — `transcribeAudio(bytes, filename, mime)` end to end; default stays for callers that don't pass it; the multipart part's content-type equals the passed mime (assert with MockEngine).
+- [x] **Step 2: `WebMic`** — `available = true` iff `navigator.mediaDevices?.getUserMedia` exists; `requestPermission()` = `getUserMedia({audio:true})` (keep the stream); `start()` = new `MediaRecorder(stream, {mimeType: first supported of ["audio/webm;codecs=opus","audio/webm","audio/mp4;codecs=mp4a.40.2","audio/mp4","audio/ogg;codecs=opus"]})`, `ondataavailable` collects blobs, `start()`; `stop()` must be synchronous by contract but `MediaRecorder.stop()` delivers the final blob asynchronously → collect chunks on `dataavailable` with `start(250)` (timeslice) so `stop()` can return what has been gathered so far plus flush the last blob via `requestData()` before `stop()`; read blob bytes through `BlobChunkSource` (sync XHR) — document the ≤250 ms tail loss; `CapturedAudio(bytes, "dictation.webm" (extension from the mime), mime)`; `cancel()` stops without returning; `liveTranscript = null`.
+- [x] **Step 3: `WebTts.playAudioChunk`** — one `AudioContext` (created lazily inside `speak`/first chunk; browsers require a gesture to start it — call `resume()`), `decodeAudioData(bytes.buffer)` → `BufferSource` → `start()` and `suspendCancellableCoroutine` resumed on `onended`; `stop()` stops the current source and clears the queue; `shutdown()` closes the context.
+- [x] **Step 4: `WebClipboard`** — `hasImage() = navigator.clipboard?.read exists`; `readImages()`: call `navigator.clipboard.read()` synchronously (before any suspension) and await the promise; for each item with an `image/*` type → `getType` → `Blob` → `PickedFile("pasted.<ext>", type, BlobChunkSource(blob))`. `WEB_CAPS.clipboardImages = true`.
+- [x] **Step 5: Verify** — Karma unit tests where feasible (`WebTts` decode of a tiny embedded MP3 is optional); headless Chrome with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`: tap the mic in the composer, stop, assert a `/transcribe` request left with `audio/webm` content-type (Playwright `page.on("request")`); upload check: attach a generated 12 MB file via the picker (`page.setInputFiles` on the hidden input) and assert `POST /upload/init` + ≥2 `PATCH` requests (chunked path) before send.
+- [x] **Step 6: Commit** — `feat(web): MediaRecorder dictation, AudioContext read-aloud, clipboard image paste; mime passes through to /transcribe`.
 
 ---
 
 ### Task 6: VNC verification + Results
 
-- [ ] **Step 1:** Displays screen on the hermetic broker: no real display exists here, so verify the negative path — the Displays screen lists none and the "Unsupported transport" text renders for an h264 stream if the fixture can register one (skip if not; say so). If a VNC server is reachable on this host (`x11vnc`/`tigervnc` — check `which`), register a display through the broker's `/displays` API and confirm the framebuffer paints (screenshot). Otherwise record "VNC path untested in browser, all code shared and unit-tested".
-- [ ] **Step 2:** Append `## Results` to this plan (terminal/editor/mic/upload/VNC outcomes, bundle numbers before/after binaryen, timings) and commit with `git add -f`.
+- [x] **Step 1:** Displays screen on the hermetic broker: no real display exists here, so verify the negative path — the Displays screen lists none and the "Unsupported transport" text renders for an h264 stream if the fixture can register one (skip if not; say so). If a VNC server is reachable on this host (`x11vnc`/`tigervnc` — check `which`), register a display through the broker's `/displays` API and confirm the framebuffer paints (screenshot). Otherwise record "VNC path untested in browser, all code shared and unit-tested".
+- [x] **Step 2:** Append `## Results` to this plan (terminal/editor/mic/upload/VNC outcomes, bundle numbers before/after binaryen, timings) and commit with `git add -f`.
 
 ---
 
@@ -177,7 +177,71 @@ Setup wizard, web push + `sw.js`, manifest/icons, `Caps.setupWizard` → plan 4.
 
 ---
 
-## Results — Task 3 (xterm.js terminal, 2026-09-12)
+## Results (2026-09-12)
+
+All six tasks landed. The browser host now runs the heavy panes — terminal, editor, VNC display —
+plus mic, uploads and clipboard, on the same `:shared`/`:ui` code every other host uses. Commits
+`30ae3a04`, `1e7ce3db`, `7675e540`, `1c5554a9`, `2d98be01`, `98c041de`, `32626442`, `8dd0f3e3`.
+
+| Task | Outcome |
+|---|---|
+| 1 — ambient auth | `PairedHost.ambientAuth` replaces the `"cookie"` sentinel; codec round-trips it (old metadata defaults false), `FleetStore.sync` dials `token.isNotBlank() \|\| ambientAuth`. No sentinel left under `apps/web`. A repair gate rewrites already-persisted sentinel records. |
+| 2 — bundle | `applyBinaryen()` was already on; measured staged gzip **5 981 KB → 6 085 KB (terminal) → 6 101 KB (final)**. Ceiling raised to **8 MiB** as a bloat catch, not a target (Skiko ≈3.4 MB is the floor). xterm npm deps + `xterm.css`; `editor/` staged from `apps/android/src/main/assets/editor/` with `editor-shim.js` overlaid and injected before `cm6.js`. |
+| 3 — terminal | Real pty through tmux: `echo hello-web` typed with `page.keyboard` appears on screen and in the tmux pane's scrollback; `tput cols` **123 → 66 → 123** across viewport resizes. +105 KB. Interop-hole paint bug found and measured (below). |
+| 4 — editor | The committed cm6 bundle runs in a same-origin iframe over desktop's bridge protocol unchanged; file open → edit → Ctrl+S → bytes on disk. The shim is the SMALL variant (~20 lines) because `bridgeShimJs` already defines the ten hooks. Bridge is origin-checked on both ends and the broker sends `frame-ancestors 'self'`. |
+| 5 — mic / uploads / clipboard | Dictation posts multipart `audio/webm;codecs=opus`, 38 KB, to `/sessions/<id>/transcribe` (mime now passes through `Dictation → FleetStore → HostStore → BrokerApi`). A 12 MB attachment takes the chunked path: 1 × `POST /upload/init` + **3 × PATCH** (5 MB, 5 MB, 2 MB). Clipboard images are a static capability probe (`navigator.clipboard.read`). Read-aloud `playAudioChunk` is verified by Karma decode only, not end to end. |
+| 6 — VNC | **Verified in the browser** against a real X display — see below. |
+| Karma | **53 tests** green (`CHROME_BIN=/usr/bin/google-chrome ./gradlew :web:wasmJsBrowserTest`), ~1 m 45 s. |
+
+### Task 6 — VNC verified in the browser
+
+This host has `x11vnc` + `Xvfb`, so the path was exercised for real. The broker provisions the
+display itself (`LinuxXvfbProvider`: `Xvfb :99` + loopback `x11vnc`), so the run just clicked "+"
+on the Displays screen rather than registering a transport by hand; nothing external had to be
+started.
+
+| Check | Result |
+|---|---|
+| `/displays` with no streams | "No active displays." renders, **no `pageerror`, no console error** (`v1-displays-empty.png`) |
+| "+" in the top bar | `POST /displays` → `{provider:"linux-xvfb", display:":99", transport:"vnc", status:"running"}`; the row appears live |
+| Framebuffer paints | `xsetroot -solid red -display :99`, open the row → the viewer is **solid red** to the edges, "Connected" chip, remote cursor drawn (`v3-vnc-red.png`) |
+| Pixel assertions | screenshot pixels at (900,300) and (300,600) = `255,0,0` |
+| Live incremental update | `xsetroot -solid blue` while the viewer is open → the same pixels flip to `0,0,255` within 4 s (`v4-vnc-blue.png`) — the RFB update loop, not just the first frame |
+| Negative path | with every displays payload rewritten to `transport:"h264"` (HTTP list + ws frames), the viewer renders **"Unsupported display transport 'h264'"** (`v6-h264-unsupported.png`) — this host has no `videoDecoder()`, so `displayTransportFor` is honest instead of pointing an RFB client at an H.264 socket |
+| Console | clean in every VNC phase; the only errors ever seen were from the test harness's own websocket interception in the h264 phase (`ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS` on the proxied `/ws`), not from the app |
+
+Screenshots: session scratchpad `plan3/` — `v1-displays-empty.png`, `v2-display-listed.png`,
+`v3-vnc-red.png`, `v4-vnc-blue.png`, `v5-h264-list.png`, `v6-h264-unsupported.png`.
+
+Cleanup: the display was stopped through `DELETE /displays/<id>` (204) and the fixture broker
+killed; no `Xvfb`/`x11vnc` survived and the live `:9898` broker was never touched.
+
+Nothing in `:web` was needed for any of this — `VncClient`, `VncFramebuffer` and the pako
+`ZlibInflater` were already shared and unit-tested, and the transport switch needed no web branch,
+exactly as the plan's facts predicted.
+
+### Carry-forward to plan 4/5
+
+- **`WebMic.releaseStream()` is never called** — the captured `MediaStream` is held for the session,
+  so the browser's mic indicator stays lit after dictation ends. Needs a release hook on the
+  `MicCapture` seam (or a `cancel()`-time stop) and a caller in `Dictation`.
+- **`WebClipboard.hasImage()` is always true** where `navigator.clipboard.read` exists, so the paste
+  entry in the attach menu is offered even with an empty clipboard. Correct per the seam's contract
+  (the probe is static) but worth a real check once `read()` can be called outside a gesture.
+- **CMP 1.12 bump attempt for the interop hole** — the pane strip band above every interop element
+  (measured below: the clear-rect is one vertical translation short). Two workarounds failed; try the
+  newer Compose Multiplatform first, then file upstream with the numbers.
+- **Hash `editor/` + the shim** — the staged editor bundle is unhashed and `no-cache` revalidated
+  (1.3 MB per load) because the page references `cm6.js` relatively.
+- **`font/ttf` MIME** for the staged fonts.
+- **LSP is untested in the browser** — the bridge carries `cmLspConnect/cmLspMessage/cmLspDisconnect`
+  and the shim routes `lspOut`, but no run has driven a language server through it.
+- **Read-aloud is untested end to end** — only the Karma decode of a chunk; nothing has streamed
+  `/speak` NDJSON into `AudioContext` in a real session.
+- **Tofu glyphs** — some icons and transcript characters render as `□` (the font atlas does not carry
+  them). Needs a font/atlas pass.
+
+### Task 3 detail — xterm.js terminal
 
 Browser terminal works end to end against a hermetic broker: a real pty through tmux, typed with
 `page.keyboard`, resized both ways by the pane.
@@ -221,7 +285,7 @@ Screenshots: session scratchpad `plan3/` — `3a-add-menu.png` (the pane "+" pop
 
 ---
 
-## Results — Task 4 (CodeMirror editor engine, 2026-09-12)
+### Task 4 detail — CodeMirror editor engine
 
 The committed cm6 bundle runs in the browser host, in a same-origin iframe, over **desktop's bridge
 protocol unchanged**. Nothing in `:ui` or `:shared` had to move.
@@ -306,7 +370,7 @@ reloaded frame gets the document re-pushed instead of silently losing it; `adopt
    future plan may want the seed script to drop a couple of files there for exactly this kind of
    check.
 
-### The interop hole (C1) — measured, two fixes attempted, both ineffective
+#### The interop hole (C1) — measured, two fixes attempted, both ineffective
 
 **Repro (2 min, no code):** stage the bundle, open the fixture session in headless Chrome, run
 `document.body.style.background = "#ff00ff"`, add a Terminal through the pane "+", screenshot.
@@ -346,7 +410,7 @@ show the same band above it. Cosmetic mitigations that would work without upstre
 the theme's strip colour (hides the band, still hides the tabs) or inset the element by the strip
 height (moves the hole into a deliberate gap) — neither is worth it.
 
-### Review follow-ups also in this commit
+#### Review follow-ups also in this commit (Task 3)
 
 `WebglAddon` is held in the attach state, registers `onContextLoss { dispose() }` (xterm then falls
 back to its canvas renderer) and is disposed with the composition — a leaked WebGL context counts
