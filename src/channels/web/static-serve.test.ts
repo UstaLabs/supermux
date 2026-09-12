@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, writeFileSync } from "fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { serveStatic } from "./static-serve"
@@ -56,4 +56,31 @@ describe("serveStatic (dual-mode)", () => {
     expect(res!.headers.get("content-encoding")).toBe("gzip")
   })
 
+})
+
+describe("serveStatic security headers", () => {
+  // The editor iframe's bridge evals what its parent posts it. `frame-ancestors 'self'` is the
+  // outer half of that guard (the shim's own origin check is the inner half): a foreign page must
+  // not be able to frame this origin and become that parent in the first place.
+  test("html disk hit carries frame-ancestors 'self'", () => {
+    const dir = tmp()
+    writeFileSync(join(dir, "index.html"), "<html>disk</html>")
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/" })
+    expect(res!.headers.get("content-security-policy")).toBe("frame-ancestors 'self'")
+  })
+
+  test("the editor page carries it too", () => {
+    const dir = tmp()
+    mkdirSync(join(dir, "editor"))
+    writeFileSync(join(dir, "editor", "index.html"), "<html>cm6</html>")
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/index.html" })
+    expect(res!.headers.get("content-security-policy")).toBe("frame-ancestors 'self'")
+  })
+
+  test("the SPA fallback carries it (the path a framer would actually request)", () => {
+    const embDir = tmp()
+    writeFileSync(join(embDir, "emb-index.html"), "<html>spa</html>")
+    const res = serveStatic({ staticDir: "/nonexistent", embedded: { "/index.html": join(embDir, "emb-index.html") }, path: "/s/whatever" })
+    expect(res!.headers.get("content-security-policy")).toBe("frame-ancestors 'self'")
+  })
 })

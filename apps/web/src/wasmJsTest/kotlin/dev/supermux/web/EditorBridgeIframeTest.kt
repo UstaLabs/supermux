@@ -1,12 +1,18 @@
+// `js(…)`/`JsString` interop is still behind the wasm opt-in in Kotlin 2.3; wasmJsMain sets it in
+// the build file, the test source set does not.
+@file:OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
+
 package dev.supermux.web
 
 import dev.supermux.web.editor.WebEditorEngine
 import kotlinx.browser.document
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.await
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.w3c.dom.HTMLDivElement
 import org.w3c.dom.HTMLIFrameElement
+import kotlin.js.Promise
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -18,31 +24,16 @@ import kotlin.test.assertTrue
  * tested without a browser is that an eval posted at a frame arrives, runs, and that the reply
  * finds its way back into `pendingEvaluations`.
  *
- * Karma serves only its own page, so the cm6 bundle cannot be loaded: the frame is an `srcdoc`
- * stand-in carrying the SAME transport shim (`apps/web/editor/editor-shim.js`, copied below — if
- * you change one, change the other) plus a two-function stub for the bundle. That is enough,
- * because the real bundle's `AndroidEditor` hooks are defined by `:ui`'s `bridgeShimJs`, which this
- * test does run verbatim: the engine evals it into the frame exactly as it will in production.
+ * Karma serves only its own page, so the cm6 bundle cannot be loaded and the frame is an `srcdoc`
+ * stand-in. Its shim, though, is the REAL `apps/web/editor/editor-shim.js`, fetched at run time
+ * (the `editorShimTestResource` Copy task in build.gradle.kts puts it on the Karma server, and
+ * `karma.config.d/editor-shim.js` gives it this URL) — an inlined copy would let the shipped shim
+ * drift while the test kept passing against yesterday's text. Only the BUNDLE is stubbed, and even
+ * its `AndroidEditor` hooks are the shared `bridgeShimJs` ones, which the engine evals in verbatim.
  */
 class EditorBridgeIframeTest {
 
-    /** The transport shim, verbatim from `apps/web/editor/editor-shim.js` (comments stripped). */
-    private val shimJs = """
-        (function () {
-          var origin = window.location.origin && window.location.origin !== "null" ? window.location.origin : "*";
-          window.smxEditorQuery = function (q) {
-            try { window.parent.postMessage(String(q && q.request != null ? q.request : ""), origin); } catch (e) {}
-          };
-          window.smxEditorQueryCancel = function () {};
-          window.addEventListener("message", function (ev) {
-            if (ev.source !== window.parent) return;
-            if (typeof ev.data !== "string" || ev.data.indexOf("__smxEval:") !== 0) return;
-            try { (0, eval)(ev.data.slice(10)); } catch (e) {
-              try { window.smxEditorQuery({ request: JSON.stringify({ fn: "evalError", arg: String(e) }) }); } catch (e2) {}
-            }
-          });
-        })();
-    """.trimIndent()
+    private suspend fun shimJs(): String = fetchText(SHIM_URL).await().toString()
 
     /**
      * The bundle stand-in: `cmInit` fires `onReady` SYNCHRONOUSLY (cm6-entry.mjs does the same, and
@@ -50,9 +41,9 @@ class EditorBridgeIframeTest {
      * `cmGetContent` returns whatever was last set — so the round trip proves a real read, not an
      * echo of a constant.
      */
-    private fun page(): String = """
+    private fun page(shim: String): String = """
         <!doctype html><html><head><meta charset="utf-8"></head><body>
-        <script>$shimJs</script>
+        <script>$shim</script>
         <script>
           var doc = "";
           function cmInit(content, filename, lineWrap, fontSize) {
@@ -70,7 +61,7 @@ class EditorBridgeIframeTest {
         </body></html>
     """.trimIndent()
 
-    private fun mount(engine: WebEditorEngine): Pair<HTMLDivElement, HTMLIFrameElement> {
+    private fun mount(engine: WebEditorEngine, shim: String): HTMLDivElement {
         val div = document.createElement("div") as HTMLDivElement
         div.style.width = "600px"
         div.style.height = "300px"
@@ -81,16 +72,17 @@ class EditorBridgeIframeTest {
         // `adopt` BEFORE the frame is in the document: the `load` listener has to be installed
         // before the parser can fire it, or the engine never injects `cmInit`.
         engine.adopt(frame)
-        frame.setAttribute("srcdoc", page())
+        frame.setAttribute("srcdoc", page(shim))
         div.appendChild(frame)
-        return div to frame
+        return div
     }
 
     @Test
     fun readyArrivesAndGetContentRoundTrips() = runTest {
+        val shim = shimJs()
         val engine = WebEditorEngine(lineWrap = true, fontSize = 15)
         engine.setDocument("notes.txt", "hello from kotlin")
-        val (div, _) = mount(engine)
+        val div = mount(engine, shim)
         try {
             // No explicit deadline: Karma's own per-test timeout is shorter than the engine's 8 s
             // ready timeout, and a `withTimeout` here would run on `runTest`'s virtual clock and
@@ -118,6 +110,33 @@ class EditorBridgeIframeTest {
         }
     }
 
+    /**
+     * A forged reply from the WRONG source must not complete a pending read. The engine's listener
+     * is on `window`, which hears every `postMessage` in the page — including one the host document
+     * sends itself, which is what any other script on the page (or an ad/extension frame) can do.
+     * Only `ev.source === iframe.contentWindow` separates them, and this is where that is proved:
+     * the read must resolve with the frame's real answer, not the forgery that arrives first.
+     */
+    @Test
+    fun aMessageFromTheWrongSourceDoesNotCompleteARead() = runTest {
+        val shim = shimJs()
+        val engine = WebEditorEngine(lineWrap = false, fontSize = 13)
+        engine.setDocument("real.txt", "the real document")
+        val div = mount(engine, shim)
+        try {
+            engine.ready.first { it }
+            val content = CompletableDeferred<String>()
+            engine.getContent { content.complete(it) }
+            // The engine's first evaluation id is 1; a `window`-sourced reply claiming it would
+            // complete the read with the forged value if the source filter were missing.
+            postToSelf("""{"fn":"evalResult","arg":"{\"id\":1,\"value\":\"FORGED\"}"}""")
+            assertEquals("the real document", content.await(), "the frame's answer wins; the forgery is dropped")
+        } finally {
+            engine.dispose()
+            document.body!!.removeChild(div)
+        }
+    }
+
     /** A read issued with no frame mounted must still call back (with the documented ""), never hang. */
     @Test
     fun getContentBeforeAttachFiresTheFallback() = runTest {
@@ -126,4 +145,16 @@ class EditorBridgeIframeTest {
         engine.getContent { content.complete(it) }
         assertEquals("", content.await())
     }
+
+    private companion object {
+        /** Where `karma.config.d/editor-shim.js` proxies the real shim to. */
+        const val SHIM_URL = "/editor-shim.js"
+    }
 }
+
+/** Fetch as text, rejecting a non-2xx loudly — a silent "" would stub the shim out of the test. */
+private fun fetchText(url: String): Promise<JsString> =
+    js("fetch(url).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status + ' fetching ' + url); return r.text(); })")
+
+/** Post a bridge payload at our own window — the wrong `source` for the engine's listener. */
+private fun postToSelf(request: String): Unit = js("window.postMessage(request, '*')")

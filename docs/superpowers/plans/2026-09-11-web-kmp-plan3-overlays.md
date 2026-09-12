@@ -229,7 +229,7 @@ protocol unchanged**. Nothing in `:ui` or `:shared` had to move.
 | Check | Result |
 |---|---|
 | `:web:compileKotlinWasmJs` | green (4 s incremental) |
-| Karma (`:web:wasmJsBrowserTest`) | **42 tests** green (40 before + 2 `EditorBridgeIframeTest`), 1 m 42 s |
+| Karma (`:web:wasmJsBrowserTest`) | **45 tests** green (42 before + 3 `EditorBridgeIframeTest`), 1 m 44 s |
 | `stageForBroker` | green (10 m 37 s cold); `editor/` = `index.html` + `cm6.js` + `editor-shim.js`, and the staged page loads the shim BEFORE `cm6.js` |
 | Open a file from the tree (`notes.txt`) | the iframe is at `…/editor/index.html` and its `.cm-content` reads `hello from the fixture\nsecond line\nthird line` — the file's real first line |
 | Type `ZZ` → cm6 `onChange` → Kotlin | `.cm-content` becomes `hello from the fixtureZZ`, the pane tab flips to `notes.txt ✓ ✕` (the save affordance appears — Kotlin's dirty state) |
@@ -250,6 +250,18 @@ page only has to supply the two ends of the TRANSPORT that JCEF's message router
 free: `window.smxEditorQuery({request})` → `parent.postMessage`, and a `message` listener that runs
 `"__smxEval:"`-prefixed code through `(0, eval)`. One shared, unit-tested definition of the ten hooks
 for all four hosts; the web page owns no copy that could drift.
+
+**Review follow-ups (second commit).** The bridge is now origin-checked on BOTH ends —
+the shim drops any `message` whose `ev.origin` is not its own (source alone is not enough: a
+cross-origin framer is still `window.parent`), and the engine's listener requires
+`ev.origin === location.origin` alongside `ev.source === iframe.contentWindow`. The outer half of
+that guard is a broker header: `serveStatic` (src/channels/web/static-serve.ts) now sends
+`content-security-policy: frame-ancestors 'self'` on every static response, so a foreign page
+cannot frame the editor and become that parent at all (3 bun tests). `onFrameLoad` treats a
+SECOND load as renderer loss (un-ready + `planner.onRendererLost()` + re-armed timeout) so a
+reloaded frame gets the document re-pushed instead of silently losing it; `adopt` clears
+`failed`; the ready-timeout branch expires pending reads; `dispose` drops the diff region and
+`detach` removes the `load` listener. And the test no longer inlines the shim — see finding 6.
 
 **Findings:**
 
@@ -276,8 +288,20 @@ for all four hosts; the web page owns no copy that could drift.
    paints solid black (plan 3 Task 3 finding 2). It is NOT permanent here — while typing, the strip
    repainted correctly (`e5-strip.png` shows the real tab), then went black again after the save
    (`e6-saved.png`). So it is a stale-clear artifact that any Compose-side invalidation fixes, which
-   matches the interop-hole diagnosis. No time spent; awaiting the reviewer's fix.
-6. **The fixture workdir is EMPTY** (`scripts/test-broker.sh` creates it and nothing else), contrary
+   matches the interop-hole diagnosis. **Re-checked after 2d98be01** (the terminal's "pane strip
+   drawn above the interop hole" fix) on a freshly staged bundle: the editor pane's strip is STILL
+   black, so whatever that commit did for the terminal does not reach the editor pane. Not
+   investigated here — flagged for whoever owns the interop-clear fix.
+6. **The shim reaches Karma as a test RESOURCE.** The inlined copy in `EditorBridgeIframeTest` was
+   an assertion against itself, so the shipped file is now fetched at run time. Karma serves only
+   what is in `config.files`, so it took both halves: an `editorShimTestResource` `Copy` task wiring
+   `apps/web/editor/editor-shim.js` into the wasmJsTest processed resources (KGP lands those under
+   `<karma basePath>/kotlin/`), and a `karma.config.d/editor-shim.js` snippet registering that one
+   file `included: false` and proxying it to `/editor-shim.js`. The test `fetch`es that URL and
+   injects the text into its stub page's `srcdoc`; a non-2xx throws rather than stubbing the shim
+   out. The sha256-constant fallback was not needed.
+
+7. **The fixture workdir is EMPTY** (`scripts/test-broker.sh` creates it and nothing else), contrary
    to the plan's note — the run seeded `notes.txt`, `main.rs` and `src/lib.ts` into it first. A
    future plan may want the seed script to drop a couple of files there for exactly this kind of
    check.

@@ -9,6 +9,13 @@ plugins {
     alias(libs.plugins.serialization)
 }
 
+// The iframe bridge shim, copied where the Karma test can FETCH it. `EditorBridgeIframeTest` builds
+// its stub editor page out of the real file, so the shim and the engine can never drift apart
+// unnoticed — an inlined copy in the test would assert against itself. Karma serves the test
+// compilation's processed resources under the run's base path; `karma.config.d/editor-shim.js`
+// registers this one file and proxies it to `/editor-shim.js`, which is what the test fetches.
+val editorShimTestResourceDir = layout.buildDirectory.dir("editorShimTestResource")
+
 // The browser host of the shared Compose app. Thin by design, like apps/ios: entry point,
 // WebPlatform + browser actuals, and the packaging that puts the bundle where the broker serves it.
 kotlin {
@@ -54,11 +61,16 @@ kotlin {
                 implementation(npm("@xterm/addon-webgl", "0.18.0"))
             }
         }
-        wasmJsTest.dependencies {
-            implementation(kotlin("test"))
-            implementation(libs.coroutines.test)
-            // MockEngine: the browser-side bootstrap tests drive BrokerApi without a broker.
-            implementation(libs.ktor.client.mock)
+        wasmJsTest {
+            // `EditorBridgeIframeTest` mounts the REAL `editor/editor-shim.js` in its stub frame
+            // rather than a copy of it — see [editorShimTestResource] below.
+            resources.srcDir(editorShimTestResourceDir)
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(libs.coroutines.test)
+                // MockEngine: the browser-side bootstrap tests drive BrokerApi without a broker.
+                implementation(libs.ktor.client.mock)
+            }
         }
     }
 }
@@ -236,3 +248,11 @@ val stageForBroker by tasks.registering {
         println("stageForBroker: ${renames.size} hashed assets, gzip total ${gz / 1024} KB → $out")
     }
 }
+
+val editorShimTestResource by tasks.registering(Copy::class) {
+    description = "Stage editor/editor-shim.js as a wasmJsTest resource so Karma can serve it"
+    from(editorShimFile)
+    into(editorShimTestResourceDir)
+}
+
+tasks.named("wasmJsTestProcessResources") { dependsOn(editorShimTestResource) }

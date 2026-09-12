@@ -17,15 +17,22 @@
 // Defining `AndroidEditor`/`webkit` here too would duplicate — and risk drifting from — the shared
 // shim that is unit-tested in `:ui`. This file is deliberately the transport only.
 //
-// SECURITY: both directions are pinned to the frame's own origin. The page is same-origin with the
-// host app (served from `/editor/` by the same broker), the eval'd text is always built by
-// `EditorBridge.kt` from values the host already holds, and a cross-origin frame could neither
-// receive these posts nor send one that passes the `ev.source !== window.parent` check.
+// SECURITY: this file hands `eval` to whatever is on the other end of the channel, so both
+// directions are pinned to the frame's own origin. Outbound, `postMessage(..., origin)` refuses to
+// deliver if the parent document is not that origin. Inbound, `ev.source === window.parent` alone
+// is NOT enough — a cross-origin parent is still `window.parent`, and could post us anything — so
+// `ev.origin` is checked against the same origin before the payload is even looked at. Together
+// with the broker's `frame-ancestors 'self'` (src/channels/web/static-serve.ts), which stops a
+// foreign page from framing us in the first place, the only document that can reach the eval is
+// the app itself. The eval'd text is then always built by `EditorBridge.kt` from values the host
+// already holds.
 (function () {
   // The staged page is same-origin with the app, so this is the app's own origin and both
   // directions are pinned to it. The `*` fallback covers an OPAQUE origin — a sandboxed or
   // `srcdoc` frame, which is how the Karma test mounts this page: `location.origin` is then the
-  // string "null", which matches nothing and would silently swallow every message.
+  // string "null", which matches nothing and would silently swallow every message. That fallback
+  // also drops the inbound origin check, because an opaque-origin frame has no origin to compare
+  // against; it exists for the test harness, and the staged page never takes it.
   var origin = window.location.origin && window.location.origin !== "null" ? window.location.origin : "*";
 
   // Outbound: JCEF's `CefMessageRouter` query function, re-implemented as a post to the parent.
@@ -39,10 +46,12 @@
   // `bridgeShimJs` that does cannot throw in here.
   window.smxEditorQueryCancel = function () {};
 
-  // Inbound: run JS the host built. Anything that is not a string with our prefix is ignored, so
-  // unrelated `postMessage` traffic (dev servers, extensions) can never reach the eval.
+  // Inbound: run JS the host built. The sender must be our parent AND our own origin, and the
+  // payload must be a string carrying our prefix — so unrelated `postMessage` traffic (dev
+  // servers, extensions) and any cross-origin framer can never reach the eval.
   window.addEventListener("message", function (ev) {
     if (ev.source !== window.parent) return;
+    if (origin !== "*" && ev.origin !== origin) return;
     if (typeof ev.data !== "string" || ev.data.indexOf("__smxEval:") !== 0) return;
     try {
       (0, eval)(ev.data.slice(10));

@@ -53,6 +53,14 @@ function cacheControlFor(candidate: string): string {
   return "no-cache, must-revalidate"
 }
 
+// Who may put this origin's pages in a frame: only this origin. The editor page (/editor/index.html)
+// hands `eval` to its parent through a postMessage bridge (apps/web/editor/editor-shim.js), and the
+// shim's own origin check is the inner half of that guard. This header is the outer half: a foreign
+// page cannot frame the editor at all, so it never gets to be the `window.parent` the shim talks to.
+// Applied to EVERY static response rather than just the editor page — the app shell has no business
+// being framed either, and one header on one helper cannot drift from a per-path list.
+const SECURITY_HEADERS: Record<string, string> = { "content-security-policy": "frame-ancestors 'self'" }
+
 export function serveStatic(opts: { staticDir: string | undefined; embedded: Record<string, string>; path: string; acceptEncoding?: string }): Response | null {
   const candidate = opts.path === "/" ? "/index.html" : opts.path
 
@@ -68,7 +76,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
     if (existsSync(filePath) && statSync(filePath).isFile()) {
       const raw = readFileSync(filePath)
       const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
-      const headers: Record<string, string> = { "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
+      const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
       if (encoding) headers["content-encoding"] = encoding
       return new Response(body, { headers })
     }
@@ -78,7 +86,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
   if (embeddedPath) {
     const raw = readFileSync(embeddedPath)
     const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
-    const headers: Record<string, string> = { "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
+    const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
     if (encoding) headers["content-encoding"] = encoding
     return new Response(body, { headers })
   }
@@ -89,7 +97,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
     if (existsSync(idx)) {
       const raw = readFileSync(idx)
       const { body, encoding } = maybeGzip("/index.html", raw, opts.acceptEncoding)
-      const headers: Record<string, string> = { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
+      const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
       if (encoding) headers["content-encoding"] = encoding
       return new Response(body, { headers })
     }
@@ -98,7 +106,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
   if (embIdx) {
     const raw = readFileSync(embIdx)
     const { body, encoding } = maybeGzip("/index.html", raw, opts.acceptEncoding)
-    const headers: Record<string, string> = { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
+    const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
     if (encoding) headers["content-encoding"] = encoding
     return new Response(body, { headers })
   }

@@ -85,6 +85,7 @@ class WebEditorEngine(
 
     private var frame: HTMLIFrameElement? = null
     private var messageListener: ((Event) -> Unit)? = null
+    private var loadListener: ((Event) -> Unit)? = null
     private var readyTimeout: Int = 0
     private var nextEvaluationId: Long = 1
     private val pendingEvaluations = mutableMapOf<Long, (String) -> Unit>()
@@ -126,10 +127,17 @@ class WebEditorEngine(
      */
     fun adopt(f: HTMLIFrameElement) {
         frame = f
+        // A re-attach after a ready timeout starts clean: leaving the old reason set would render
+        // the native fallback over a page that is loading perfectly well.
+        _failed.value = null
         val listener: (Event) -> Unit = { ev -> onFrameMessage(ev) }
         messageListener = listener
         window.addEventListener("message", listener)
-        f.addEventListener("load", { onFrameLoad() })
+        // Kept so [detach] can take it off again: a detached frame the caller holds on to (the test
+        // adopts one it owns) must not keep calling back into a disposed engine.
+        val onLoad: (Event) -> Unit = { onFrameLoad() }
+        loadListener = onLoad
+        f.addEventListener("load", onLoad)
         armReadyTimeout()
     }
 
@@ -142,7 +150,11 @@ class WebEditorEngine(
         clearReadyTimeout()
         messageListener?.let { window.removeEventListener("message", it) }
         messageListener = null
-        frame?.let { removeFromParent(it) }
+        frame?.let { f ->
+            loadListener?.let { f.removeEventListener("load", it) }
+            removeFromParent(f)
+        }
+        loadListener = null
         frame = null
         _ready.value = false
         planner.onRendererLost()
@@ -152,8 +164,16 @@ class WebEditorEngine(
         pendingEvaluations.clear()
     }
 
-    /** Idempotent teardown. Same work as [detach] — there is no per-engine runtime to release. */
-    override fun dispose() = detach()
+    /**
+     * Idempotent teardown. [detach] plus the walkthrough region: [detach] may be followed by
+     * another [attach] (the surface leaving and re-entering the composition), and that page is owed
+     * its region back — but a disposed engine is never reattached, so holding the region would only
+     * pin the document it carries.
+     */
+    override fun dispose() {
+        detach()
+        pendingDiffRegion = null
+    }
 
     // ── Kotlin → JS ──────────────────────────────────────────────────────────
 
@@ -209,6 +229,16 @@ class WebEditorEngine(
      * single-eval timing guarantee [initScript] documents for desktop.
      */
     private fun onFrameLoad() {
+        // A SECOND load means the page we were talking to is gone (a reload, or a navigation inside
+        // the frame). Desktop learns that from `onLoadError`/`onRenderProcessTerminated`; here the
+        // next `load` IS the notification. Un-ready first so the planner re-pushes the whole
+        // document into the new page — without this, every push since the first ready was recorded
+        // as already-applied and the reloaded editor would come up empty.
+        if (_ready.value || planner.ready) {
+            _ready.value = false
+            planner.onRendererLost()
+            armReadyTimeout()
+        }
         postEval(
             initScript(
                 QUERY_FN,
@@ -222,7 +252,7 @@ class WebEditorEngine(
 
     private fun onFrameMessage(ev: Event) {
         val f = frame ?: return
-        val data = frameMessageData(ev, f)?.toString() ?: return
+        val data = frameMessageData(ev, f, window.location.origin)?.toString() ?: return
         val event = parseBridgeEvent(data)
         if (event == null) {
             logLine("[WebEditorEngine] ignoring unknown bridge payload: ${data.take(200)}")
@@ -280,6 +310,10 @@ class WebEditorEngine(
             if (!_ready.value) {
                 _failed.value = "the editor did not load (no response from $indexUrl within " +
                     "${EDITOR_READY_TIMEOUT_MS / 1000} s)"
+                // Nothing is going to answer a read issued against a page that never booted. Fire
+                // the documented fallbacks now rather than leaving the callbacks pending forever.
+                pendingEvaluations.values.toList().forEach { it("") }
+                pendingEvaluations.clear()
             }
         }
     }
@@ -349,10 +383,20 @@ private data class DiffRegionRequest(
 // is not on its `Window`, and `ChildNode.remove` does not exist either — so each of these crosses
 // into JS rather than through a typed member that is not there.
 
-/** The message's string payload IFF it came from [f]'s document; null otherwise (and for the
- *  structured-clone traffic of unrelated libraries, which is never a string). */
-private fun frameMessageData(ev: Event, f: HTMLIFrameElement): JsString? =
-    js("(ev.source === f.contentWindow && typeof ev.data === 'string') ? ev.data : null")
+/**
+ * The message's string payload IFF it came from [f]'s document AND from [origin]; null otherwise
+ * (and for the structured-clone traffic of unrelated libraries, which is never a string).
+ *
+ * The source check alone would be enough for an `<iframe src>` we control, but the engine can also
+ * be handed a frame ([WebEditorEngine.adopt]) and a page can be navigated away: `source` then still
+ * points at the same `contentWindow` while the document behind it is somebody else's. The origin
+ * check is what makes "this came from our own editor page" true, and it mirrors the identical check
+ * the shim makes on the way in. A frame with an OPAQUE origin — the `srcdoc` the Karma test mounts —
+ * reports `ev.origin` as "null", which is accepted only because such a frame can only exist inside
+ * our own document in the first place.
+ */
+private fun frameMessageData(ev: Event, f: HTMLIFrameElement, origin: String): JsString? =
+    js("(ev.source === f.contentWindow && (ev.origin === origin || ev.origin === 'null') && typeof ev.data === 'string') ? ev.data : null")
 
 /** Post to the frame's own document. A frame that has not navigated yet has no `contentWindow`. */
 private fun postEvalToFrame(f: HTMLIFrameElement, message: String, origin: String): Unit =
