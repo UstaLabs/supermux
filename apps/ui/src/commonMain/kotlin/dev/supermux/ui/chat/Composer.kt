@@ -193,6 +193,16 @@ data class ComposerExternalAttach(val file: PickedFile?, val text: String)
 /** One-shot "transcribe these bytes and append the cleaned text to the draft" request — the
  *  `SM_DICTATE` headless hook, which proves the real POST→append round-trip under Xvfb where there
  *  is no mic. [bytes] null = the host could not read the audio; consume without appending. */
+data class ComposerExternalDictate(val bytes: ByteArray?, val filename: String) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ComposerExternalDictate) return false
+        return filename == other.filename && (bytes?.contentEquals(other.bytes ?: ByteArray(0)) ?: (other.bytes == null))
+    }
+
+    override fun hashCode(): Int = (bytes?.contentHashCode() ?: 0) * 31 + filename.hashCode()
+}
+
 /** Audio container for a dictation FILE name — the `SM_DICTATE` headless hook's side of what
  *  `CapturedAudio.mime` carries for a real recording. */
 internal fun dictationMimeFor(filename: String): String = when (filename.substringAfterLast('.', "").lowercase()) {
@@ -202,16 +212,6 @@ internal fun dictationMimeFor(filename: String): String = when (filename.substri
     "mp3", "mpeg" -> "audio/mpeg"
     "flac" -> "audio/flac"
     else -> "audio/wav"
-}
-
-data class ComposerExternalDictate(val bytes: ByteArray?, val filename: String) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is ComposerExternalDictate) return false
-        return filename == other.filename && (bytes?.contentEquals(other.bytes ?: ByteArray(0)) ?: (other.bytes == null))
-    }
-
-    override fun hashCode(): Int = (bytes?.contentHashCode() ?: 0) * 31 + filename.hashCode()
 }
 
 /**

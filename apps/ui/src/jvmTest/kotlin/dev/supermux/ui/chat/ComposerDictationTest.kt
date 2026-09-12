@@ -205,4 +205,13 @@ class ComposerDictationTest {
         assertEquals("hello there", appendDictated("hello ", "there", trimDraft = true))
         assertEquals("hello there", appendDictated("hello\n\t", "there", trimDraft = true))
     }
+
+    /** The headless `SM_DICTATE` hook labels its part from the FILE name. `.webm` must be the
+     *  AUDIO type — `mimeForFileName` answers `video/webm` for the shared container. */
+    @Test fun dictation_mime_is_derived_from_the_audio_extension() {
+        assertEquals("audio/webm", dictationMimeFor("dictation.webm"))
+        assertEquals("audio/mp4", dictationMimeFor("voice.m4a"))
+        assertEquals("audio/wav", dictationMimeFor("dictation.wav"))
+    }
+
 }

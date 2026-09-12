@@ -37,8 +37,12 @@ private fun playChunkJs(ctx: JsAny, data: Int8Array, onEnd: () -> Unit, onErr: (
       // The generation this chunk belongs to is captured here and re-checked there: a stopped
       // read-aloud must never start a node, or the chunk the user silenced plays anyway.
       var gen = ctx.__smxGen || 0;
+      // The decode has no cancel, so `stop()` resumes the caller through this instead of leaving
+      // it suspended until the decode happens to come back.
+      ctx.__smxPending = onErr;
       try {
         ctx.decodeAudioData(buf, function (decoded) {
+          if (ctx.__smxPending === onErr) ctx.__smxPending = null;
           if ((ctx.__smxGen || 0) !== gen) { onErr(); return; }
           try {
             var src = ctx.createBufferSource();
@@ -49,8 +53,8 @@ private fun playChunkJs(ctx: JsAny, data: Int8Array, onEnd: () -> Unit, onErr: (
             started = true;
             src.start();
           } catch (e2) { onErr(); }
-        }, function () { if (!started) onErr(); });
-      } catch (e) { onErr(); }
+        }, function () { if (ctx.__smxPending === onErr) ctx.__smxPending = null; if (!started) onErr(); });
+      } catch (e) { ctx.__smxPending = null; onErr(); }
     }""",
 )
 
@@ -58,6 +62,9 @@ private fun playChunkJs(ctx: JsAny, data: Int8Array, onEnd: () -> Unit, onErr: (
 private fun stopSourceJs(ctx: JsAny): Unit = js(
     """{
       ctx.__smxGen = (ctx.__smxGen || 0) + 1;
+      var pending = ctx.__smxPending;
+      ctx.__smxPending = null;
+      if (pending) pending();
       var src = ctx.__smxSource;
       ctx.__smxSource = null;
       // `onended` is deliberately LEFT IN PLACE: stopping a node fires it, and that is the only
@@ -80,8 +87,8 @@ private fun closeContextJs(ctx: JsAny): Unit = js("{ try { ctx.close(); } catch 
  *
  * [stop] stops the node under way; stopping fires the same `onended` a natural finish does, so
  * the suspended caller unwinds promptly instead of waiting out a chunk nobody can hear. It also
- * bumps a generation counter, so a chunk still inside `decodeAudioData` when [stop] lands resolves
- * its caller without ever starting a node.
+ * bumps a generation counter and calls the pending chunk's resume hook, so a chunk still inside
+ * `decodeAudioData` when [stop] lands resumes its caller AT ONCE and never starts a node.
  */
 object WebTts : TtsEngine {
     private var ctx: JsAny? = null

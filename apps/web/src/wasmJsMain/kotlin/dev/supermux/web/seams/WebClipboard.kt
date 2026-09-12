@@ -99,6 +99,12 @@ internal fun pastedExtensionFor(mime: String): String {
  * therefore reaches [readImages] and comes back empty — the composer's own "nothing to attach"
  * path — instead of prompting for permission on every keystroke.
  *
+ * **Ordering assumption.** The `paste` listener is on the document in the CAPTURE phase, so it has
+ * already run — in the same interaction task as the keystroke — by the time the composer's
+ * `scope.launch { withContext(Default) { readImages() } }` hop resumes. The stash is therefore
+ * always filled before it is read, and [STASH_TTL_MS] is what keeps a stale one from being
+ * attached to a LATER "Paste image" menu click rather than what makes the handoff work.
+ *
  * [readImages] prefers the stash a real `paste` event just filled (fresh = within [STASH_TTL_MS],
  * which covers the dispatch hop the composer makes through `Dispatchers.Default`), because that is
  * the only path Safari allows. The `navigator.clipboard.read()` fallback covers the attach menu's
@@ -131,7 +137,10 @@ object WebClipboard : ClipboardAccess {
         )
     }
 
-    override fun hasImage(): Boolean = clipboardReadAvailableJs() || hookInstalled
+    /** The CAPABILITY probe only — never "a paste event stashed something". A browser without
+     *  `clipboard.read` (Firefox) can serve no images at all, and answering true there would make
+     *  the composer consume Ctrl/Cmd+V and break plain-text paste. */
+    override fun hasImage(): Boolean = clipboardReadAvailableJs()
 
     override suspend fun readImages(): List<PickedFile> {
         takeFreshStash()?.let { return it }

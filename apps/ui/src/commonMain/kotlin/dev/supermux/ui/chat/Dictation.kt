@@ -151,6 +151,18 @@ class DictationController(
      */
     private var liveSessionOpen = false
 
+    /**
+     * Whether the RECORDER has been started and not yet stopped or cancelled — the [recording]
+     * analogue of [liveSessionOpen], and it exists for the same bug.
+     *
+     * [stopMic] leaves the recording state on the frame the user tapped Stop and only THEN awaits
+     * [MicCapture.flush] inside the transcribe job. A [cancelMic] landing in that window cancels
+     * the job, so neither `stop()` nor `cancel()` would ever run: the mic would stay open (a
+     * browser tab's recording indicator lit for good, a desktop line held) and the next dictation
+     * would ADOPT the still-running recorder and splice the abandoned audio onto the front of it.
+     */
+    private var audioSessionOpen = false
+
     private fun fail(message: String) {
         banner = message
         errorMessage = message
@@ -202,6 +214,7 @@ class DictationController(
             return
         }
         recording = mic.start()
+        audioSessionOpen = recording
         if (!recording) micUnavailable = true
     }
 
@@ -243,8 +256,12 @@ class DictationController(
             transcribing = true
             transcribeJob = scope.launch {
                 try {
-                    mic.flush()
-                    val audio: CapturedAudio? = mic.stop()
+                    val audio: CapturedAudio? = try {
+                        mic.flush()
+                        mic.stop()
+                    } finally {
+                        audioSessionOpen = false
+                    }
                     if (audio == null) {
                         fail("Didn't catch that")
                         return@launch
@@ -262,9 +279,11 @@ class DictationController(
     fun cancelMic() {
         val wasRecording = recording
         val wasLiveOpen = liveSessionOpen
+        val wasAudioOpen = audioSessionOpen
         recording = false
         listening = false
         liveSessionOpen = false
+        audioSessionOpen = false
         liveTranscript = null
         partialJob?.cancel()
         partialJob = null
@@ -277,7 +296,10 @@ class DictationController(
         // draining the recogniser must stop it too, or the next dictation starts a second one.
         // `cancel()` is idempotent on every host and also clears the partial.
         if (wasLiveOpen) mic.liveTranscript?.cancel()
-        if (wasRecording) mic.cancel()
+        // [audioSessionOpen] and not just `recording`, for the same reason: a cancel that lands
+        // while `stopMic`'s job is still awaiting the flush must close the recorder, which that
+        // job will no longer reach.
+        if (wasRecording || wasAudioOpen) mic.cancel()
     }
 
     /**

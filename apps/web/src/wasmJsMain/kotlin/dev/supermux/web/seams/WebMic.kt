@@ -84,13 +84,16 @@ private fun flushRecorderJs(rec: JsAny, timeoutMs: Int, onDone: () -> Unit): Uni
       var finish = function () { if (!fired) { fired = true; onDone(); } };
       if (rec.state !== 'recording') { finish(); return; }
       var prev = rec.ondataavailable;
+      // Every exit restores the original handler: a recorder left with this wrapper installed
+      // would keep calling a finished flush's callback for the rest of the recording.
+      var restore = function () { if (rec.ondataavailable !== prev) rec.ondataavailable = prev; };
       rec.ondataavailable = function (e) {
         if (prev) prev(e);
-        rec.ondataavailable = prev;
+        restore();
         finish();
       };
-      setTimeout(finish, timeoutMs);
-      try { rec.requestData(); } catch (err) { finish(); }
+      setTimeout(function () { restore(); finish(); }, timeoutMs);
+      try { rec.requestData(); } catch (err) { restore(); finish(); }
     }""",
 )
 

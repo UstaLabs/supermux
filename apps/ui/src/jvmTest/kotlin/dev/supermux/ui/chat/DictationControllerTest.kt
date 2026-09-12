@@ -25,9 +25,11 @@ private class FakeMicCapture(
     /** Every call in order, so "flush was awaited BEFORE stop" is assertable. */
     val calls = mutableListOf<String>()
     override fun start(): Boolean { startCalls++; calls.add("start"); return startsOk }
+    /** When [flushGate] is set, [flush] suspends on it — the window a `cancelMic` can land in. */
+    var flushGate: CompletableDeferred<Unit>? = null
     override suspend fun flush() {
         calls.add("flush")
-        kotlinx.coroutines.yield()
+        flushGate?.await() ?: kotlinx.coroutines.yield()
         calls.add("flushed")
     }
     override fun stop(): CapturedAudio? {
@@ -62,6 +64,33 @@ class DictationControllerTest {
         assertTrue(ctrl.recording)
         assertFalse(ctrl.micUnavailable)
         assertEquals(1, fake.startCalls)
+    }
+
+    /**
+     * A cancel that lands while `stopMic` is still awaiting the flush must still CLOSE the mic.
+     * The job it cancels is the only thing that would have called `stop()`, so without the
+     * audio-session guard the recorder stays open — on web the tab's recording indicator stays
+     * lit and the next `startMic` adopts the stale recorder, splicing the abandoned audio onto
+     * the front of the next dictation.
+     */
+    @Test fun cancel_mic_during_the_flush_still_closes_the_recorder() = runTest {
+        val fake = FakeMicCapture()
+        fake.flushGate = CompletableDeferred()
+        val scope = TestScope(StandardTestDispatcher(testScheduler))
+        val ctrl = DictationController(fake, scope)
+        ctrl.startMic()
+
+        ctrl.stopMic()
+        testScheduler.advanceUntilIdle()   // the job is parked inside flush()
+        assertEquals(listOf("start", "flush"), fake.calls)
+
+        ctrl.cancelMic()
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(1, fake.cancelCalls)
+        assertEquals(0, fake.stopCalls)
+        assertFalse(ctrl.transcribing)
+        assertFalse(ctrl.recording)
     }
 
     /** The browser's recorder is still holding the tail of the clip when the user taps Stop, so
