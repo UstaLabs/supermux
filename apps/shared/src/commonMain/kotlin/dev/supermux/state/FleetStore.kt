@@ -81,6 +81,7 @@ import dev.supermux.session.HandoffPrefill
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -325,18 +326,28 @@ class FleetStore(
     val usageSnapshot: StateFlow<UsageResponse?> = _usageSnapshot.asStateFlow()
 
     /**
-     * The ACTIVE host's `onboarded` flag (null until that host's first snapshot). Per-broker like
-     * [usageSnapshot], so it FOLLOWS the active host rather than merging across the fleet: a
-     * second, already-onboarded broker must not hide the first one's setup wizard. Assembled with
-     * `flatMapLatest` (not the [Publication] fold) because it is a plain passthrough of one host's
-     * own StateFlow — nothing to merge, nothing to key by recordId.
+     * The ACTIVE host's `onboarded` flag — `null` until that host's first snapshot.
+     *
+     * It FOLLOWS the active host rather than merging across the fleet: a second, already-onboarded
+     * broker must not hide the first one's setup wizard.
+     *
+     * A deliberate departure from the [Publication] folds above: those merge many hosts' events
+     * into one fleet-wide projection, whereas this is a plain passthrough of ONE host's own
+     * `StateFlow` — nothing to merge, nothing to key by recordId — so it subscribes to whichever
+     * host is active and re-subscribes on a switch. [distinctUntilChanged] keeps that
+     * re-subscription to real changes of identity: `hostApps` republishes on every fleet edit, and
+     * without it each one would tear down and rebuild the same host's collector.
+     *
+     * `null` again only when there is no active host at all (the last host forgotten, or the fleet
+     * torn down) — NOT on a dropped socket: a reconnect keeps the last value until the new
+     * snapshot replaces it, so a blip never flashes the wizard over a live shell.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     val onboarded: StateFlow<Boolean?> =
         combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
             .flatMapLatest { app -> app?.onboarded ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
-
 
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.

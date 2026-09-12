@@ -218,6 +218,11 @@ fun rememberAgentSettingsActions(fleet: FleetStore): AgentSettingsActions = reme
  *   (`SettingsSlotScope.topBarShown`). When it is false AND the window is Compact this screen
  *   brings Android's own bar, so a phone never loses its title/back and a tablet's rail layout
  *   never gets a second one.
+ * @param onStatusesChanged every list this screen loads, as it loads it (initial load, Retry, the
+ *   error auto-retry). Hoisted for the first-run setup wizard, which gates its "Next" on whether
+ *   any agent is usable and otherwise has no way to see statuses this screen keeps private. Not
+ *   called for an empty or failed load — the wizard keeps its last answer rather than un-gating on
+ *   a transport blip.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -226,6 +231,7 @@ fun AgentSettingsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit = {},
     topBarShown: Boolean = false,
+    onStatusesChanged: (List<AgentInstallStatus>) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -253,10 +259,10 @@ fun AgentSettingsScreen(
             },
             containerColor = cs.background,
         ) { padding ->
-            AgentSettingsBody(actions, modifier.padding(padding))
+            AgentSettingsBody(actions, modifier.padding(padding), onStatusesChanged)
         }
     } else {
-        AgentSettingsBody(actions, modifier)
+        AgentSettingsBody(actions, modifier, onStatusesChanged)
     }
 }
 
@@ -264,6 +270,7 @@ fun AgentSettingsScreen(
 private fun AgentSettingsBody(
     actions: AgentSettingsActions,
     modifier: Modifier = Modifier,
+    onStatusesChanged: (List<AgentInstallStatus>) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     var loadState by remember { mutableStateOf<AgentsLoadState>(AgentsLoadState.Loading) }
@@ -279,7 +286,7 @@ private fun AgentSettingsBody(
         loadState = when {
             result == null -> AgentsLoadState.Error("Couldn't load agent statuses.")
             result.isEmpty() -> AgentsLoadState.Empty
-            else -> AgentsLoadState.Ready(result)
+            else -> AgentsLoadState.Ready(result).also { onStatusesChanged(result) }
         }
     }
 
@@ -292,7 +299,11 @@ private fun AgentSettingsBody(
             delay(ERROR_AUTO_RETRY_MS)
             val result = actions.agentStatuses()
             if (result != null) {
-                loadState = if (result.isEmpty()) AgentsLoadState.Empty else AgentsLoadState.Ready(result)
+                loadState = if (result.isEmpty()) {
+                    AgentsLoadState.Empty
+                } else {
+                    AgentsLoadState.Ready(result).also { onStatusesChanged(result) }
+                }
                 break
             }
         }

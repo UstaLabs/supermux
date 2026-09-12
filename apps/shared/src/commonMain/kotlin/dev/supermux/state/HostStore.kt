@@ -311,6 +311,10 @@ class HostStore(
      * that gates a setup wizard on this must not decide while it is null (it would flash the wizard
      * or the shell before the broker has spoken). Live: every snapshot republishes it, and
      * [setOnboarded] flips it on a successful write.
+     *
+     * Declared above `init` by this class's convention (state first, wiring after), not to dodge a
+     * race: the frame collector `init` starts feeds [reduce], and `BrokerClient`'s frame flow has
+     * replay 0, so no snapshot can be delivered into an uninitialised field however this is ordered.
      */
     private val _onboarded = MutableStateFlow<Boolean?>(null)
     val onboarded: StateFlow<Boolean?> = _onboarded.asStateFlow()
