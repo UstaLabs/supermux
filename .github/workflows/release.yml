@@ -167,7 +167,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
       - name: Install SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - name: Resolve Android client version
         id: ver
         working-directory: .

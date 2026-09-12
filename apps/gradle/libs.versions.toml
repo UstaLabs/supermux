@@ -1,23 +1,34 @@
 [versions]
-kotlin = "2.3.21"
+# 2.4.10, NOT 2.4.20: SKIE 0.10.14 (the newest release) refuses to configure against 2.4.20
+# ("SKIE 0.10.14 does not support Kotlin 2.4.20"), and disabling SKIE would strip the Swift-friendly
+# API :ios ships. 2.4.10 is the newest Kotlin SKIE accepts and it configures fine against AGP 9.3.1
+# / Gradle 9.7.0. Raise together with `skie` once SKIE ships 2.4.20 support.
+kotlin = "2.4.10"
 coroutines = "1.9.0"
 serialization = "1.7.3"
 ktor = "3.5.0"
 androidSecurity = "1.1.0-alpha06"
-agp = "8.9.1"
+# AGP 9.x is forced by Compose Multiplatform 1.12's androidx artifacts (minAgpVersion 9.1.0).
+# AGP 9.3.x needs Gradle >= 9.5.0 (wrapper is 9.7.0); JDK 17 is still fine.
+agp = "9.3.1"
 androidMinSdk = "26"
-androidCompileSdk = "36"
+# compileSdk 37 is forced by Compose Multiplatform 1.12's androidx artifacts (their AAR metadata
+# sets minCompileSdk=37 / minAndroidGradlePluginVersion=9.1.0). targetSdk deliberately stays at 36:
+# compiling against newer APIs is safe, opting into 37's behaviour changes is a separate decision.
+androidCompileSdk = "37"
+androidTargetSdk = "36"
 composeBom = "2026.06.00"
 activityCompose = "1.10.1"
 lifecycle = "2.8.7"
 coreSplashscreen = "1.0.1"
 termlib = "0.0.35"
-skie = "0.10.12"
+skie = "0.10.14"
 zxingEmbedded = "4.3.0"
 zxingCore = "3.4.1"
 datastore = "1.1.1"
 firebaseBom = "33.7.0"
-googleServices = "4.4.2"
+# 4.5.0, not 4.4.2: the older plugin uses the variant API AGP 9 removed.
+googleServices = "4.5.0"
 composeMultiplatform = "1.11.1"
 # Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
 # 1.11.1 / 2.3.21), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).

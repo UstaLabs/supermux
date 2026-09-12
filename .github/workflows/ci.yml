@@ -194,6 +194,11 @@ jobs:
       # Caching is load-bearing, not an optimization: a cold run of these tasks
       # measured 4m23s locally, which is too slow for a push lane.
       - uses: gradle/actions/setup-gradle@v4
+      # compileSdk 37 (forced by Compose Multiplatform 1.12's androidx AAR metadata). android-37.0
+      # is only published on the sdkmanager BETA channel today, hence --channel=1.
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
 
       # Skiko (Compose Desktop's renderer) needs an X display even for the
       # "headless" in-process UI tests — without one, SessionDetailTest dies with
@@ -270,6 +275,11 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
+      # compileSdk 37 (forced by Compose Multiplatform 1.12's androidx AAR metadata). android-37.0
+      # is only published on the sdkmanager BETA channel today, hence --channel=1.
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - run: bun install --frozen-lockfile
 
       # The runner user is not in the kvm group by default. Without hardware

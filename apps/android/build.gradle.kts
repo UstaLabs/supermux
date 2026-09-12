@@ -37,7 +37,7 @@ android {
     defaultConfig {
         applicationId = "dev.supermux.android"
         minSdk = libs.versions.androidMinSdk.get().toInt()
-        targetSdk = libs.versions.androidCompileSdk.get().toInt()
+        targetSdk = libs.versions.androidTargetSdk.get().toInt()
         versionCode = supermuxVersionCode
         versionName = supermuxVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
