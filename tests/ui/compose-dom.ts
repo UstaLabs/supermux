@@ -27,9 +27,16 @@
  */
 import type { Locator, Page } from "playwright"
 
-/** Ids with a `:` need the attribute form — `#chat-message:outbound:m1` is invalid CSS. */
+/**
+ * Ids with a `:` need the attribute form — `#chat-message:outbound:m1` is invalid CSS.
+ *
+ * `.first()` on purpose: a tag mounted twice (two composers on screen, a pane that
+ * did not tear down) would otherwise raise a strict-mode violation INSIDE a
+ * `waitFor`, which Playwright swallows into a 30 s timeout reporting nothing but an
+ * empty text. Taking the first match fails honestly on the assertion instead.
+ */
 export function byTag(page: Page, id: string): Locator {
-  return page.locator(`[id="${id}"]`)
+  return page.locator(`[id="${id}"]`).first()
 }
 
 /** Every mirror element whose id starts with [prefix] (`chat-message:outbound:`). */
