@@ -11,8 +11,7 @@ import { spawnSession, type SpawnDeps } from "../src/core/session-manager/spawn-
 // real modules are captured first and restored in afterAll — otherwise later
 // test files would see the fakes (same pattern as tests/spawn-opencode.test.ts).
 const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
-const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
-const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 const realPlugins = { ...(await import("../src/core/plugins")) }
 
 const codexAdapterOpts: any[] = []
@@ -21,33 +20,28 @@ mock.module("../src/core/agents/codex/auth", () => ({
   ...realCodexAuth,
   resolveCodexAuth: async () => ({ mode: "oauth_copy", env: {} }),
 }))
-mock.module("../src/core/agents/codex/spawn", () => ({
-  ...realCodexSpawn,
-  spawnCodexAppServer: () => ({
-    pid: 123,
-    client: { request: async () => ({}), onNotification: () => {} },
-    onExit: () => {},
-  }),
-}))
-mock.module("../src/core/agents/codex/adapter", () => ({
-  ...realCodexAdapter,
-  CodexAdapter: class {
-    kind = "codex"
-    sessionName: string
-    workdir: string
-    constructor(opts: any) {
+mock.module("../src/core/agents/codex/core-host-provider", () => ({
+  ...realCodexCoreHost,
+  getCodexCoreHost: () => ({
+    createAdapter: (opts: any) => {
       codexAdapterOpts.push(opts)
-      this.sessionName = opts.sessionName
-      this.workdir = opts.workdir
-    }
-    async start() {}
-    async resume() {}
-    async stop() {}
-    async send() {}
-    async interrupt() {}
-    on() {}
-    emit() {}
-  },
+      return {
+        kind: "codex" as const,
+        id: opts.id,
+        sessionName: opts.sessionName,
+        workdir: opts.workdir,
+        async start() { await opts.persistThreadId?.("codex-thread-id") },
+        async resume() {},
+        async stop() {},
+        async send() {},
+        async interrupt() {},
+        async setConfiguration() {},
+        on() {},
+        emit() {},
+        rpc: { request: async () => ({}) },
+      }
+    },
+  }),
 }))
 mock.module("../src/core/plugins", () => ({
   ...realPlugins,
@@ -57,8 +51,7 @@ mock.module("../src/core/plugins", () => ({
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
-  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
-  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
   mock.module("../src/core/plugins", () => realPlugins)
 })
 

@@ -6,11 +6,15 @@ import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
 import { ClaudeCodeAdapter } from "../agents/claude"
 import { CodexAdapter } from "../agents/codex/adapter"
+import { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
+import type { CodexRuntimeAdapter } from "./runtime"
 import { CursorAdapter } from "../agents/cursor/adapter"
 import { OpenCodeAdapter } from "../agents/opencode/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import { GrokAdapter } from "../agents/grok/adapter"
+import { CoreGrokAdapter } from "../agents/grok/core-adapter"
+import type { GrokRuntimeAdapter } from "./runtime"
 import { agents } from "../agents/registry"
 import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { PendingReapply, shouldDeferReapply, changedSince, type PreChangeConfig } from "./pending-reapply"
@@ -173,6 +177,10 @@ export type SessionManagerPorts = {
   }
 }
 
+function isBusyApply(r: { ok: true } | { ok: false; busy?: true; error?: string }): r is { ok: false; busy: true } {
+  return r.ok === false && r.busy === true
+}
+
 /**
  * The component that owns per-session runtime state (Move 2 of the
  * session-consolidation spec). It grows stage by stage: it owns the ONE
@@ -188,6 +196,10 @@ export class SessionManager {
   readonly runtimes = new RuntimeRegistry()
   /** Sessions owing a deferred model/effort apply (marked mid-turn, drained on idle). */
   private readonly pendingReapply = new PendingReapply()
+  /** One-shot follow-up drain after a typed-busy apply while broker phase is idle. */
+  private readonly reapplyBusyFollowup = new Set<string>()
+  /** Serialize native reapply/configure per session so M2 waits for M1 to settle. */
+  private readonly reapplyTail = new Map<string, Promise<void>>()
   /** Dedupe window for inbound message_ids — owned here so deliver() is idempotent. */
   readonly recentInbound = new RecentInboundIds()
   private readonly ports: SessionManagerPorts
@@ -263,9 +275,9 @@ export class SessionManager {
     this.registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
   }
 
-  registerCodexRuntime(sessionId: string, name: string, adapter: CodexAdapter, handle: CodexSpawnHandle): void {
+  registerCodexRuntime(sessionId: string, name: string, adapter: CodexRuntimeAdapter, handle?: CodexSpawnHandle): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Codex, adapter, handle })
-    handle.onExit?.((code: number | null) => {
+    handle?.onExit?.((code: number | null) => {
       log.info("codex_app_server_exited", { name, code })
       this.deleteRuntime(sessionId)
     })
@@ -277,7 +289,7 @@ export class SessionManager {
 
   // grok's stdio child is owned by the adapter (no separate handle), so unlike
   // opencode there's no handle.onExit to unregister on — adapter.stop() is the kill.
-  registerGrokRuntime(sessionId: string, adapter: GrokAdapter): void {
+  registerGrokRuntime(sessionId: string, adapter: GrokRuntimeAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
   }
 
@@ -322,7 +334,10 @@ export class SessionManager {
       else log.warn("kill_session_no_runtime_target", { name: displayName })
     } else if (s.agent === "codex") {
       const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
+      if (runtime?.kind === AgentKind.Codex) {
+        if (runtime.handle) runtime.handle.kill()
+        else await runtime.adapter.stop()
+      }
     } else if (s.agent === AgentKind.Cursor) {
       // No persistent process or tmux pane to kill.
     } else if (s.agent === "opencode") {
@@ -330,8 +345,9 @@ export class SessionManager {
       if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
     } else if (s.agent === AgentKind.Grok) {
       // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
+      // Must finish before deleting the runtime / archiving / reclaiming the worktree.
       const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.Grok) void runtime.adapter.stop()
+      if (runtime?.kind === AgentKind.Grok) await runtime.adapter.stop()
     }
     this.deleteRuntime(s.id)
     this.ports.cleanup.stopClaudeTailer(s.id)   // also clears the session's background tasks
@@ -838,13 +854,15 @@ export class SessionManager {
   registerSpawnedAdapter(name: string, adapter: AgentAdapter, handle?: unknown): void {
     const session = this.registry.resolveName(name)
     const sid = session?.id ?? name
-    if (adapter instanceof CodexAdapter) {
+    if (adapter instanceof CoreCodexAdapter) {
+      this.registerCodexRuntime(sid, name, adapter)
+    } else if (adapter instanceof CodexAdapter) {
       this.registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
     } else if (adapter instanceof CursorAdapter) {
       this.registerCursorRuntime(sid, adapter)
     } else if (adapter instanceof OpenCodeAdapter) {
       this.registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
-    } else if (adapter instanceof GrokAdapter) {
+    } else if (adapter instanceof CoreGrokAdapter || adapter instanceof GrokAdapter) {
       this.registerGrokRuntime(sid, adapter)
     }
     this.ports.resume.wireAdapterEvents(adapter, sid)
@@ -883,6 +901,7 @@ export class SessionManager {
 
     const oldModel = session.model
     const oldReasoningLevel = session.reasoningLevel
+    this.pendingReapply.bump(sessionId)
     this.registry.setModel(sessionId, newModel)
     if (session.reasoningLevel) {
       const clamped = clampSessionReasoningLevel({ ...session, model: newModel }, newModel, this.ports.config.lookupModels)
@@ -891,12 +910,12 @@ export class SessionManager {
       }
     }
 
-    // cursor, opencode and grok read their adapter's `model` field fresh on each
-    // turn (opencode re-parses it in send() via parseModel(); grok folds it into
-    // each session/prompt), so a model switch is a live in-process update —
-    // no process/serve restart, no config reapply. The typed set is each kind's
-    // applyConfig dialect; `changed` masks out the effort half.
-    if (session.agent === AgentKind.Cursor || session.agent === AgentKind.OpenCode || session.agent === AgentKind.Grok) {
+    // cursor and opencode read their adapter's `model` field fresh on each
+    // turn (opencode re-parses it in send() via parseModel()), so a model
+    // switch is a live in-process update. Grok native configure restarts the
+    // child and must wait until idle — even when applyNow is true — so it
+    // cannot kill an in-flight turn.
+    if (session.agent === AgentKind.Cursor || session.agent === AgentKind.OpenCode) {
       const adapter = this.runtimes.get(session.id)?.adapter
       if (adapter) {
         await agents[session.agent].applyConfig(
@@ -911,7 +930,10 @@ export class SessionManager {
 
     // Claude switches are typed into the TUI, which is only safe on an idle
     // composer — force queue-until-idle (user decision: never type mid-turn).
-    const effectiveApplyNow = session.agent === AgentKind.Claude ? false : applyNow ?? false
+    // Grok configure is likewise unsafe mid-turn.
+    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Codex)
+      ? false
+      : applyNow ?? false
     return this.applyOrDeferReapply(sessionId, { oldModel, oldReasoningLevel }, effectiveApplyNow)
   }
 
@@ -934,10 +956,13 @@ export class SessionManager {
     }
 
     const oldReasoningLevel = session.reasoningLevel
+    this.pendingReapply.bump(sessionId)
     this.registry.setReasoningLevel(sessionId, newLevel)
 
-    // Same queue-until-idle rule as switchModel for claude (typed /effort).
-    const effectiveApplyNow = session.agent === AgentKind.Claude ? false : applyNow ?? false
+    // Same queue-until-idle rule as switchModel for claude and grok.
+    const effectiveApplyNow = (session.agent === AgentKind.Claude || session.agent === AgentKind.Grok || session.agent === AgentKind.Codex)
+      ? false
+      : applyNow ?? false
     return this.applyOrDeferReapply(sessionId, { oldModel: session.model, oldReasoningLevel }, effectiveApplyNow)
   }
 
@@ -950,18 +975,49 @@ export class SessionManager {
     applyNow: boolean,
   ): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
     const phase = this.ports.agentState.get(sessionId).phase
+    this.pendingReapply.mark(sessionId, olds)
     if (shouldDeferReapply(phase, applyNow)) {
-      this.pendingReapply.mark(sessionId, olds)
       return { ok: true, status: "queued" }
     }
+    return this.enqueueReapply(sessionId, async () => this.runReapplyAttempt(sessionId, false))
+  }
+
+  /**
+   * Apply the registry's current desired config. Snapshot the desired revision
+   * so a stale failure cannot overwrite a newer request, and a stale success
+   * cannot take a newer pending entry.
+   */
+  private async runReapplyAttempt(
+    sessionId: string,
+    followup: boolean,
+  ): Promise<{ ok: true; status: "applied" | "queued" } | { ok: false; error: string }> {
+    const attemptRevision = this.pendingReapply.currentRevision(sessionId)
+    const baseline = this.pendingReapply.peek(sessionId)
     const current = this.registry.get(sessionId)
-    const result = await this.reapplyAgentConfig(sessionId, current ? changedSince(olds, current) : undefined)
+    const attemptApplied: PreChangeConfig = { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel }
+    const result = await this.reapplyAgentConfig(
+      sessionId,
+      current && baseline ? changedSince(baseline, current) : undefined,
+    )
+    if (isBusyApply(result)) {
+      if (baseline) this.pendingReapply.mark(sessionId, baseline)
+      if (!followup) this.scheduleBusyFollowup(sessionId)
+      return { ok: true as const, status: "queued" as const }
+    }
     if (!result.ok) {
+      if (this.pendingReapply.currentRevision(sessionId) > attemptRevision) {
+        if (baseline) this.pendingReapply.mark(sessionId, baseline)
+        return { ok: false as const, error: result.error }
+      }
+      const olds = baseline ?? { oldModel: current?.model, oldReasoningLevel: current?.reasoningLevel }
       this.registry.setModel(sessionId, olds.oldModel)
       this.registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-      return result
+      this.pendingReapply.takeIfCovered(sessionId, attemptRevision)
+      return { ok: false as const, error: result.error }
     }
-    return { ok: true, status: "applied" }
+    this.pendingReapply.advanceBaseline(sessionId, attemptApplied)
+    this.pendingReapply.takeIfCovered(sessionId, attemptRevision)
+    return { ok: true as const, status: "applied" as const }
   }
 
   /** Drain hook: called on every agent-state change (main.ts listener). When a
@@ -969,18 +1025,50 @@ export class SessionManager {
    *  rolls the registry back, tells the clients, and notifies the user. The
    *  returned promise is for tests — production fires and forgets. */
   drainPendingReapply(sessionId: string, phase: AgentPhase): Promise<void> {
-    if (phase !== "idle" || !this.pendingReapply.has(sessionId)) return Promise.resolve()
-    const olds = this.pendingReapply.take(sessionId)!
-    const drainSession = this.registry.get(sessionId)
-    return this.reapplyAgentConfig(sessionId, drainSession ? changedSince(olds, drainSession) : undefined).then((r) => {
-      if (!r.ok) {
-        this.registry.setModel(sessionId, olds.oldModel)
-        this.registry.setReasoningLevel(sessionId, olds.oldReasoningLevel)
-        const s = this.registry.get(sessionId)
-        this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: this.ports.resume.sessionEffort(s ?? {}) })
-        void this.ports.register.notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
+    return this.enqueueReapply(sessionId, () => this.drainPendingReapplyInner(sessionId, phase, false))
+  }
+
+  private async drainPendingReapplyInner(sessionId: string, phase: AgentPhase, followup: boolean): Promise<void> {
+    if (phase !== "idle" || !this.pendingReapply.has(sessionId)) return
+    try {
+      let usedFollowup = followup
+      while (this.pendingReapply.has(sessionId)) {
+        const before = this.pendingReapply.currentRevision(sessionId)
+        const r = await this.runReapplyAttempt(sessionId, usedFollowup)
+        usedFollowup = true
+        if (r.ok && r.status === "queued") return
+        if (!r.ok && !this.pendingReapply.has(sessionId)) {
+          const s = this.registry.get(sessionId)
+          this.ports.getWebChannel()?.broadcastToAll({ type: "session_state", session: sessionId, model: s?.model, reasoningLevel: this.ports.resume.sessionEffort(s ?? {}) })
+          void this.ports.register.notifyAgentError(sessionId, s?.name ?? sessionId, "config", `Failed to apply model/effort change: ${r.error}`)
+          return
+        }
+        if (this.pendingReapply.has(sessionId) && this.pendingReapply.currentRevision(sessionId) <= before) return
       }
-    }).catch((err) => log.warn("drain_reapply_failed", { sessionId, err: String(err) }))
+    } catch (err) {
+      log.warn("drain_reapply_failed", { sessionId, err: String(err) })
+    }
+  }
+
+  private enqueueReapply<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.reapplyTail.get(sessionId) ?? Promise.resolve()
+    const run = prev.then(fn, fn)
+    this.reapplyTail.set(sessionId, run.then(() => {}, () => {}))
+    return run
+  }
+
+  /** After a typed-busy apply, retry once when this settlement's chain finishes if the
+   *  broker is still idle. Tied to the serialized apply tail — not a recursive busy loop. */
+  private scheduleBusyFollowup(sessionId: string): void {
+    if (this.reapplyBusyFollowup.has(sessionId)) return
+    if (this.ports.agentState.get(sessionId).phase !== "idle") return
+    this.reapplyBusyFollowup.add(sessionId)
+    const prev = this.reapplyTail.get(sessionId) ?? Promise.resolve()
+    const follow = prev.then(async () => {
+      this.reapplyBusyFollowup.delete(sessionId)
+      await this.drainPendingReapplyInner(sessionId, this.ports.agentState.get(sessionId).phase, true)
+    })
+    this.reapplyTail.set(sessionId, follow.then(() => {}, () => {}))
   }
 
   /** Re-apply the session's stored model/effort to its LIVE runtime — the
@@ -988,7 +1076,7 @@ export class SessionManager {
   private async reapplyAgentConfig(
     sessionId: string,
     changed?: { model: boolean; effort: boolean },
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
+  ): Promise<{ ok: true } | { ok: false; busy: true } | { ok: false; error: string }> {
     const session = this.registry.get(sessionId)
     if (!session) return { ok: false, error: `no such session: ${sessionId}` }
 
@@ -1016,25 +1104,18 @@ export class SessionManager {
     }
 
     if (session.agent === AgentKind.Codex) {
-      // Codex has no live setter: full kill + respawn of the app-server with
-      // the new flags. The dialect builds the fresh runtime; the swap and
-      // rewire happen HERE so callers never hold a half-dead adapter.
       try {
         const runtime = this.runtimes.get(session.id)
-        if (runtime?.kind === AgentKind.Codex) runtime.handle.kill()
-        this.deleteRuntime(session.id)
-
-        if (!session.agent_home) return { ok: false, error: "codex session missing agent_home" }
-
+        if (runtime?.kind !== AgentKind.Codex) {
+          if (!session.agent_home) return { ok: false, error: "codex session missing agent_home" }
+          return { ok: false, error: "codex session has no live adapter" }
+        }
         const result = await agents.codex.applyConfig(
-          this.resumeCtx(session.id),
-          { ...session, agent_home: session.agent_home },
-          session.name,
+          { ...this.resumeCtx(session.id), adapter: runtime.adapter },
+          session, session.name,
           { model: session.model, effort, changed },
         )
-        this.registerCodexRuntime(session.id, session.name, result.runtime.adapter, result.runtime.handle)
-        this.ports.resume.wireAdapterEvents(result.runtime.adapter, session.id)
-
+        if (!result.ok) return result
         this.ports.getWebChannel()?.broadcastToAll({
           type: "session_state",
           session: session.id,
@@ -1092,11 +1173,10 @@ export class SessionManager {
     return false
   }
 
-  private async resumeCodexArm(session: ResumeRow, name: string): Promise<CodexSpawnHandle> {
-    const { adapter, handle } = await agents.codex.resume(this.resumeCtx(session.id), session, name)
-    this.registerCodexRuntime(session.id, name, adapter, handle)
+  private async resumeCodexArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await agents.codex.resume(this.resumeCtx(session.id), session, name)
+    this.registerCodexRuntime(session.id, name, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
-    return handle
   }
 
   private async resumeCursorArm(session: ResumeRow, name: string): Promise<void> {
@@ -1274,8 +1354,8 @@ export class SessionManager {
           continue
         }
         try {
-          const handle = await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, handle.pid ?? process.pid)
+          await this.resumeCodexArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
           log.info("codex_resume_ok", { name: s.name, thread: s.agent_session_id })
         } catch (err: any) {
           log.warn("codex_resume_failed", { name: s.name, err: String(err) })

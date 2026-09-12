@@ -61,6 +61,7 @@ jobs:
               - 'src/**'
               - 'tests/**'
               - 'scripts/**'
+              - 'packages/supermux-core/**'
               - 'package.json'
               - 'bunfig.toml'
               - 'tsconfig.json'
@@ -130,6 +131,18 @@ jobs:
       - name: Typecheck PWA
         run: ./node_modules/.bin/vue-tsc --noEmit
         working-directory: src/web-app
+
+      # Core package: tsc + dist build, then Node 22 smoke of the built dist via
+      # examples/custom-driver.mjs (self-import of this workspace's dist, not a
+      # packed tarball consumer). bun test --isolate already discovers
+      # packages/supermux-core/tests — do not add a second core test run.
+      - name: Typecheck core package
+        run: bun run typecheck:core
+      - name: Build core package
+        run: bun run build:core
+      - name: Node 22 consumer smoke
+        run: node examples/custom-driver.mjs
+        working-directory: packages/supermux-core
 
   # ── PWA journey: real browser + broker + shim, all on throwaway state ──────
   ui:

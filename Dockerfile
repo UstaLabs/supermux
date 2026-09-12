@@ -64,14 +64,15 @@ ENV DISABLE_AUTOUPDATER=1
 WORKDIR /app
 
 # Copy manifest files first so Docker can cache the install layer separately
-# from source changes. The root bun.lock is gitignored (absent from a fresh
-# clone), so it's copied optionally (glob) and the root install is non-frozen —
-# otherwise `docker compose up` from a clean checkout fails on a missing lock.
+# from source changes. Root bun.lock is committed (CI also uses --frozen-lockfile).
+# Copy the core workspace manifest before install so Bun can install
+# packages/supermux-core deps (ACP SDK) — broker source-imports that package.
 COPY package.json bun.lock* ./
+COPY packages/supermux-core/package.json ./packages/supermux-core/
 COPY src/web-app/package.json src/web-app/bun.lock* ./src/web-app/
 
-# Install root dependencies (non-frozen: the root lock may be absent)
-RUN bun install
+# Install root + workspace dependencies from the committed lock
+RUN bun install --frozen-lockfile
 
 # Install web-app dependencies (its bun.lock IS committed → reproducible)
 RUN cd src/web-app && bun install --frozen-lockfile

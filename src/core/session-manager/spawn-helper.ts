@@ -5,10 +5,17 @@ import { preAcceptTrust } from "./trust"
 // modules, dispatched through the agents map.
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CodexAdapter } from "../agents/codex/adapter"
+import type { CoreCodexAdapter } from "../agents/codex/core-adapter"
+import type { CodexCoreHost } from "../agents/codex/core-host"
 import type { CursorAdapter } from "../agents/cursor/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import type { OpenCodeAdapter } from "../agents/opencode/adapter"
 import type { GrokAdapter } from "../agents/grok/adapter"
+import type { CoreGrokAdapter } from "../agents/grok/core-adapter"
+import type { GrokCoreHost } from "../agents/grok/core-host"
+
+export type GrokLikeAdapter = CoreGrokAdapter | GrokAdapter
+export type CodexLikeAdapter = CoreCodexAdapter | CodexAdapter
 // Dispatcher-only import: the per-agent session modules import types/helpers
 // back from this file, which is a benign cycle as long as neither side
 // dereferences the other at module-init time (functions + types only).
@@ -49,9 +56,11 @@ export type SpawnDeps = {
   resolveAttachment?: (file_id: string) => Promise<string>
   registerAdapter?: (
     name: string,
-    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
+    adapter: CodexLikeAdapter | CursorAdapter | OpenCodeAdapter | GrokLikeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
+  grokHost?: GrokCoreHost
+  codexHost?: CodexCoreHost
   onThreadId?: (name: string, threadId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
@@ -125,9 +134,11 @@ export async function spawnPA(opts: {
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexAdapter | CursorAdapter | OpenCodeAdapter | GrokAdapter,
+    adapter: CodexLikeAdapter | CursorAdapter | OpenCodeAdapter | GrokLikeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
+  grokHost?: GrokCoreHost
+  codexHost?: CodexCoreHost
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -154,6 +165,8 @@ export async function spawnPA(opts: {
       tmuxSession: opts.tmuxSession,
       resolveAttachment: opts.resolveAttachment,
       registerAdapter: opts.registerAdapter,
+      grokHost: opts.grokHost,
+      codexHost: opts.codexHost,
       // PA thread-id persistence is keyed by the broker session id (the
       // supervisor writes setAgentSessionId directly); adapt codex's
       // name-keyed port to that contract.

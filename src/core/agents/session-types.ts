@@ -14,6 +14,10 @@ export type ResumeCtx = {
   resolveAttachment(file_id: string): Promise<string>
   /** Persist the agent-native session id onto this session's row. */
   persistAgentSessionId(sid: string): void
+  /** Optional Grok core host (tests inject a fake; production uses the process provider). */
+  grokHost?: import("./grok/core-host").GrokCoreHost
+  /** Optional Codex core host (tests inject a fake; production uses the process provider). */
+  codexHost?: import("./codex/core-host").CodexCoreHost
 }
 
 /** Input for the optional `commandContext` leaf: build the opaque per-kind
@@ -51,7 +55,7 @@ export type ApplyConfigCtx = ResumeCtx & {
   windowId?: string
   /** claude: persistent-terminal backend the type-in goes through. */
   backend?: SessionBackend
-  /** cursor/opencode/grok: the session's live adapter. */
+  /** cursor/opencode/grok/codex: the session's live adapter. */
   adapter?: AgentAdapter
 }
 
@@ -64,9 +68,11 @@ export type ApplyConfigChange = {
   changed?: { model: boolean; effort: boolean }
 }
 
-/** Dialect outcome. Restart-style kinds (codex) return the freshly built
- *  runtime — the SessionManager swaps it in and rewires events (state half),
- *  so callers never hold a half-dead adapter. */
+/** Dialect outcome. Core-backed kinds (grok, codex) apply model/effort live through
+ *  Session.configure and report a typed `busy` when the native session is mid-turn so
+ *  the SessionManager can queue the change until idle instead of killing the turn.
+ *  `runtime` is a legacy field for restart-style dialects; no production kind returns it. */
 export type ApplyConfigResult =
   | { ok: true; runtime?: { adapter: AgentAdapter; handle?: unknown } }
+  | { ok: false; busy: true }
   | { ok: false; error: string }

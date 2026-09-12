@@ -40,6 +40,8 @@ import { ensureWindowId } from "./core/session-manager/window-id"
 import { resumedSessionPid } from "./core/session-manager/resume-pid"
 import { spawnSession as spawnSessionHelper, spawnPA } from "./core/session-manager/spawn-helper"
 import { SessionManager } from "./core/session-manager/manager"
+import { closeGrokCoreHost } from "./core/agents/grok/core-host-provider"
+import { closeCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
@@ -3138,6 +3140,12 @@ async function gracefulShutdown(signal: string) {
   try {
     supervisor.stop()
   } catch (err: any) { log.warn("supervisor_stop_failed", { err: err?.message }) }
+  try {
+    await closeGrokCoreHost()
+  } catch (err: any) { log.warn("grok_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeCodexCoreHost()
+  } catch (err: any) { log.warn("codex_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }

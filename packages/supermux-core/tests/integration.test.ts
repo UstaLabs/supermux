@@ -1,0 +1,35 @@
+import { expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { fileURLToPath } from "node:url"
+import { join } from "node:path"
+import { createCore } from "../src/index.js"
+import { acp } from "../src/acp/index.js"
+
+test("public core lifecycle works through a real ACP subprocess", async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "core-integration-"))
+  const agent = acp({ id: "fixture", command: process.execPath, args: [fileURLToPath(new URL("./fixtures/acp-agent.mjs", import.meta.url))] })
+  const core = createCore({ stateDirectory, agents: [agent] })
+  let next: ReturnType<typeof createCore> | undefined
+  try {
+    const session = await core.sessions.create({ agent: "fixture", cwd: tmpdir() })
+    const receipt = await session.send({ content: [{ type: "text", text: "hello" }], whenBusy: "queue" })
+    expect(await receipt.completed).toEqual({ status: "completed", stopReason: "end_turn" })
+    const active = await session.send({ content: [{ type: "text", text: "hang" }], whenBusy: "queue" })
+    expect(await session.interrupt()).toEqual({ status: "stopped" })
+    expect(await active.completed).toEqual({ status: "cancelled" })
+    await core.close()
+    next = createCore({ stateDirectory, agents: [agent] })
+    const resumed = await next.sessions.resume(session.id)
+    expect(resumed.snapshot().agentSessionId).toBe(session.snapshot().agentSessionId)
+    const second = await resumed.send({ content: [{ type: "text", text: "again" }], whenBusy: "queue" })
+    expect((await second.completed).status).toBe("completed")
+    await resumed.close()
+    await next.sessions.forget(session.id)
+    expect(await next.sessions.list()).toEqual([])
+  } finally {
+    await core.close()
+    await next?.close()
+    await rm(stateDirectory, { recursive: true, force: true })
+  }
+})

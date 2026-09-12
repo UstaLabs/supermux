@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { handleSlash, CommandCtx } from "../src/core/commands"
+import type { UsageResponse } from "../src/core/usage"
 import { AGENT_KINDS, spawnCommandForAgent } from "../src/shared/agents"
 import { Registry } from "../src/core/session-manager/registry"
 import { MessageStore } from "../src/core/session-manager/messages"
@@ -157,9 +158,43 @@ test("unknown command returns help-ish error", async () => {
 })
 
 test("/usage returns formatted usage text", async () => {
-  const r1 = await handleSlash({ command: "usage", rest: "" }, ctx)
-  expect(typeof r1.text).toBe("string")
-  expect(r1.text.length).toBeGreaterThan(0)
+  const fake: UsageResponse = {
+    claude: {
+      fiveHour: { used: 44, resetsAt: new Date(Date.now() + 2.5 * 3_600_000).toISOString() },
+      sevenDay: { used: 4, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
+      sevenDaySonnet: { used: 1, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
+      sevenDayFable: { used: 9, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
+      extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 27, currency: "usd" },
+    },
+    codex: null,
+    cursor: {
+      totalPercentUsed: 85,
+      totalSpendCents: 1200,
+      includedCents: 2000,
+      limitCents: 5000,
+      spendAvailable: true,
+      billingCycleStart: String(Date.now() - 10 * 24 * 3_600_000),
+      billingCycleEnd: String(Date.now() + 33 * 24 * 3_600_000),
+    },
+    opencode: null,
+    grok: null,
+    errors: {},
+  }
+  let fetchCount = 0
+  const ctxWithUsage: CommandCtx = {
+    ...ctx,
+    fetchUsage: async () => {
+      fetchCount++
+      return fake
+    },
+  }
+  const r1 = await handleSlash({ command: "usage", rest: "" }, ctxWithUsage)
+  expect(fetchCount).toBe(1)
+  expect(r1.text).toContain("Claude")
+  expect(r1.text).toContain("44% used")
+  expect(r1.text).toContain("Cursor")
+  expect(r1.text).toContain("85% used")
+  expect(r1.text).toContain("$27")
 })
 
 test("/show prints recent log entries", async () => {

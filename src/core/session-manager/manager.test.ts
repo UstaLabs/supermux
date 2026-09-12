@@ -26,6 +26,7 @@ type PortSeams = {
   agentErrors?: string[]
   /** collects webChannel broadcast frames. */
   frames?: object[]
+  sessionEffort?: SessionManagerPorts["resume"]["sessionEffort"]
 }
 
 /** Minimal inert ports: the runtime-store tests never cross into a port. */
@@ -84,7 +85,7 @@ function fakePorts(db: Db, seams: PortSeams = {}): SessionManagerPorts {
     resume: {
       bind: async () => {},
       ensureSessionWorktree: async () => {},
-      sessionEffort: () => undefined,
+      sessionEffort: seams.sessionEffort ?? (() => undefined),
       resolveAttachment: async () => { throw new Error("unused in tests") },
       wireAdapterEvents: () => {},
       sessionBackend: {
@@ -214,7 +215,7 @@ describe("SessionManager applyConfig", () => {
     expect(adapter.model).toBe("anthropic/claude-sonnet-5")
   })
 
-  test("grok model switch pokes the live adapter and does NOT touch effort", async () => {
+  test("grok model switch goes through reapply and does NOT touch effort", async () => {
     const m = manager()
     m.registry.register({ id: "g1", name: "gk", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
     const adapter = grokAdapter("grok-4")
@@ -225,6 +226,17 @@ describe("SessionManager applyConfig", () => {
     expect(r).toEqual({ ok: true, status: "applied" })
     expect(adapter.model).toBe("grok-4-fast")
     expect(effortCalls).toEqual([])
+  })
+
+  test("grok model switch queues even with applyNow while busy", async () => {
+    const m = manager({ phase: "running" })
+    m.registry.register({ id: "g1q", name: "gkq", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const adapter = grokAdapter("grok-4")
+    m.registerGrokRuntime("g1q", adapter)
+    const r = await m.applyConfig("g1q", { model: "grok-4-fast", applyNow: true })
+    expect(r).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("g1q")?.model).toBe("grok-4-fast")
+    expect(adapter.model).toBe("grok-4")
   })
 
   test("live-model kinds apply even with no runtime adapter (registry only)", async () => {
@@ -298,6 +310,326 @@ describe("SessionManager applyConfig", () => {
     const r = await m.applyConfig("x1", { model: "new-m" })
     expect(r).toEqual({ ok: false, error: "codex session missing agent_home" })
     expect(m.registry.get("x1")?.model).toBe("old-m")
+  })
+
+  test("kill awaits core codex stop before dropping the runtime; a delayed stop is not faked", async () => {
+    const m = manager()
+    m.registry.register({ id: "cx", name: "cx", workdir: "/tmp", pid: 0, agent: "codex" })
+    let release!: () => void
+    const stopped = new Promise<void>((resolve) => { release = resolve })
+    let stopStarted = false
+    const adapter = {
+      kind: "codex",
+      sessionName: "cx",
+      workdir: "/tmp",
+      async stop() { stopStarted = true; await stopped },
+    }
+    m.registerCodexRuntime("cx", "cx", adapter as never)
+    const killP = m.kill("cx")
+    await Promise.resolve()
+    expect(stopStarted).toBe(true)
+    expect(m.adapterFor("cx")).toBeDefined()
+    release()
+    await killP
+    expect(m.adapterFor("cx")).toBeUndefined()
+  })
+
+  test("failed core codex stop retains the runtime handle", async () => {
+    const m = manager()
+    m.registry.register({ id: "cx2", name: "cx2", workdir: "/tmp", pid: 0, agent: "codex" })
+    const adapter = {
+      kind: "codex",
+      sessionName: "cx2",
+      workdir: "/tmp",
+      async stop() { throw new Error("stop failed") },
+    }
+    m.registerCodexRuntime("cx2", "cx2", adapter as never)
+    await expect(m.kill("cx2")).rejects.toThrow("stop failed")
+    expect(m.adapterFor("cx2")).toBe(adapter as never)
+  })
+
+  test("queued model+effort while busy then applied when idle; rollback on failure", async () => {
+    const agentErrors: string[] = []
+    const seams: PortSeams = {
+      phase: "running",
+      agentErrors,
+      lookupModels: () => [
+        { id: "gpt-5", reasoningLevels: [{ id: "low" }, { id: "high" }] } as never,
+        { id: "other", reasoningLevels: [{ id: "low" }, { id: "high" }] } as never,
+      ],
+      sessionEffort: (s) => s.reasoningLevel,
+    }
+    const m = manager(seams)
+    m.registry.register({ id: "cxq", name: "cxq", workdir: "/tmp", pid: 0, agent: "codex", model: "gpt-5", reasoningLevel: "low" })
+    const applied: { model?: string; effort?: string }[] = []
+    let failNext = false
+    const adapter = {
+      kind: "codex",
+      sessionName: "cxq",
+      workdir: "/tmp",
+      model: "gpt-5",
+      async setConfiguration(patch: { model?: string; effort?: string }) {
+        if (failNext) throw new Error("native configure failed")
+        applied.push({ ...patch })
+        if (patch.model) this.model = patch.model
+      },
+      async stop() {},
+    }
+    m.registerCodexRuntime("cxq", "cxq", adapter as never)
+    const queuedModel = await m.applyConfig("cxq", { model: "other", applyNow: true })
+    expect(queuedModel).toEqual({ ok: true, status: "queued" })
+    const queuedEffort = await m.applyConfig("cxq", { effort: "high", applyNow: true })
+    expect(queuedEffort).toEqual({ ok: true, status: "queued" })
+    expect(applied).toEqual([])
+    expect(m.registry.get("cxq")?.model).toBe("other")
+    expect(m.registry.get("cxq")?.reasoningLevel).toBe("high")
+
+    seams.phase = "idle"
+    await m.drainPendingReapply("cxq", "idle")
+    expect(applied.at(-1)).toEqual({ model: "other", effort: "high" })
+    expect(adapter.model).toBe("other")
+
+    failNext = true
+    const failed = await m.applyConfig("cxq", { model: "gpt-5" })
+    expect(failed.ok).toBe(false)
+    expect(m.registry.get("cxq")?.model).toBe("other")
+  })
+
+  test("kill awaits grok stop before dropping the runtime; a delayed stop is not faked", async () => {
+    const m = manager()
+    m.registry.register({ id: "gk", name: "gk", workdir: "/tmp", pid: 0, agent: "grok" })
+    let release!: () => void
+    const stopped = new Promise<void>((resolve) => { release = resolve })
+    let stopStarted = false
+    const adapter = grokAdapter()
+    adapter.stop = async () => { stopStarted = true; await stopped }
+    m.registerGrokRuntime("gk", adapter)
+    const killP = m.kill("gk")
+    await Promise.resolve()
+    expect(stopStarted).toBe(true)
+    expect(m.adapterFor("gk")).toBeDefined()
+    release()
+    await killP
+    expect(m.adapterFor("gk")).toBeUndefined()
+  })
+
+  test("failed grok stop retains the runtime handle", async () => {
+    const m = manager()
+    m.registry.register({ id: "gk2", name: "gk2", workdir: "/tmp", pid: 0, agent: "grok" })
+    const adapter = grokAdapter()
+    adapter.stop = async () => { throw new Error("stop failed") }
+    m.registerGrokRuntime("gk2", adapter)
+    await expect(m.kill("gk2")).rejects.toThrow("stop failed")
+    expect(m.adapterFor("gk2")).toBe(adapter)
+  })
+
+  test("typed busy drain keeps desired grok model and original rollback baseline", async () => {
+    const agentErrors: string[] = []
+    const frames: object[] = []
+    const m = manager({ phase: "idle", agentErrors, frames })
+    m.registry.register({ id: "gb", name: "gb", workdir: "/tmp", pid: 0, agent: "grok", model: "old-m" })
+    let busy = true
+    const adapter = {
+      kind: "grok",
+      sessionName: "gb",
+      workdir: "/tmp",
+      model: "old-m",
+      async setConfiguration() {
+        if (busy) {
+          const err = new Error("Session is busy") as Error & { code: string }
+          err.code = "session_busy"
+          throw err
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gb", adapter as never)
+    const queued = await m.applyConfig("gb", { model: "new-m" })
+    expect(queued).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("gb")?.model).toBe("new-m")
+    expect(agentErrors).toEqual([])
+    expect(frames.filter((f: any) => f.type === "session_state" && f.model === "old-m")).toHaveLength(0)
+
+    await m.applyConfig("gb", { model: "newer-m" })
+    expect(m.registry.get("gb")?.model).toBe("newer-m")
+
+    busy = false
+    await m.drainPendingReapply("gb", "idle")
+    expect(m.registry.get("gb")?.model).toBe("newer-m")
+    expect(agentErrors).toEqual([])
+  })
+
+  test("serialized grok configure applies the latest desired model after an in-flight configure", async () => {
+    const m = manager()
+    m.registry.register({ id: "gs", name: "gs", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const applied: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let held = false
+    const adapter = {
+      kind: "grok",
+      sessionName: "gs",
+      workdir: "/tmp",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) applied.push(patch.model)
+        if (!held) {
+          held = true
+          entered()
+          await gate
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gs", adapter as never)
+    const first = m.applyConfig("gs", { model: "grok-4-fast" })
+    await started
+    const second = m.applyConfig("gs", { model: "grok-4.5" })
+    expect(m.registry.get("gs")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await first
+    const r2 = await second
+    expect(r1.ok).toBe(true)
+    expect(r2).toEqual({ ok: true, status: "applied" })
+    expect(applied.at(-1)).toBe("grok-4.5")
+    expect(m.registry.get("gs")?.model).toBe("grok-4.5")
+  })
+
+  test("failed in-flight grok configure does not overwrite a newer desired model", async () => {
+    const m = manager()
+    m.registry.register({ id: "gf2", name: "gf2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let first = true
+    const adapter = {
+      kind: "grok",
+      sessionName: "gf2",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) native.push(patch.model)
+        if (first) {
+          first = false
+          entered()
+          await gate
+          throw new Error("native configure failed")
+        }
+        if (patch.model) this.model = patch.model
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gf2", adapter as never)
+    const p1 = m.applyConfig("gf2", { model: "grok-4-fast" })
+    await started
+    const p2 = m.applyConfig("gf2", { model: "grok-4.5" })
+    expect(m.registry.get("gf2")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await p1
+    const r2 = await p2
+    expect(r1.ok).toBe(false)
+    expect(r2).toEqual({ ok: true, status: "applied" })
+    expect(native.at(-1)).toBe("grok-4.5")
+    expect(adapter.model).toBe("grok-4.5")
+    expect(m.registry.get("gf2")?.model).toBe("grok-4.5")
+  })
+
+  test("successful in-flight grok configure preserves a newer pending revision until idle drain", async () => {
+    const seams: PortSeams = { phase: "idle" }
+    const m = manager(seams)
+    m.registry.register({ id: "gp", name: "gp", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    let held = false
+    const adapter = {
+      kind: "grok",
+      sessionName: "gp",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) {
+          native.push(patch.model)
+          this.model = patch.model
+        }
+        if (!held) {
+          held = true
+          entered()
+          await gate
+        }
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gp", adapter as never)
+    const first = m.applyConfig("gp", { model: "grok-4-fast" })
+    await started
+    seams.phase = "running"
+    const second = await m.applyConfig("gp", { model: "grok-4.5" })
+    expect(second).toEqual({ ok: true, status: "queued" })
+    expect(m.registry.get("gp")?.model).toBe("grok-4.5")
+    release()
+    const r1 = await first
+    expect(r1.ok).toBe(true)
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(native).toEqual(["grok-4-fast"])
+    seams.phase = "idle"
+    await m.drainPendingReapply("gp", "idle")
+    expect(native.at(-1)).toBe("grok-4.5")
+    expect(adapter.model).toBe("grok-4.5")
+    expect(m.registry.get("gp")?.model).toBe("grok-4.5")
+  })
+
+  test("after a successful grok apply, a later failure rolls back to native M1 not original M0", async () => {
+    const m = manager()
+    m.registry.register({ id: "gb2", name: "gb2", workdir: "/tmp", pid: 0, agent: "grok", model: "grok-4" })
+    const native: string[] = []
+    let n = 0
+    const adapter = {
+      kind: "grok",
+      sessionName: "gb2",
+      workdir: "/tmp",
+      model: "grok-4",
+      async setConfiguration(patch: { model?: string }) {
+        n += 1
+        if (patch.model) native.push(patch.model)
+        if (n === 1) {
+          if (patch.model) this.model = patch.model
+          return
+        }
+        throw new Error("native configure failed")
+      },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gb2", adapter as never)
+    const r1 = await m.applyConfig("gb2", { model: "grok-4-fast" })
+    expect(r1).toEqual({ ok: true, status: "applied" })
+    const r2 = await m.applyConfig("gb2", { model: "grok-4.5" })
+    expect(r2.ok).toBe(false)
+    expect(native).toEqual(["grok-4-fast", "grok-4.5"])
+    expect(adapter.model).toBe("grok-4-fast")
+    expect(m.registry.get("gb2")?.model).toBe("grok-4-fast")
+  })
+
+  test("genuine grok apply failure rolls back to the original olds", async () => {
+    const agentErrors: string[] = []
+    const m = manager({ phase: "idle", agentErrors })
+    m.registry.register({ id: "gf", name: "gf", workdir: "/tmp", pid: 0, agent: "grok", model: "old-m" })
+    const adapter = {
+      kind: "grok",
+      sessionName: "gf",
+      workdir: "/tmp",
+      async setConfiguration() { throw new Error("native configure failed") },
+      async stop() {},
+    }
+    m.registerGrokRuntime("gf", adapter as never)
+    const r = await m.applyConfig("gf", { model: "new-m" })
+    expect(r).toEqual({ ok: false, error: "native configure failed" })
+    expect(m.registry.get("gf")?.model).toBe("old-m")
   })
 
   test("grok effort reapply without a live adapter fails with the exact error and rolls back", async () => {

@@ -58,12 +58,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-# The ROOT bun.lock is GITIGNORED in this repo (only src/web-app/bun.lock is
-# committed — see .gitignore + Dockerfile), so --frozen-lockfile would abort the
-# root install with "lockfile not found / out of date". Use a plain install at
-# the root and keep --frozen-lockfile only for web-app, whose lock IS committed
-# and must stay byte-for-byte reproducible.
-bun install
+# Root bun.lock is committed (and lists the supermux-core workspace). Freeze it
+# so binary builds match CI. Web-app keeps its own committed lock.
+bun install --frozen-lockfile
 ( cd src/web-app && bun install --frozen-lockfile )
 
 # PWA build. Graceful ladder: `bun run build` (runs vue-tsc + vite) is the happy

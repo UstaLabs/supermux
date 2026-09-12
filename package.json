@@ -5,6 +5,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "workspaces": ["packages/supermux-core"],
   "scripts": {
     "broker": "bun src/main.ts",
     "shim": "bun src/shim/index.ts",
@@ -18,7 +19,10 @@
     "migrate:mux": "bun scripts/migrate-to-mux.ts",
     "generate:logo": "bun scripts/generate-logo-assets.ts",
     "relay": "bun src/relay/main.ts",
-    "connectivity-relay": "bun src/connectivity-relay/main.ts"
+    "connectivity-relay": "bun src/connectivity-relay/main.ts",
+    "test:core": "bun test packages/supermux-core/tests",
+    "build:core": "bun run --cwd packages/supermux-core build",
+    "typecheck:core": "bun run --cwd packages/supermux-core typecheck"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -36,6 +40,7 @@
     "@codemirror/view": "^6.43.1",
     "@resvg/resvg-js": "^2.6.2",
     "@types/bun": "latest",
+    "@types/node": "25.9.5",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/web-push": "^3.6.4",
     "@vueuse/core": "^14.3.0",

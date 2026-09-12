@@ -1,0 +1,158 @@
+# supermux-core API
+
+Node.js **>= 22** ESM. Package is **private** (`version` `0.0.0`). Import compiled `dist/` after `tsc`.
+
+This document describes **exported source contracts**. The in-tree broker is not this contract. Driver capabilities and unsupported operations are listed under Drivers.
+
+### TypeScript (NodeNext)
+
+Use `module` / `moduleResolution` `NodeNext`. Helpers such as `cursorConfigRoot` / `cursorHistoryStorePath` are typed with `NodeJS.ProcessEnv`. Add `@types/node` **22** as a **devDependency** and set `"types": ["node"]` (or `--types node`). Do **not** enable blanket `skipLibCheck` for this package. With TypeScript 6.x and those Node types, `skipLibCheck: false` typechecks the public surface. No source API change is required.
+
+## Package exports
+
+| Subpath | Factory / types |
+| --- | --- |
+| `supermux-core` | `createCore`, `Core`, `Session`, `CoreError`, `UnsupportedOperation`, public types |
+| `supermux-core/acp` | `acp` |
+| `supermux-core/claude` | `claude` |
+| `supermux-core/codex` | `codex` |
+| `supermux-core/cursor` | `cursor`, `cursorConfigRoot`, `cursorHistoryStorePath` |
+| `supermux-core/agents` | `grok`, `opencode` |
+| `supermux-core/auth` | `copiedCredentials`, `withAuth` |
+
+Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`.
+
+## Core
+
+```ts
+createCore(options: CoreOptions): Core
+```
+
+`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), `profiles?`, `onPermission?`, `onObserverError?`, `interruptTimeoutMs?` (default 10_000, any positive finite number), `maxPending?` (default 128, **positive integer**).
+
+### Configuration
+
+Only `model` and `reasoningEffort` (nonempty strings). Unknown keys / non-object → `invalid_input`. Core does not enumerate vendor effort strings; drivers may still reject (Grok: `low|medium|high` or a `TypeError` on open/configure).
+
+Create/resume-open pass cloned requested state into `driver.open` when nonempty. On create/adopt, `{}` / omitted / undefined values → omit on disk and omit on `DriverContext`. Resume `configuration: {}` is an **explicit patch** (see table). **Adopt never opens**: nonempty adopt config is persisted only; `configure` capability is enforced on later resume-open, not at adopt.
+
+| Call | omitted / `undefined` | `configuration: {}` | `undefined` values on keys |
+| --- | --- | --- | --- |
+| create | defaults | defaults (normalized away) | omitted |
+| adopt | defaults | defaults | omitted |
+| resume | no-options; dedupes in-flight restore | explicit patch; no join with a different restore (`session_busy`) | clears key |
+| live idle resume + patch | n/a | `Session.configure` | same merge |
+
+Nonempty create/resume-open config requires the opened runtime to advertise `configure` (**after** `driver.open`). Failure then leftover-cleans the runtime; if cleanup fails, retry `sessions.close(id)`. Live patched resume without `configure` → `unsupported_operation` (Claude/ACP/Cursor/OpenCode).
+
+`Session.configuration()` is requested persisted state (`{}` = defaults). `runtime.configuration()` is **optional** and driver-defined (live native **or** last requested overrides). A runtime may omit the getter.
+
+### `core.sessions`
+
+- `create({ agent, cwd, authProfile?, id?, configuration? })` → `Session`. `cwd` must be an existing absolute directory. Session id `^[a-zA-Z0-9_-]{1,128}$`.
+- `adopt({ id, agent, agentSessionId, cwd, createdAt?, authProfile?, configuration? })` → `SessionRecord`. No spawn. Resume later must keep that native id.
+- `get(id)`, `list({ agent? })`.
+- `resume(id, { configuration? }?)` — exact native id. See table.
+- `forget(id)` — metadata only; session must already be closed. Leftover ownership is `session_busy` until confirmed close.
+- `close(id)` — no spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close()` starts). A **new** close after shutdown → `core_closed`; `core.close()` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id)` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id)` or `core.close()`. Different ids are independent.
+
+Duplicate saved id → `session_exists`. Core closing → `core_closed` on **new** operations. Failed-open leftover blocks create/adopt/resume/forget of the same id until confirmed close.
+
+### `core.auth`
+
+`methods` / `login` only if the driver implements `auth`. ACP/Grok expose ACP auth discovery.
+
+### `core.subscribe` / `core.close`
+
+Events are live microtask notifications, not a durable log. ACP history load updates may set `replay: true`. Initialize metadata is **not** replay.
+
+`CoreEvent` variants: `session.created` | `session.resumed` | `session.stateChanged` | `session.update` | `session.failed` | `message.accepted` | `message.started` | `message.completed`.
+
+`message.started` `{ sessionId, messageId }` fires once when an owned queued send becomes the active drain entry, **synchronously before** `runtime.prompt`, **after** `session.stateChanged` to `running`. Drain is blocked while outstanding native activity (`activity.size`); sequence is then `accepted` → wait activity complete → `started` → `completed`. Not emitted for cancelled queued work, autonomous `onActivity`, or an idempotent resend of the same key. Observer delivery is `queueMicrotask`; prompt may already be running.
+
+`close` aborts the core lifetime, waits operations, closes runtimes and the store. Failed runtime shutdown: retry `close()`. Stale `.core.lock` is **manual** recovery.
+
+## Session
+
+- `id`, `snapshot()`, `capabilities()` (`detach` forced false).
+- `send({ content, whenBusy, idempotencyKey? })` → `Receipt`. Failures settle `completed` as `{ status: "failed", error }` rather than rejecting the receipt (invalid send still throws).
+- `pending.list|cancel|clear|continue`. `continue` after `interrupt({ pending: "keep" })`.
+- `interrupt({ pending }?)` → `stopped` | `already_idle` | `unconfirmed`. Default `{ pending: "discard" }`.
+- `close()`, `steer`, `configure`, `configuration()`, `history`, `fork`, `detach` (always unsupported).
+
+Configure/fork require idle + empty queue + no outstanding activity. Configure merge: nonempty string `model` / `reasoningEffort` only; `undefined` values clear that key. Empty requested config means defaults.
+
+Steer without an active owned prompt → `session_not_running`. Close/fail/interrupt on a closed or failed handle → `session_closed` / `session_failed`.
+
+## Types (selected)
+
+`SessionRecord` version `1`. Secrets never stored. `AuthProfile` is `{ agent, env?, methodId? }` in **caller** configuration.
+
+`AgentUpdate`: `{ protocol: "acp" | "native", value, replay? }`.
+
+`ActivityNotice`: `{ id: string; phase: "started" | "completed" }` (`ActivityPhase`). Core clones via `copyActivityNotice`. Empty id / bad phase silently dropped. Duplicate `started` same id: no-op. Unknown `completed`: no-op. Max **256** distinct outstanding ids (open buffer and live map). Overflow → session `fail` with `activity_overflow`. Native activity is independent of owned receipts and does **not** emit `message.started`. Not a `CoreEvent`; hosts observe busy via `snapshot().state` / interrupt / send rejection.
+
+Default `onPermission` returns cancelled. Host must implement allow/deny; selected-once options are driver-specific (`allow_once` / `reject_once` on Claude/Codex). No library always-approve default.
+
+## Errors
+
+`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`.
+
+`UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes.
+
+Auth-helper-only codes (`auth_home_locked`, `auth_source_locked`, `auth_missing`, `auth_invalid`) apply when using `copiedCredentials`, not the session surface.
+
+## Drivers
+
+**ACP** `acp({ id, command, args?, env?, inheritEnv?, mcpServers?, timeouts… })`. Client capabilities `{}` (no FS/terminal claims). Steer/fork/detach/configure/history unsupported at this wrapper. Cancel retries are best-effort; core may still return `unconfirmed`.
+
+**Grok** `grok({ command?, commandArgs?, model?, reasoningEffort?, authPath?, alwaysApprove?, noLeader?, inheritEnv?, … })`. Defaults: `noLeader: true`, `alwaysApprove: false`. Configure: close child, reopen with **exact** `agentSessionId`. Steer/history/fork/detach unsupported.
+
+**OpenCode** `opencode({ command? })` → `opencode acp`. Steer/fork/configure/history unsupported at this wrapper.
+
+**Claude** `claude({ command?, inheritEnv?, env?, model?, effort?, tools?, allowedTools?, disallowedTools?, permissionMode?, permissionPrompts? })`. Default `tools` is **empty** (no tools). `permissionPrompts` default `none`. Host path is explicit `'host'`. Do not default `bypassPermissions`. Steer/fork/configure/history unsupported.
+
+**Codex** `codex({ sandbox? = "read-only", approvalPolicy? = "never", permissionPrompts? = not host, model?, reasoningEffort?, onRuntimeRequest? })`. Supports resume, steer, fork, configure, history. Unknown native reset can reject. `onRuntimeRequest` is invoked once the thread id is known with a `request(method, params)` that refuses `turn/` and `thread/` methods and rejects after close so hosts can run read-only RPC such as `skills/list` without owning turns.
+
+**Cursor** `cursor({ command?, inheritEnv?, env?, model?, mode?, sandbox?, trust?, force?, approveMcps? })`. Resume is intended to use a cwd-hashed `store.db`. Steer/fork/configure/history unsupported. **Durable native resume has not been verified** on a live `create-chat` path; do not assume it works.
+
+Env precedence: inherit process (unless `inheritEnv: false`) → factory `env` → `profile.env`.
+
+## Auth helper
+
+`copiedCredentials({ source, homesDirectory, filename, homeVariable })` + `withAuth(driver, provider)`. Fork disabled. Failed open + failed lease release: `provider.close()`. Native expiry stays on the driver; Core does not inspect tokens. This is **opt-in**; examples that talk to real CLIs should use caller env/home instead of silent copies.
+
+## Custom drivers
+
+Implement `AgentDriver.open(DriverContext): AgentRuntime`. Honor `signal`, `onExit`, serialize protocol internally, settle `close` after releasing resources. Core owns records and the send queue.
+
+If you advertise `configure`, `configure(requested)` must apply the **full** requested object (missing keys are factory defaults). If you implement `configuration()`, return a **copy** of applied state — Core may clone it, and callers must not share a mutable open-time snapshot.
+
+Core always passes `onActivity`. Call it only if the native runtime has autonomous work **outside** an owned `prompt`: `context.onActivity?.({ id, phase })`. Core clones notices; mutating the object after return has no effect. Omit calls to keep owned-prompt lifecycle only. Overflow (257th distinct outstanding id) fails open/session with `activity_overflow`.
+
+## Examples
+
+Packed tarball includes `examples/` and this file. Run from a project that depends on the installed package, or from the repository after build. Do not use `NODE_PATH` for ESM. `examples/real-agents.mjs` does **not** copy credentials via `copiedCredentials`; vendor CLIs may still refresh credentials or write history under HOME. Default live prompt: `Reply with the single word pong. Do not use tools.` Do not treat these snippets as live-model tests.
+
+Pre-open config (configure-capable driver; `{}` is omitted). Codex/Grok both advertise `configure`; do not execute against a live CLI from CI:
+
+```js
+const session = await core.sessions.create({
+  agent: "codex", // or "grok"
+  cwd,
+  configuration: { model: "gpt-5", reasoningEffort: "low" },
+})
+await core.sessions.create({ agent: "codex", cwd, configuration: {} }) // same as omitted
+```
+
+Failed-start leftover: nonempty create config on a runtime **without** `configure` throws `unsupported_operation` **after** `driver.open`. If leftover `close` fails, the create/resume rejects with an **`AggregateError`** (no `code`; `errors[0]` is the open failure, the last entry is the cleanup failure), and create/resume of that id is `session_busy` until `sessions.close(id)` (or `core.close()`) confirms cleanup. See `examples/custom-driver.mjs` (no network; CI Node 22 smoke).
+
+Subscribe owned-prompt order (started is not native activity):
+
+```js
+core.subscribe(event => {
+  if (event.type === "message.accepted" || event.type === "message.started" || event.type === "message.completed") {
+    console.log(event.type, event.messageId)
+  }
+})
+```

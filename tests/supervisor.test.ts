@@ -13,35 +13,36 @@ import type { SessionBackend } from "../src/core/runtime/session-backend"
 // swapped via bun module mocks (there are no injection seams). mock.module is
 // process-global: capture the real modules and restore them in afterAll.
 const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
-const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
-const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 
 mock.module("../src/core/agents/codex/auth", () => ({
   ...realCodexAuth,
   resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
 }))
-mock.module("../src/core/agents/codex/spawn", () => ({
-  ...realCodexSpawn,
-  spawnCodexAppServer: () => ({
-    pid: 123,
-    client: { request: async () => ({}) } as any,
-    child: null as any,
-    kill: () => {},
-    onExit: () => {},
+mock.module("../src/core/agents/codex/core-host-provider", () => ({
+  ...realCodexCoreHost,
+  getCodexCoreHost: () => ({
+    createAdapter: (opts: any) => ({
+      kind: "codex" as const,
+      id: opts.id,
+      sessionName: opts.sessionName,
+      workdir: opts.workdir,
+      async start() { await opts.persistThreadId?.("codex-thread-id") },
+      async resume() {},
+      async stop() {},
+      async send() {},
+      async interrupt() {},
+      async setConfiguration() {},
+      on() {},
+      emit() {},
+      rpc: { request: async () => ({}) },
+    }),
   }),
-}))
-mock.module("../src/core/agents/codex/adapter", () => ({
-  ...realCodexAdapter,
-  CodexAdapter: class {
-    constructor(_opts: any) {}
-    async start() {}
-  },
 }))
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
-  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
-  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
 })
 
 let tmpDir: string, db: ReturnType<typeof openDb>
@@ -125,7 +126,7 @@ test("ensurePersonalAssistants respawns dead non-Claude PA", async () => {
   await expect(supervisor.ensurePersonalAssistants()).resolves.toBeUndefined()
   const pa = registry.get(paId)
   expect(pa?.status).toBe("active")
-  expect(pa?.pid).toBe(123)
+  expect(pa?.pid).toBe(0)
 })
 
 test("bootstrapPA forwards model and reasoningLevel to registry", async () => {

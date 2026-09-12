@@ -12,8 +12,7 @@ import type { SessionBackend } from "../src/core/runtime/session-backend"
 // injection seams). mock.module is process-global: capture the real modules
 // first, restore them in afterAll so later test files see the real thing.
 const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
-const realCodexSpawn = { ...(await import("../src/core/agents/codex/spawn")) }
-const realCodexAdapter = { ...(await import("../src/core/agents/codex/adapter")) }
+const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
 const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
 const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
@@ -25,22 +24,25 @@ mock.module("../src/core/agents/codex/auth", () => ({
   ...realCodexAuth,
   resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
 }))
-mock.module("../src/core/agents/codex/spawn", () => ({
-  ...realCodexSpawn,
-  spawnCodexAppServer: () => ({
-    pid: 123,
-    client: { request: async () => ({}) } as any,
-    child: null as any,
-    kill: () => {},
-    onExit: () => {},
+mock.module("../src/core/agents/codex/core-host-provider", () => ({
+  ...realCodexCoreHost,
+  getCodexCoreHost: () => ({
+    createAdapter: (opts: any) => ({
+      kind: "codex" as const,
+      id: opts.id,
+      sessionName: opts.sessionName,
+      workdir: opts.workdir,
+      async start() { await opts.persistThreadId("codex-thread-id") },
+      async resume() {},
+      async stop() {},
+      async send() {},
+      async interrupt() {},
+      async setConfiguration() {},
+      on() {},
+      emit() {},
+      rpc: { request: async () => ({}) },
+    }),
   }),
-}))
-mock.module("../src/core/agents/codex/adapter", () => ({
-  ...realCodexAdapter,
-  CodexAdapter: class {
-    constructor(private opts: any) {}
-    async start() { await this.opts.persistThreadId("codex-thread-id") }
-  },
 }))
 mock.module("../src/core/agents/cursor/auth", () => ({
   ...realCursorAuth,
@@ -82,8 +84,7 @@ mock.module("../src/core/agents/opencode/adapter", () => ({
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
-  mock.module("../src/core/agents/codex/spawn", () => realCodexSpawn)
-  mock.module("../src/core/agents/codex/adapter", () => realCodexAdapter)
+  mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
   mock.module("../src/core/agents/cursor/auth", () => realCursorAuth)
   mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
   mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)

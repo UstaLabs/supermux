@@ -3,36 +3,15 @@ import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
 import { makeLogger } from "../../../shared/log"
 import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
+import {
+  createCodexNativeItemState,
+  handleCodexItemCompleted,
+  handleCodexItemStarted,
+} from "./native-items"
+
+export { CODEX_TOOL_ITEM_TYPES, isCodexToolItem } from "./native-items"
 
 const log = makeLogger("agents/codex/adapter")
-
-// Codex thread-item types that ARE tools (→ activity tool-cards). Everything
-// else (userMessage, agentMessage, reasoning, error, todo, tokenCount, …) is
-// NOT a tool. Allowlist (not blocklist) so unknown non-tool item types can
-// never leak in as junk cards. Extend this when Codex adds a tool type.
-export const CODEX_TOOL_ITEM_TYPES = new Set<string>([
-  "command_execution", "commandExecution",
-  "fileChange", "file_change",
-  "webSearch", "web_search",
-  "mcpToolCall", "mcp_tool_call",
-  "dynamicToolCall", "dynamic_tool_call",
-])
-export function isCodexToolItem(type: string | undefined): boolean {
-  return typeof type === "string" && CODEX_TOOL_ITEM_TYPES.has(type)
-}
-
-function isCodexWebSearchItem(type: string | undefined): boolean {
-  return type === "webSearch" || type === "web_search"
-}
-
-function hasCodexWebSearchPreview(item: Record<string, unknown>): boolean {
-  if (typeof item.query === "string" && item.query.trim()) return true
-  const action = item.action
-  if (!action || typeof action !== "object") return false
-  const row = action as Record<string, unknown>
-  return [row.query, row.url, row.pattern].some((value) => typeof value === "string" && value.trim())
-    || (Array.isArray(row.queries) && row.queries.some((value) => typeof value === "string" && value.trim()))
-}
 
 type JsonRpcLike = {
   request<T = any>(method: string, params: any): Promise<T>
@@ -76,7 +55,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   private resolveAttachment?: (file_id: string) => Promise<string>
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
-  private deferredWebSearchStarts = new Set<string>()
+  private nativeItems = createCodexNativeItemState()
 
   /** The live app-server JSON-RPC client, for read-only queries like skills/list. */
   get rpc(): JsonRpcLike {
@@ -106,47 +85,20 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
         case "turn/completed":
           if (!this.currentTurnId || this.currentTurnId === turnIdFrom(params)) {
             this.currentTurnId = undefined
-            this.deferredWebSearchStarts.clear()
+            this.nativeItems.deferredWebSearchStarts.clear()
           }
           this.emit("turn-complete", { kind: "turn-complete" })
           break
         case "item/completed":
-          if (params?.item?.type === "agentMessage" && typeof params.item.text === "string") {
-            this.emit("assistant-message", { kind: "assistant-message", text: params.item.text })
-          }
-          if (isCodexToolItem(params?.item?.type)) {
-            const callId = String(params.item.id ?? "")
-            const exitCode = params.item.exitCode ?? params.item.exit_code
-            const failed = params.item.status === "failed" || params.item.status === "declined"
-              || (exitCode != null && exitCode !== 0)
-            const tool = params.item.type === "dynamicToolCall" || params.item.type === "dynamic_tool_call"
-              ? String(params.item.tool || params.item.type)
-              : String(params.item.type)
-            // Codex 0.144 starts webSearch items as { query:"", action:null } and
-            // only fills the query/action on item/completed. Defer that tool card
-            // until the useful snapshot arrives, otherwise every search preview is
-            // permanently blank even though the completed item has the query.
-            if (this.deferredWebSearchStarts.delete(callId)) {
-              this.emit("tool-call", { kind: "tool-call", tool, phase: "started",
-                call_id: callId, detail: params.item })
-            }
-            this.emit("tool-call", { kind: "tool-call", tool, phase: failed ? "failed" : "completed",
-              call_id: callId, detail: params.item })
-          }
+          handleCodexItemCompleted(params?.item, this.nativeItems, {
+            emitAssistant: (text) => this.emit("assistant-message", { kind: "assistant-message", text }),
+            emitTool: (event) => this.emit("tool-call", event),
+          })
           break
         case "item/started":
-          if (isCodexToolItem(params?.item?.type)) {
-            const callId = String(params.item.id ?? "")
-            if (isCodexWebSearchItem(params.item.type) && !hasCodexWebSearchPreview(params.item)) {
-              this.deferredWebSearchStarts.add(callId)
-              break
-            }
-            const tool = params.item.type === "dynamicToolCall" || params.item.type === "dynamic_tool_call"
-              ? String(params.item.tool || params.item.type)
-              : String(params.item.type)
-            this.emit("tool-call", { kind: "tool-call", tool, phase: "started",
-              call_id: callId, detail: params.item })
-          }
+          handleCodexItemStarted(params?.item, this.nativeItems, {
+            emitTool: (event) => this.emit("tool-call", event),
+          })
           break
         case "error":
           this.emit("error", { kind: "error", error: new Error(params?.message ?? "codex error") })
