@@ -235,12 +235,27 @@ class DictationController(
             }
         } else if (recording) {
             recording = false
-            val audio: CapturedAudio? = mic.stop()
-            if (audio == null) {
-                fail("Didn't catch that")
-                return
+            // Same shape as the on-device branch above, and for the same reason: `transcribing` is
+            // set on the frame the user tapped Stop, and the await happens INSIDE the one job
+            // [cancelMic] holds. The await is [MicCapture.flush] — the browser's `MediaRecorder`
+            // only ever delivers bytes through an event, so the tail of the recording is still in
+            // the encoder until it has fired. Every other host's flush returns without suspending.
+            transcribing = true
+            transcribeJob = scope.launch {
+                try {
+                    mic.flush()
+                    val audio: CapturedAudio? = mic.stop()
+                    if (audio == null) {
+                        fail("Didn't catch that")
+                        return@launch
+                    }
+                    transcribeAndAppend(rawFallback = null) {
+                        transcribeAudio(audio.bytes, audio.filename, audio.mime)
+                    }
+                } finally {
+                    transcribing = false
+                }
             }
-            runTranscription(rawFallback = null) { transcribeAudio(audio.bytes, audio.filename, audio.mime) }
         }
     }
 

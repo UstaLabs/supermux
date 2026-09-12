@@ -69,8 +69,8 @@ class BrokerApiVoiceTest {
 
         val text = multipartText(reqs.single())
         assertTrue("audio/webm;codecs=opus" in text, text)
+        assertTrue("""name="audio"""" in text, text)
         assertTrue("""filename="dictation.webm"""" in text, text)
-        assertTrue("audio" in text, text)
     }
 
     @Test fun transcribe_audio_part_defaults_to_mp4_when_no_mime_is_passed() = runTest {

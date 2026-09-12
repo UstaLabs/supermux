@@ -133,6 +133,20 @@ interface MicCapture {
      *  permission not granted) — the caller shows "microphone unavailable", not a crash. */
     fun start(): Boolean
 
+    /**
+     * Give the backend a chance to hand over bytes it is still holding, before the synchronous
+     * [stop]. Default: nothing to do — desktop's line and Android's recorder have already written
+     * everything they have.
+     *
+     * It exists for the browser, where `MediaRecorder` NEVER produces bytes synchronously: its
+     * blobs arrive through a `dataavailable` event, so the last fragment of a recording is still
+     * in the encoder when [stop] returns. `WebMic.flush()` asks for that fragment and awaits the
+     * one event that delivers it. Called immediately before [stop] by
+     * [dev.supermux.ui.chat.DictationController], from the same coroutine, so a host that does
+     * suspend here is covered by the "Transcribing…" strip.
+     */
+    suspend fun flush() {}
+
     /** Stops capture and returns the encoded audio, or null when nothing was captured. */
     fun stop(): CapturedAudio?
 

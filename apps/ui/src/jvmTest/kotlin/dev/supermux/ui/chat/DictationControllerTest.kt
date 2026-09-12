@@ -22,9 +22,17 @@ private class FakeMicCapture(
     private val mime: String = "audio/wav",
 ) : MicCapture {
     var startCalls = 0; var stopCalls = 0; var cancelCalls = 0
-    override fun start(): Boolean { startCalls++; return startsOk }
+    /** Every call in order, so "flush was awaited BEFORE stop" is assertable. */
+    val calls = mutableListOf<String>()
+    override fun start(): Boolean { startCalls++; calls.add("start"); return startsOk }
+    override suspend fun flush() {
+        calls.add("flush")
+        kotlinx.coroutines.yield()
+        calls.add("flushed")
+    }
     override fun stop(): CapturedAudio? {
         stopCalls++
+        calls.add("stop")
         return wavOnStop?.let { CapturedAudio(it, filename, mime) }
     }
     override fun cancel() { cancelCalls++ }
@@ -54,6 +62,19 @@ class DictationControllerTest {
         assertTrue(ctrl.recording)
         assertFalse(ctrl.micUnavailable)
         assertEquals(1, fake.startCalls)
+    }
+
+    /** The browser's recorder is still holding the tail of the clip when the user taps Stop, so
+     *  the controller must await [MicCapture.flush] BEFORE the synchronous [MicCapture.stop]. */
+    @Test fun stop_mic_awaits_the_flush_before_stopping_the_recorder() {
+        val fake = FakeMicCapture()
+        val ctrl = controller(fake)
+        ctrl.transcribeAudio = { _, _, _ -> "text" }
+        ctrl.startMic()
+
+        ctrl.stopMic()
+
+        assertEquals(listOf("start", "flush", "flushed", "stop"), fake.calls)
     }
 
     /** The browser records `audio/webm;codecs=opus`, not WAV: the recorded container has to reach

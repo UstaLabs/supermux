@@ -8,11 +8,13 @@
 // `included: false` — it must not be injected as a <script> into the Karma context; the test fetches
 // its TEXT and injects it into an iframe's srcdoc. The proxy gives it the short, stable URL the test
 // asks for, independent of where KGP decides to put processed resources.
-(function () {
+// Leading `;`: karma.config.d snippets are concatenated verbatim, so an IIFE that follows
+// another one without a separator is parsed as a CALL of its result.
+;(function () {
   var path = require("path")
   var file = path.resolve(config.basePath, "kotlin/editor-shim.js")
   config.files = config.files || []
   config.files.push({ pattern: file, included: false, served: true, watched: false })
   config.proxies = config.proxies || {}
   config.proxies["/editor-shim.js"] = "/base/kotlin/editor-shim.js"
-})()
+})();

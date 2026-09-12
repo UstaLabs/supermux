@@ -33,8 +33,13 @@ private fun playChunkJs(ctx: JsAny, data: Int8Array, onEnd: () -> Unit, onErr: (
       try { if (ctx.state === 'suspended') ctx.resume(); } catch (e) {}
       var buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       var started = false;
+      // Decoding is asynchronous, so a `stop()` can land between the request and the callback.
+      // The generation this chunk belongs to is captured here and re-checked there: a stopped
+      // read-aloud must never start a node, or the chunk the user silenced plays anyway.
+      var gen = ctx.__smxGen || 0;
       try {
         ctx.decodeAudioData(buf, function (decoded) {
+          if ((ctx.__smxGen || 0) !== gen) { onErr(); return; }
           try {
             var src = ctx.createBufferSource();
             src.buffer = decoded;
@@ -52,6 +57,7 @@ private fun playChunkJs(ctx: JsAny, data: Int8Array, onEnd: () -> Unit, onErr: (
 @Suppress("UNUSED_PARAMETER")
 private fun stopSourceJs(ctx: JsAny): Unit = js(
     """{
+      ctx.__smxGen = (ctx.__smxGen || 0) + 1;
       var src = ctx.__smxSource;
       ctx.__smxSource = null;
       // `onended` is deliberately LEFT IN PLACE: stopping a node fires it, and that is the only
@@ -73,7 +79,9 @@ private fun closeContextJs(ctx: JsAny): Unit = js("{ try { ctx.close(); } catch 
  * the browser dislikes must skip a sentence, not kill the read-aloud loop.
  *
  * [stop] stops the node under way; stopping fires the same `onended` a natural finish does, so
- * the suspended caller unwinds promptly instead of waiting out a chunk nobody can hear.
+ * the suspended caller unwinds promptly instead of waiting out a chunk nobody can hear. It also
+ * bumps a generation counter, so a chunk still inside `decodeAudioData` when [stop] lands resolves
+ * its caller without ever starting a node.
  */
 object WebTts : TtsEngine {
     private var ctx: JsAny? = null

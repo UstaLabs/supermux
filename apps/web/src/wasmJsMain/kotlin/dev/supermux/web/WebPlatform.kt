@@ -46,6 +46,11 @@ val WEB_CAPS = Caps(
  * (several are read during composition); "not here" is said through [caps], never by throwing.
  */
 class WebPlatform : Platform {
+    init {
+        // The `paste` hook has to be listening before the user pastes — see [WebClipboard].
+        WebClipboard.install()
+    }
+
     override val caps: Caps = WEB_CAPS
     /** Gesture-bound: `window.open` off the gesture's own tick is popup-blocked silently (see
      *  [dev.supermux.web.seams.WebFiles]), so never await anything before calling this. */

@@ -121,7 +121,6 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.chat.DEFAULT_MODEL_ID
-import dev.supermux.chat.mimeForFileName
 import dev.supermux.net.ChunkSource
 import dev.supermux.net.ModelInfo
 import dev.supermux.net.ModelsResponse
@@ -194,6 +193,17 @@ data class ComposerExternalAttach(val file: PickedFile?, val text: String)
 /** One-shot "transcribe these bytes and append the cleaned text to the draft" request — the
  *  `SM_DICTATE` headless hook, which proves the real POST→append round-trip under Xvfb where there
  *  is no mic. [bytes] null = the host could not read the audio; consume without appending. */
+/** Audio container for a dictation FILE name — the `SM_DICTATE` headless hook's side of what
+ *  `CapturedAudio.mime` carries for a real recording. */
+internal fun dictationMimeFor(filename: String): String = when (filename.substringAfterLast('.', "").lowercase()) {
+    "webm" -> "audio/webm"
+    "m4a", "mp4", "aac" -> "audio/mp4"
+    "ogg", "opus" -> "audio/ogg"
+    "mp3", "mpeg" -> "audio/mpeg"
+    "flac" -> "audio/flac"
+    else -> "audio/wav"
+}
+
 data class ComposerExternalDictate(val bytes: ByteArray?, val filename: String) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -816,9 +826,10 @@ fun Composer(
         val bytes = request.bytes
         if (onTranscribeAudio != null && bytes != null) {
             // The headless hook has a file, not a recording: its container is whatever the
-            // filename says (the harness writes a WAV), which is exactly what the mic would pass.
-            val mime = mimeForFileName(request.filename) ?: "audio/wav"
-            val cleaned = onTranscribeAudio.invoke(bytes, request.filename, mime)?.trim()
+            // filename says (the harness writes a WAV). Mapped HERE rather than through
+            // `mimeForFileName`, which answers with the VIDEO type for the containers audio and
+            // video share (`.webm` → video/webm) and would mislabel the part.
+            val cleaned = onTranscribeAudio.invoke(bytes, request.filename, dictationMimeFor(request.filename))?.trim()
             if (!cleaned.isNullOrEmpty()) {
                 setText(appendDictated(text, cleaned, chrome.dictationTrimsDraft))
             }
