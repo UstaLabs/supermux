@@ -2,6 +2,7 @@ package dev.supermux.web
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,6 +27,7 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.MessageTts
 import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.ui.intro.SetupWizardScreen
 import dev.supermux.ui.prefs.UiPrefs
 import dev.supermux.ui.prefs.seedShellState
 import dev.supermux.ui.push.PushTapHandle
@@ -35,6 +37,9 @@ import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
+import dev.supermux.ui.settings.rememberAgentSettingsActions
+import dev.supermux.ui.settings.rememberDevicesSettingsActions
+import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.SupermuxApp
 import dev.supermux.ui.shell.visibleWorkspaceChatIdsAt
@@ -51,7 +56,6 @@ import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -69,20 +73,6 @@ object WebWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
     override fun create(sessionId: String) = WalkthroughState(sessionId)
     override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
 }
-
-/**
- * The viewing keep-alive interval, in milliseconds.
- *
- * 60 s by default, matching the Vue app and leaving four re-assertions of head-room inside the
- * broker's 5-minute presence TTL. `window.__smxHeartbeatMs` is a TEST HOOK — the browser test sets
- * it to a couple of seconds before the bundle loads so a heartbeat can be observed on the wire
- * without a minute-long wait. Read once, at startup: nothing in the app changes it at runtime.
- */
-private val heartbeatMs: Int by lazy { heartbeatMsOverride() }
-
-@Suppress("UNUSED_PARAMETER")
-private fun heartbeatMsOverride(): Int =
-    js("(typeof window.__smxHeartbeatMs === 'number' && window.__smxHeartbeatMs > 0) ? window.__smxHeartbeatMs : 60000")
 
 /** Group the session list by project — a per-BROWSER view preference, like iOS's NSUserDefaults one. */
 private const val GROUP_BY_PROJECT_KEY = "web:groupByProject"
@@ -202,9 +192,61 @@ fun main() {
                 // on ON_STOP: nothing else would ever stop it, since the composition stays alive.
                 LaunchedEffect(foreground) { if (!foreground) MessageTts.stop(platform.tts) }
 
+                // Has this broker been through first-run setup? `null` until its first snapshot,
+                // which is the whole reason this is a tri-state: a default of `false` would flash
+                // the wizard at every already-onboarded user for the length of one WS round trip,
+                // and a default of `true` would flash the shell at a fresh one.
+                val onboarded by fleet.onboarded.collectAsState()
+                // The browser is the ONLY host that runs the wizard (`Caps.setupWizard`): it is
+                // where a new broker is first opened, and the other three hosts pair INTO a broker
+                // someone already set up.
+                val wizard = platform.caps.setupWizard && onboarded == false
+                val shellVisible = onboarded != null && !wizard
+
                 // The address bar IS this app's back stack. Exactly once, and only here: it reads
-                // `window.location` on its first composition.
-                UrlSync(ui)
+                // `window.location` on its first composition. Hoisted ABOVE the wizard/shell
+                // branch on purpose — while the wizard is up it holds the address bar at
+                // `/setup` and applies nothing; the initial URL lands when the shell mounts. See
+                // [UrlSync].
+                UrlSync(ui, enabled = shellVisible, wizard = wizard)
+
+                // Push, exactly where iOS registers it (`MainViewController.kt`): once, after the
+                // fleet exists, so `registerIfPaired()` has a broker to talk to. It is a no-op
+                // until the user has granted the permission — the banner below asks for that.
+                // Outside the branch: a subscription is worth having before the wizard is done
+                // (the Done step is the moment the user walks away to their phone).
+                LaunchedEffect(Unit) { platform.push?.registerIfPaired() }
+
+                if (onboarded == null) {
+                    // NOT the shell with an empty sidebar: the snapshot decides between two
+                    // completely different screens, and painting either one first would be a
+                    // visible wrong answer. The splash is already gone by now (it goes on the
+                    // first frame), so this is what the user sees for that round trip.
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    return@WebTheme
+                }
+
+                if (wizard) {
+                    // INSTEAD of the shell, like the pairing gate above — `SupermuxApp` has no
+                    // full-screen slot to host this, and a fresh broker has nothing behind the
+                    // wizard to show anyway.
+                    SetupWizardScreen(
+                        agents = rememberAgentSettingsActions(fleet),
+                        forges = rememberGitHostingActions(fleet),
+                        devices = rememberDevicesSettingsActions(fleet),
+                        // The flow this writes is the one read three lines up, so a successful
+                        // write swaps this screen for the shell by itself.
+                        onFinish = { fleet.setOnboarded(true) },
+                        onCreateFirstSession = { ui.openLauncher() },
+                        // The APP scope, never `rememberCoroutineScope()`: the Done step's work
+                        // and the phone step's revoke-if-unused both outlive this composable —
+                        // `onFinish` succeeding is precisely what removes it from the tree.
+                        scope = appScope,
+                    )
+                    return@WebTheme
+                }
 
                 val workspaces by fleet.workspaces.collectAsState()
                 val sessionHost by fleet.sessionHost.collectAsState()
@@ -267,32 +309,10 @@ fun main() {
                     }
                 }
 
-                // Keep this tab's viewing presence alive. The broker forgets a device's viewing
-                // entry 5 minutes after it last heard about it
-                // (`src/core/push/viewing-tracker.ts:22`), so a user who reads one long, quiet turn
-                // would start getting pushes for the chat they are staring at. The Vue app
-                // re-asserted every 60 s (`src/web-app/src/composables/useViewing.ts:7`) and this is
-                // the same cadence, driven from the HOST because the browser is where a throttled
-                // or bfcache-restored tab can leave `HostStore`'s own timer un-fired for minutes.
-                // Only while [foreground]: a hidden tab has already sent `Viewing(null, false)` and
-                // has no presence to keep.
-                LaunchedEffect(foreground) {
-                    while (foreground) {
-                        delay(heartbeatMs.toLong())
-                        fleet.reassertViewing()
-                    }
-                }
-
-                // Push, exactly where iOS registers it (`MainViewController.kt`): once, after the
-                // fleet exists, so `registerIfPaired()` has a broker to talk to. It is a no-op
-                // until the user has granted the permission — the banner above asks for that.
-                LaunchedEffect(Unit) { platform.push?.registerIfPaired() }
-
-                // The push banner belongs to the SHELL branch and nowhere else. Plan 4 task 6
-                // renders the setup wizard INSTEAD of `SupermuxApp` inside this same gate, and a
-                // permission strip floating over the wizard's Connect-your-phone step would sit on
-                // top of the QR code. Keep this `Box` wrapped around `SupermuxApp` only — never
-                // hoisted to the gate.
+                // The push banner belongs to the SHELL branch and nowhere else: the wizard is
+                // rendered INSTEAD of `SupermuxApp` in the same gate, and a permission strip
+                // floating over its Connect-your-phone step would sit on top of the QR code. Keep
+                // this `Box` wrapped around `SupermuxApp` only — never hoisted to the gate.
                 Box(Modifier.fillMaxSize()) {
                     SupermuxApp(
                         fleet = fleet,

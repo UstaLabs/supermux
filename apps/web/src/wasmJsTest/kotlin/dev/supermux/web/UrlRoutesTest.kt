@@ -34,7 +34,7 @@ class UrlRoutesTest {
     }
     @Test fun unknownAndLegacyPathsGoHome() {
         assertEquals(UrlTarget.Screen(Route.Home), parsePath("/nope/what"))
-        assertEquals(UrlTarget.Screen(Route.Home), parsePath("/setup"))              // wizard arrives in plan 4
+        assertEquals(UrlTarget.Screen(Route.Home), parsePath("/setup"))              // the wizard owns it; UrlSync never applies it
         assertEquals(UrlTarget.Screen(Route.Settings(SettingsSection.Agents)), parsePath("/settings"))
         assertEquals(UrlTarget.Screen(Route.Home), parsePath("/settings/keyboard")) // dropped page
     }

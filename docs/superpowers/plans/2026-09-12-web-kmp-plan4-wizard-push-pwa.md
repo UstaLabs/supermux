@@ -129,3 +129,109 @@
 ## Not in this plan
 
 Playwright journey rewrite, CI/Docker, cm6 lockfile, `font/ttf` MIME, hashing `editor/` + `sw.js` versioning, the CMP 1.12 bump for the interop-hole bug, deletion of `src/web-app` (and of the Vue icon targets) → plan 5.
+
+---
+
+## Results (2026-09-12)
+
+All six tasks landed. The browser host now owns the three things only the Vue app had — the
+first-run wizard, Web Push, and the PWA shell — plus the viewing presence the broker's 5-minute
+TTL needs. Commits `744adf46`, `a9bd4e33`, `0a1e6e90`, `07e5c8a0`, `9f6ee7dd`, `a9fe0932`,
+`ec53f2e1`, and this one.
+
+| Task | Outcome |
+|---|---|
+| 1 — `onboarded` | `ServerFrame.Snapshot.onboarded` decodes (absent → `false`); `HostStore.onboarded: StateFlow<Boolean?>` is `null` until the first snapshot; `setOnboarded(v)` PUTs `{"onboarded":v}` and flips the flow; `FleetStore` lifts both off the ACTIVE host. `Caps.setupWizard` added, default false. |
+| 2 — wizard in `:ui` | `SetupWizardScreen` (5 steps, linear stepper, no Skip, no exit) + `SetupPhoneStep` (auto-mint, QR, 1 s poll, copy, refresh, revoke-if-unused). Agents gate = Vue's rule with Vue's own fallback: `authed`, or an INSTALLED `opencode` (no `capabilities` field on `AgentInstallStatus`). `AgentSettingsScreen` gained `onStatusesChanged`. Both the Done step and the phone step's revoke run on an injected app scope — `onFinish` succeeding is exactly what unmounts the composable. |
+| 3 — PWA shell | `apps/web/pwa/` (sw.js, manifest, icons, favicon) staged to the broker ROOT (outside `assets/`, so unhashed and `no-cache`); `index.html` registers `/sw.js` BEFORE the 6 MB bundle and reloads once on `controllerchange`. curl proof: `/sw.js` `application/javascript` + `no-cache`, `/manifest.webmanifest` `application/manifest+json`, `/icons/icon-192.png` `image/png`, `/favicon.ico` served; in Chrome `navigator.serviceWorker.ready` resolves with scope `/`. |
+| 4 — Web Push | `BrokerApi.pushVapidPublicKey/pushSubscribe/pushUnsubscribe`; `WebPushRegistrar` is Vue's `useNotifications` state machine in Kotlin/Wasm; `WebPushBanner` keyed on the Vue app's `cmux:push:banner-dismissed`. Browser-verified against a hermetic broker: VAPID key 200, a **real FCM subscription** created, `POST /push/subscribe` 200, row in sqlite, no pageerror. Two caveats recorded there: Chrome refuses the Push API in incognito (so the run uses `launchPersistentContext` with a temp profile), and the FCM round trip takes **> 6 s**, long enough to need an explicit wait. `pushSubscribe` is tri-state (`Boolean?`) so a network blip does not discard a working subscription. |
+| 5 — push tap + viewing | `Main.kt` now runs Android's `MainActivity` logic byte for byte (`pushTapHandleDecision` → `resolvePushTap` → `selectSession` + `setActiveView`, `Skip` still consumes the id) plus iOS's notification-withdraw effect (`notificationCancelSessionIds` over `visibleWorkspaceChatIdsAt`). `HostStore.reassertViewing()`/`FleetStore.reassertViewing()` + `ViewingReassertTest` (jvm). **The host-side 60 s loop this task added has been REMOVED in task 6** — see below. |
+| 6 — wizard wired | Below. |
+| Tests | Karma **65** (`CHROME_BIN=/usr/bin/google-chrome ./gradlew :web:wasmJsBrowserTest`, 1 m 44 s); `:shared:jvmTest` **985**; `:ui:jvmTest` **1613** (xvfb). All green. Staged bundle 6 123 KB gzip; `stageForBroker` 10 m 30–10 m 50 s cold. |
+
+### Task 6 — the gate in `Main.kt`
+
+Inside the `Paired` branch, after the fleet: `val onboarded by fleet.onboarded.collectAsState()`,
+then three states — `null` → a centered `CircularProgressIndicator` (never the shell, never the
+wizard: painting either before the snapshot is a visible wrong answer), `false && caps.setupWizard`
+→ `SetupWizardScreen(..., onFinish = { fleet.setOnboarded(true) }, onCreateFirstSession = {
+ui.openLauncher() }, scope = appScope)`, else the existing `SupermuxApp` box. `WEB_CAPS.setupWizard
+= true`; the browser is the only host that is ever a setup surface.
+
+The notification-withdraw effect, the push-tap effect and `UrlSync` all moved INSIDE the shell
+branch (or, for `UrlSync`, above it but disabled): they read `fleet.workspaces`/`ui.selectedId`,
+which mean nothing while the wizard is up. `registerIfPaired()` stayed outside — a subscription is
+worth having before Done, since Done is when the user walks off to their phone.
+
+**`UrlSync(ui, enabled, wizard)`** — the deviation from the plan's sketch. `parsePath("/setup")`
+still resolves to `Route.Home` (unchanged: the address bar is user input). What changed is when the
+initial apply runs:
+
+- `wizard` → `history.replaceState("/setup")`, nothing else. A reload during setup comes back to
+  setup.
+- `enabled` (shell on screen) → the initial apply runs THEN, not at mount, and it SKIPS `/setup`
+  (`shouldApplyInitialUrl`, a pure function with Karma coverage). Without that skip, Done's
+  `openLauncher()` would be undone a frame later by an apply of `/setup` → Home, and the run would
+  land on `/` instead of `/new`.
+- **neither** — `onboarded == null` — the URL is left ALONE. This third state is a bug this task's
+  own browser run caught: stamping `/setup` while the snapshot is in flight ate the deep link every
+  cold load starts with, and `/s/<id>` came back as `/` a second later. Verified after the fix:
+  `/s/<id>` and `/new` both survive a reload.
+
+### The browser run (hermetic broker, headless Chrome 148 + Playwright)
+
+`MUX_TEST_SKIP_WEB_BUILD=1 scripts/test-broker.sh bun <driver>` after `:web:stageForBroker`.
+Screenshots in the session scratchpad `plan4/`.
+
+| Step | What happened | Shot |
+|---|---|---|
+| Pair, `onboarded=false` forced (`PUT /settings/config`) | `/pair?t=…` → the app lands on **`/setup`** with "Step 1 of 5 — Welcome", the logo, the blurb and a single centered **Start** | `w1-welcome.png` |
+| Reload | still `/setup`, still Welcome — the wizard survives a refresh | `w1b-reloaded.png` |
+| Start | "Step 2 of 5 — Agents", the real `AgentSettingsScreen` inside the wizard chrome; **Next enabled** | `w2-agents.png` |
+| Next | "Step 3 of 5 — Git Hosting" — `GitHostingScreen` with Import/Connect actions | `w3-forges.png` |
+| Next | "Step 4 of 5 — Connect Your Phone": `POST /devices` → 200, QR rendered, the minted `http://127.0.0.1:<port>/pair?t=…` printed in mono below it, Copy/Refresh | `w4-phone.png` |
+| The phone | a SECOND browser context (390×844) opens the minted link → `GET /devices` shows the `phone` row's `last_seen_at` set, and the step flips to **"Your phone is connected"** + "Connect another phone" | `w4b-phone-app.png`, `w4c-phone-connected.png` |
+| Next | "Step 5 of 5 — Done": "You're all set!" and a single **Create your first session**, no footer | `w5-done.png` |
+| Create your first session | `PUT /settings/config` → 200, config reads `"onboarded":true`, the wizard is replaced by the shell at **`/new`** (launcher, "Let's build", workspace list in the sidebar, push banner overlaid at the top) | `w6-shell.png` |
+| Reload | no wizard — the shell comes back | `w7-reloaded-shell.png` |
+| Deep links after setup | `/s/<id>` reopens that chat, `/new` reopens the launcher (the `onboarded == null` fix above) | `w8-deeplink-session.png`, `w9-deeplink-new.png` |
+
+Network writes seen across the whole run: exactly `POST /devices -> 200` and
+`PUT /settings/config -> 200`. **No `pageerror`**, no app console errors (only the known headless
+WebGL driver warnings).
+
+**The Agents gate was NOT observed holding**, and the reason is the fixture, not the code: this
+host's real agent credential files are visible to the broker's detector, so the fixture's
+`/agents/status` answered `installed:true, authed:true` for all five kinds (claude, codex, cursor,
+opencode, grok) — Next was enabled the moment the step opened, and the same leak shows on the Git
+Hosting step, which offered "Import from gh (@AhmetHuseyinDOK)". The gate itself is covered by
+`SetupWizardScreenTest` (jvm): Next stays disabled until `onStatusesChanged` reports an authed
+agent. No `onboarded=true` shortcut was used anywhere in the run.
+
+### Carry-forward for plan 5
+
+- **The host-side viewing heartbeat was a duplicate and is gone.** `HostStore.ensureViewingHeartbeat()`
+  (HostStore.kt:476) already re-asserts every 60 s from the store's own timer, on every platform, so
+  task 5's `LaunchedEffect(foreground) { while … delay(heartbeatMs); fleet.reassertViewing() }` in
+  `Main.kt` — and the `window.__smxHeartbeatMs` test hook it needed — sent the frame twice a minute
+  for nothing. Removed in this commit; `reassertViewing()` on `HostStore`/`FleetStore` and its jvm
+  test stay, because they are the API a host needs if a throttled or bfcached tab ever proves the
+  store's timer unreliable. If plan 5 sees presence lapse in a backgrounded tab, that API is the
+  place to re-add a host-driven cadence — with evidence this time.
+- **Compose testTags are NOT in the accessibility DOM in this build.** `document.getElementById
+  ("setup_wizard")` (and every other tag, including `#chat-view`) returns null; `document.body`
+  holds three empty `div`s and the canvas. Every browser check in this plan therefore drives the
+  page by **mouse coordinates + screenshots + broker-side network/state assertions**. Plan 5's
+  Playwright journey must re-derive its selectors: either enable CMP's a11y DOM (if the version
+  bump exposes it) or standardise on coordinate/visual driving plus broker assertions.
+- **Tapping a push while a settings overlay is up does not pop the overlay** — `selectSession` +
+  `setActiveView` change what is UNDER the overlay, and the shared code has always behaved this
+  way (Android and iOS included). Shared behaviour, not a web bug; fix it in `:ui` or leave it.
+- **The fixture leaks the host's real agent/forge credentials** into `/agents/status` and the Git
+  Hosting step (see above). A journey that wants to exercise the Agents gate needs the detector
+  pointed at the fixture `MUX_HOME` (or a `MUX_TEST_AGENTS_STATUS` stub).
+- `scripts/test-broker-seed.ts` does NOT seed `onboarded`; the broker's own default config answers
+  `onboarded:true` once the seeded session exists, so any wizard run must force `false` over
+  `PUT /settings/config` first.
+- The fixture's `bun src/main.ts` child can outlive a killed wrapper; scope any cleanup to the
+  fixture's own port and never touch the live `:9898`.

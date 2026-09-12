@@ -3,11 +3,14 @@ package dev.supermux.web
 import dev.supermux.ui.nav.Route
 import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.shell.ShellUiState
+import dev.supermux.web.nav.UrlTarget
 import dev.supermux.web.nav.applyTarget
 import dev.supermux.web.nav.parsePath
 import dev.supermux.web.nav.pathFor
+import dev.supermux.web.nav.shouldApplyInitialUrl
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -80,6 +83,29 @@ class UrlSyncTest {
         applyTarget(ui, parsePath("/settings"))
         assertEquals(Route.Settings(SettingsSection.Agents), ui.currentRoute)
         assertEquals("/settings/agents", pathFor(ui.currentRoute, ui.selectedId))
+    }
+
+    @Test fun theWizardsPathParsesHomeButIsNeverAppliedAsAnInitialUrl() {
+        // `/setup` is the wizard's own URL and stays unknown to the router (an old bookmark of it
+        // must still land somewhere sane), so the ONLY thing keeping the Done step's launcher
+        // alive when the shell mounts is this guard.
+        assertEquals(UrlTarget.Screen(Route.Home), parsePath("/setup"))
+        assertFalse(shouldApplyInitialUrl("/setup", enabled = true))
+        assertFalse(shouldApplyInitialUrl("/setup/", enabled = true))
+        assertFalse(shouldApplyInitialUrl("/setup?x=1", enabled = true))
+
+        val ui = ShellUiState()
+        ui.openLauncher()
+        // What the real sequence does: Done → openLauncher() → onboarded flips → shell mounts.
+        if (shouldApplyInitialUrl("/setup", enabled = true)) applyTarget(ui, parsePath("/setup"))
+        assertEquals("/new", pathFor(ui.currentRoute, ui.selectedId))
+    }
+
+    @Test fun nothingIsAppliedWhileTheWizardIsUp() {
+        // Disabled is disabled whatever the address bar says — the shell is not composed.
+        for (path in everyPath) assertFalse(shouldApplyInitialUrl(path, enabled = false))
+        // And once it IS enabled, every real path still applies.
+        for (path in everyPath) assertTrue(shouldApplyInitialUrl(path, enabled = true), path)
     }
 
     @Test fun destinationsDoNotStack() {

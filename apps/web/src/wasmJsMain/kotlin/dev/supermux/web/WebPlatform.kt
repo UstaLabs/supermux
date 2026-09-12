@@ -33,12 +33,21 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.onEach
 
-/** What the browser can do. Plan 3 turns on terminal (xterm.js) and clipboardImages; plan 4 push. */
+/**
+ * What the browser can do. Plan 3 turns on terminal (xterm.js) and clipboardImages; plan 4 push
+ * and [Caps.setupWizard].
+ *
+ * `setupWizard` is true HERE and nowhere else: the browser is the surface a brand-new broker is
+ * opened on, so it is the one host that must be able to run first-run setup. Android/iOS/desktop
+ * pair into a broker somebody already set up, and a wizard there would be asking the wrong device
+ * to install agents on the broker's machine.
+ */
 val WEB_CAPS = Caps(
     push = true, camera = false, tray = false, externalDisplay = true, hardwareVideoDecode = false,
     localBroker = false, multiWindow = false, fileSystem = false,
     clipboardImages = true, saveAs = true, walkthrough = true, appearanceControls = true,
     dynamicColor = false, appUpdate = false, terminal = true, scrcpy = false,
+    setupWizard = true,
 )
 
 /**

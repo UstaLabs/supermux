@@ -47,6 +47,25 @@ fun applyTarget(ui: ShellUiState, target: UrlTarget) {
     }
 }
 
+/** The path the address bar shows while the first-run setup wizard owns the screen. */
+const val SETUP_PATH = "/setup"
+
+/**
+ * Should [UrlSync]'s one-shot "address bar → shell" apply run for [path]?
+ *
+ * No while the wizard is up ([enabled] false) — the shell is not on screen to apply anything to.
+ * And no for the wizard's OWN path once the shell finally mounts: the Done step calls
+ * `ui.openLauncher()` and only then flips `onboarded`, so by the time this runs the shell already
+ * holds the destination the user asked for (`/new`). `parsePath("/setup")` is [Route.Home] (the
+ * address bar is user input and unknown paths go Home — see [parsePath]), so applying it here
+ * would throw that launcher away and land on `/`. The shell→URL mirror rewrites `/setup` to the
+ * real path a frame later either way.
+ *
+ * Pure, and tested as such: the decision is the part worth pinning, and it needs no DOM.
+ */
+fun shouldApplyInitialUrl(path: String, enabled: Boolean): Boolean =
+    enabled && path.substringBefore('?').trimEnd('/') != SETUP_PATH
+
 /**
  * Two-way binding between the address bar and [ShellUiState]. The shell's back stack stays the
  * source of truth; the URL mirrors it (`pushState` on a new destination, `replaceState` when the
@@ -60,20 +79,39 @@ fun applyTarget(ui: ShellUiState, target: UrlTarget) {
  *    pushed at all.
  *  - A `popstate` must not push. It applies the target onto the shell, the mirror recomputes the
  *    same path the browser already shows, and the `current != path` guard drops it.
+ *
+ * Two flags, not one, because there are THREE states and only the middle one writes a URL:
+ *  - [enabled] false — no shell on screen. Nothing is applied, mirrored, or listened for: there is
+ *    no `ShellUiState` worth driving, and the initial apply is DEFERRED to the moment the shell
+ *    mounts. This is why the composable is hoisted above the wizard/shell branch rather than
+ *    living inside the shell's: it must see the wizard in order to stay out of its way.
+ *  - [wizard] true (and [enabled] false) — the wizard owns the screen, so the address bar reads
+ *    [SETUP_PATH] and a reload during setup comes back to setup.
+ *  - neither — `onboarded` has not arrived yet. The URL is LEFT ALONE. Stamping `/setup` here
+ *    would eat the deep link the tab was opened with: every cold load spends a WS round trip in
+ *    this state, and `/s/<id>` would come back as `/` a second later.
  */
 @Composable
-fun UrlSync(ui: ShellUiState) {
+fun UrlSync(ui: ShellUiState, enabled: Boolean = true, wizard: Boolean = false) {
     var initialApplied by remember(ui) { mutableStateOf(false) }
 
-    // 1. Initial URL → shell, once.
-    LaunchedEffect(ui) {
-        applyTarget(ui, parsePath(currentPath()))
+    // 0. Wizard on screen: the address bar says so, and nothing below runs.
+    LaunchedEffect(ui, enabled, wizard) {
+        if (enabled || !wizard) return@LaunchedEffect
+        if (currentPath() != SETUP_PATH) window.history.replaceState(null, "", SETUP_PATH)
+    }
+
+    // 1. Initial URL → shell, once, and not before the shell is there.
+    LaunchedEffect(ui, enabled) {
+        if (!enabled || initialApplied) return@LaunchedEffect
+        val path = currentPath()
+        if (shouldApplyInitialUrl(path, enabled = true)) applyTarget(ui, parsePath(path))
         initialApplied = true
     }
 
     // 2. Shell → URL, only after (1) ran.
-    LaunchedEffect(ui, initialApplied) {
-        if (!initialApplied) return@LaunchedEffect
+    LaunchedEffect(ui, initialApplied, enabled) {
+        if (!initialApplied || !enabled) return@LaunchedEffect
         snapshotFlow { pathFor(ui.currentRoute, ui.selectedId) }.distinctUntilChanged().collect { path ->
             val current = currentPath()
             if (current == path) return@collect
@@ -87,9 +125,9 @@ fun UrlSync(ui: ShellUiState) {
     }
 
     // 3. Browser back/forward → shell.
-    DisposableEffect(ui) {
-        val handler: (Event) -> Unit = { applyTarget(ui, parsePath(currentPath())) }
-        window.addEventListener("popstate", handler)
-        onDispose { window.removeEventListener("popstate", handler) }
+    DisposableEffect(ui, enabled) {
+        val handler: (Event) -> Unit = { if (enabled) applyTarget(ui, parsePath(currentPath())) }
+        if (enabled) window.addEventListener("popstate", handler)
+        onDispose { if (enabled) window.removeEventListener("popstate", handler) }
     }
 }
