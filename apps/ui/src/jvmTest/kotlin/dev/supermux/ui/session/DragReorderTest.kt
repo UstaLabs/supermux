@@ -363,18 +363,25 @@ class DragReorderTest {
         waitForIdle()
         val home = onNodeWithTag("b").getBoundsInRoot().top
 
+        // Drive the clock by hand from HERE, not just from the release: while the finger is down
+        // the edge-auto-scroll poll loop (`while (draggingKey != null) { … delay(16) }`) is live,
+        // and since Compose Multiplatform 1.12 an auto-advancing clock lets that delay re-arm
+        // forever, so every mid-drag `onNodeWithTag` (each one waits for idle first) hangs.
+        // With autoAdvance off, idleness is recomposition/layout/draw only — which is all this
+        // test ever wanted, and the release frame stays inspectable as before.
+        mainClock.autoAdvance = false
+
         // Less than one slot, so no move is accepted — the row is purely displaced.
         onNodeWithTag("b").performTouchInput {
             down(center)
             moveBy(Offset(0f, 12f))
             moveBy(Offset(0f, 18f))
         }
-        waitForIdle()
+        mainClock.advanceTimeByFrame()
+        mainClock.advanceTimeByFrame()
         val held = onNodeWithTag("b").getBoundsInRoot().top
         assertTrue((held - home).value > 1f, "the row did not follow the pointer: $held vs $home")
 
-        // Drive the clock by hand from here: the release frame must be inspectable.
-        mainClock.autoAdvance = false
         onNodeWithTag("b").performTouchInput { up() }
         mainClock.advanceTimeByFrame()
         mainClock.advanceTimeByFrame()

@@ -2,7 +2,6 @@ package dev.supermux.ui.settings
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.InternalComposeUiApi
-import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -22,6 +21,7 @@ import androidx.navigationevent.NavigationEvent
 import androidx.navigationevent.NavigationEventDispatcher
 import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEventInput
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.supermux.net.AppConfigDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.net.ModelInfo
@@ -686,7 +686,7 @@ class VoiceSettingsScreenTest {
         }
         var closed = 0
         voiceContent(pointer = false, widthClass = WindowWidthClass.Compact) {
-            CompositionLocalProvider(LocalCompatNavigationEventDispatcherOwner provides owner) {
+            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
                 SupermuxTheme(appearance = AppearanceMode.DARK) {
                     SettingsHub(
                         section = SettingsSection.Voice,

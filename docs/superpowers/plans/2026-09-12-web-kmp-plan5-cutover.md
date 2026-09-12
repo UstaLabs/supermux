@@ -164,3 +164,134 @@ band where the view tab strip should paint is fully transparent. **Keep the know
 **Bundle size:** staged `src/channels/web/static` 22,333,188 → 22,797,721 B (**+464,533 B, +2.08 %**);
 `stageForBroker` gzip total 6269 KB (8 MiB guard untroubled). `supermux-apps-web-*.wasm` 10,942,205
 raw / 2,862,494 gz; `skiko-*.wasm` 8,640,316 / 3,328,934; `app-*.js` 993,828 / 211,379.
+
+---
+
+### Toolchain bump outcome (Task 1 UNBLOCKED — CMP 1.12.0 is landed)
+
+**Status: green.** The Android toolchain bump that Task 1 was blocked on is done, and the parked
+CMP 1.12.0 patch is replayed on top of it. Everything this host can build is green.
+
+**Final version set** (`apps/gradle/libs.versions.toml`, `apps/gradle/wrapper/…`,
+`apps/gradle.properties`):
+
+| key | before | after |
+|---|---|---|
+| `kotlin` | 2.3.21 | **2.4.10** |
+| `agp` | 8.9.1 | **9.3.1** |
+| Gradle wrapper | 8.14 | **9.7.0** |
+| `androidCompileSdk` | 36 | **37** |
+| `androidTargetSdk` | *(did not exist)* | **36** |
+| `composeMultiplatform` | 1.11.1 | **1.12.0** |
+| `navigationEvent` | 1.0.1 | **1.1.0** |
+| `composeBom` | 2026.06.00 | **2026.09.00** |
+| `googleServices` | 4.4.2 | **4.5.0** |
+| `skie` | 0.10.12 | **0.10.14** |
+| `coil` | 3.4.0 | **3.5.0** (Kotlin-2.3 ABI pin lifted) |
+| `composeMediaPlayer` | 0.10.0 | **0.11.4** (Kotlin-2.3 ABI pin lifted) |
+
+JDK stays 17. `composeHotReload` stays 1.2.0 — `:desktop` configures and tests fine on Gradle 9 /
+Kotlin 2.4, no bump forced.
+
+**Forced changes, and why each one was forced.**
+
+1. **Kotlin is 2.4.10, NOT 2.4.20.** SKIE 0.10.14 — the newest release on Maven Central — hard-fails
+   at configuration with *"SKIE 0.10.14 does not support Kotlin 2.4.20. Supported versions are
+   [… 2.4.0, 2.4.10]"*. The only escapes are `skie { isEnabled = false }` (which would strip the
+   Swift-friendly API `:ios` ships — a real regression) or 2.4.10. 2.4.10 configures and builds
+   cleanly against AGP 9.3.1 / Gradle 9.7.0, so it is the pin. Raise `kotlin` and `skie` together.
+2. **`android.newDsl=false` + `android.builtInKotlin=false`** in `apps/gradle.properties`. AGP 9
+   defaults both on; `org.jetbrains.kotlin.android` (applied by `:android`) refuses to apply against
+   the new DSL — *"class ApplicationExtensionImpl cannot be cast to BaseExtension"* — and AGP's own
+   message names `android.newDsl=false` as the temporary bypass. TODO before AGP 10: drop KGP from
+   `:android` and move to AGP's built-in Kotlin.
+3. **`android.enableLegacyVariantApi` does NOT exist any more.** The plan expected to set it for the
+   `com.android.library` + `kotlin.multiplatform` combination in `:shared`/`:ui`; AGP 9.3.1 fails
+   the build outright (*"removed in version 9.0 … has no effect, use android.newDsl instead"*). The
+   deprecated combination still works under `android.newDsl=false`; the migration to
+   `com.android.kotlin.multiplatform.library` / `androidLibrary {}` is a TODO before AGP 10, noted
+   in `gradle.properties`.
+4. **`kotlin.daemon.jvmargs=-Xmx6g`.** Kotlin 2.4's Kotlin/Wasm backend needs materially more heap
+   than 2.3 did. At the inherited `-Xmx2g`, `:web:compileProductionExecutableKotlinWasmJs` does not
+   fail — it GC-thrashes indefinitely (measured with `jstat`: old gen pinned at 99.97 %, **1723 full
+   GCs / 4176 s of GC**, still not finished after 80 minutes). With 6 g the same task plus
+   `:web:wasmJsBrowserTest` and `:web:stageForBroker` finish in **14m13s** total. Anyone building
+   `:web` needs the headroom — this is the single most likely CI/Docker surprise of the bump.
+5. **`targetSdk` gets its own catalog key.** `apps/android/build.gradle.kts:40` read
+   `targetSdk = libs.versions.androidCompileSdk`, so raising compileSdk to 37 would have silently
+   opted the shipped app into API 37 behaviour changes. It now reads `androidTargetSdk` (36).
+6. **The Android SDK platform is `platforms;android-37.0`, on the BETA channel.** Android SDK
+   platforms are minor-versioned now. `sdkmanager "platforms;android-37"` fails with *"Failed to
+   find package"*, and nothing above 36 appears on the default (stable) channel at all. The working
+   install is `sdkmanager --channel=1 "platforms;android-37.0"`; AGP resolves `compileSdk = 37`
+   against it without further configuration. `.github/workflows/{ci,release}.yml` use that exact
+   command, and `ci.yml`'s `kotlin` and `android-journey` lanes gained
+   `android-actions/setup-android@v3` + the install step (they previously had none).
+7. The four `:ui` jvmTest fixes from the parked patch, unchanged and still all that CMP 1.12 needs:
+   `LocalCompatNavigationEventDispatcherOwner` → `androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner`
+   (`SettingsHubTest`, `VoiceSettingsScreenTest`, `SupermuxAppNavTest`); `mainClock.autoAdvance =
+   false` before `down()` in `DragReorderTest`; the missing `waitUntil` guard in
+   `ProxiesSettingsScreenTest`. **No production source file was changed by this bump at all.**
+
+`grep NativeCanvas|NativePaint` over `apps/` is still zero hits. New Kotlin 2.4 / CMP 1.12 warnings
+(none forced an edit, all scheduled): `BackHandler`/`PredictiveBackHandler` deprecated in favour of
+`NavigationEventHandler`; `runComposeUiTest` deprecated in favour of the `…test.v2` one;
+`ScrollableTabRow` → `PrimaryScrollableTabRow`; several `Icons.Outlined.*` → `Icons.AutoMirrored.*`.
+Gradle 9.6 API deprecations in `apps/desktop/build.gradle.kts` and `apps/ios/build.gradle.kts`
+(`tasks.registering` delegates) warn but build; Gradle 10 will need them rewritten.
+
+**Suite counts** (all zero failures):
+
+| suite | result |
+|---|---|
+| `./gradlew --version` | Gradle **9.7.0**, Kotlin 2.4.0, launcher JVM 17.0.20 |
+| `:shared:jvmTest` | **985** pass, 1 skipped |
+| `:ui:jvmTest` (xvfb) | **1613** pass |
+| `:desktop:test` (xvfb) | **297** pass |
+| `:android:testDebugUnitTest` | **90** pass |
+| `:android:assembleDebug` | APK produced, 38,327,779 B |
+| `:shared:compileKotlinWasmJs`, `:ui:compileKotlinWasmJs` | compile clean |
+| `:web:wasmJsBrowserTest` | **65** pass |
+| `:web:stageForBroker` | 3 hashed assets, gzip total **6376 KB** (8 MiB guard fine) |
+
+Staged `src/channels/web/static` is **23,078,759 B** (was 22,797,721 B on CMP 1.12 + Kotlin 2.3.21,
+22,333,188 B on 1.11.1) — **+280,038 B / +1.2 %** attributable to Kotlin 2.4 codegen.
+
+**Accessibility DOM — re-measured after the bump, unchanged from the parked measurement.** Hermetic
+`scripts/test-broker.sh` fixture, headless Chrome, 1280×900: no `pageerror`, no `console.error`.
+`div#cmp_a11y_root` is **1280×900** `role="presentation"` (the 0×0 bug stays fixed);
+`#workspaces_list`, `[id^="workspace_row_"]`, `#composer-input`, `#composer-send`, `#composer-attach`
+all present; `#tab-add-view` → `#tab-add-view-terminal` opens a terminal and a **real tmux** (the
+fixture's stub replaced with `/usr/bin/tmux`) mounts — 2 xterm nodes, prompt renders. Everything
+Task 4 was told still holds, including the two rules that matter most: **`locator.click()` is
+refused on mirror elements** (the canvas intercepts pointer events) so `dispatchEvent("click")` is
+the only sanctioned tap, and `page.evaluate(document.querySelector(...))` returns null because the
+mirror lives in an open shadow root — Playwright locators pierce it, in-page code must walk
+`.shadowRoot`. **The 32 px interop hole above `HtmlElementView` panes is still present** (screenshot:
+the terminal starts at y=0 and the view tab strip does not paint). Screenshots in the session
+scratchpad: `plan5/bump-01-chat.png`, `plan5/bump-02-terminal.png`.
+
+**Docker: GREEN, no change needed.** `docker build -t supermux-web-cutover .` succeeded unmodified
+(`webbuild` stage 24m16s, image 3.58 GB). The feared AGP 9 configuration-time Android SDK
+requirement did NOT materialise: `:web:stageForBroker` configures `:web`, `:ui` and `:shared`, and
+even though `:shared`/`:ui` apply `com.android.library`, AGP 9.3.1 configures them without an SDK
+present as long as no Android task is requested — so no `-Pandroid.skip` guard, no `ANDROID_HOME`,
+and no cmdline-tools in the build stage. Note the stage inherits `kotlin.daemon.jvmargs=-Xmx6g` from
+`apps/gradle.properties`: `compileProductionExecutableKotlinWasmJs` took 171 s there, and a Docker
+daemon capped below ~8 GB would regress to the GC thrash described in item 4.
+
+**Apple caveat:** iOS / uikit targets **cannot be compiled on this Linux host** (Kotlin/Native
+`ios*`/`uikit*` need a macOS konan host), so `:ios` and the Apple source sets of `:shared`/`:ui` are
+CONFIGURED but UNTESTED under Kotlin 2.4.10 / SKIE 0.10.14 / coil 3.5.0. The first macOS build after
+this bump should be treated as a verification step. `scripts/test-android.sh` (the emulator journey)
+was **not runnable**: no emulator is attached (`adb devices` empty) and no `emu` helper is on PATH.
+
+**Carry-forwards for the rest of plan 5.**
+- *Task 4 (Playwright rewrite):* the selector/interaction facts above are confirmed post-bump —
+  `#view_chat`/`#chat_body` (not `#chat-view`), `composer-send` (not `composer-submit`),
+  `workspaces_list`/`workspace_row_<id>` in the fixture, still **no id on any timeline row**,
+  `dispatchEvent("click")` only, ~6 s wasm boot so poll, never sleep.
+- *Any lane that builds `:web`:* budget the Kotlin daemon heap (item 4). CI runners and the Docker
+  `webbuild` stage inherit `apps/gradle.properties`, so they get the 6 g automatically — but a
+  machine with less than ~8 GB free will now OOM where it used to merely be slow.
+- *Task 6 (deletion):* nothing in this bump touches `src/web-app`; the sweep is unaffected.

@@ -546,6 +546,18 @@ class ProxiesSettingsScreenTest {
             }
         }
         waitForIdle()
+        // The list here comes from a REAL HostStore over a mock engine, so the rows land a few
+        // frames after the first idle — and since Compose Multiplatform 1.12 changed what
+        // `waitForIdle()` waits for, that first idle can arrive before them. Wait for the row
+        // itself, exactly as the two sibling toggle tests above do.
+        waitUntil(timeoutMillis = 5_000) {
+            try {
+                onNodeWithTag("proxy_public_switch_app.example.local").assertIsDisplayed()
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
         onNodeWithTag("proxy_public_switch_app.example.local").performClick()
         waitForIdle()
         onNodeWithTag("proxies_public_confirm").performClick()

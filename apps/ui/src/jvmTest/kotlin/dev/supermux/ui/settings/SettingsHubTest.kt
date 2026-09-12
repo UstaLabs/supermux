@@ -13,13 +13,13 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.InternalComposeUiApi
-import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.navigationevent.NavigationEvent
 import androidx.navigationevent.NavigationEventDispatcher
 import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEventInput
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.setPlatformContent
@@ -491,7 +491,7 @@ class SettingsHubTest {
             widthClass = WindowWidthClass.Compact,
             inputMode = InputMode.Touch,
         ) {
-            CompositionLocalProvider(LocalCompatNavigationEventDispatcherOwner provides owner) {
+            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
                 SettingsHub(
                     section = SettingsSection.Agents,
                     onSectionChange = {},

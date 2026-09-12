@@ -29,11 +29,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.compose.ui.InternalComposeUiApi
-import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEvent
 import androidx.navigationevent.NavigationEventDispatcher
 import androidx.navigationevent.NavigationEventDispatcherOwner
 import androidx.navigationevent.NavigationEventInput
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -119,7 +119,7 @@ class SupermuxAppNavTest {
             override val navigationEventDispatcher = NavigationEventDispatcher().apply { addInput(input) }
         }
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
-            CompositionLocalProvider(LocalCompatNavigationEventDispatcherOwner provides owner) {
+            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
                 SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
             }
         }
@@ -145,7 +145,7 @@ class SupermuxAppNavTest {
             override val navigationEventDispatcher = NavigationEventDispatcher().apply { addInput(input) }
         }
         setPlatformContent(pointer = false, widthClass = WindowWidthClass.Compact, inputMode = InputMode.Touch) {
-            CompositionLocalProvider(LocalCompatNavigationEventDispatcherOwner provides owner) {
+            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) {
                 SupermuxApp(fleet = rememberTestFleet(app), ui = ui)
             }
         }

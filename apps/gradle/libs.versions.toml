@@ -17,7 +17,9 @@ androidMinSdk = "26"
 # compiling against newer APIs is safe, opting into 37's behaviour changes is a separate decision.
 androidCompileSdk = "37"
 androidTargetSdk = "36"
-composeBom = "2026.06.00"
+# 2026.09.00, not 2026.06.00: the older BOM pins androidx.compose 1.11.3, which clashes with the
+# 1.12.x artifacts Compose Multiplatform 1.12.0 resolves for the Android target.
+composeBom = "2026.09.00"
 activityCompose = "1.10.1"
 lifecycle = "2.8.7"
 coreSplashscreen = "1.0.1"
@@ -29,9 +31,10 @@ datastore = "1.1.1"
 firebaseBom = "33.7.0"
 # 4.5.0, not 4.4.2: the older plugin uses the variant API AGP 9 removed.
 googleServices = "4.5.0"
-composeMultiplatform = "1.11.1"
+# 1.12.0: sized #cmp_a11y_root (the 0x0 accessibility-root bug), web input fixes, font fallback.
+composeMultiplatform = "1.12.0"
 # Compose Hot Reload. 1.2.x requires Compose Multiplatform 1.10.0+ and Kotlin 2.1.20+ (we're on
-# 1.11.1 / 2.3.21), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
+# 1.12.0 / 2.4.10), and a JetBrains Runtime whose target is Java 21 or earlier (:desktop is 17).
 composeHotReload = "1.2.0"
 # Navigation 3 (Compose Multiplatform / JetBrains fork). Stable 1.1.1 works on desktop JVM.
 # Desktop pilot: full-pane workspace overlays (Settings / Usage / Archived / AppUpdate).
@@ -39,7 +42,7 @@ navigation3 = "1.1.1"
 # androidx navigation-event, the dispatcher Compose Multiplatform's BackHandler listens on. Only
 # :ui's jvmTest names it (to fire a real back gesture at a shared screen); production pulls the
 # same artifact transitively through ui-backhandler.
-navigationEvent = "1.0.1"
+navigationEvent = "1.1.0"  # CMP 1.12.0's ui module requires navigationevent-compose 1.1.0.
 jediterm = "3.73"
 # JBR API facade (Maven Central, Apache-2.0). Compiles against any JDK; at run time
 # JBR.getWindowDecorations() returns the real service under the pinned JetBrains Runtime used by
@@ -51,21 +54,17 @@ jbrApi = "1.10.1"
 jcef = "137.0.17-gf354b0e-chromium-137.0.7151.104-api-1.20-253-b13"
 markdown = "0.7.6"
 kotlinxBrowser = "0.5.0"
-# 3.4.0, NOT 3.5.0, and pinned by the Kotlin version rather than by taste: coil 3.5.0's
-# Kotlin/Native klibs are built with Kotlin 2.4 (klib abi_version 2.4.0), and a 2.3.21 compiler
-# refuses to read them — ":ui:compileKotlinIosSimulatorArm64" fails with "can consume libraries
-# having ABI version <= 2.3.0" the moment `:ui` has an iOS target. 3.4.0 is abi_version 2.3.0
-# (compiler 2.3.10). Every other native dependency we ship is already <= 2.3.0. Raise this again
-# when Kotlin moves to 2.4.
-coil = "3.4.0"
+# 3.5.0: its Kotlin/Native klibs are abi_version 2.4.0, which the 2.3.21 compiler refused; the
+# Kotlin 2.4.10 toolchain reads them, so the 3.4.0 ABI pin is lifted.
+coil = "3.5.0"
 # Compose Media Player — inline video in the desktop chat stream. MIT (vlcj, the obvious
 # alternative, is GPLv3 and would relicense the app). Per-platform native backends compiled into
 # the jar: AVPlayer on macOS, Media Foundation on Windows, GStreamer on Linux — no system install.
 # Frames are painted into a Compose Canvas, NOT a heavyweight AWT child, so it composes inside the
 # message list (see ModalPresence.kt for why that matters).
-# ⚠️ Pinned to 0.10.0: 0.11.x is built with Kotlin 2.4.x, whose metadata our 2.3.21 compiler
-# rejects. Bump this together with the `kotlin` version above.
-composeMediaPlayer = "0.10.0"
+# 0.11.4: built with Kotlin 2.4.x, which the 2.3.21 compiler rejected — the 0.10.0 pin is lifted
+# along with the Kotlin bump.
+composeMediaPlayer = "0.11.4"
 atomicfu = "0.29.0"
 
 [libraries]
