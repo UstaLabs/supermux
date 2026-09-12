@@ -20,25 +20,49 @@ function guessMime(p: string): string {
   if (p.endsWith(".woff2")) return "font/woff2"
   if (p.endsWith(".wasm")) return "application/wasm"
   if (p.endsWith(".mjs"))  return "application/javascript"
+  // The wasm bundle's composeResources ship platform fonts and misc text/xml
+  // resources alongside the app — see src/types/assets.d.ts for the matching
+  // module declarations.
+  if (p.endsWith(".ttf"))  return "font/ttf"
+  if (p.endsWith(".otf"))  return "font/otf"
+  if (p.endsWith(".woff")) return "font/woff"
+  if (p.endsWith(".xml"))  return "application/xml"
+  if (p.endsWith(".txt"))  return "text/plain; charset=utf-8"
   return "application/octet-stream"
 }
 
-const COMPRESSIBLE = /\.(html|js|mjs|css|json|svg|webmanifest|wasm)$/
+const COMPRESSIBLE = /\.(html|js|mjs|css|json|svg|webmanifest|wasm|ttf|otf|xml|txt)$/
 const gzipCache = new Map<string, { body: Buffer; mtime: number }>()
+let gzipCacheHits = 0
 
-function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined): { body: Buffer | Uint8Array; encoding?: string } {
+// TEST-ONLY: lets static-serve.test.ts assert cache growth/hits without
+// spying on Bun.gzipSync or reaching into module-private state.
+export function _gzipCacheStats(): { size: number; hits: number } {
+  return { size: gzipCache.size, hits: gzipCacheHits }
+}
+
+function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined, mtimeMs?: number): { body: Buffer | Uint8Array; encoding?: string } {
   if (!acceptEncoding?.includes("gzip") || !COMPRESSIBLE.test(candidate)) return { body }
-  // Only cache content-addressed /assets/ files (hashed filenames change with
-  // content). Entry points (index.html, sw.js) are small and may change on
-  // live-deploy, so always re-compress them.
-  const cacheable = candidate.startsWith("/assets/")
+  // Cache content-addressed /assets/ files (hashed filenames change with
+  // content) and /editor/ (cm6.js is 1.3 MB and was re-gzipped per editor
+  // open otherwise — its filename isn't hashed, so the cache key folds in
+  // mtimeMs to invalidate when the file on disk changes). Entry points
+  // (index.html, sw.js) are small and may change on live-deploy without a
+  // mtime we're keying on here, so always re-compress them.
+  const cacheable = candidate.startsWith("/assets/") || candidate.startsWith("/editor/")
+  // Embedded (compiled-binary) files have no mtime to key on — fall back to
+  // the path alone, as before.
+  const cacheKey = cacheable ? (mtimeMs !== undefined ? `${candidate}:${mtimeMs}` : candidate) : candidate
   if (cacheable) {
-    const cached = gzipCache.get(candidate)
-    if (cached) return { body: cached.body, encoding: "gzip" }
+    const cached = gzipCache.get(cacheKey)
+    if (cached) {
+      gzipCacheHits++
+      return { body: cached.body, encoding: "gzip" }
+    }
   }
   const compressed = Bun.gzipSync(new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength))
   if (compressed.byteLength < body.byteLength * 0.85) {
-    if (cacheable) gzipCache.set(candidate, { body: Buffer.from(compressed), mtime: Date.now() })
+    if (cacheable) gzipCache.set(cacheKey, { body: Buffer.from(compressed), mtime: mtimeMs ?? Date.now() })
     return { body: compressed, encoding: "gzip" }
   }
   return { body }
@@ -73,9 +97,10 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
 
   if (opts.staticDir) {
     const filePath = join(opts.staticDir, candidate)
-    if (existsSync(filePath) && statSync(filePath).isFile()) {
+    const stat = existsSync(filePath) ? statSync(filePath) : undefined
+    if (stat?.isFile()) {
       const raw = readFileSync(filePath)
-      const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
+      const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding, stat.mtimeMs)
       const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
       if (encoding) headers["content-encoding"] = encoding
       return new Response(body, { headers })

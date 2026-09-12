@@ -10,7 +10,7 @@ const root = join(repoRoot, "src/channels/web/static")
 const outFile = join(repoRoot, "src/channels/web/static-manifest.generated.ts")
 
 if (!existsSync(join(root, "index.html"))) {
-  console.error(`generate-static-manifest: ${root}/index.html missing — build the PWA first (cd src/web-app && bun run build)`)
+  console.error(`generate-static-manifest: ${root}/index.html missing — build the web client first (cd apps && ./gradlew :web:stageForBroker)`)
   process.exit(1)
 }
 

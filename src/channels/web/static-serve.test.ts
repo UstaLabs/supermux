@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, writeFileSync } from "fs"
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { serveStatic } from "./static-serve"
+import { serveStatic, _gzipCacheStats } from "./static-serve"
 
 function tmp(): string { return mkdtempSync(join(tmpdir(), "mux-static-")) }
 
@@ -82,5 +82,84 @@ describe("serveStatic security headers", () => {
     writeFileSync(join(embDir, "emb-index.html"), "<html>spa</html>")
     const res = serveStatic({ staticDir: "/nonexistent", embedded: { "/index.html": join(embDir, "emb-index.html") }, path: "/s/whatever" })
     expect(res!.headers.get("content-security-policy")).toBe("frame-ancestors 'self'")
+  })
+})
+
+describe("serveStatic MIME types for the wasm bundle's composeResources fonts/text assets", () => {
+  test(".ttf -> font/ttf, gzip on request", () => {
+    const dir = tmp()
+    writeFileSync(join(dir, "font.ttf"), Buffer.alloc(2048, 0x41))
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/font.ttf", acceptEncoding: "gzip" })
+    expect(res!.headers.get("content-type")).toBe("font/ttf")
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+
+  test(".otf -> font/otf", () => {
+    const dir = tmp()
+    writeFileSync(join(dir, "font.otf"), "x")
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/font.otf" })
+    expect(res!.headers.get("content-type")).toBe("font/otf")
+  })
+
+  test(".woff -> font/woff", () => {
+    const dir = tmp()
+    writeFileSync(join(dir, "font.woff"), "x")
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/font.woff" })
+    expect(res!.headers.get("content-type")).toBe("font/woff")
+  })
+
+  test(".xml -> application/xml, gzip on request", () => {
+    const dir = tmp()
+    writeFileSync(join(dir, "manifest.xml"), Buffer.alloc(2048, 0x42))
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/manifest.xml", acceptEncoding: "gzip" })
+    expect(res!.headers.get("content-type")).toBe("application/xml")
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+
+  test(".txt -> text/plain; charset=utf-8, gzip on request", () => {
+    const dir = tmp()
+    writeFileSync(join(dir, "notes.txt"), Buffer.alloc(2048, 0x43))
+    const res = serveStatic({ staticDir: dir, embedded: {}, path: "/notes.txt", acceptEncoding: "gzip" })
+    expect(res!.headers.get("content-type")).toBe("text/plain; charset=utf-8")
+    expect(res!.headers.get("content-encoding")).toBe("gzip")
+  })
+})
+
+describe("serveStatic /editor/ gzip cache", () => {
+  test("second request for /editor/cm6.js is served from the gzip cache", () => {
+    const dir = tmp()
+    mkdirSync(join(dir, "editor"))
+    // Large, compressible, repetitive content so gzip clears the 15% savings bar.
+    writeFileSync(join(dir, "editor", "cm6.js"), "x".repeat(200_000))
+    const before = _gzipCacheStats()
+    const res1 = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    expect(res1!.headers.get("content-encoding")).toBe("gzip")
+    const afterFirst = _gzipCacheStats()
+    expect(afterFirst.size).toBe(before.size + 1)
+
+    const res2 = serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    expect(res2!.headers.get("content-encoding")).toBe("gzip")
+    const afterSecond = _gzipCacheStats()
+    expect(afterSecond.size).toBe(afterFirst.size) // no new entry
+    expect(afterSecond.hits).toBe(before.hits + 1) // served from cache
+  })
+
+  test("the cache invalidates when the file's mtime changes", () => {
+    const dir = tmp()
+    mkdirSync(join(dir, "editor"))
+    const filePath = join(dir, "editor", "cm6.js")
+    writeFileSync(filePath, "y".repeat(200_000))
+    serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    const afterFirst = _gzipCacheStats()
+
+    // Bump mtime forward so it's guaranteed to differ, then rewrite the content.
+    const future = new Date(Date.now() + 60_000)
+    writeFileSync(filePath, "z".repeat(200_000))
+    utimesSync(filePath, future, future)
+
+    serveStatic({ staticDir: dir, embedded: {}, path: "/editor/cm6.js", acceptEncoding: "gzip" })
+    const afterSecond = _gzipCacheStats()
+    // A new entry was recompressed and cached rather than reusing the stale one.
+    expect(afterSecond.size).toBe(afterFirst.size + 1)
   })
 })
