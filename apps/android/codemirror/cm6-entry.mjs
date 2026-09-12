@@ -1,6 +1,7 @@
-// CodeMirror 6 bundle for the Android WebView editor — mirrors the web's
-// CodeEditor.vue setup (minus LSP), with a curated language set so there are
-// no dynamic imports (which can't load from a file:// WebView origin).
+// CodeMirror 6 bundle for the Android WebView editor — mirrors the retired Vue
+// web editor's CodeMirror setup (see git history before 2026-09-12), with a
+// curated language set so there are no dynamic imports (which can't load from a
+// file:// WebView origin).
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, Decoration, gutter, GutterMarker, WidgetType } from "@codemirror/view"
 import { EditorState, Compartment } from "@codemirror/state"
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
