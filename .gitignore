@@ -6,7 +6,7 @@ dist/
 *.pid
 .worktrees/
 
-# Web PWA build output (cd src/web-app && bun run build)
+# Web client build output (cd apps && ./gradlew :web:stageForBroker)
 src/channels/web/static/
 
 # Internal planning/spec docs (kept local, never published)

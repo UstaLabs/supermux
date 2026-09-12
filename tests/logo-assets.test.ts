@@ -12,11 +12,13 @@ function pngSize(path: string): { w: number; h: number } {
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
 }
 
+// The web client's icons live in apps/web/pwa/** — staged verbatim to the root
+// of the broker's served tree by `:web:stageForBroker`.
 const persistentPngs: Array<[string, number]> = [
-  ["src/web-app/public/icons/icon-192.png", 192],
-  ["src/web-app/public/icons/icon-512.png", 512],
-  ["src/web-app/public/icons/icon-mask.png", 512],
-  ["src/web-app/public/icons/apple-touch-icon.png", 180],
+  ["apps/web/pwa/icons/icon-192.png", 192],
+  ["apps/web/pwa/icons/icon-512.png", 512],
+  ["apps/web/pwa/icons/icon-mask.png", 512],
+  ["apps/web/pwa/icons/apple-touch-icon.png", 180],
   ["assets/logo/telegram-avatar.png", 640],
 ]
 
@@ -26,13 +28,8 @@ describe("logo assets", () => {
     expect(statSync(p).size).toBeGreaterThan(200)
   })
 
-  test("favicon.svg exists and is non-empty", () => {
-    const p = join(ROOT, "src/web-app/public/favicon.svg")
-    expect(statSync(p).size).toBeGreaterThan(200)
-  })
-
   test("favicon.ico exists with correct header and >=3 entries", () => {
-    const p = join(ROOT, "src/web-app/public/favicon.ico")
+    const p = join(ROOT, "apps/web/pwa/favicon.ico")
     const buf = readFileSync(p)
     expect(buf.length).toBeGreaterThan(500)
     // ICONDIR: reserved(2)=0, type(2)=1, count(2)

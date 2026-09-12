@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="src/web-app/public/icons/icon-512.png">
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/pwa/icons/icon-512.png">
     <img src="assets/logo/supermux.svg" alt="supermux logo" width="120">
   </picture>
 </p>

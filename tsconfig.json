@@ -12,5 +12,10 @@
     "lib": ["ES2022"]
   },
   "include": ["src", "tests"],
+  // The retired Vue PWA. It is dead code that plan 5 task 6 deletes outright;
+  // until the directory is gone this exclude has to stay, because typechecking
+  // it pulls src/web-app/node_modules' own DOM/fetch declarations into THIS
+  // program and they contradict bun-types (BodyInit, WebSocket options) in ~300
+  // errors across the broker. Delete this line together with the directory.
   "exclude": ["src/web-app"]
 }

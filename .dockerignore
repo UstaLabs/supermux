@@ -1,5 +1,8 @@
 # ─── .dockerignore ────────────────────────────────────────────────────────────
-# Keeps the Docker build context lean. The web PWA is built in-image (see Dockerfile).
+# Keeps the Docker build context lean. The web client is built in-image by the
+# `webbuild` JDK stage (see Dockerfile) from the apps/ sources copied below, so
+# the local Gradle OUTPUT dirs are noise — excluding them keeps a warm developer
+# tree from shipping hundreds of MB of build artefacts into the build context.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Node / Bun install artefacts
@@ -10,9 +13,22 @@ node_modules
 .git
 .gitignore
 
-# Build outputs outside the web-app
+# Build outputs
 dist
 .tmp
+
+# Gradle build outputs + local caches (the image rebuilds these from source).
+# apps/kotlin-js-store is NOT excluded: it holds the committed yarn.lock that
+# pins the Kotlin/Wasm npm tree, and the build stage needs it.
+apps/build
+apps/*/build
+apps/.gradle
+
+# The staged web bundle. It comes from the `webbuild` stage, and COPY --from
+# only ADDS files — so shipping a developer's copy in the context too would
+# leave their stale content-hashed assets sitting in the image beside the
+# freshly built ones.
+src/channels/web/static
 
 # Logs and runtime state files
 *.log

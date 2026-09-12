@@ -6,14 +6,19 @@
 # the very same script, so "works on my machine" == "works in the release".
 #
 # Steps, in the required order:
-#   1. install deps (root + web-app)
-#   2. build the PWA (vue-tsc → vite fallback ladder for hosts w/o node on PATH)
+#   1. install the root bun deps
+#   2. stage the web client: `:web:stageForBroker` compiles the Kotlin/Wasm
+#      Compose app and copies the bundle + PWA shell into
+#      src/channels/web/static. That needs a JDK 17+ on PATH (checked below) —
+#      there is no fallback ladder anymore: the Vue/Vite PWA is gone and Gradle
+#      is the only thing that can produce the bundle.
 #   3. compile pty-helper for the native POSIX arch (the committed ELF is x64-only;
 #      embedding it raw would break on arm64 — recompile so the right arch is
 #      embedded by bun build --compile); Windows uses sessiond and skips it
 #   4. fetch + verify the native frpc used by the built-in connectivity relay
-#   5. generate the static manifest (turns the committed empty stub into 130
-#      `with { type: "file" }` imports so the whole PWA is embedded)
+#   5. generate the static manifest (turns the committed empty stub into one
+#      `with { type: "file" }` import per staged file so the whole web client is
+#      embedded)
 #   6. bun build --compile (version/commit injected via --define)
 #   7. restore the working tree (manifest stub + committed native helpers) — the
 #      embedded copies now live INSIDE the binary, the tree goes back to clean.
@@ -58,21 +63,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-# The ROOT bun.lock is GITIGNORED in this repo (only src/web-app/bun.lock is
-# committed — see .gitignore + Dockerfile), so --frozen-lockfile would abort the
-# root install with "lockfile not found / out of date". Use a plain install at
-# the root and keep --frozen-lockfile only for web-app, whose lock IS committed
-# and must stay byte-for-byte reproducible.
+# Plain install, not --frozen-lockfile: bun.lock IS committed (CI installs
+# frozen), but a release build must not abort because a developer's tree is a
+# lock refresh behind. CI is where lock drift gets caught.
 bun install
-( cd src/web-app && bun install --frozen-lockfile )
 
-# PWA build. Graceful ladder: `bun run build` (runs vue-tsc + vite) is the happy
-# path on CI runners that have node on PATH. On hosts WITHOUT node (vue-tsc and
-# the vite node-shebang launcher both fail), fall through to invoking vite's JS
-# entry through bun directly, which needs no node binary.
-( cd src/web-app && bun run build ) \
-  || ( cd src/web-app && ./node_modules/.bin/vite build ) \
-  || ( cd src/web-app && bun node_modules/vite/bin/vite.js build )
+# Web client build. The Kotlin/Wasm Compose app is the only web client, and only
+# Gradle can build it — no vite fallback ladder to hide behind, so fail loudly
+# and early if this host has no JDK instead of dying 40 lines later inside
+# Gradle's own launcher.
+command -v java >/dev/null || { echo "build-binary.sh: needs a JDK 17+ on PATH for :web:stageForBroker" >&2; exit 1; }
+( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).
 if [ "$TARGET" != "windows-x64" ]; then
@@ -85,7 +86,7 @@ fi
 # release binary's own checksum therefore covers the relay executable too.
 scripts/fetch-frpc.sh "$TARGET" src/core/relay/frpc-embedded
 
-# Embed the freshly-built PWA: rewrites the committed stub with per-file imports.
+# Embed the freshly-staged web client: rewrites the committed stub with per-file imports.
 bun scripts/generate-static-manifest.ts
 
 # Compile. --define statically replaces the build-info env reads; IS_COMPILED is

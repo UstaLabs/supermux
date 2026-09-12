@@ -141,7 +141,7 @@ if git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     case "$f" in
-      src/web-app/*|src/channels/web/static/*) has_web=1 ;;
+      apps/web/*|apps/ui/*|apps/shared/*|src/channels/web/static/*) has_web=1 ;;
       src/*) has_backend=1 ;;
       apps/android/*|apps/shared/*) has_android=1; has_ios=1 ;;
       apps/iosApp/*) has_ios=1 ;;
@@ -216,11 +216,21 @@ if [[ $DO_ANDROID -eq 1 ]]; then
 fi
 
 if [[ $DO_WEB -eq 1 ]]; then
-  log "building web static in worktree"
-  if [[ ! -d "$workdir/src/web-app/node_modules" && -d "$MAIN_ROOT/src/web-app/node_modules" ]]; then
-    ln -sfn "$MAIN_ROOT/src/web-app/node_modules" "$workdir/src/web-app/node_modules"
+  log "staging Kotlin/Wasm web client in worktree"
+  # A cold worktree would re-download the whole Gradle + Kotlin/Wasm toolchain
+  # and re-run the yarn install that backs the wasm test/dist plumbing. Share
+  # both with the main checkout, exactly like the old node_modules symlink did:
+  #   • GRADLE_USER_HOME — the dependency cache (default ~/.gradle, already
+  #     shared unless the caller overrode it; make that explicit).
+  #   • apps/build/wasm/node_modules — the Kotlin/Wasm npm tree, symlinked when
+  #     the worktree has none of its own.
+  export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+  if [[ ! -e "$workdir/apps/build/wasm/node_modules" && -d "$MAIN_ROOT/apps/build/wasm/node_modules" ]]; then
+    mkdir -p "$workdir/apps/build/wasm"
+    ln -sfn "$MAIN_ROOT/apps/build/wasm/node_modules" "$workdir/apps/build/wasm/node_modules"
   fi
-  ( cd "$workdir/src/web-app" && bun ./node_modules/vite/bin/vite.js build ) \
+  command -v java >/dev/null || die "web build needs a JDK 17+ on PATH for :web:stageForBroker"
+  ( cd "$workdir/apps" && ./gradlew :web:stageForBroker --console=plain ) \
     || die "web build failed"
   if [[ "$BACKEND" == "none" ]]; then
     log "web static built in worktree — for LIVE serve, also build in $MAIN_ROOT or use --backend shadow/swap"

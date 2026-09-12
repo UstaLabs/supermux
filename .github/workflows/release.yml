@@ -41,6 +41,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      # build-binary.sh stages the web client with Gradle (`:web:stageForBroker`
+      # compiles the Kotlin/Wasm Compose app) and hard-fails without a JDK on
+      # PATH, so every matrix leg — macos-14 included — needs these two.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
       - name: Resolve version
         id: ver
         run: |
