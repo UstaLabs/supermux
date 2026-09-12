@@ -210,7 +210,8 @@ fun TermlibTerminalView(
                 .fillMaxWidth()
                 .weight(1f)
                 .onSizeChanged { boxHeightPx = it.height }
-            // Touch-drag → tmux scroll, mirroring the web PWA (src/web-app/.../touch-scroll.ts).
+            // Touch-drag → tmux scroll, mirroring the retired Vue PWA's touch-scroll helper
+            // (retired Vue PWA; see git history before 2026-09-12).
             // termlib's own drag only scrolls its LOCAL scrollback — empty under tmux's alternate
             // screen — and it exposes no mouse-forwarding, so we translate a vertical drag into SGR
             // mouse-wheel bytes (TerminalScroll.kt) and send them down the pty; tmux scrolls its

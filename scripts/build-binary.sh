@@ -73,6 +73,15 @@ bun install
 # and early if this host has no JDK instead of dying 40 lines later inside
 # Gradle's own launcher.
 command -v java >/dev/null || { echo "build-binary.sh: needs a JDK 17+ on PATH for :web:stageForBroker" >&2; exit 1; }
+# ...and 17+ specifically: the apps/ build targets JVM 17, so an older JDK gets
+# past `command -v` and then dies inside Gradle with an unreadable class-file
+# error. `java -version` writes to stderr in one of two shapes — `"1.8.0_392"`
+# (8 and older) or `"17.0.20"` / `"21"` (9+) — so take the major accordingly.
+java_major=$(java -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p;1s/.*version "\([0-9][0-9]*\)".*/\1/p' | awk '{ if ($1 == 1) print $2; else print $1 }')
+case "$java_major" in
+  ''|*[!0-9]*) echo "build-binary.sh: could not parse 'java -version' output; needs a JDK 17+ for :web:stageForBroker" >&2; exit 1 ;;
+esac
+[ "$java_major" -ge 17 ] || { echo "build-binary.sh: java $java_major is too old; :web:stageForBroker needs a JDK 17+" >&2; exit 1; }
 ( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )
 
 # pty-helper: POSIX-only native-arch compile (Windows persistent terminals use sessiond).

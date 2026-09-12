@@ -152,8 +152,12 @@ const bridge = () => (typeof window !== "undefined" ? window.AndroidEditor : nul
 const wrapExt = (on) => (on ? EditorView.lineWrapping : [])
 const fontExt = (px) => EditorView.theme({ "&": { fontSize: (px || 13) + "px" } })
 
-// ── Font zoom: Cmd/Ctrl +/−/0 + two-finger pinch. Mirrors the web app's
-// src/web-app/src/lib/editor-font-zoom.ts — keep the two in sync. ─────────────
+// ── Font zoom: Cmd/Ctrl +/−/0 + two-finger pinch. Keep in sync with the
+// font-zoom behaviour the retired web editor had (retired Vue PWA; see git
+// history before 2026-09-12): size is clamped to 10–24 px with a 13 px default,
+// Cmd/Ctrl +/− steps by 1 px, Cmd/Ctrl 0 resets to the default, and a two-finger
+// pinch scales the gesture's base size by curDist/baseDist before the same clamp.
+// ─────────────────────────────────────────────────────────────────────
 const FONT_MIN = 10, FONT_MAX = 24, FONT_DEFAULT = 13
 let currentFontSize = FONT_DEFAULT
 function clampFont(v) {

@@ -97,6 +97,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      # test-update-flow.sh builds two real binaries with scripts/build-binary.sh,
+      # which stages the Kotlin/Wasm web client via `:web:stageForBroker` and
+      # hard-fails without a JDK 17+ on PATH — so this lane needs the toolchain too.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
       - name: Update-flow e2e
@@ -251,6 +259,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
+      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+      - uses: gradle/actions/setup-gradle@v4
       - uses: oven-sh/setup-bun@v2 # broker compile (scripts/build-binary.sh) during staging
       - name: Resolve version
         id: ver
@@ -295,6 +306,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
+      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+      - uses: gradle/actions/setup-gradle@v4
       - uses: oven-sh/setup-bun@v2
         with:
           # Bun's ConPTY/EOF behavior is a native-Windows release gate.
@@ -398,6 +412,9 @@ jobs:
           # JDK 21 jpackage supplies --app-content, used to merge JBR's sibling JCEF
           # Frameworks/helpers into Contents/runtime before signing the app bundle.
           java-version: "21"
+      # stage-desktop-binaries.sh shells out to scripts/build-binary.sh, which runs
+      # `:web:stageForBroker` — cache the Gradle build alongside the packaging build.
+      - uses: gradle/actions/setup-gradle@v4
       - uses: oven-sh/setup-bun@v2
       - name: Resolve version
         id: ver

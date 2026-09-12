@@ -89,8 +89,8 @@ final class TerminalCoordinator: NSObject, TerminalViewDelegate {
     /// SwiftTerm forwards a one-finger drag to the app as a pressed-button drag (tmux reads it as a
     /// selection, not a scroll), so swiping never scrolls. We add our own one-finger pan that turns
     /// a vertical drag into SGR mouse-wheel bytes sent to the pty — tmux then scrolls its history.
-    /// Mirrors the web PWA (src/web-app/src/lib/touch-scroll.ts) and shares its math (Shared
-    /// `TerminalScroll.kt`). A gesture-delegate failure requirement (below) makes SwiftTerm's own
+    /// Mirrors the retired Vue PWA's touch-scroll behaviour (retired Vue PWA; see git history before 2026-09-12)
+    /// and shares its math (Shared `TerminalScroll.kt`). A gesture-delegate failure requirement (below) makes SwiftTerm's own
     /// pan recognizers yield to ours, so we win the drag WITHOUT disabling them (SwiftTerm toggles
     /// them on mouse-mode changes, which would defeat a one-time disable). Taps / long-press /
     /// double-tap (selection) and pinch (font zoom) are not pans, so they — and click-forwarding to

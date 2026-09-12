@@ -2,9 +2,10 @@ package dev.supermux.net
 
 /**
  * Touch-drag → scrollback math for the NATIVE terminal panes (iOS SwiftTerm,
- * Android ConnectBot termlib). The web PWA solves this in TypeScript
- * (`src/web-app/src/lib/touch-scroll.ts`); this is the shared-Kotlin port so the
- * two native apps drive the SAME, tested logic instead of each reinventing it.
+ * Android ConnectBot termlib). The retired Vue PWA solved this in TypeScript
+ * (retired Vue PWA; see git history before 2026-09-12); this is the shared-Kotlin
+ * port so the two native apps drive the SAME, tested logic instead of each
+ * reinventing it.
  *
  * Neither native terminal lib turns a finger drag into scrollback movement:
  * SwiftTerm forwards a one-finger drag to the app as a pressed-button drag (tmux

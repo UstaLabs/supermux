@@ -4,8 +4,8 @@ package dev.supermux.web.push
  * The VAPID application server key, base64url (RFC 4648 §5) → raw bytes.
  *
  * The Push API wants the key as a `Uint8Array`; the broker sends it as an UNPADDED base64url
- * string (`GET /push/vapid-public-key`). This is the Kotlin twin of the Vue app's
- * `urlBase64ToUint8Array` (src/web-app/src/composables/useNotifications.ts): re-pad to a multiple
+ * string (`GET /push/vapid-public-key`). This is the Kotlin twin of the retired Vue PWA's
+ * `urlBase64ToUint8Array` (retired Vue PWA; see git history before 2026-09-12): re-pad to a multiple
  * of 4, swap `-`→`+` and `_`→`/`, then decode.
  *
  * It is its own file, and pure, because it is the only part of the push flow a test can assert

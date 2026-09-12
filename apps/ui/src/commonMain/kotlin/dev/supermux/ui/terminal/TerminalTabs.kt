@@ -1,4 +1,5 @@
-// Web-parity scratch-terminal tab strip (src/web-app/src/components/TerminalPanel.vue). One strip
+// Scratch-terminal tab strip, ported from the retired Vue PWA's terminal panel
+// (retired Vue PWA; see git history before 2026-09-12). One strip
 // per session; each tab is one tmux-backed terminal. The tab SET is rebuilt from the broker
 // (listTerminals → live tmux) on open, so both the shells AND the tabs survive an app restart.
 //

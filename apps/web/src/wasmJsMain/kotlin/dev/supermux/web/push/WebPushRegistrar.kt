@@ -152,8 +152,8 @@ private data class PushSubJson(val endpoint: String = "", val keys: PushSubKeys 
 /**
  * The browser's [PushRegistrar]: W3C Web Push (VAPID) against the broker's `/push` routes.
  *
- * This is the Kotlin port of the Vue app's `useNotifications` state machine
- * (src/web-app/src/composables/useNotifications.ts), minus the `status` ref — the shared shell
+ * This is the Kotlin port of the retired Vue PWA's `useNotifications` state machine
+ * (retired Vue PWA; see git history before 2026-09-12), minus the `status` ref — the shared shell
  * asks for actions, not for a status, and the one place that needs a state (the enable banner)
  * reads [permission].
  *

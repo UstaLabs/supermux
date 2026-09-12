@@ -37,42 +37,42 @@
 
 ### Task 1: Compose Multiplatform 1.12.0
 
-- [ ] **Step 1:** `composeMultiplatform = "1.12.0"`, `navigationEvent = "1.1.0"` (KDoc the reason next to each). `grep -rn "NativeCanvas\|NativePaint\|SwingPanel(" apps/` — fix any ERROR-level deprecation the compiler reports (VncFramebuffer does raw pixels via Skia `Bitmap`, not `NativeCanvas` — verify).
-- [ ] **Step 2:** Build everything this host can: `./gradlew :shared:jvmTest :ui:jvmTest :desktop:test :android:testDebugUnitTest :shared:compileKotlinWasmJs :ui:compileKotlinWasmJs :web:wasmJsBrowserTest :web:stageForBroker` (jvm UI/desktop under `xvfb-run -a`; android needs `ANDROID_HOME` and the gitignored `apps/android/google-services.json` — copy it from the main checkout for the run and delete after, as plan 1 did). Record counts and any timing-related jvmTest failures (the release notes changed `ComposeUiTest` idling); fix real breakages, note flakes. Apple targets can't be compiled here — say so.
-- [ ] **Step 3:** Browser check on a hermetic broker: the app loads (no pageerror), `document.querySelector` finds `#cmp_a11y_root` (or whatever id 1.12 gives) with non-zero size, `#composer-input` exists in the shadow DOM; re-measure the interop hole with a terminal mounted (magenta body → pixel scan; record whether the 32 px band is gone). Screenshot to scratchpad `plan5/`.
-- [ ] **Step 4:** Commit `build(apps): Compose Multiplatform 1.12.0 (+ navigationevent 1.1.0)`.
+- [x] **Step 1:** `composeMultiplatform = "1.12.0"`, `navigationEvent = "1.1.0"` (KDoc the reason next to each). `grep -rn "NativeCanvas\|NativePaint\|SwingPanel(" apps/` — fix any ERROR-level deprecation the compiler reports (VncFramebuffer does raw pixels via Skia `Bitmap`, not `NativeCanvas` — verify).
+- [x] **Step 2:** Build everything this host can: `./gradlew :shared:jvmTest :ui:jvmTest :desktop:test :android:testDebugUnitTest :shared:compileKotlinWasmJs :ui:compileKotlinWasmJs :web:wasmJsBrowserTest :web:stageForBroker` (jvm UI/desktop under `xvfb-run -a`; android needs `ANDROID_HOME` and the gitignored `apps/android/google-services.json` — copy it from the main checkout for the run and delete after, as plan 1 did). Record counts and any timing-related jvmTest failures (the release notes changed `ComposeUiTest` idling); fix real breakages, note flakes. Apple targets can't be compiled here — say so.
+- [x] **Step 3:** Browser check on a hermetic broker: the app loads (no pageerror), `document.querySelector` finds `#cmp_a11y_root` (or whatever id 1.12 gives) with non-zero size, `#composer-input` exists in the shadow DOM; re-measure the interop hole with a terminal mounted (magenta body → pixel scan; record whether the 32 px band is gone). Screenshot to scratchpad `plan5/`.
+- [x] **Step 4:** Commit `build(apps): Compose Multiplatform 1.12.0 (+ navigationevent 1.1.0)`.
 
 ### Task 2: Broker static serving covers the wasm tree
 
-- [ ] **Step 1 (red):** `static-serve.test.ts`: `.ttf → font/ttf` + gzip, `.xml → application/xml`, `.txt → text/plain; charset=utf-8`, `.otf/.woff`; `/editor/cm6.js` served gzipped from the cache on the second request (spy: `Bun.gzipSync` call count, or timing-free: assert the cache map via an exported `_gzipCacheSize()` test hook) and the cache invalidates when the file's mtime changes.
-- [ ] **Step 2 (green):** add the MIME lines, extend `COMPRESSIBLE` (`ttf|otf|xml|txt`), make the gzip cache key include `mtimeMs` and cache `/editor/` too (read the `mtime` field that is currently written and ignored). Add `*.ttf *.otf *.woff *.xml *.txt` to `src/types/assets.d.ts`; fix `generate-static-manifest.ts:13`'s message to `cd apps && ./gradlew :web:stageForBroker`.
-- [ ] **Step 3:** `bun test src/channels/web` green; generate the manifest once against the staged tree and run `bun run typecheck` (then `git checkout -- src/channels/web/static-manifest.generated.ts`). Commit `feat(web-channel): fonts/xml/txt MIME, gzip cache for /editor, manifest typings for the wasm tree`.
+- [x] **Step 1 (red):** `static-serve.test.ts`: `.ttf → font/ttf` + gzip, `.xml → application/xml`, `.txt → text/plain; charset=utf-8`, `.otf/.woff`; `/editor/cm6.js` served gzipped from the cache on the second request (spy: `Bun.gzipSync` call count, or timing-free: assert the cache map via an exported `_gzipCacheSize()` test hook) and the cache invalidates when the file's mtime changes.
+- [x] **Step 2 (green):** add the MIME lines, extend `COMPRESSIBLE` (`ttf|otf|xml|txt`), make the gzip cache key include `mtimeMs` and cache `/editor/` too (read the `mtime` field that is currently written and ignored). Add `*.ttf *.otf *.woff *.xml *.txt` to `src/types/assets.d.ts`; fix `generate-static-manifest.ts:13`'s message to `cd apps && ./gradlew :web:stageForBroker`.
+- [x] **Step 3:** `bun test src/channels/web` green; generate the manifest once against the staged tree and run `bun run typecheck` (then `git checkout -- src/channels/web/static-manifest.generated.ts`). Commit `feat(web-channel): fonts/xml/txt MIME, gzip cache for /editor, manifest typings for the wasm tree`.
 
 ### Task 3: cm6 bundle stands alone
 
-- [ ] **Step 1:** `apps/android/codemirror/package.json` (the pinned list above; `"build"` script writing `../src/main/assets/editor/cm6.js` with `--target browser --format iife --minify`) + `bun install` → commit `bun.lock`. Rewrite README.md build section (no symlink, no `src/web-app`). Update the entry header comment.
-- [ ] **Step 2:** Rebuild and diff: `cd apps/android/codemirror && bun run build && git diff --stat apps/android/src/main/assets/editor/cm6.js`. If the bundle changes only by the version pins (bytes differ), rebuild is the new truth — run `:desktop:test` (`EditorWebAssetsTest`) and the plan-3 editor browser check (open/edit/save) on a restaged bundle before accepting; if it is byte-identical, say so. Add `tests/cm6-bundle-drift.test.ts` (bun) that rebuilds into a temp dir and asserts byte-equality with the committed bundle (skip when `bun install` deps are absent, with a clear message).
-- [ ] **Step 3:** Commit `build(editor): standalone package + lockfile for the committed CodeMirror bundle`.
+- [x] **Step 1:** `apps/android/codemirror/package.json` (the pinned list above; `"build"` script writing `../src/main/assets/editor/cm6.js` with `--target browser --format iife --minify`) + `bun install` → commit `bun.lock`. Rewrite README.md build section (no symlink, no `src/web-app`). Update the entry header comment.
+- [x] **Step 2:** Rebuild and diff: `cd apps/android/codemirror && bun run build && git diff --stat apps/android/src/main/assets/editor/cm6.js`. If the bundle changes only by the version pins (bytes differ), rebuild is the new truth — run `:desktop:test` (`EditorWebAssetsTest`) and the plan-3 editor browser check (open/edit/save) on a restaged bundle before accepting; if it is byte-identical, say so. Add `tests/cm6-bundle-drift.test.ts` (bun) that rebuilds into a temp dir and asserts byte-equality with the committed bundle (skip when `bun install` deps are absent, with a clear message).
+- [x] **Step 3:** Commit `build(editor): standalone package + lockfile for the committed CodeMirror bundle`.
 
 ### Task 4: Test ids + Playwright journeys against the wasm app
 
-- [ ] **Step 1: ids.** Decide once and mirror in both `test-ids.ts` and `TestIds.kt` (keep `tests/test-ids-parity.test.ts:31` green): canonical send id becomes `composer-send` (matches `:ui`; drop `composer-submit`); add `chat-message` as a PREFIX id `chat-message:<direction>:<messageId>` applied via `Modifier.testTag` on each timeline row in `apps/ui/.../chat/Timeline.kt` (find the per-message composable; direction from the message's role; add `TestIds.chatMessage(direction, id)` + a jvm test that the tag is present); keep `session-list`/`session-row` (workspaces-off) and document `workspaces_list`/`workspace_row_<id>` as the workspaces-on ids. Rewrite `tests/test-ids-parity.test.ts:44–50` to assert the Kotlin sites (`SessionListScreen.kt` uses `TestIds.SESSION_LIST`, `SessionRow.kt` uses `TestIds.sessionRow`, `Timeline.kt` uses `chatMessage`) instead of the Vue files.
-- [ ] **Step 2: specs.** Port all four under `tests/ui/` to the a11y DOM: selectors `#chat-view`, `#composer-input` (type via `page.keyboard.type` after clicking it; assert via `innerText`), `#composer-send`, `[id^="workspace_row_"]` (or `#session-list`/`[id^="session-row:"]` when the fixture has no workspace — detect either), `getByText("Fixture reply: …")` AND `[id^="chat-message:outbound:"]`; keep the `/sessions/<id>/messages` persistence assert. `composer-attachment`: click `#composer-attach` (pointer mode picks directly — see plan 3 Results), `page.waitForEvent("filechooser")` → set a temp file → chip `[id^="composer_staged_"]` → send → persisted attachment. `voice-recorder`: fake media flags, `#composer-mic` (find the real tag/aria-label in Composer.kt), stub `**/transcribe`, assert the draft text via `#composer-input` innerText. `push-banner`: persistent context, grant notifications, `getByText("Enable")`, then the sqlite assert. Add `MUX_TEST_A11Y_ROOT` no; instead a shared helper `tests/ui/compose-dom.ts` (`byTag(page, id)`, `typeInto(page, id, text)`, `waitReady(page)` = wait for `#composer-input` or `#workspaces_list`). `package.json` `test:ui` runs all four specs sequentially (each spawns its own fixture via test-broker.sh — or one fixture + four specs; pick the cheaper and say which).
-- [ ] **Step 3:** `scripts/test-broker.sh:56–58` → `( cd apps && ./gradlew :web:stageForBroker --console=plain )` unless `MUX_TEST_SKIP_WEB_BUILD=1` (keep the flag; `test-android.sh` comment updated: skipping now saves minutes). Run `bun run test:ui` locally (Chrome at `/usr/bin/google-chrome`) → all four PASS lines. Commit `test(ui): Playwright journeys drive the Compose-for-Web app through its accessibility DOM`.
+- [x] **Step 1: ids.** Decide once and mirror in both `test-ids.ts` and `TestIds.kt` (keep `tests/test-ids-parity.test.ts:31` green): canonical send id becomes `composer-send` (matches `:ui`; drop `composer-submit`); add `chat-message` as a PREFIX id `chat-message:<direction>:<messageId>` applied via `Modifier.testTag` on each timeline row in `apps/ui/.../chat/Timeline.kt` (find the per-message composable; direction from the message's role; add `TestIds.chatMessage(direction, id)` + a jvm test that the tag is present); keep `session-list`/`session-row` (workspaces-off) and document `workspaces_list`/`workspace_row_<id>` as the workspaces-on ids. Rewrite `tests/test-ids-parity.test.ts:44–50` to assert the Kotlin sites (`SessionListScreen.kt` uses `TestIds.SESSION_LIST`, `SessionRow.kt` uses `TestIds.sessionRow`, `Timeline.kt` uses `chatMessage`) instead of the Vue files.
+- [x] **Step 2: specs.** Port all four under `tests/ui/` to the a11y DOM: selectors `#chat-view`, `#composer-input` (type via `page.keyboard.type` after clicking it; assert via `innerText`), `#composer-send`, `[id^="workspace_row_"]` (or `#session-list`/`[id^="session-row:"]` when the fixture has no workspace — detect either), `getByText("Fixture reply: …")` AND `[id^="chat-message:outbound:"]`; keep the `/sessions/<id>/messages` persistence assert. `composer-attachment`: click `#composer-attach` (pointer mode picks directly — see plan 3 Results), `page.waitForEvent("filechooser")` → set a temp file → chip `[id^="composer_staged_"]` → send → persisted attachment. `voice-recorder`: fake media flags, `#composer-mic` (find the real tag/aria-label in Composer.kt), stub `**/transcribe`, assert the draft text via `#composer-input` innerText. `push-banner`: persistent context, grant notifications, `getByText("Enable")`, then the sqlite assert. Add `MUX_TEST_A11Y_ROOT` no; instead a shared helper `tests/ui/compose-dom.ts` (`byTag(page, id)`, `typeInto(page, id, text)`, `waitReady(page)` = wait for `#composer-input` or `#workspaces_list`). `package.json` `test:ui` runs all four specs sequentially (each spawns its own fixture via test-broker.sh — or one fixture + four specs; pick the cheaper and say which).
+- [x] **Step 3:** `scripts/test-broker.sh:56–58` → `( cd apps && ./gradlew :web:stageForBroker --console=plain )` unless `MUX_TEST_SKIP_WEB_BUILD=1` (keep the flag; `test-android.sh` comment updated: skipping now saves minutes). Run `bun run test:ui` locally (Chrome at `/usr/bin/google-chrome`) → all four PASS lines. Commit `test(ui): Playwright journeys drive the Compose-for-Web app through its accessibility DOM`.
 
 ### Task 5: Pipelines — build-binary, Docker, CI, release, deploy, docs
 
-- [ ] **Step 1: `scripts/build-binary.sh`** — replace :66–75 with a JDK precondition (`command -v java || die "needs JDK 17+ for :web:stageForBroker"`) and `( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )`; update the header ladder (:8–19). Run it locally end to end (`scripts/build-binary.sh dist/supermux-linux-x64 dev <sha>`) and `scripts/smoke-binary.sh` on the output.
-- [ ] **Step 2: Dockerfile** — multi-stage: `FROM eclipse-temurin:17-jdk AS webbuild` copies `apps/` (+ `src/channels/web/static-serve.ts` because `stageForBroker` sanity-checks its sibling — copy the minimal `src/channels/web/` tree or relax the check to the dir name; prefer copying the file) and runs `./gradlew :web:stageForBroker --no-daemon`; the runtime stage drops :71, :77, :82–90 and does `COPY --from=webbuild /src/src/channels/web/static ./src/channels/web/static`. `.dockerignore`: refresh the comment, add `apps/*/build`, `apps/.gradle`, `apps/kotlin-js-store` stays included. `docker build .` locally must succeed (needs network); note image size delta.
-- [ ] **Step 3: CI** — `ci.yml`: delete the two `src/web-app` installs, `setup-node`, `Typecheck PWA`; `ui` lane gets `setup-java` 17 + `setup-gradle` and runs `bun run test:ui` (which now stages via Gradle); add the `web` paths filter + output + `if`; fix the :23–26 and :103–104 comments (the lane is no longer cheap: gate it on `web || ts` changes and rely on the Gradle cache). `release.yml` `build-binaries`: add `setup-java` 17 + `setup-gradle` to the matrix job (incl. macos-14). Validate YAML (`bunx yaml-lint` or `actionlint` if present; else careful review).
-- [ ] **Step 4: deploy + misc** — `scripts/feel-deploy.sh` :144 change map → `apps/web/*|apps/ui/*|apps/shared/*|src/channels/web/static/*`, :219–226 → Gradle stage (share `GRADLE_USER_HOME`/`apps/build/wasm/node_modules` with the main checkout via symlink like the old node_modules trick); `scripts/generate-logo-assets.ts` targets → `apps/web/pwa/icons/*` + `apps/web/pwa/favicon.ico` (drop the Vue rows) and `tests/logo-assets.test.ts` in lockstep; `tsconfig.json` remove the exclude; `package.json` prune devDeps proven unused by `grep -rn "from \"vue\"\|pinia\|@vueuse\|marked\|dompurify" src tests scripts`; `README.md:3` srcset → `apps/web/pwa/icons/icon-512.png`; `SETUP.md:136–138` → `cd apps && ./gradlew :web:stageForBroker` + JDK 17 prerequisite; `docs/docs/web-channel-setup.md:39,43` (voice max seconds: point at the Kotlin `WebMic` constant or drop); `.gitignore:9–10` comment.
-- [ ] **Step 5:** `bun test` (root — the whole suite, `.mux/verify.sh`), `bun run typecheck`; commit `build(web): Gradle-staged bundle in build-binary, Docker (JDK build stage), CI ui lane, release binaries, feel-deploy; docs`.
+- [x] **Step 1: `scripts/build-binary.sh`** — replace :66–75 with a JDK precondition (`command -v java || die "needs JDK 17+ for :web:stageForBroker"`) and `( cd apps && ./gradlew :web:stageForBroker --no-daemon --console=plain )`; update the header ladder (:8–19). Run it locally end to end (`scripts/build-binary.sh dist/supermux-linux-x64 dev <sha>`) and `scripts/smoke-binary.sh` on the output.
+- [x] **Step 2: Dockerfile** — multi-stage: `FROM eclipse-temurin:17-jdk AS webbuild` copies `apps/` (+ `src/channels/web/static-serve.ts` because `stageForBroker` sanity-checks its sibling — copy the minimal `src/channels/web/` tree or relax the check to the dir name; prefer copying the file) and runs `./gradlew :web:stageForBroker --no-daemon`; the runtime stage drops :71, :77, :82–90 and does `COPY --from=webbuild /src/src/channels/web/static ./src/channels/web/static`. `.dockerignore`: refresh the comment, add `apps/*/build`, `apps/.gradle`, `apps/kotlin-js-store` stays included. `docker build .` locally must succeed (needs network); note image size delta.
+- [x] **Step 3: CI** — `ci.yml`: delete the two `src/web-app` installs, `setup-node`, `Typecheck PWA`; `ui` lane gets `setup-java` 17 + `setup-gradle` and runs `bun run test:ui` (which now stages via Gradle); add the `web` paths filter + output + `if`; fix the :23–26 and :103–104 comments (the lane is no longer cheap: gate it on `web || ts` changes and rely on the Gradle cache). `release.yml` `build-binaries`: add `setup-java` 17 + `setup-gradle` to the matrix job (incl. macos-14). Validate YAML (`bunx yaml-lint` or `actionlint` if present; else careful review).
+- [x] **Step 4: deploy + misc** — `scripts/feel-deploy.sh` :144 change map → `apps/web/*|apps/ui/*|apps/shared/*|src/channels/web/static/*`, :219–226 → Gradle stage (share `GRADLE_USER_HOME`/`apps/build/wasm/node_modules` with the main checkout via symlink like the old node_modules trick); `scripts/generate-logo-assets.ts` targets → `apps/web/pwa/icons/*` + `apps/web/pwa/favicon.ico` (drop the Vue rows) and `tests/logo-assets.test.ts` in lockstep; `tsconfig.json` remove the exclude; `package.json` prune devDeps proven unused by `grep -rn "from \"vue\"\|pinia\|@vueuse\|marked\|dompurify" src tests scripts`; `README.md:3` srcset → `apps/web/pwa/icons/icon-512.png`; `SETUP.md:136–138` → `cd apps && ./gradlew :web:stageForBroker` + JDK 17 prerequisite; `docs/docs/web-channel-setup.md:39,43` (voice max seconds: point at the Kotlin `WebMic` constant or drop); `.gitignore:9–10` comment.
+- [x] **Step 5:** `bun test` (root — the whole suite, `.mux/verify.sh`), `bun run typecheck`; commit `build(web): Gradle-staged bundle in build-binary, Docker (JDK build stage), CI ui lane, release binaries, feel-deploy; docs`.
 
 ### Task 6: Delete `src/web-app` + sweep + Results
 
-- [ ] **Step 1:** `git rm -r src/web-app`; fix `src/channels/web/watch-session-row.ts:21`; sweep `grep -rn "src/web-app" --include=*.kt --include=*.ts --include=*.mjs --include=*.swift --include=*.xml --include=*.md apps src scripts tests README.md SETUP.md` → replace citations with "(retired Vue PWA; see git history before 2026-09-12)" in comments; leave dated docs under `docs/docs/**` untouched. `apps/android/codemirror/cm6-entry.mjs` header: "mirrors the retired web CodeEditor setup".
-- [ ] **Step 2:** Full verification: `bun test` (verify.sh), `bun run typecheck`, `bun run test:ui` (four journeys), `./gradlew :shared:jvmTest :ui:jvmTest :desktop:test :web:wasmJsBrowserTest :web:stageForBroker` green, `scripts/build-binary.sh` + `smoke-binary.sh` green, `docker build` green. `grep -rn "web-app" . --exclude-dir=node_modules --exclude-dir=docs --exclude-dir=.git` → only the `.gitignore`/historical hits you intend.
-- [ ] **Step 3:** `## Results` in this plan (CMP bump outcome incl. the interop-hole re-measure, journey timings, image size, binary size, bundle size) + a "What changed for operators" paragraph (JDK 17 needed to build; Docker build stage). Commit `chore(web): retire the Vue PWA — the Compose-for-Web client is the only web client`.
+- [x] **Step 1:** `git rm -r src/web-app`; fix `src/channels/web/watch-session-row.ts:21`; sweep `grep -rn "src/web-app" --include=*.kt --include=*.ts --include=*.mjs --include=*.swift --include=*.xml --include=*.md apps src scripts tests README.md SETUP.md` → replace citations with "(retired Vue PWA; see git history before 2026-09-12)" in comments; leave dated docs under `docs/docs/**` untouched. `apps/android/codemirror/cm6-entry.mjs` header: "mirrors the retired web CodeEditor setup".
+- [x] **Step 2:** Full verification: `bun test` (verify.sh), `bun run typecheck`, `bun run test:ui` (four journeys), `./gradlew :shared:jvmTest :ui:jvmTest :desktop:test :web:wasmJsBrowserTest :web:stageForBroker` green, `scripts/build-binary.sh` + `smoke-binary.sh` green, `docker build` green. `grep -rn "web-app" . --exclude-dir=node_modules --exclude-dir=docs --exclude-dir=.git` → only the `.gitignore`/historical hits you intend.
+- [x] **Step 3:** `## Results` in this plan (CMP bump outcome incl. the interop-hole re-measure, journey timings, image size, binary size, bundle size) + a "What changed for operators" paragraph (JDK 17 needed to build; Docker build stage). Commit `chore(web): retire the Vue PWA — the Compose-for-Web client is the only web client`.
 - [ ] **Step 4 (coordinator):** update `~/.mux/domains/claudemux.md` (the client matrix: Web = `apps/web` Kotlin/Wasm; Vue dead) and hand the branch to `superpowers:finishing-a-development-branch`.
 
 ---
@@ -295,3 +295,105 @@ was **not runnable**: no emulator is attached (`adb devices` empty) and no `emu`
   `webbuild` stage inherit `apps/gradle.properties`, so they get the 6 g automatically — but a
   machine with less than ~8 GB free will now OOM where it used to merely be slow.
 - *Task 6 (deletion):* nothing in this bump touches `src/web-app`; the sweep is unaffected.
+
+---
+
+## Results (2026-09-12)
+
+**Plan 5 is complete. `src/web-app` is gone; the Kotlin/Wasm Compose client is the only web
+client.** Everything this Linux host can build or run is green.
+
+### Per-task outcomes
+
+| task | outcome |
+|---|---|
+| **1 — CMP 1.12.0** | Landed via the **toolchain bump** recorded above (it was blocked on AGP 9.1 / compileSdk 37). Final set: Kotlin **2.4.10**, AGP **9.3.1**, Gradle **9.7.0**, compileSdk **37** / targetSdk **36**, CMP **1.12.0**, navigationevent **1.1.0**, compose BOM 2026.09.00, SKIE 0.10.14, coil 3.5.0, composeMediaPlayer 0.11.4. No production source file changed; four `:ui` jvmTest fixes only. Kotlin 2.4's wasm backend forced `kotlin.daemon.jvmargs=-Xmx6g`. |
+| **2 — broker static serving** | `f8587394` + `ffbf828c`. `guessMime` gained `.ttf/.otf/.woff/.woff2/.xml/.txt`; `COMPRESSIBLE` extended; the gzip cache is keyed by path **and** `mtimeMs` (so a redeploy replaces rather than accumulates) and now covers `/editor/` as well as `/assets/`, which stops the 1.3 MB `cm6.js` being re-gzipped on every request. `src/types/assets.d.ts` learned `*.ttf *.otf *.woff *.xml *.txt` so the generated manifest typechecks; `generate-static-manifest.ts`'s failure text points at `cd apps && ./gradlew :web:stageForBroker`. |
+| **3 — cm6 bundle stands alone** | `f50304b4`. `apps/android/codemirror` has its own `package.json` + `bun.lock` pinning every direct `@codemirror/*` dep (including `@codemirror/lsp-client`, which the plan's list had missed — without it `bun build` walked up to the repo-root `node_modules`) and a `build` script that writes `../src/main/assets/editor/cm6.js` in place. No symlink into `src/web-app/node_modules` any more; `tests/cm6-bundle-drift.test.ts` rebuilds into a temp dir and asserts byte-equality (skipping with a clear message when the deps are not installed). |
+| **4 — test ids + Playwright** | `46559524`. All four journeys now drive Compose-for-Web's accessibility mirror: `testTag` → element `id` inside an **open** shadow root. Three facts are encoded once in `tests/ui/compose-dom.ts`: the canvas intercepts pointer events so `locator.click()` always times out and `dispatchEvent("click")` is the only sanctioned tap; Playwright locators pierce the shadow root but `document.querySelector` inside `page.evaluate` does not; the mirror syncs on a ~100 ms debounce after a ~6 s wasm boot, so every wait polls. Ids: `composer-submit` never existed — canonical is now **`composer-send`**; timeline rows gained **`chat-message:<direction>:<messageId>`** (they carried no id at all), which is what lets the core journey prove the reply rendered as an outbound row. `tests/test-ids-parity.test.ts` asserts four Kotlin call sites instead of two Vue files by path (an ENOENT that would have fired the moment the PWA was deleted). All four specs share ONE fixture broker. |
+| **5 — pipelines** | `8467711e`. `build-binary.sh` lost the 3-rung Vite ladder for a JDK precondition + `:web:stageForBroker`; the Dockerfile became multi-stage (`eclipse-temurin:17-jdk AS webbuild` → `oven/bun:1` runtime, no JDK in the runtime image); `ci.yml` dropped both `src/web-app` installs, `setup-node` and the `vue-tsc` typecheck, gained a `web` paths filter/output and a JDK+Gradle `ui` lane; `release.yml`'s `build-binaries` matrix gained JDK 17 + Gradle on all three legs; `feel-deploy.sh`'s change map and staging step moved to Gradle; logo assets, `README.md`, `SETUP.md` and `docs/docs/web-channel-setup.md` follow. |
+| **6 — deletion + sweep** | This commit. `git rm -r src/web-app` — **485 files, 33,929 lines**. `tsconfig.json`'s `exclude: ["src/web-app"]` (and its six-line comment) went in the same commit, because deleting the exclude earlier would have broken `bun run typecheck`. **22 files swept**: every `src/web-app/...` citation in a Kotlin/Swift/JS/XML comment now reads "(retired Vue PWA; see git history before 2026-09-12)", and each one keeps the invariant it described rather than just losing the pointer — e.g. `apps/android/codemirror/cm6-entry.mjs` now states the font-zoom rule itself (10–24 px, 13 px default, ±1 px per keystroke, `Cmd/Ctrl 0` resets, pinch scales base × curDist/baseDist then clamps) instead of pointing at a deleted `editor-font-zoom.ts`. Root devDeps `@codemirror/lsp-client`, `@codemirror/state`, `@codemirror/view` pruned (zero consumers in `src tests scripts` now that `apps/android/codemirror` has its own manifest; `playwright` stays) and the tracked root `bun.lock` refreshed. |
+
+**Two pipeline follow-ups from the Task 5 review, also in this commit.**
+`release.yml`: every job that reaches `scripts/build-binary.sh` indirectly now sets up the same
+toolchain the direct callers do — `update-flow` (→ `test-update-flow.sh`, which builds two real
+binaries) gains `setup-java` 17 **and** `setup-gradle`; `build-desktop-linux`,
+`build-desktop-windows` and `build-compose-desktop-macos` (→ `stage-desktop-binaries.sh`) already
+had a JDK and now get `gradle/actions/setup-gradle@v4` so the wasm build is cached rather than
+recompiled cold on every release. `scripts/build-binary.sh`'s JDK check no longer stops at
+`command -v java`: it parses `java -version` (both the `"1.8.0_392"` and the `"17.0.20"` / `"21"`
+shapes) and fails with a readable message unless the major is ≥ 17 — an old JDK used to sail past
+the check and die inside Gradle with a class-file error.
+
+### Verification (all on this branch, this host)
+
+| check | result |
+|---|---|
+| `bun test` (root, `.mux/verify.sh`) | **3036 pass, 3 skip, 0 fail** — 3039 tests / 425 files, 128 s |
+| `bun run typecheck` | clean (`tsc --noEmit`, exit 0) — with the `src/web-app` exclude removed |
+| `bun run test:ui` (4 Playwright journeys) | **ALL UI JOURNEYS PASS** |
+| `:shared:jvmTest` | **985 pass**, 1 skipped |
+| `:ui:jvmTest` (xvfb) | **1614 pass** |
+| `:desktop:test` (xvfb) | **297 pass** |
+| `:web:wasmJsBrowserTest` (Chrome) | **65 pass** |
+| `:web:stageForBroker` | BUILD SUCCESSFUL — 3 hashed assets, gzip total **6376 KB** (8 MiB guard fine) |
+| `scripts/build-binary.sh` + `scripts/smoke-binary.sh` | built, **SMOKE PASS 3/3** (version, `/me` → 401, embedded client + auth) |
+| `docker build .` | **GREEN**, unmodified — `webbuild` stage **1453 s**, image **3.57 GB**; `docker run --rm supermux-web-cutover ls src/channels/web/static` lists the full client (`index.html`, `assets/`, `editor/`, `icons/`, `sw.js`, `manifest.webmanifest`, `xterm.css`, `favicon.ico`) |
+
+**Journey timings** (one shared fixture broker, headless Chrome): `core-journey` **10.2 s**,
+`composer-attachment` **8.8 s**, `voice-recorder` **9.9 s**, `push-banner` **9.9 s**.
+
+**Sizes.** Staged `src/channels/web/static` **23,078,821 B** across 28 files
+(`supermux-apps-web-*.wasm` 11,223,305 · `skiko-*.wasm` 8,640,316 · `app-*.js` 993,828);
+gzip total 6376 KB. Linux x64 binary **134,248,576 B** (the whole client is embedded, one
+`with { type: "file" }` import per staged file). Docker image ****3.57 GB** (`webbuild` JDK stage discarded; the runtime image is `oven/bun:1` + the staged tree)**.
+
+**`:web:stageForBroker` is the proof the deletion is complete.** It was run from a wiped
+`src/channels/web/static` on a tree with no `src/web-app` at all and produced the full client,
+editor bundle included — the editor's source of truth is `apps/android/src/main/assets/editor`,
+copied by the Gradle task, not anything the Vue app ever owned.
+
+**Interop hole: STILL PRESENT.** The 32 px transparent band above `HtmlElementView` panes survived
+CMP 1.12.0 (re-measured during the toolchain bump: with a magenta body, every scanline from y=0 to
+y=31 above a real mounted xterm is `rgb(255,0,255)`). Nothing in plan 5 addresses it; keep the
+known-issue note in the spec.
+
+**Still unverified on this host:** the Apple targets. `:ios` and the Apple source sets of
+`:shared`/`:ui` are CONFIGURED but never compiled here (Kotlin/Native `ios*`/`uikit*` need a macOS
+konan host), so the **first macOS build of this branch is a verification step** for Kotlin 2.4.10 /
+SKIE 0.10.14 / coil 3.5.0. `scripts/test-android.sh` (the emulator journey) was likewise not
+runnable — no device attached.
+
+### Remaining `web-app` hits, and why each stays
+
+- `apps/web/src/wasmJsMain/resources/index.html:19,22,25` — `apple-mobile-web-app-capable`,
+  `mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`. Standard PWA meta tags; the
+  substring is a coincidence.
+- `apps/android/codemirror/README.md:4` — a deliberate history mention ("mirrors the retired Vue
+  web editor's CodeMirror setup"), no path citation.
+- `graphify-out/**` (10 files) — a committed, *generated* knowledge-graph snapshot (`manifest.json`,
+  `graph.json`, `GRAPH_REPORT.md`, AST/semantic caches) that still indexes the old tree. It is
+  regenerated wholesale by `/graphify`, not hand-edited; rewriting it here would be a meaningless
+  ~850-file diff. Refresh it on the next graphify run.
+
+`.gitignore` and `.dockerignore` needed no history comment: Task 5 had already rewritten both to
+talk about `cd apps && ./gradlew :web:stageForBroker` and the `webbuild` stage.
+
+### What changed for operators
+
+**Building supermux now needs a JDK 17+ and Gradle.** The web client is Kotlin/Wasm Compose, and
+the only thing that can produce it is `cd apps && ./gradlew :web:stageForBroker`; there is no Vite
+fallback ladder to hide behind, so `scripts/build-binary.sh` fails fast (and now checks the JDK
+*major*, not merely that `java` exists) rather than dying inside Gradle. Budget the memory: Kotlin
+2.4's wasm backend needs `kotlin.daemon.jvmargs=-Xmx6g`, which `apps/gradle.properties` sets for
+everyone — a machine or container with less than ~8 GB free will OOM or GC-thrash where it used to
+merely be slow, and a cold `:web:stageForBroker` is roughly 14 minutes (seconds when warm). Docker
+users are unaffected in the runtime image: the Dockerfile is multi-stage, a `eclipse-temurin:17-jdk`
+`webbuild` stage compiles the client and the `oven/bun:1` runtime image only copies
+`src/channels/web/static` — no JDK, no Node, no Vite in what you run. Android builders need one
+extra step: compileSdk is 37 and Android SDK platforms are minor-versioned now, so install it from
+the **beta** channel with `sdkmanager --channel=1 "platforms;android-37.0"` (plain
+`platforms;android-37` does not exist). `bun run test:ui` stages the client through Gradle too —
+export `MUX_TEST_SKIP_WEB_BUILD=1` when the staged tree is already current and you only want the
+four browser journeys. Finally, iOS: the first macOS build of this branch is the verification step
+for Kotlin 2.4.10 / SKIE 0.10.14, since no Apple target can be compiled on Linux.

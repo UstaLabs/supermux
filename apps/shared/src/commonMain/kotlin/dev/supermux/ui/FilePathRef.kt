@@ -8,7 +8,8 @@ data class FilePathMatch(val start: Int, val end: Int, val ref: FilePathRef, val
 /** Path body shared with linkification (relative, absolute, home-relative). Port of FILE_PATH_BODY.
  *
  *  Exposed so Apple clients can compile the SAME pattern with Foundation's regex engine — see
- *  the note on [findFilePathRefs]. Keep in sync with `src/web-app/src/lib/file-path-ref.ts`. */
+ *  the note on [findFilePathRefs]. It began as a port of the retired Vue PWA's file-path-ref
+ *  helper (retired Vue PWA; see git history before 2026-09-12); this file is now the source of truth. */
 const val FILE_PATH_BODY: String =
     """(?:\.{0,2}/)?(?:[\w@.-]+/)+[\w.-]+\.[\w]+|(?:/|~/)(?:[\w@.-]+/)+[\w.-]+\.[\w]+"""
 

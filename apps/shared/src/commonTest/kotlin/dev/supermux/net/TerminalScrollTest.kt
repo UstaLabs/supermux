@@ -6,8 +6,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Mirrors the web reference suite (src/web-app/src/lib/touch-scroll.test.ts) so
- * the native math stays in lockstep with the PWA's.
+ * Mirrors the retired Vue PWA's touch-scroll reference suite
+ * (retired Vue PWA; see git history before 2026-09-12); this suite is now the spec
+ * for the native math.
  */
 class TerminalScrollTest {
     private fun assertClose(expected: Double, actual: Double, eps: Double = 1e-9) {

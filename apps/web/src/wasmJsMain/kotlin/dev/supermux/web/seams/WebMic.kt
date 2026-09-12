@@ -17,8 +17,8 @@ private fun micApiAvailableJs(): Boolean =
     js("!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && typeof MediaRecorder !== 'undefined')")
 
 /**
- * The first container this browser can actually encode, from the Vue app's preference list
- * (`src/web-app/src/composables/useMediaRecorder.ts`): opus-in-webm on Chrome/Firefox, mp4/AAC on
+ * The first container this browser can actually encode, from the retired Vue PWA's preference
+ * list (retired Vue PWA; see git history before 2026-09-12): opus-in-webm on Chrome/Firefox, mp4/AAC on
  * Safari. `""` means "none of them, let the browser choose its own default" and null means this
  * browser cannot record at all.
  */

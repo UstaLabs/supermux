@@ -4,8 +4,8 @@ package dev.supermux.session
  * Server-authoritative unread: a session is unread when it has a last-message
  * timestamp newer than the server's `last_read_at` pointer (or no pointer yet).
  *
- * Mirrors the web store (`src/web-app/src/stores/unread.ts`) and watch helper
- * (`src/channels/web/watch-session-row.ts`): ISO timestamps compare as strings
+ * Mirrors the retired Vue PWA's unread store (retired Vue PWA; see git history before 2026-09-12)
+ * and the watch helper (`src/channels/web/watch-session-row.ts`): ISO timestamps compare as strings
  * because the broker always emits UTC `…Z` form.
  *
  * Do **not** use message `direction` as a proxy for unread — `inbound` is the

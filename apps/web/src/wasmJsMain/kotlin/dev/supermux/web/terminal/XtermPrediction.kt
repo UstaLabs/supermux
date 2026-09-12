@@ -16,8 +16,8 @@ import dev.supermux.ui.terminal.PredictionSink
 /**
  * Renders the shared `PredictionEngine`'s display ops against an xterm.js [Terminal] — the web
  * host's twin of `JediTermPredictionAdapter` (desktop) and `TermlibPredictionAdapter` (Android),
- * and a direct port of the PWA's `src/web-app/src/lib/predictive-echo/xterm-adapter.ts`, which
- * remains the behaviour spec. The engine owns ALL reconcile and cursor math; this is the thin,
+ * and a direct port of the retired Vue PWA's xterm predictive-echo adapter
+ * (retired Vue PWA; see git history before 2026-09-12). The engine owns ALL reconcile and cursor math; this is the thin,
  * mechanical translator.
  *
  * ## Rendering
