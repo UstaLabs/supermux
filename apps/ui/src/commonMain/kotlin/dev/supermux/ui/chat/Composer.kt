@@ -129,6 +129,7 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.effortSpeedometerParams
 import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.SlashCommand
+import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.platform.MicCapture
@@ -275,10 +276,10 @@ fun rememberComposerActions(
 @Immutable
 data class ComposerTags(
     val card: String = "composer-card",
-    val input: String = "composer-input",
+    val input: String = TestIds.COMPOSER_INPUT,
     val attach: String = "composer-attach",
     val mic: String = "composer-mic",
-    val send: String = "composer-send",
+    val send: String = TestIds.COMPOSER_SEND,
     val stop: String = "composer-stop",
     val banner: String = "composer_banner",
     val micError: String = "composer-mic-error",

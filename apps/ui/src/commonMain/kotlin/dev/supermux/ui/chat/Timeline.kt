@@ -107,6 +107,7 @@ import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.ActivityToolBody
 import dev.supermux.proto.Attachment
 import dev.supermux.ui.FilePathRef
+import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -712,9 +713,13 @@ fun TimelineItemRow(
             val isUser = item.entry.direction == "inbound"
             if (!text.isNullOrBlank() || !atts.isNullOrEmpty()) {
                 Column(
+                    // The row container carries the tag so the text and any attachments are INSIDE
+                    // it: on Compose-for-Web the tag becomes this element's DOM `id`, and a journey
+                    // asserts `[id^="chat-message:outbound:"]` has the reply's text within it.
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = Space.sm),
+                        .padding(vertical = Space.sm)
+                        .testTag(TestIds.chatMessage(item.entry.direction, item.entry.id)),
                     horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 ) {
                     if (!text.isNullOrBlank()) {

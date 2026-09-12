@@ -1,7 +1,11 @@
 /**
- * Black-box attachment smoke: choose a file through the visible composer menu,
- * send it, and verify the broker persisted an inbound message with an
- * attachment.
+ * Black-box attachment smoke against the Kotlin/Wasm client: pick a file through
+ * the composer's attach button, send it, and verify the broker persisted an
+ * inbound message carrying the attachment.
+ *
+ * On a pointer-sized window `composer-attach` opens the OS file chooser directly
+ * (no attach menu, and Compose emits no `menuitem` role anywhere), so the journey
+ * arms `page.waitForEvent("filechooser")` before tapping.
  *
  * Run: scripts/test-broker.sh bun tests/ui/composer-attachment.spec.ts
  */
@@ -10,13 +14,14 @@ import { rmSync, writeFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { launchBrowser, uiFixture } from "./fixture-env"
+import { byTag, openSeededSession, tap } from "./compose-dom"
 
 const PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAICAQCk/EwiAAAAAElFTkSuQmCC",
   "base64",
 )
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   if (process.env.MUX_RUN_UI_SMOKE !== "1") {
     console.log("skipping UI smoke; run through scripts/test-broker.sh")
     return
@@ -25,6 +30,7 @@ async function main(): Promise<void> {
   const fixture = uiFixture()
   const tmpFile = join(tmpdir(), `playwright-pixel-${Date.now()}.png`)
   writeFileSync(tmpFile, PIXEL_PNG)
+  const filename = tmpFile.split("/").pop()!
 
   let browser: Browser | null = null
   try {
@@ -34,25 +40,36 @@ async function main(): Promise<void> {
     page.on("pageerror", (error) => console.error(`[pageerror] ${error.message}`))
 
     await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
     })
-    await page.locator(
-      `[data-testid="session-row"][data-session-id="${fixture.sessionId}"]`,
-    ).click()
-    await page.locator('[data-testid="composer-input"]').waitFor({ state: "visible" })
+    await openSeededSession(page, fixture.sessionId)
 
-    const chooserPromise = page.waitForEvent("filechooser")
-    await page.locator('[data-testid="attachment-menu"]').click()
-    await page.getByRole("menuitem", { name: "Files" }).click()
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 30_000 })
+    await tap(byTag(page, "composer-attach"))
     const chooser = await chooserPromise
     await chooser.setFiles(tmpFile)
 
-    const filename = tmpFile.split("/").pop()!
-    await page.locator(
-      `[data-testid="attachment-chip"][data-filename="${filename}"]`,
-    ).waitFor({ state: "visible", timeout: 10_000 })
-    await page.locator('[data-testid="composer-submit"]').click()
+    // The chip an ATTACHED chat composer renders is `composer-chip` (it tracks a
+    // real upload); `composer_staged_<name>` is the pre-spawn launcher's chip, for
+    // files staged before a session exists. Accept either so the journey does not
+    // encode which screen the fixture happens to open on.
+    await page.locator('[id="composer-chip"], [id^="composer_staged_"]').first()
+      .waitFor({ state: "attached", timeout: 30_000 })
 
+    // Send is enabled by the staged attachment even with an empty draft, but the
+    // enabling is a recomposition away from the chip appearing — retry rather than
+    // dispatching one click into a not-yet-clickable button.
+    const send = byTag(page, "composer-send")
+    for (let i = 0; i < 10; i++) {
+      await tap(send)
+      const sent = await page.locator('[id="composer-chip"], [id^="composer_staged_"]').count()
+      if (sent === 0) break
+      await page.waitForTimeout(1000)
+    }
+
+    // The real assertion: the broker persisted an inbound web message whose
+    // attachment list names the file we picked. Rendering a chip proves nothing
+    // about the upload having landed.
     await page.waitForFunction(
       async ({ sessionId, expectedName }) => {
         const response = await fetch(`/sessions/${encodeURIComponent(sessionId)}/messages`)
@@ -69,7 +86,7 @@ async function main(): Promise<void> {
         )
       },
       { sessionId: fixture.sessionId, expectedName: filename },
-      { timeout: 15_000 },
+      { timeout: 30_000 },
     )
 
     console.log("ATTACHMENT UI PASS: choose → upload → send → persist")
@@ -79,7 +96,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error("ATTACHMENT UI FAILED:", error instanceof Error ? error.stack ?? error.message : String(error))
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error("ATTACHMENT UI FAILED:", error instanceof Error ? error.stack ?? error.message : String(error))
+    process.exit(1)
+  })
+}
