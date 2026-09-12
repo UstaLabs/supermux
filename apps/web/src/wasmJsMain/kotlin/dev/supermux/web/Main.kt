@@ -1,12 +1,16 @@
 package dev.supermux.web
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
 import dev.supermux.host.HostSnapshotStore
@@ -31,6 +35,8 @@ import dev.supermux.web.auth.CookieSession
 import dev.supermux.web.auth.SessionState
 import dev.supermux.web.auth.WebPairScreen
 import dev.supermux.web.nav.UrlSync
+import dev.supermux.web.push.WebPushBanner
+import dev.supermux.web.push.WebPushRegistrar
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.CoroutineScope
@@ -91,9 +97,15 @@ fun main() {
     // Unpairing the origin host has to end the cookie session too — see [WebHostStores]. Wired
     // before anything reads the store, because the hook lives on its persistence.
     WebHostStores.init(session, appScope)
+    // The fleet is built inside the composition (see the gate below), but the push registrar has
+    // to exist BEFORE the platform, which exists before the composition. This holder is the join:
+    // the registrar resolves its `BrokerApi` per call, so it is constructed once and simply reads
+    // "no host yet" until the fleet lands.
+    var fleetRef: FleetStore? = null
+    val push = WebPushRegistrar(api = { fleetRef?.activeApp()?.api }, scope = appScope)
     // ONE platform for the page: `FlowNotices` is a bus, and a second instance would mean notices
     // shown on one and rendered from another.
-    val platform = WebPlatform()
+    val platform = WebPlatform(push = push)
 
     appScope.launch {
         val appearanceSeed = uiPrefs.appearance(AppearanceMode.SYSTEM).first()
@@ -140,7 +152,7 @@ fun main() {
                     // The record's hostId/platform/version are backfilled from `GET /host` by the
                     // fleet's own probe; all it needs up front is a URL to connect to.
                     WebHostStores.ensureOriginHost()
-                    buildFleet(deps, appScope)
+                    buildFleet(deps, appScope).also { fleetRef = it }
                 }
                 val ui = remember {
                     ShellUiState().apply {
@@ -178,30 +190,41 @@ fun main() {
                     WebAppState.consumePendingPushSessionId()
                 }
 
-                SupermuxApp(
-                    fleet = fleet,
-                    ui = ui,
-                    appearance = appearance,
-                    onToggleTheme = {
-                        appScope.launch {
-                            uiPrefs.putAppearance(
-                                if (appearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK,
-                            )
-                        }
-                    },
-                    appForeground = foreground,
-                    // A tab reopens where it was, and the URL says where that is.
-                    persistSelection = true,
-                    defaultDeviceName = "Browser",
-                    sessionListMode = SessionListMode.Fleet,
-                    groupByProject = groupByProject,
-                    onGroupByProjectChange = { value ->
-                        groupByProject = value
-                        appScope.launch { settings.putString(GROUP_BY_PROJECT_KEY, value.toString()) }
-                    },
-                    settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
-                    settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
-                )
+                // Push, exactly where iOS registers it (`MainViewController.kt`): once, after the
+                // fleet exists, so `registerIfPaired()` has a broker to talk to. It is a no-op
+                // until the user has granted the permission — the banner above asks for that.
+                LaunchedEffect(Unit) { platform.push?.registerIfPaired() }
+
+                Box(Modifier.fillMaxSize()) {
+                    SupermuxApp(
+                        fleet = fleet,
+                        ui = ui,
+                        appearance = appearance,
+                        onToggleTheme = {
+                            appScope.launch {
+                                uiPrefs.putAppearance(
+                                    if (appearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK,
+                                )
+                            }
+                        },
+                        appForeground = foreground,
+                        // A tab reopens where it was, and the URL says where that is.
+                        persistSelection = true,
+                        defaultDeviceName = "Browser",
+                        sessionListMode = SessionListMode.Fleet,
+                        groupByProject = groupByProject,
+                        onGroupByProjectChange = { value ->
+                            groupByProject = value
+                            appScope.launch { settings.putString(GROUP_BY_PROJECT_KEY, value.toString()) }
+                        },
+                        settingsExtra = { extra, scope -> FleetSettingsExtra(extra, scope) },
+                        settingsSection = { section, scope -> FleetSettingsSection(section, scope, fleet) },
+                    )
+                    // An OVERLAY at the top, not a row above the shell: the strip must not reflow
+                    // the app (see [WebPushBanner]). It draws nothing at all unless this browser
+                    // can do push and the user has answered neither way.
+                    WebPushBanner(push, Modifier.align(Alignment.TopCenter))
+                }
             }
         }
     }

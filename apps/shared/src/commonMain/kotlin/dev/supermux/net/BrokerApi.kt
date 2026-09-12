@@ -1145,6 +1145,19 @@ private data class RegisterPushDeviceBody(
     val pubkey: String,
 )
 
+/** GET /push/vapid-public-key → `{publicKey}` (503 with no body field when unconfigured). */
+@Serializable
+private data class VapidKeyResponse(val publicKey: String? = null)
+
+/** The `keys` object of a W3C `PushSubscription.toJSON()`. */
+@Serializable
+private data class WebPushKeys(val p256dh: String, val auth: String)
+
+/** POST /push/subscribe body. Field ORDER is the wire shape the broker validates by name;
+ *  keep `endpoint` first and `keys` nested, never flattened. */
+@Serializable
+private data class WebPushSubscribeBody(val endpoint: String, val keys: WebPushKeys)
+
 /** POST /usage/refresh body. [force] is always encoded (the Kotlin default is true; the
  *  broker treats an omitted force as false). [providers] is omitted when null. */
 @Serializable
@@ -2410,6 +2423,69 @@ class BrokerApi(
             RegisterPushRelayBody(platform, pushToken),
         )
         return resp.routingToken?.takeIf { it.isNotBlank() }
+    }
+
+    // ── Web Push (browser, VAPID) ─────────────────────────────────────────────
+    //
+    // The browser host subscribes through the standard W3C Push API and hands the
+    // resulting endpoint + keys to the broker. All three calls are QUIET: a non-2xx
+    // is an answer ("not configured", "not authorised"), never an exception — the
+    // registrar that drives them runs inside a Compose composition and must not throw.
+    //
+    // On the browser the token is blank and `authHeader()` sends nothing; the
+    // HttpOnly `cmux_token` cookie is what the broker's `requireAuth` reads.
+
+    /**
+     * GET /push/vapid-public-key → the base64url VAPID application server key, or null when
+     * the broker has no push keys (503), the body has no `publicKey`, or the call failed.
+     */
+    suspend fun pushVapidPublicKey(): String? {
+        val resp = try {
+            http.get("$httpBase/push/vapid-public-key") { authHeader() }
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            println("[BrokerApi] vapid key fetch failed: ${e.message?.take(160)}")
+            return null
+        }
+        if (!resp.status.isSuccess()) return null
+        val text = try {
+            resp.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            return null
+        }
+        return runCatching { json.decodeFromString<VapidKeyResponse>(text).publicKey }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * POST /push/subscribe `{"endpoint":…,"keys":{"p256dh":…,"auth":…}}` — idempotent upsert
+     * keyed by the calling device. Returns whether the broker accepted it.
+     */
+    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String): Boolean = try {
+        http.post("$httpBase/push/subscribe") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(WebPushSubscribeBody(endpoint, WebPushKeys(p256dh, auth))))
+        }.status.isSuccess()
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Throwable) {
+        println("[BrokerApi] push subscribe failed: ${e.message?.take(160)}")
+        false
+    }
+
+    /** DELETE /push/subscribe — drop this device's browser subscription. */
+    suspend fun pushUnsubscribe(): Boolean = try {
+        http.delete("$httpBase/push/subscribe") { authHeader() }.status.isSuccess()
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Throwable) {
+        println("[BrokerApi] push unsubscribe failed: ${e.message?.take(160)}")
+        false
     }
 
     @OptIn(ExperimentalEncodingApi::class)

@@ -35,12 +35,22 @@ function isSessionPath(url, sessionId) {
   }
 }
 
+// iOS Safari REVOKES the push subscription when a delivered push shows no notification, so
+// every `push` event must end in a `showNotification` — including the ones we cannot read.
+function fallbackNotification() {
+  return self.registration.showNotification("supermux", { body: "New activity" })
+}
+
 self.addEventListener("push", (event) => {
-  if (!event.data) return
+  if (!event.data) {
+    event.waitUntil(fallbackNotification())
+    return
+  }
   let data
   try {
     data = event.data.json()
   } catch {
+    event.waitUntil(fallbackNotification())
     return
   }
 

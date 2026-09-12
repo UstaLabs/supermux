@@ -138,7 +138,9 @@ val stageForBroker by tasks.registering {
     inputs.files(xtermCssFile).withPropertyName("xtermCss").optional()
     inputs.dir(editorSrcDir).withPropertyName("editorBundle")
     inputs.files(editorShimFile).withPropertyName("editorShim").optional()
-    inputs.dir(pwaDir).withPropertyName("pwa")
+    // `.optional()` like the editor shim above: a missing `pwa/` must fail in the task action
+    // with the explanatory check below, not as an opaque Gradle snapshotting error.
+    inputs.dir(pwaDir).withPropertyName("pwa").optional()
     inputs.property("maxGzipBytes", maxGzipBytes)
     outputs.dir(brokerStaticDir)
 
@@ -249,6 +251,11 @@ val stageForBroker by tasks.registering {
         // is hashed and none of it counts against the gzip ceiling.
         check(pwaDir.asFile.resolve("sw.js").isFile && pwaDir.asFile.resolve("manifest.webmanifest").isFile) {
             "PWA shell missing from ${pwaDir.asFile} (expected sw.js + manifest.webmanifest)"
+        }
+        // The webpack dist's own index.html is the app shell; a stray one here would silently
+        // overwrite it in the copy below and serve a page with no bundle.
+        check(!pwaDir.asFile.resolve("index.html").exists()) {
+            "${pwaDir.asFile}/index.html would overwrite the staged app shell — remove it"
         }
         pwaDir.asFile.copyRecursively(staging, overwrite = true)
 

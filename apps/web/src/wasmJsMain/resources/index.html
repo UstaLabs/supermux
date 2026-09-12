@@ -17,6 +17,12 @@
   <link rel="icon" href="favicon.ico">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <!-- The standardised spelling of the same thing; Chrome warns when only the apple- one is
+       present, and both are needed because iOS still reads only its own. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <!-- Standalone on iOS draws under the status bar (the page is already viewport-fit=cover),
+       so the bar must be translucent or its opaque strip double-pads the top inset. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <!-- xterm.js's own stylesheet (cell metrics, the viewport/screen stacking, selection layers).
        Staged to the root by `stageForBroker` straight out of KGP's node_modules — webpack bundles
        the JS but not the CSS, and the terminal renders as overlapping garbage without it. -->

@@ -35,7 +35,7 @@ import kotlinx.coroutines.flow.onEach
 
 /** What the browser can do. Plan 3 turns on terminal (xterm.js) and clipboardImages; plan 4 push. */
 val WEB_CAPS = Caps(
-    push = false, camera = false, tray = false, externalDisplay = true, hardwareVideoDecode = false,
+    push = true, camera = false, tray = false, externalDisplay = true, hardwareVideoDecode = false,
     localBroker = false, multiWindow = false, fileSystem = false,
     clipboardImages = true, saveAs = true, walkthrough = true, appearanceControls = true,
     dynamicColor = false, appUpdate = false, terminal = true, scrcpy = false,
@@ -45,7 +45,15 @@ val WEB_CAPS = Caps(
  * The browser's [Platform] — the fourth host of the shared Compose root. Every member ANSWERS
  * (several are read during composition); "not here" is said through [caps], never by throwing.
  */
-class WebPlatform : Platform {
+class WebPlatform(
+    /**
+     * Web Push, when the page has a broker to subscribe against. Constructor-injected rather than
+     * built here because [dev.supermux.web.push.WebPushRegistrar] needs a `BrokerApi` and the
+     * platform is created BEFORE the fleet exists — `main()` owns that ordering, so `main()` owns
+     * the registrar. Null keeps every push read in the shell on the "this host has none" path.
+     */
+    override val push: PushRegistrar? = null,
+) : Platform {
     init {
         // The `paste` hook has to be listening before the user pastes — see [WebClipboard].
         WebClipboard.install()
@@ -82,7 +90,6 @@ class WebPlatform : Platform {
     override val updates: AppUpdater = NoAppUpdater
     override val notifications: NotificationManager = NoopNotificationManager
     override val windows: WindowHostController? = null
-    override val push: PushRegistrar? = null
     // The committed cm6 bundle in a same-origin iframe, driven by desktop's bridge protocol.
     override val editorEngine: EditorEngineFactory = WebEditorEngineFactory()
 }
