@@ -33,6 +33,12 @@ const variants: Variant[] = [
   { out: "src/web-app/public/icons/icon-512.png",         size: 512, tile: "transparent", color: "#fafafa" },
   { out: "src/web-app/public/icons/icon-mask.png",        size: 512, tile: "#0b0b0b",     color: "#fafafa", safeZonePadding: 64 },
   { out: "src/web-app/public/icons/apple-touch-icon.png", size: 180, tile: "#0a0a0a",     color: "#fafafa" },
+  // Kotlin/Wasm PWA shell (apps/web/pwa/** is staged to the root of the served tree). Same five
+  // files as the Vue app above; both targets stay until the Vue PWA is retired in plan 5.
+  { out: "apps/web/pwa/icons/icon-192.png",               size: 192, tile: "transparent", color: "#fafafa" },
+  { out: "apps/web/pwa/icons/icon-512.png",               size: 512, tile: "transparent", color: "#fafafa" },
+  { out: "apps/web/pwa/icons/icon-mask.png",              size: 512, tile: "#0b0b0b",     color: "#fafafa", safeZonePadding: 64 },
+  { out: "apps/web/pwa/icons/apple-touch-icon.png",       size: 180, tile: "#0a0a0a",     color: "#fafafa" },
   { out: "assets/logo/telegram-avatar.png",               size: 640, tile: "#0a0a0a",     color: "#fafafa" },
   // Native iOS app icon (no alpha; opaque dark tile + light mark — matches apple-touch-icon).
   { out: "apps/iosApp/Supermux/Assets.xcassets/AppIcon.appiconset/icon-1024.png", size: 1024, tile: "#0a0a0a", color: "#fafafa" },
@@ -96,6 +102,7 @@ async function main(): Promise<void> {
   }
   const icoBuf = await pngToIco(tmpPngs)
   await writeOut("src/web-app/public/favicon.ico", icoBuf)
+  await writeOut("apps/web/pwa/favicon.ico", icoBuf)
   // Clean up transient PNGs
   for (const p of tmpPngs) await rm(p).catch(() => {})
 }

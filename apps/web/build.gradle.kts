@@ -120,6 +120,13 @@ val editorSrcDir: File = rootProject.projectDir.resolve("android/src/main/assets
 // This lives outside the Kotlin source set precisely so the build treats it as a plain data file.
 val editorShimFile: File = layout.projectDirectory.file("editor/editor-shim.js").asFile
 
+// The PWA shell: `sw.js`, `manifest.webmanifest`, `favicon.ico` and `icons/`. Committed (no build
+// step) and staged to the ROOT of the served tree, outside `assets/` — same reason as the editor
+// bundle and emphatically NOT `src/wasmJsMain/resources/`: the hashing pass above renames every
+// .js in the dist root, and a service worker that moves to `assets/sw-<hash>.js` has neither its
+// registered URL nor its `/` scope any more.
+val pwaDir = layout.projectDirectory.dir("pwa")
+
 val stageForBroker by tasks.registering {
     group = "distribution"
     description = "Build the wasm bundle and stage it (content-hashed) into src/channels/web/static"
@@ -131,6 +138,7 @@ val stageForBroker by tasks.registering {
     inputs.files(xtermCssFile).withPropertyName("xtermCss").optional()
     inputs.dir(editorSrcDir).withPropertyName("editorBundle")
     inputs.files(editorShimFile).withPropertyName("editorShim").optional()
+    inputs.dir(pwaDir).withPropertyName("pwa")
     inputs.property("maxGzipBytes", maxGzipBytes)
     outputs.dir(brokerStaticDir)
 
@@ -234,12 +242,25 @@ val stageForBroker by tasks.registering {
             }
         )
 
+        // The PWA shell, copied verbatim into the staged root: `sw.js` must be served from `/`
+        // (its registration scope), the manifest and favicon are linked by bare name from
+        // index.html, and `icons/` is referenced absolutely (`/icons/icon-192.png`) by both the
+        // manifest and the push notifications the worker shows. Outside `assets/`, so nothing here
+        // is hashed and none of it counts against the gzip ceiling.
+        check(pwaDir.asFile.resolve("sw.js").isFile && pwaDir.asFile.resolve("manifest.webmanifest").isFile) {
+            "PWA shell missing from ${pwaDir.asFile} (expected sw.js + manifest.webmanifest)"
+        }
+        pwaDir.asFile.copyRecursively(staging, overwrite = true)
+
         // Guards, BEFORE anything is published.
         val gz = assets.listFiles()!!.filter { it.extension == "wasm" || it.extension == "js" || it.extension == "mjs" }
             .sumOf { gzipSize(it.readBytes()) }
         check(gz <= maxGzipBytes) { "web bundle gzip total ${gz / 1024} KB exceeds the ${maxGzipBytes / 1024} KB ceiling" }
         check(staging.resolve("index.html").exists()) { "index.html missing from the staged bundle" }
         check(staging.resolve("editor/index.html").exists()) { "editor bundle missing from the staged tree" }
+        check(staging.resolve("sw.js").exists() && staging.resolve("icons/icon-192.png").exists()) {
+            "PWA shell missing from the staged tree"
+        }
 
         // Publish: wipe whatever the previous build (Vite or ours) left — the broker reads disk-first.
         out.deleteRecursively()

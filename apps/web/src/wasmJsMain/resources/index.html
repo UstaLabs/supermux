@@ -10,6 +10,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#0b0b0b">
   <title>Supermux</title>
+  <!-- PWA shell. These four files are committed under `apps/web/pwa/` and staged to the ROOT of
+       the served tree by `stageForBroker` (outside assets/, so they keep their names and the
+       broker's no-cache rule). -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <!-- xterm.js's own stylesheet (cell metrics, the viewport/screen stacking, selection layers).
        Staged to the root by `stageForBroker` straight out of KGP's node_modules — webpack bundles
        the JS but not the CSS, and the terminal renders as overlapping garbage without it. -->
@@ -28,6 +35,15 @@
 </head>
 <body>
   <div id="splash"><div>Supermux</div><div class="bar"><i></i></div></div>
+  <script>
+    if ("serviceWorker" in navigator) {
+      // Register early — before the 6 MB wasm bundle — so push works even on a slow first load.
+      navigator.serviceWorker.register("/sw.js").catch(function () {});
+      // A new worker took control after an update: reload once so the page runs the new bundle.
+      var had = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener("controllerchange", function () { if (had) location.reload(); });
+    }
+  </script>
   <script src="app.js"></script>
 </body>
 </html>
