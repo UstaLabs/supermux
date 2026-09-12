@@ -74,3 +74,93 @@
 - [ ] **Step 2:** Full verification: `bun test` (verify.sh), `bun run typecheck`, `bun run test:ui` (four journeys), `./gradlew :shared:jvmTest :ui:jvmTest :desktop:test :web:wasmJsBrowserTest :web:stageForBroker` green, `scripts/build-binary.sh` + `smoke-binary.sh` green, `docker build` green. `grep -rn "web-app" . --exclude-dir=node_modules --exclude-dir=docs --exclude-dir=.git` → only the `.gitignore`/historical hits you intend.
 - [ ] **Step 3:** `## Results` in this plan (CMP bump outcome incl. the interop-hole re-measure, journey timings, image size, binary size, bundle size) + a "What changed for operators" paragraph (JDK 17 needed to build; Docker build stage). Commit `chore(web): retire the Vue PWA — the Compose-for-Web client is the only web client`.
 - [ ] **Step 4 (coordinator):** update `~/.mux/domains/claudemux.md` (the client matrix: Web = `apps/web` Kotlin/Wasm; Vue dead) and hand the branch to `superpowers:finishing-a-development-branch`.
+
+---
+
+### Task 1 outcome (blocked on AGP 9.1 / compileSdk 37)
+
+**CMP 1.12.0 is parked, not landed.** The bump is correct and green on every target this host can
+build — and blocked on Android by a toolchain requirement the plan did not anticipate.
+
+**What 1.12 requires on Android.** CMP 1.12.0 resolves the androidx Compose artifacts to 1.12.0, and
+`:android:checkDebugAarMetadata` rejects all of them (`ui-android`, `ui-graphics-android`,
+`ui-text-android`, `ui-tooling(-data)-android`, `foundation(-layout)-android`,
+`animation(-core)-android`, `runtime-saveable-android`) with two hard constraints:
+
+- *"requires Android Gradle plugin **9.1.0** or higher. This build currently uses Android Gradle
+  plugin 8.9.1."*
+- *"requires libraries and applications that depend on it to compile against version **37** or later
+  of the Android APIs. `:android` is currently compiled against android-36."*
+
+That is AGP 8.9.1 → 9.1.0, Gradle 8.14 → 9.x, `androidCompileSdk` 36 → 37 — a migration of its own,
+not a step of this plan, and AAR metadata has no supported suppression for `minAgpVersion` /
+`minCompileSdk`. **Land the Android toolchain bump first, then replay the patch below.**
+
+**The patch.** Six files, 174 lines, verified with `git apply --check` against this commit's tree:
+
+`<scratchpad>/plan5/cmp-1.12.0.patch` (session scratchpad —
+`/tmp/claude-1000/-home-ahmet--mux-worktrees-supermux-3962b5bf-add67966-f459-4473-ab17-b64a62eb8da2/4bdce31a-5d27-443a-b3cf-06204998acf5/scratchpad/plan5/cmp-1.12.0.patch`)
+
+1. `apps/gradle/libs.versions.toml` — `composeMultiplatform 1.11.1 → 1.12.0`,
+   `navigationEvent 1.0.1 → 1.1.0`, both with their reason comments.
+2. `SettingsHubTest.kt`, `VoiceSettingsScreenTest.kt`, `SupermuxAppNavTest.kt` — **compile error**:
+   `androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner` is gone in 1.12 (so is
+   `ui-desktop`'s internal `LocalInternalNavigationEventDispatcherOwner`); 1.12's `BackHandler` reads
+   the public `androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner` instead. Import
+   swap only — `provides` syntax is unchanged.
+3. `DragReorderTest.kt` — a **real** 1.12 idling regression, not the known flake (passes on 1.11.1,
+   hangs 3/3 on 1.12.0 in isolation). `DragReorder.startEdgeScroll()`'s
+   `while (draggingKey != null) { … delay(16) }` is live while the finger is down; with an
+   auto-advancing clock that delay re-arms forever, so every mid-drag `onNodeWithTag` (each waits for
+   idle) times out. Fix: `mainClock.autoAdvance = false` before the `down()`, two frames by hand.
+   No production code changed.
+4. `ProxiesSettingsScreenTest.kt` — a timing shift; one test lacked the
+   `waitUntil { assertIsDisplayed }` guard its two siblings have. Added.
+
+`grep NativeCanvas|NativePaint` over `apps/`: **zero hits** (VncFramebuffer confirmed raw Skia
+`Bitmap`). `SwingPanel(background=)` is WARNING-only in 1.12 (5 `:desktop` probe sites) — no edit
+forced. New WARNING to schedule: `runComposeUiTest` is deprecated in favour of
+`androidx.compose.ui.test.v2.runComposeUiTest` (~950 warnings in `:ui:jvmTest`).
+
+**Green under the patch:** `:shared:jvmTest` 985 pass / 1 skipped · `:ui:jvmTest` 1613 pass ·
+`:desktop:test` 297 pass · `:shared:compileKotlinWasmJs` + `:ui:compileKotlinWasmJs` ·
+`:web:wasmJsBrowserTest` 65 pass · `:web:stageForBroker` (11 m). Apple targets cannot be compiled on
+this Linux host (Kotlin/Native ios*/uikit* need a macOS konan host) — untested.
+
+**Accessibility DOM — measured on 1.12.0, and it decides Task 4.** Hermetic `test-broker.sh` fixture,
+Chrome via Playwright, no `pageerror`, no console errors. `ComposeViewport(document.body!!)` with
+**defaults** — no explicit `isA11YEnabled = true` needed.
+
+- **`div#cmp_a11y_root` is `1280×900`** (`role="presentation"`) — the 0×0 bug is fixed. It lives
+  inside the OPEN shadow root on `<body>`'s single anonymous `<div>`: Playwright locators pierce it,
+  but `page.evaluate(() => document.querySelector("#cmp_a11y_root"))` returns **null**. Any in-page
+  assertion helper must walk `.shadowRoot` itself.
+- **`testTag` → element `id` works**, with roles and `aria-label`s populated. Confirmed present:
+  `#workspaces_list` (`role=list`), `[id^="workspace_row_"]` (`role=button`), `#new_session_row`,
+  `#sidebar_{search,group_toggle,footer,footer_theme,footer_usage,footer_devices,footer_settings,divider}`,
+  `#list_overflow`, `#view-tab-strip`, `#tab-add-view`, `#tab-add-view-{terminal,diff,display}`,
+  `#view-tab-<id>`, `#tab-close-<id>`, `#view_chat`, `#chat_body`, `#chat_starter_0..2`,
+  `#composer-card`, **`#composer-input`** (`role=textbox`), `#composer-attach`, `#composer-mic`,
+  **`#composer-send`**, `#composer-model-pill`, `#composer-reasoning-pill`, `#footer_detail`.
+- **⚠️ Playwright's `.click()` is REFUSED on every mirror element** — *"`<canvas … role="generic">`
+  intercepts pointer events"*, 30 s timeout, every time. **`locator.dispatchEvent("click")` works**
+  (Compose installs a real DOM `click` listener on `OnClick` nodes) and drove the whole journey;
+  `click({ force: true })` is the alternative. Put this in `tests/ui/compose-dom.ts` as the only
+  sanctioned tap, and never call `.click()` directly.
+- **`#chat-view` does not exist** — the chat container is **`#view_chat`** / `#chat_body`. The Facts
+  section above is wrong on this; fix the selector or add a `chat-view` testTag in Task 4 Step 1.
+- `composer-submit` does not exist anywhere; `composer-send` is the real id (Task 4 Step 1's choice is
+  correct). **No timeline row carries any id yet** — `chat-message:<direction>:<id>` must be added
+  before a spec can assert on it. The fixture is workspaces-on, so `session-list` / `session-row`
+  never appear, and the broker is already onboarded, so `setup_wizard` never appears either.
+- The a11y sync is debounced ~100 ms and the wasm boot is slow: ~6 s after `/pair` before the sidebar
+  ids appear. `waitReady(page)` should poll `#workspaces_list`, not sleep.
+
+**Interop hole: STILL PRESENT in 1.12.0.** Terminal mounted for real (fixture `tmux` stub replaced
+with `/usr/bin/tmux`); xterm at `(320, 32) 960×855`. With `document.body.style.background =
+"#ff00ff"`, every scanline from `y=0` to `y=31` above it is dominantly `rgb(255,0,255)` — the 32 px
+band where the view tab strip should paint is fully transparent. **Keep the known-issue note.**
+
+**Bundle size:** staged `src/channels/web/static` 22,333,188 → 22,797,721 B (**+464,533 B, +2.08 %**);
+`stageForBroker` gzip total 6269 KB (8 MiB guard untroubled). `supermux-apps-web-*.wasm` 10,942,205
+raw / 2,862,494 gz; `skiko-*.wasm` 8,640,316 / 3,328,934; `app-*.js` 993,828 / 211,379.
