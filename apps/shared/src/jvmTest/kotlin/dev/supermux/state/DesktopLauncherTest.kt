@@ -172,7 +172,7 @@ class DesktopLauncherTest {
         assertTrue(app.consumeFirstUploads("sess-1").isEmpty()) // single-shot: cleared after consume
     }
 
-    @Test fun create_session_null_worktree_and_model_are_omitted_from_the_spawn_body() = runBlocking {
+    @Test fun create_session_blank_model_is_omitted_and_worktree_false_is_sent() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)
 
@@ -182,10 +182,11 @@ class DesktopLauncherTest {
         )
 
         // explicitNulls=false in BrokerApi drops null fields — blank model/baseBranch/reasoning
-        // map to null (…?.ifBlank { null }); worktree=false → null (not `false`).
+        // map to null (…?.ifBlank { null }). worktree=false must be SENT: the broker
+        // treats an omitted worktree as ON and would cut a nested worktree.
         val body = recorded.first { it.path == "/sessions" }.body
         assertTrue("model" !in body, "blank model must be omitted, got: $body")
-        assertTrue("worktree" !in body, "worktree=false must be omitted, got: $body")
+        assertEquals(false, json.decodeFromString<SpawnRequest>(body).worktree, "worktree=false must be sent, got: $body")
         assertTrue("baseBranch" !in body, "blank baseBranch must be omitted, got: $body")
         assertTrue("reasoningLevel" !in body, "blank reasoning must be omitted, got: $body")
     }
@@ -253,7 +254,7 @@ class DesktopLauncherTest {
         assertEquals("feat-x", req.name)
         assertEquals("ws-src", req.workspaceId)
         assertEquals("pick up here", req.firstMessage)
-        assertNull(req.worktree)
+        assertEquals(false, req.worktree) // same checkout — never a new (nested) worktree
     }
 
     @Test fun create_session_resolves_a_blank_spawn_id_by_name() = runBlocking {

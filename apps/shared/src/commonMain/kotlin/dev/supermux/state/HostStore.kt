@@ -1898,7 +1898,8 @@ class HostStore(
                     name = name?.ifBlank { null },
                     agent = agent,
                     model = model?.ifBlank { null },
-                    worktree = if (worktree) true else null,
+                    // Explicit false: the broker defaults an omitted worktree to ON (worktree-by-default).
+                    worktree = worktree,
                     baseBranch = baseBranch?.ifBlank { null },
                     reasoningLevel = reasoningLevel?.ifBlank { null },
                     workspaceId = workspaceId,
