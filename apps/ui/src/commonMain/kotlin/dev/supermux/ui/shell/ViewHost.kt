@@ -94,16 +94,11 @@ object WorkspaceChatPaneTestIds {
 enum class ChatHeaderMode { PANEL, BAR, NONE }
 
 /**
- * The shape a host gets when it does not ask for one: a POINTER host draws the panel header (its
- * slots need a mouse to be worth having), a touch host draws the bar when there is room for it and
- * nothing at all on a phone, where the screen's own header is right above.
+ * The shape a host gets when it does not ask for one: the panel's own (desktop) header on every
+ * device and width. The header itself sheds its least important parts as it narrows.
  */
 @Composable
-fun defaultChatHeaderMode(): ChatHeaderMode = when {
-    LocalPointerAvailable.current -> ChatHeaderMode.PANEL
-    LocalWindowWidthClass.current == WindowWidthClass.Compact -> ChatHeaderMode.NONE
-    else -> ChatHeaderMode.BAR
-}
+fun defaultChatHeaderMode(): ChatHeaderMode = ChatHeaderMode.PANEL
 
 /**
  * Draw one view's body.

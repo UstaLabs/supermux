@@ -136,6 +136,24 @@ private val CONTENT_MAX_WIDTH = 860.dp
 /** Height of the fade that carries the transcript into the header above it. */
 private val EDGE_FADE = 28.dp
 
+/** Fade, not a rule: a short scrim of the panel's own background. Non-interactive. */
+@Composable
+private fun EdgeFade(bg: androidx.compose.ui.graphics.Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(EDGE_FADE)
+            .background(
+                Brush.verticalGradient(
+                    0.00f to bg,
+                    0.45f to bg.copy(alpha = 0.72f),
+                    0.75f to bg.copy(alpha = 0.28f),
+                    1.00f to bg.copy(alpha = 0f),
+                ),
+            ),
+    )
+}
+
 /**
  * Everything the chat surface READS. A host that owns a [HostStore] builds it with
  * [rememberChatState]; Android's screen passes the values its view-model already collected.
@@ -473,14 +491,22 @@ fun ChatPanel(
             // never grows/shrinks (and the transcript never shifts) as the agent starts and stops
             // working. No bar and no rule — it shares the panel's background and the transcript
             // dissolves into it through the scrim below.
+            // Responsive: the same header at every width, shedding the least important parts as it
+            // narrows — the project crumb first, then the status words (the dot stays), then the
+            // Chat/Native labels.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val headerWidth = maxWidth
+            val showProject = headerWidth >= 560.dp
+            val showStatusText = headerWidth >= 460.dp
+            val toggleIconOnly = headerWidth < 420.dp
             Row(
-                Modifier.fillMaxWidth().height(44.dp).padding(start = Space.lg, end = Space.sm),
+                Modifier.fillMaxWidth().height(44.dp).padding(start = if (pointer) Space.lg else Space.md, end = Space.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                     // Breadcrumb, not a title: the PROJECT the session belongs to, then the session.
                     val projectName = projectLabel(session, inferHomeDir(session.workdir))
-                    if (projectName.isNotEmpty()) {
+                    if (showProject && projectName.isNotEmpty()) {
                         Icon(
                             Icons.Outlined.FolderOpen,
                             contentDescription = null,
@@ -515,6 +541,7 @@ fun ChatPanel(
                     if (statusText != null) {
                         Spacer(Modifier.width(Space.sm))
                         Box(Modifier.size(5.dp).clip(CircleShape).background(statusColor))
+                        if (showStatusText) {
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = statusText,
@@ -524,6 +551,7 @@ fun ChatPanel(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        }
                     }
                 }
                 headerLinks(proxies, forceLinksMenu, onForceLinksMenuConsumed)
@@ -533,11 +561,12 @@ fun ChatPanel(
                         nativeView = nativeView,
                         onSetNative = { nativeView = it },
                         modifier = Modifier.testTag("toggle_native"),
+                        iconOnly = toggleIconOnly,
                     )
                     Spacer(Modifier.width(Space.xs))
                 }
-                finish?.let { FinishHeaderButton(session, it) }
                 headerActions()
+            }
             }
         }
         // "Not responding" dead banner (error-tinted strip).
@@ -715,20 +744,7 @@ fun ChatPanel(
                         if (emptySession) starters() else transcript(0.dp)
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(EDGE_FADE)
-                                .align(Alignment.TopCenter)
-                                .background(
-                                    Brush.verticalGradient(
-                                        0.00f to cs.surfaceContainerLow,
-                                        0.45f to cs.surfaceContainerLow.copy(alpha = 0.72f),
-                                        0.75f to cs.surfaceContainerLow.copy(alpha = 0.28f),
-                                        1.00f to cs.surfaceContainerLow.copy(alpha = 0f),
-                                    ),
-                                ),
-                        )
+                        EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
                     }
                     WalkthroughUnreadChip(state, onOpenWalkthrough, Modifier.align(Alignment.CenterHorizontally))
                     // A pointer host can still raise a soft keyboard (a tablet with a mouse, DeX
@@ -772,6 +788,7 @@ fun ChatPanel(
                     } else {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                             transcript(with(density) { composerHeightPx.toDp() } + Space.md)
+                            if (showHeader) EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
                         }
                     }
                     // The inset the whole cluster sits above. It is applied per-HALF rather than

@@ -61,6 +61,8 @@ fun AgentViewToggle(
     nativeView: Boolean,
     onSetNative: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** Drop the labels (icons only) when the header is too narrow for them. */
+    iconOnly: Boolean = false,
 ) {
     val cs = MaterialTheme.colorScheme
     val touch = !LocalPointerAvailable.current
@@ -75,8 +77,8 @@ fun AgentViewToggle(
             .padding(2.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Segment("Chat", Icons.Outlined.AutoAwesome, selected = !nativeView, touch = touch, tag = "agent_view_chat") { onSetNative(false) }
-        Segment("Native", Icons.Outlined.Terminal, selected = nativeView, touch = touch, tag = "agent_view_native") { onSetNative(true) }
+        Segment("Chat", Icons.Outlined.AutoAwesome, selected = !nativeView, touch = touch, iconOnly = iconOnly, tag = "agent_view_chat") { onSetNative(false) }
+        Segment("Native", Icons.Outlined.Terminal, selected = nativeView, touch = touch, iconOnly = iconOnly, tag = "agent_view_native") { onSetNative(true) }
     }
 }
 
@@ -86,6 +88,7 @@ private fun Segment(
     icon: ImageVector,
     selected: Boolean,
     touch: Boolean,
+    iconOnly: Boolean,
     tag: String,
     onClick: () -> Unit,
 ) {
@@ -114,15 +117,17 @@ private fun Segment(
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = if (iconOnly) label else null,
             tint = content,
             modifier = Modifier.size(13.dp),
         )
-        Text(
-            label,
-            color = content,
-            fontSize = 12.sp,
-            fontWeight = if (touch || selected) FontWeight.SemiBold else FontWeight.Medium,
-        )
+        if (!iconOnly) {
+            Text(
+                label,
+                color = content,
+                fontSize = 12.sp,
+                fontWeight = if (touch || selected) FontWeight.SemiBold else FontWeight.Medium,
+            )
+        }
     }
 }

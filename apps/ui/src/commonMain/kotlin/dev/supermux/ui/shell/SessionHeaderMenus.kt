@@ -676,7 +676,6 @@ fun ChatViewHeader(
                 modifier = Modifier.testTag("toggle_native"),
             )
         }
-        FinishHeaderButton(session = session, bindings = finish)
         OverflowMenu(
             session = session,
             onRename = onRename,
