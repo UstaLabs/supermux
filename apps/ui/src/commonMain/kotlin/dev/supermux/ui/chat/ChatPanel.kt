@@ -385,10 +385,9 @@ fun ChatPanel(
 
     // ── Autoscroll ────────────────────────────────────────────────────────────────────────────
     val listState = rememberLazyListState()
-    var composerHeightPx by remember { mutableIntStateOf(0) }
 
-    if (pointer) {
-        // Desktop's rule: instant jump on the first content for a session, then follow new items
+    run {
+        // One rule on every host (was desktop's): instant jump on the first content for a session, then follow new items
         // only while the user is at/near the bottom (reading history stays put).
         var prevSize by remember(session.id) { mutableIntStateOf(-1) }
         var autoFollow by remember(session.id) { mutableStateOf(true) }
@@ -409,40 +408,7 @@ fun ChatPanel(
             }
             prevSize = timelineItems.size
         }
-    } else {
-        // Android's rule: the composer FLOATS, so the target includes the working row and the list
-        // must scroll past the composer-sized contentPadding to reach the true bottom.
-        var prevTimelineSize by remember(session.id) { mutableIntStateOf(0) }
-        LaunchedEffect(timelineItems.size, working, active) {
-            if (!active) return@LaunchedEffect
-            val target = timelineItems.size - 1 + (if (working) 1 else 0)
-            if (target >= 0 && (timelineItems.size > prevTimelineSize || working)) {
-                if (prevTimelineSize == 0) listState.scrollToItem(target)
-                else listState.animateScrollToItem(target)
-                listState.scrollBy(100_000f)
-            }
-            prevTimelineSize = timelineItems.size
-        }
-        // Follow the floating composer SMOOTHLY as its height changes (first layout, expand, the
-        // ime inset animating in) by scrolling the transcript by the SAME delta. snapshotFlow, not
-        // a per-change effect, so awaiting a frame is never cancelled by the next change.
-        LaunchedEffect(session.id, active) {
-            if (!active) return@LaunchedEffect
-            var prev = 0
-            snapshotFlow { composerHeightPx }.collect { h ->
-                val delta = h - prev
-                prev = h
-                // Only follow GROWTH: on shrink the LazyColumn auto-clamps the padding already.
-                if (delta > 0) {
-                    withFrameNanos {}
-                    val info = listState.layoutInfo
-                    val atBottom =
-                        (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 2
-                    if (atBottom) listState.scrollBy(delta.toFloat())
-                }
-            }
-        }
-    }
+}
 
     // ── Header status line ─────────────────────────────────────────────────────────────────────
     // Priority: dead (banner) > working > sending > waiting.
@@ -592,9 +558,8 @@ fun ChatPanel(
                 draft = draft,
                 onDraftChange = onDraftChange,
                 sending = sending,
-                // A pointer host puts Stop in the composer's trailing slot; a touch host keeps the
-                // send button always-send and surfaces Stop in the transcript's working row (iOS).
-                agentWorking = if (pointer) working else false,
+                // Stop lives in the composer's trailing slot on every host.
+                agentWorking = working,
                 // Scope staged attachments to this session: the panel stays composed across a
                 // switch, so without this a chip staged against A would leak into B's send.
                 sessionKey = session.id,
@@ -611,7 +576,7 @@ fun ChatPanel(
                 onControl = onControl,
                 handledControlKinds = handledControls,
                 openModelPickerNonce = openModelPicker,
-                placeholder = if (pointer) DEFAULT_COMPOSER_PLACEHOLDER else "Message ${session.name}…",
+                placeholder = DEFAULT_COMPOSER_PLACEHOLDER,
                 externalAttach = externalAttach,
                 onExternalAttachConsumed = onExternalAttachConsumed,
                 externalDictate = externalDictate,
@@ -738,8 +703,9 @@ fun ChatPanel(
         // keep-alive PAIR, not an if/else: Chat hides through `Modifier.keepAlivePanel` (draft and
         // scroll survive a flip) while Native is heavyweight and only a 0×0 layout can hide it.
         Box(Modifier.fillMaxWidth().weight(1f)) {
-            if (pointer) {
-                Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body")) {
+            run {
+                // Docked composer under the transcript on every host; a tap on the transcript drops focus.
+                Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body").pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }) {
                     Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
                         if (emptySession) starters() else transcript(0.dp)
                         // Fade, not a rule: a short scrim of the panel's own background so a
@@ -773,94 +739,7 @@ fun ChatPanel(
                         }
                     }
                 }
-            } else {
-                // Touch: the composer FLOATS over the transcript (iOS ChatPane parity). The
-                // transcript pads its content by the measured composer height so the last message
-                // still clears it; a tap on the transcript drops focus.
-                Box(
-                    Modifier
-                        .keepAlivePanel(visible = !showNative)
-                        .testTag("chat_body")
-                        .pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) },
-                ) {
-                    if (emptySession) {
-                        starters()
-                    } else {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-                            transcript(with(density) { composerHeightPx.toDp() } + Space.md)
-                            if (showHeader) EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
-                        }
-                    }
-                    // The inset the whole cluster sits above. It is applied per-HALF rather than
-                    // to the cluster, because the strip's background must paint THROUGH it (see
-                    // below) while the glass card must sit above it.
-                    val bottomInset = WindowInsets.ime.union(WindowInsets.navigationBars)
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            // Measure the FULL footprint (card + strip + nav/ime inset): the inset
-                            // is now inside the children, so this still sees it.
-                            .onSizeChanged { composerHeightPx = it.height },
-                    ) {
-                        // The GLASS half — chip + composer card — floats over the transcript. That
-                        // see-through is the design (iOS parity), and it is bounded by the card.
-                        Column(
-                            Modifier
-                                .testTag("composer_float_glass")
-                                .padding(horizontal = 8.dp)
-                                .padding(top = 6.dp),
-                        ) {
-                            WalkthroughUnreadChip(
-                                state,
-                                onOpenWalkthrough,
-                                Modifier.align(Alignment.CenterHorizontally),
-                            )
-                            composer()
-                        }
-                        // Compact (a phone) keeps the footer-less composer it always had; a
-                        // tablet-class window gets desktop's strip.
-                        //
-                        // D4 (H4): the strip is CHROME, not glass, so it carries the panel's own
-                        // background. Without it the bottom of this floating cluster had no opaque
-                        // surface at all — a transparent ~50dp band under the card — and transcript
-                        // rows scrolled into it, reading as messages sitting BELOW the composer and
-                        // over the git strip. The band exists only at tablet widths, which is why a
-                        // phone never showed it, and only under the FLOATING arrangement, which is
-                        // why a trackpad (which docks the composer) made it disappear.
-                        //
-                        // The background is applied BEFORE the inset padding, so the opaque surface
-                        // extends down THROUGH the nav-bar/keyboard band to the true bottom of the
-                        // window. With the inset on the cluster instead (H4's first shape) the band
-                        // itself stayed transparent and the transcript still showed through it —
-                        // the same bug, moved 30dp down. On a host with zero insets the two are
-                        // identical, which is why the test below cannot tell them apart and this
-                        // comment has to.
-                        if (LocalWindowWidthClass.current != WindowWidthClass.Compact) {
-                            Column(
-                                Modifier
-                                    .testTag("composer_float_strip")
-                                    .fillMaxWidth()
-                                    .background(cs.surfaceContainerLow)
-                                    .windowInsetsPadding(bottomInset)
-                                    .padding(horizontal = 8.dp)
-                                    .padding(top = 3.dp, bottom = 6.dp),
-                            ) {
-                                ComposerFooter(
-                                    session = session,
-                                    onFetch = actions.composer.gitFetch,
-                                    onPull = actions.composer.gitPull,
-                                    onPush = actions.composer.gitPush,
-                                    onPublish = actions.composer.gitPublish,
-                                )
-                            }
-                        } else {
-                            // Compact has no strip, so the glass card itself has to clear the
-                            // inset: the spacer carries it.
-                            Spacer(Modifier.windowInsetsPadding(bottomInset).height(6.dp))
-                        }
-                    }
-                }
-            }
+}
             if (hasNative && nativeOpened) {
                 KeepAlivePanel(visible = showNative, modifier = Modifier.testTag("pane_native")) {
                     // Agent PTY exited → drop the kept-alive panel so a later re-open builds a

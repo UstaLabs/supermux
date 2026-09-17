@@ -10,7 +10,10 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -348,8 +351,16 @@ fun PhoneWorkspacePanes(
                     onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                     modifier = Modifier.weight(1f),
                     addSlot = {
-                        IconButton(onClick = { showAdd = true }, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Filled.Add, contentDescription = "Add view", modifier = Modifier.size(16.dp))
+                        // As roomy as a touch tab chip, so the + is as easy to hit as a tab.
+                        Box(
+                            Modifier
+                                .width(64.dp)
+                                .fillMaxHeight()
+                                .clickable { showAdd = true }
+                                .testTag("phone_add_view"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Filled.Add, contentDescription = "Add view", modifier = Modifier.size(20.dp))
                         }
                     },
                 )

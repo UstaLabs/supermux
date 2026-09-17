@@ -637,8 +637,10 @@ fun PaneTabStrip(
         }
         return x
     }
+    // Touch gets a + as roomy as its tab chips (see DefaultTabChip).
+    val addSlotWidth = if (dev.supermux.ui.adaptive.LocalPointerAvailable.current) 36.dp else 64.dp
     val stripContentWidthPx = displayIds.sumOf { widthOf(it).toDouble() }.toFloat() +
-        if (addSlot != null) with(density) { 36.dp.toPx() } else 0f
+        if (addSlot != null) with(density) { addSlotWidth.toPx() } else 0f
 
     Box(
         modifier
@@ -784,7 +786,7 @@ fun PaneTabStrip(
                             .zIndex(0.5f)
                             .graphicsLayer { translationX = animatedAddX }
                             .fillMaxHeight()
-                            .width(36.dp),
+                            .width(addSlotWidth),
                     ) {
                         addSlot()
                     }
