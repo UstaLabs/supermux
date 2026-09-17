@@ -1,19 +1,9 @@
 // The one session/workspace list both apps render (cluster F4).
 //
-// Base: desktop's `shell/WorkspaceListPanel.kt` — workspace-first grouping (`groupWorkspaces`),
-// the shared reorder, collapsed project groups through `UiPrefs`, per-group archived folds, the
-// sidebar footer and the cross-panel tab-drop targets. Android's `session/SessionListScreen.kt` is
-// the Compact/Touch branch: the `Scaffold` + `CenterAlignedTopAppBar` + FAB chrome, swipe rows,
-// the overflow nav, host rename/forget on the filter chips, the session/task fallback list for
-// hosts that report no workspaces, offline-host groups, and one archived fold at the tail.
-//
-// Two gates, and only two:
-//   - CHROME  `(standalone || compact) && !topBarShown` — cluster E's rule. On it the screen paints
-//     Android's Scaffold (top bar + FAB, host chips / new-session card / group-by switch as list
-//     items); off it, desktop's Column (new-session card, chips, section header, list, footer slot).
-//     Nothing else keys on the platform.
-//   - INPUT   `LocalInputMode` — inside the rows (see `WorkspaceRow` / `SessionRow`): swipe and
-//     48dp targets under Touch, hover + right-click under Pointer.
+// Desktop's list on every host — the same frame (new-session card, host chips, section header,
+// list, footer) and the same rows. The only extras: where this screen is the whole surface (a
+// phone) it paints the logo title and clears the system bars; touch-sized hit targets live inside
+// the shared rows.
 //
 // The screen owns NO navigation of its own: it registers no `BackHandler` (the list is the phone's
 // back destination, not a back consumer) and Android's shared-element scopes stay at the
@@ -28,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -238,7 +229,6 @@ fun SessionListScreen(
     listState: LazyListState = rememberLazyListState(),
 ) {
     val cs = MaterialTheme.colorScheme
-    val touch = LocalInputMode.current == InputMode.Touch
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
     // Cluster E's chrome rule, unchanged: paint the bar/FAB only where this screen is the whole
     // surface and nobody above it already painted one.
@@ -613,9 +603,8 @@ fun SessionListScreen(
                     },
                     onChildClick = { sid -> openChild(w.id, sid) },
                 )
-                // The Pointer row has no child fold — desktop's sidebar lists a multi-agent
-                // workspace's chats inline underneath it (the Touch row expands its own).
-                if (!touch && model.multiAgent) {
+                // A multi-agent workspace lists its chats inline underneath the row.
+                if (model.multiAgent) {
                     Column(
                         Modifier
                             .testTag(WorkspaceListTestIds.children(w.id))
@@ -736,7 +725,7 @@ fun SessionListScreen(
                 if (canDrag) wsWorkingOrders[g.key] else null,
             )
             item(key = "h:${g.key}") {
-                GroupHeaderRow(touch) {
+                GroupHeaderRow {
                     PathGroupHeader(
                         g.label,
                         ordered.size,
@@ -915,7 +904,7 @@ fun SessionListScreen(
             val settledOpen = settledExpanded.contains(g.workdir)
 
             item(key = "group:header:${g.workdir}") {
-                GroupHeaderRow(touch) {
+                GroupHeaderRow {
                     PathGroupHeader(
                         label = g.label,
                         count = activeCount,
@@ -1037,29 +1026,6 @@ fun SessionListScreen(
     }
 
     fun LazyListScope.body() {
-        if (chrome) {
-            if (multiHost) {
-                item(key = "host_filter_chips") {
-                    HostFilterChips(
-                        hosts = hosts,
-                        sessions = sessions,
-                        sessionHost = sessionHost,
-                        selected = hostFilter,
-                        onSelect = onHostFilter,
-                        onAddHost = onAddHost,
-                        onRenameHost = actions.renameHost,
-                        onForgetHost = actions.forgetHost,
-                    )
-                }
-            }
-            item(key = "new_session_row") { NewSessionListRow(onClick = onNewSession) }
-            item(key = "group_by_toggle") {
-                GroupByProjectRow(
-                    checked = groupByProject,
-                    onCheckedChange = { groupByProject = it; onGroupByProjectChange(it) },
-                )
-            }
-        }
         if (useWorkspaces) workspaceBody() else sessionBody()
 
         // Offline hosts (spec §5): a greyed group per unreachable host with its last-seen and its
@@ -1099,129 +1065,78 @@ fun SessionListScreen(
                 }
             }
         }
-        item(key = "bottom_spacer") { Spacer(Modifier.height(if (chrome) 88.dp else Space.lg)) }
+        item(key = "bottom_spacer") { Spacer(Modifier.height(Space.lg)) }
     }
 
     // ── Chrome ────────────────────────────────────────────────────────────────────────────────
     val listTag = if (useWorkspaces) WorkspaceListTestIds.LIST else TestIds.SESSION_LIST
-    if (chrome) {
-        Scaffold(
-            modifier = modifier,
-            topBar = {
-                CenterAlignedTopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                painter = painterResource(Res.drawable.mux_logo),
-                                contentDescription = "Supermux logo",
-                                tint = cs.onSurface,
-                                modifier = Modifier.size(22.dp),
-                            )
-                            Spacer(Modifier.width(Space.sm))
-                            Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
-                        }
-                    },
-                    actions = {
-                        if (onNavigate != null) {
-                            OverflowNav(
-                                expanded = menuExpanded,
-                                onExpandedChange = { menuExpanded = it },
-                                onNavigate = onNavigate,
-                                onAddHost = onAddHost,
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = cs.surfaceContainerLow,
-                    ),
+    // One frame at every width (desktop's): new-session card, chips, section header, list, footer.
+    // Where this screen is the whole surface (a phone) it keeps the logo title above, and clears
+    // the system bars itself.
+    Column(
+        modifier
+            .background(cs.surfaceContainerHigh)
+            .fillMaxSize()
+            .then(if (chrome) Modifier.systemBarsPadding() else Modifier),
+    ) {
+        if (chrome) {
+            Row(
+                Modifier.fillMaxWidth().height(56.dp).testTag("session_list_logo_bar"),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    painter = painterResource(Res.drawable.mux_logo),
+                    contentDescription = "Supermux logo",
+                    tint = cs.onSurface,
+                    modifier = Modifier.size(22.dp),
                 )
+                Spacer(Modifier.width(Space.sm))
+                Text("supermux", color = cs.onSurface, style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
+        if (multiHost) {
+            HostFilterChips(
+                hosts = hosts,
+                sessions = sessions,
+                sessionHost = sessionHost,
+                selected = hostFilter,
+                onSelect = onHostFilter,
+                onAddHost = onAddHost,
+                onRenameHost = actions.renameHost,
+                onForgetHost = actions.forgetHost,
+            )
+        }
+        SessionsSectionHeader(
+            title = if (useWorkspaces) "Workspaces" else "Sessions",
+            groupByProject = groupByProject,
+            onToggleGroupByProject = {
+                groupByProject = !groupByProject
+                onGroupByProjectChange(groupByProject)
             },
-            floatingActionButton = {
-                FloatingActionButton(
-                    onClick = onNewSession,
-                    modifier = Modifier
-                        .testTag("new_session_fab")
-                        .size(56.dp)
-                        .softElevation(radius = Radii.pill),
-                    shape = CircleShape,
-                    containerColor = cs.primary,
-                    contentColor = cs.onPrimary,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = "New session",
-                        tint = cs.onPrimary,
-                        modifier = Modifier.size(24.dp),
+            // Without the top bar the overflow destinations would be unreachable on a mount
+            // that has a router (Android's tablet sidebar), so they live in the header there.
+            overflow = onNavigate?.let { nav ->
+                {
+                    OverflowNav(
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                        onNavigate = nav,
+                        onAddHost = onAddHost,
                     )
                 }
             },
-            floatingActionButtonPosition = FabPosition.End,
-            containerColor = cs.surfaceContainerHigh,
-        ) { innerPadding ->
-            Column(Modifier.fillMaxSize().padding(innerPadding)) {
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .testTag(listTag)
-                            .fillMaxSize()
-                            .background(cs.surfaceContainerHigh),
-                    ) { body() }
-                }
-                // A caller that supplies a footer still gets it here: narrowing a desktop window
-                // past 600dp flips this branch on, and the rail is where Usage / Devices /
-                // Settings / the theme toggle live on that host.
-                footer?.invoke()
-            }
+        )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.testTag(listTag).fillMaxSize(),
+            ) { body() }
         }
-    } else {
-        Column(
-            modifier
-                .background(cs.surfaceContainerHigh)
-                .fillMaxSize(),
-        ) {
-            NewSessionListRow(onClick = onNewSession, modifier = Modifier.padding(top = Space.md))
-            if (multiHost) {
-                HostFilterChips(
-                    hosts = hosts,
-                    sessions = sessions,
-                    sessionHost = sessionHost,
-                    selected = hostFilter,
-                    onSelect = onHostFilter,
-                    onAddHost = onAddHost,
-                    onRenameHost = actions.renameHost,
-                    onForgetHost = actions.forgetHost,
-                )
-            }
-            SessionsSectionHeader(
-                title = if (useWorkspaces) "Workspaces" else "Sessions",
-                groupByProject = groupByProject,
-                onToggleGroupByProject = {
-                    groupByProject = !groupByProject
-                    onGroupByProjectChange(groupByProject)
-                },
-                // Without the top bar the overflow destinations would be unreachable on a mount
-                // that has a router (Android's tablet sidebar), so they live in the header there.
-                overflow = onNavigate?.let { nav ->
-                    {
-                        OverflowNav(
-                            expanded = menuExpanded,
-                            onExpandedChange = { menuExpanded = it },
-                            onNavigate = nav,
-                            onAddHost = onAddHost,
-                        )
-                    }
-                },
-            )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.testTag(listTag).fillMaxSize(),
-                ) { body() }
-            }
-            footer?.invoke()
-        }
+        footer?.invoke()
     }
+
 
     // ── Dialogs ───────────────────────────────────────────────────────────────────────────────
     renameTarget?.let { target ->
@@ -1301,24 +1216,19 @@ private fun groupedRowShape(first: Boolean, last: Boolean) = RoundedCornerShape(
 
 @Composable
 private fun SectionLabel(text: String) {
-    val touch = LocalInputMode.current == InputMode.Touch
     Text(
         text,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontFamily = MonoFontFamily,
         fontSize = 11.sp,
-        fontWeight = if (touch) FontWeight.Medium else FontWeight.Normal,
-        modifier = Modifier.padding(
-            horizontal = if (touch) 16.dp else Space.md,
-            vertical = if (touch) 8.dp else 6.dp,
-        ),
+        modifier = Modifier.padding(horizontal = Space.md, vertical = 6.dp),
     )
 }
 
-/** Android insets its group headers; desktop's sit flush against the rail. */
+/** Group headers sit flush against the rail on every host. */
 @Composable
-private fun GroupHeaderRow(touch: Boolean, content: @Composable () -> Unit) {
-    if (touch) Box(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) { content() } else content()
+private fun GroupHeaderRow(content: @Composable () -> Unit) {
+    content()
 }
 
 @Composable

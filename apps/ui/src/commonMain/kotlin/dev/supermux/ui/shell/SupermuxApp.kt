@@ -254,7 +254,7 @@ fun SupermuxApp(
     autoSelect: Boolean = false,
     autoSelectName: String? = null,
     defaultDeviceName: String = "This device",
-    sessionListMode: SessionListMode = SessionListMode.Fleet,
+    sessionListMode: SessionListMode = SessionListMode.Workspaces,
     groupByProject: Boolean = true,
     onGroupByProjectChange: (Boolean) -> Unit = {},
     onAddedHost: () -> Unit = {},
@@ -652,7 +652,7 @@ fun SupermuxApp(
                                 // home layer it IS the whole surface and paints both.
                                 standalone = standalone,
                                 topBarShown = !standalone,
-                                footer = if (standalone) null else {
+                                footer = run {
                                     {
                                         SessionListFooter(
                                             appearance = appearance,

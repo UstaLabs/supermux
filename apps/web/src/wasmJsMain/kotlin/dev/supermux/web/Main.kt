@@ -329,7 +329,7 @@ fun main() {
                         // A tab reopens where it was, and the URL says where that is.
                         persistSelection = true,
                         defaultDeviceName = "Browser",
-                        sessionListMode = SessionListMode.Fleet,
+                        sessionListMode = SessionListMode.Workspaces,
                         groupByProject = groupByProject,
                         onGroupByProjectChange = { value ->
                             groupByProject = value

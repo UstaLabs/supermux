@@ -1,20 +1,8 @@
-// The one workspace row both hosts' lists render (cluster F3).
+// The one workspace row every host renders (cluster F3) — desktop's sidebar row, on touch too.
 //
-// Desktop’s sidebar row is the base and stays byte-identical (pinned by SessionListScreenTest):
-// hover affordance, right-click context menu, message preview + branch + project tag, no swipe.
-// Android's phone row is the Touch branch of the SAME composable: a swipeable card with the
-// mono path label, the git badge row, an overflow menu and expandable multi-agent children.
-//
-// The split is LocalInputMode — the same rule cluster E set for drag/swipe (and NOT
-// LocalPointerAvailable, which is the hover/hit-target question). A docked tablet with a mouse
-// therefore gets the lean pointer row; a touchscreen laptop keeps it too, because a mouse is the
-// primary input there.
-//
-// The pointer row's actions live in a right-click menu, which exists only where
-// LocalContextMenuAvailable is true. Android is Pointer whenever a keyboard or mouse is attached
-// (DeX, Chromebook, docked tablet, phone in a keyboard case) and has NO context menu, so the
-// pointer row falls back to a visible overflow there — otherwise rename / new chat / mute /
-// archive (and Restore on an archived row) would be unreachable on those devices.
+// Hover affordance + right-click menu where there is a pointer; where there is no context menu
+// (touch, or Android with a keyboard/mouse) the same row shows a visible ⋮ overflow, so rename /
+// new chat / mute / archive (and Restore on an archived row) stay reachable everywhere.
 package dev.supermux.ui.session
 
 import androidx.compose.animation.core.animateDpAsState
@@ -100,14 +88,9 @@ fun archivedWorkspaceRowContextLabels(): List<String> = listOf("Restore")
 /**
  * One workspace row.
  *
- * Under [InputMode.Pointer] this is desktop's sidebar row: status rail, name, multi-agent mark,
- * project tag, relative time, host badge, lifecycle badge, message preview and branch — lean by
- * design (SessionRow parity), no per-row avatar, path omitted (the group header owns it), with a
- * hover affordance and a right-click menu.
- *
- * Under [InputMode.Touch] it is Android's phone card: a [SwipeActionRow] (mute/unmute at the
- * start, archive at the end) wrapping a tonal surface with the mono path label, the [GitBadgeRow]
- * and an overflow menu, plus expandable multi-agent children.
+ * Desktop's sidebar row on every host: status rail, name, multi-agent mark, project tag, relative
+ * time, host badge, lifecycle badge, message preview and branch — lean by design, no per-row
+ * avatar, path omitted (the group header owns it).
  *
  * @param model the shared [WorkspaceRowModel] both lists derive with [deriveWorkspaceRow].
  * @param preview last message of the primary session — Pointer only (the phone row shows the path).
@@ -143,7 +126,7 @@ fun WorkspaceRow(
     onNewChat: () -> Unit = {},
     onKill: () -> Unit = {},
     onToggleMute: () -> Unit = {},
-    // ── Touch-branch inputs (Android's phone row) ─────────────────────────────────────────────
+    // ── Unused since the rows unified (kept so callers compile) ──
     openSwipeRowId: String? = null,
     onOpenSwipeRowChange: (String?) -> Unit = {},
     rowShape: Shape = RoundedCornerShape(Radii.md),
@@ -153,53 +136,28 @@ fun WorkspaceRow(
     onToggleChildren: (() -> Unit)? = null,
     onChildClick: (String) -> Unit = {},
 ) {
-    if (LocalInputMode.current == InputMode.Touch) {
-        TouchWorkspaceRow(
-            model = model,
-            active = active,
-            modifier = modifier,
-            host = host,
-            mute = mute,
-            dragModifier = dragModifier,
-            interactionSource = interactionSource,
-            isDragging = isDragging,
-            openSwipeRowId = openSwipeRowId,
-            onOpenSwipeRowChange = onOpenSwipeRowChange,
-            rowShape = rowShape,
-            outerPadding = outerPadding,
-            rowColor = rowColor,
-            childrenExpanded = childrenExpanded,
-            onToggleChildren = onToggleChildren,
-            onClick = onClick,
-            onRename = onRename,
-            onNewChat = onNewChat,
-            onKill = onKill,
-            onToggleMute = onToggleMute,
-            onChildClick = onChildClick,
-        )
-    } else {
-        PointerWorkspaceRow(
-            model = model,
-            active = active,
-            modifier = modifier,
-            preview = preview,
-            lastReadAt = lastReadAt,
-            sessionStatus = sessionStatus,
-            projectTag = projectTag,
-            dropHover = dropHover,
-            onRowBounds = onRowBounds,
-            host = host,
-            mute = mute,
-            dragModifier = dragModifier,
-            interactionSource = interactionSource,
-            isDragging = isDragging,
-            onClick = onClick,
-            onRename = onRename,
-            onNewChat = onNewChat,
-            onKill = onKill,
-            onToggleMute = onToggleMute,
-        )
-    }
+    PointerWorkspaceRow(
+        model = model,
+        active = active,
+        modifier = modifier,
+        preview = preview,
+        lastReadAt = lastReadAt,
+        sessionStatus = sessionStatus,
+        projectTag = projectTag,
+        dropHover = dropHover,
+        onRowBounds = onRowBounds,
+        host = host,
+        mute = mute,
+        dragModifier = dragModifier,
+        interactionSource = interactionSource,
+        isDragging = isDragging,
+        onClick = onClick,
+        onRename = onRename,
+        onNewChat = onNewChat,
+        onKill = onKill,
+        onToggleMute = onToggleMute,
+    )
+
 }
 
 /** Desktop's sidebar row, verbatim. */
@@ -417,226 +375,6 @@ private fun PointerWorkspaceRow(
     } // Box
 }
 
-/** Android's phone row, verbatim. */
-@Composable
-private fun TouchWorkspaceRow(
-    model: WorkspaceRowModel,
-    active: Boolean,
-    modifier: Modifier,
-    host: HostView?,
-    mute: Boolean,
-    dragModifier: Modifier,
-    interactionSource: MutableInteractionSource?,
-    isDragging: Boolean,
-    openSwipeRowId: String?,
-    onOpenSwipeRowChange: (String?) -> Unit,
-    rowShape: Shape,
-    outerPadding: PaddingValues,
-    rowColor: Color?,
-    childrenExpanded: Boolean,
-    onToggleChildren: (() -> Unit)?,
-    onClick: () -> Unit,
-    onRename: () -> Unit,
-    onNewChat: () -> Unit,
-    onKill: () -> Unit,
-    onToggleMute: () -> Unit,
-    onChildClick: (String) -> Unit,
-) {
-    val c = LocalPanes.current
-    val cs = MaterialTheme.colorScheme
-    val haptic = rememberHaptics()
-    val w = model.workspace
-    val working = model.activity == WorkspaceActivity.WORKING
-    val hasUnread = model.unread && model.activity != WorkspaceActivity.WORKING
-    val rowInteraction = interactionSource ?: remember { MutableInteractionSource() }
-    val surfaceColor = rowColor ?: if (active) cs.surfaceContainer else cs.surfaceContainerHigh
-    val elevation by animateDpAsState(
-        if (isDragging) 6.dp else 0.dp,
-        label = "workspace-drag-elevation",
-    )
-    val startAction = if (mute) SessionSwipeAction.Unmute else SessionSwipeAction.Mute
-    val endAction = SessionSwipeAction.Settle
-
-    fun label(action: SessionSwipeAction) = when (action) {
-        SessionSwipeAction.Mute -> "Mute"
-        SessionSwipeAction.Unmute -> "Unmute"
-        SessionSwipeAction.Settle -> "Archive"
-        else -> null
-    }
-
-    fun icon(action: SessionSwipeAction) = when (action) {
-        SessionSwipeAction.Settle -> WorkspaceArchiveSwipeIcon
-        else -> sessionSwipeActionIcon(action)
-    }
-
-    Column(modifier.fillMaxWidth()) {
-        Box(
-            modifier = dragModifier
-                .fillMaxWidth()
-                .padding(outerPadding),
-        ) {
-            SwipeActionRow(
-                rowId = w.id,
-                openRowId = openSwipeRowId,
-                onOpenRowChange = onOpenSwipeRowChange,
-                startLabel = label(startAction),
-                endLabel = label(endAction),
-                startIcon = icon(startAction),
-                endIcon = icon(endAction),
-                onStartAction = {
-                    haptic.perform(HapticKind.Tick)
-                    onToggleMute()
-                },
-                onEndAction = {
-                    haptic.perform(HapticKind.Confirm)
-                    onKill()
-                },
-                enabled = !isDragging,
-                startColor = Color(c.warning).copy(alpha = 0.35f),
-                modifier = Modifier.fillMaxWidth().clip(rowShape),
-            ) {
-                Surface(
-                    tonalElevation = elevation,
-                    shadowElevation = elevation,
-                    shape = rowShape,
-                    color = surfaceColor,
-                    onClick = {
-                        onOpenSwipeRowChange(null)
-                        haptic.perform(HapticKind.Tick)
-                        onClick()
-                    },
-                    interactionSource = rowInteraction,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .testTag(WorkspaceListTestIds.row(w.id))
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        SessionStatusRail(
-                            git = model.git,
-                            working = working,
-                            unread = hasUnread,
-                            unreadTestTag = "workspace_unread_${w.id}",
-                            modifier = Modifier.align(Alignment.CenterVertically),
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                if (model.multiAgent && onToggleChildren != null) {
-                                    val rotation by animateFloatAsState(
-                                        targetValue = if (childrenExpanded) 0f else -90f,
-                                        label = "wsChildChevron",
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Filled.ExpandMore,
-                                        contentDescription = if (childrenExpanded) "Hide chats" else "Show chats",
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .rotate(rotation)
-                                            .clickable(role = Role.Button, onClick = onToggleChildren),
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                }
-                                Text(
-                                    model.name,
-                                    color = cs.onSurface,
-                                    fontSize = 15.sp,
-                                    fontWeight = if (active || hasUnread) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                if (model.multiAgent) {
-                                    Text(
-                                        "✦",
-                                        color = cs.primary,
-                                        fontSize = 11.sp,
-                                        modifier = Modifier.testTag(WorkspaceListTestIds.multiAgent(w.id)),
-                                    )
-                                }
-                                if (host != null) {
-                                    Spacer(Modifier.width(Space.sm))
-                                    HostBadge(host)
-                                }
-                                Box {
-                                    var menu by remember { mutableStateOf(false) }
-                                    Icon(
-                                        imageVector = Icons.Filled.MoreVert,
-                                        contentDescription = "More",
-                                        tint = cs.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .clickable {
-                                                haptic.perform(HapticKind.Tick)
-                                                menu = true
-                                            },
-                                    )
-                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text("Rename") },
-                                            onClick = {
-                                                menu = false
-                                                onRename()
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text("New chat here") },
-                                            modifier = Modifier.testTag(WorkspaceListTestIds.ROW_NEW_CHAT),
-                                            onClick = {
-                                                menu = false
-                                                onNewChat()
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                            Text(
-                                model.pathLabel,
-                                color = cs.onSurfaceVariant,
-                                fontFamily = MonoFontFamily,
-                                fontSize = 11.sp,
-                                fontStyle = FontStyle.Italic,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            GitBadgeRow(model.git)
-                        }
-                    }
-                }
-            }
-        }
-        if (model.multiAgent && childrenExpanded) {
-            Column(
-                Modifier
-                    .testTag(WorkspaceListTestIds.children(w.id))
-                    .fillMaxWidth()
-                    .padding(start = 36.dp, end = 8.dp),
-            ) {
-                for (child in model.children) {
-                    Text(
-                        child.name,
-                        color = cs.onSurface,
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                haptic.perform(HapticKind.Tick)
-                                onChildClick(child.sessionId)
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
 /** "Show N archived" / "Hide N archived" — shared by flat + per-group folds on both hosts. */
 @Composable
 fun ArchivedFoldButton(
@@ -658,9 +396,8 @@ fun ArchivedFoldButton(
 }
 
 /**
- * One archived workspace row: desktop's compact name-only row with a right-click Restore under
- * [InputMode.Pointer]; Android's name + path + "Archived 2d" card with a Restore overflow menu
- * under [InputMode.Touch].
+ * One archived workspace row on every host: a compact name-only row with Restore in the right-click
+ * menu, or in a visible overflow where there is no context menu.
  */
 @Composable
 fun ArchivedWorkspaceRow(
@@ -671,49 +408,6 @@ fun ArchivedWorkspaceRow(
 ) {
     val cs = MaterialTheme.colorScheme
     val w = model.workspace
-    if (LocalInputMode.current == InputMode.Touch) {
-        var menu by remember { mutableStateOf(false) }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onSelect)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .testTag(WorkspaceListTestIds.archived(w.id)),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(model.name, color = cs.onSurface, fontWeight = FontWeight.Medium, fontSize = 14.sp, maxLines = 1)
-                Text(
-                    model.pathLabel,
-                    color = cs.onSurfaceVariant,
-                    fontSize = 11.sp,
-                    fontFamily = MonoFontFamily,
-                    maxLines = 1,
-                )
-                val ended = archivedRelTime(model.archivedAt)
-                if (ended.isNotEmpty()) {
-                    Text("Archived $ended", color = cs.onSurfaceVariant, fontSize = 10.sp)
-                }
-            }
-            Box {
-                Icon(
-                    imageVector = Icons.Filled.MoreVert,
-                    contentDescription = "More",
-                    tint = cs.onSurfaceVariant,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clickable { menu = true },
-                )
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Restore") },
-                        onClick = { menu = false; onRestore() },
-                    )
-                }
-            }
-        }
-        return
-    }
     val rowBg = if (active) cs.surfaceContainer else Color.Transparent
     RowContextMenu(
         items = {
@@ -785,3 +479,4 @@ internal fun RowOverflowMenu(
         }
     }
 }
+
