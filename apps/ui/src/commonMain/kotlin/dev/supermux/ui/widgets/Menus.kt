@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -75,6 +76,9 @@ object MenuStyle {
     /** Row height — a pointer target, not a 48dp thumb target. */
     val ItemHeight = 28.dp
 
+    /** Row height without a pointer — a thumb target. */
+    val TouchItemHeight = 44.dp
+
     /** How far the highlight is inset from the menu's own edge. */
     val ItemInset = 5.dp
 
@@ -133,30 +137,23 @@ fun DropdownMenu(
     // Only while it is actually open: a closed menu is composed all over the app and would
     // otherwise pin every desktop terminal hidden forever.
     if (expanded) ModalHost {}
-    if (LocalPointerAvailable.current) {
-        androidx.compose.material3.DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = onDismissRequest,
-            modifier = modifier,
-            offset = offset,
-            shape = MenuStyle.Shape,
-            containerColor = MenuStyle.containerColor,
-            // Tonal elevation would tint the container a second time on top of the explicit
-            // containerColor; the shadow alone carries the "floating" read.
-            tonalElevation = 0.dp,
-            shadowElevation = MenuStyle.ShadowElevation,
-            border = MenuStyle.border,
-            content = content,
-        )
-    } else {
-        androidx.compose.material3.DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = onDismissRequest,
-            modifier = modifier,
-            offset = offset,
-            content = content,
-        )
-    }
+    // One look on every host (the desktop design); only the row height adapts to touch.
+    androidx.compose.material3.DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        modifier = modifier,
+        offset = offset,
+        shape = MenuStyle.Shape,
+        containerColor = MenuStyle.containerColor,
+        // Tonal elevation would tint the container a second time on top of the explicit
+        // containerColor; the shadow alone carries the "floating" read.
+        tonalElevation = 0.dp,
+        // Android draws a menu in its own popup window sized to the menu, which clips a big soft
+        // shadow at its edges; a touch host gets a tight one that fits inside that window.
+        shadowElevation = if (LocalPointerAvailable.current) MenuStyle.ShadowElevation else 3.dp,
+        border = MenuStyle.border,
+        content = content,
+    )
 }
 
 /**
@@ -181,22 +178,15 @@ fun DropdownMenuItem(
     trailingIcon: (@Composable () -> Unit)? = null,
     enabled: Boolean = true,
 ) {
-    if (!LocalPointerAvailable.current) {
-        androidx.compose.material3.DropdownMenuItem(
-            text = text,
-            onClick = onClick,
-            modifier = modifier,
-            leadingIcon = leadingIcon,
-            trailingIcon = trailingIcon,
-            enabled = enabled,
-        )
-        return
-    }
+    // Same design with or without a pointer; touch only gets a thumb-sized row and a press
+    // highlight in place of hover.
+    val touch = !LocalPointerAvailable.current
     val cs = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     // clickable() already feeds hover into the source, so no separate hoverable().
     val hovered by interaction.collectIsHoveredAsState()
-    val active = hovered && enabled
+    val pressed by interaction.collectIsPressedAsState()
+    val active = (hovered || pressed) && enabled
     val contentColor = when {
         !enabled -> cs.onSurfaceVariant.copy(alpha = 0.5f)
         active -> cs.onPrimary
@@ -214,7 +204,7 @@ fun DropdownMenuItem(
                 // No indication: a macOS menu row highlights on hover and then just closes — a
                 // ripple expanding under the cursor belongs to touch.
                 .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
-                .heightIn(min = MenuStyle.ItemHeight)
+                .heightIn(min = if (touch) MenuStyle.TouchItemHeight else MenuStyle.ItemHeight)
                 .padding(horizontal = MenuStyle.ItemPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
