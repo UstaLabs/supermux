@@ -10,6 +10,8 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,8 +21,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,14 +41,21 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import dev.supermux.proto.SessionInfo
@@ -59,6 +71,8 @@ import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.panes.PaneStripChrome
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.session.LocalContextMenuAvailable
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.ui.theme.MonoFontFamily
@@ -104,6 +118,14 @@ class WorkspacePanesBind(
     var drafts by mutableStateOf(drafts)
     var overlayScope by mutableStateOf(overlayScope)
     var launcherPane by mutableStateOf(launcherPane)
+
+    /**
+     * How many compositions are drawing this workspace right now. The bind itself outlives them
+     * (it stays in `ShellUiState.panesBinds`), so a window in ANOTHER composition — an Android
+     * Android extra activity — reads this to tell a live workspace from one whose `ws` was
+     * disposed with the main window.
+     */
+    var holders by mutableIntStateOf(0)
 }
 
 /**
@@ -144,6 +166,7 @@ fun WorkspacePanes(
     val previewModes = ws.previewModes
     val fileOpener = ws.fileOpener
     var walkthroughSessionId by remember(current.id) { mutableStateOf<String?>(null) }
+    val windowsSeam = LocalPlatform.current.windows
 
     PaneHost(
         layout = layout,
@@ -174,7 +197,9 @@ fun WorkspacePanes(
             }
         },
         dragState = tabDragState,
-        onDragEndMiss = { viewId -> onTearOutTab(viewId) },
+        // Desktop tears a tab dropped outside every pane into a new window. Not on touch: a
+        // finger that lets go a little off-target must not spawn a window.
+        onDragEndMiss = { viewId -> if (windowsSeam?.tearOutOnDragMiss == true) onTearOutTab(viewId) },
         onDocked = { viewId ->
             ui.windows.transfer(viewId, hostId, layoutSync.tree)
         },
@@ -192,36 +217,45 @@ fun WorkspacePanes(
             val filePath = v
                 ?.takeIf { it.kind == "editor" && it.stateString("mode") == "file" }
                 ?.stateString("path")
-            if (filePath == null) {
-                RowContextMenu(
-                    items = { listOf(RowContextMenuEntry("Move to New Window") { onTearOutTab(itemId) }) },
-                ) {
-                    Box(Modifier.testTag("tab-move-to-window-$itemId")) {
-                    DefaultTabChip(
-                        itemId = itemId,
-                        title = v?.let { viewTitle(it) } ?: "view",
-                        state = tabState,
-                        labelFont = MonoFontFamily,
-                        onClose = { _ -> onCloseCandidate(v) },
-                    )
+            // Touch has no right-click, so a device that CAN open a second window offers "Move to
+            // New Window" on a long press instead. A held finger never reaches the strip's drag
+            // threshold, so this does not fight the tab drag.
+            TabLongPressMenu(
+                enabled = windowsSeam != null && !LocalContextMenuAvailable.current,
+                itemId = itemId,
+                onMoveToNewWindow = { onTearOutTab(itemId) },
+            ) {
+                if (filePath == null) {
+                    RowContextMenu(
+                        items = { listOf(RowContextMenuEntry("Move to New Window") { onTearOutTab(itemId) }) },
+                    ) {
+                        Box(Modifier.testTag("tab-move-to-window-$itemId")) {
+                        DefaultTabChip(
+                            itemId = itemId,
+                            title = v?.let { viewTitle(it) } ?: "view",
+                            state = tabState,
+                            labelFont = MonoFontFamily,
+                            onClose = { _ -> onCloseCandidate(v) },
+                        )
+                        }
                     }
+                } else {
+                    WorkspaceFileTab(
+                        itemId = itemId,
+                        title = filePath.substringAfterLast('/'),
+                        path = filePath,
+                        state = tabState,
+                        dirty = documents.isDirty(filePath),
+                        saving = documents.saving,
+                        previewMode = previewModes[itemId] == true,
+                        onSave = { documents.get(filePath)?.let { documents.save(it) } },
+                        onTogglePreview = {
+                            previewModes[itemId] = previewModes[itemId] != true
+                        },
+                        onClose = { _ -> onCloseCandidate(v) },
+                        onMoveToNewWindow = { onTearOutTab(itemId) },
+                    )
                 }
-            } else {
-                WorkspaceFileTab(
-                    itemId = itemId,
-                    title = filePath.substringAfterLast('/'),
-                    path = filePath,
-                    state = tabState,
-                    dirty = documents.isDirty(filePath),
-                    saving = documents.saving,
-                    previewMode = previewModes[itemId] == true,
-                    onSave = { documents.get(filePath)?.let { documents.save(it) } },
-                    onTogglePreview = {
-                        previewModes[itemId] = previewModes[itemId] != true
-                    },
-                    onClose = { _ -> onCloseCandidate(v) },
-                    onMoveToNewWindow = { onTearOutTab(itemId) },
-                )
             }
         },
     ) { viewId ->
@@ -292,7 +326,13 @@ fun PhoneWorkspacePanes(
     sessionNames: Map<String, String>,
     modifier: Modifier = Modifier,
 ) {
-    val layout = current.layout.toDomainOrNull() ?: ws.layoutSync.tree
+    // Minus whatever an extra window claimed: this phone layout, in split screen beside its own
+    // extra window, must not show those views twice.
+    val windowsSeam = LocalPlatform.current.windows
+    val layout = ui.windows.layoutFor(
+        ui.windows.mainHostId,
+        current.layout.toDomainOrNull() ?: ws.layoutSync.tree,
+    )
     val tabs = phoneTabModel(layout, current.activeViewId)
     val viewsById = ws.viewsById
     var showAdd by remember { mutableStateOf(false) }
@@ -353,6 +393,11 @@ fun PhoneWorkspacePanes(
                         // a tab bar and put the close button ABOVE its own label — no phone tab
                         // strip on either platform looks like that, and the pane below is the
                         // thing the user came for.
+                        TabLongPressMenu(
+                            enabled = windowsSeam != null && !LocalContextMenuAvailable.current,
+                            itemId = id,
+                            onMoveToNewWindow = { windowsSeam?.tearOutTab(id) },
+                        ) {
                         Tab(
                             selected = id == tabs.selectedId,
                             onClick = { app.setActiveView(current.id, id) },
@@ -390,6 +435,7 @@ fun PhoneWorkspacePanes(
                                     )
                                 }
                             }
+                        }
                         }
                     }
                     Tab(
@@ -609,3 +655,77 @@ private fun WorkspacePaneContent(
 }
 
 private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()
+
+/**
+ * A long press on this element, detected WITHOUT taking the tap from whatever is underneath it: a
+ * short press, or one that moves past the touch slop (a tab drag, a strip scroll), is left
+ * entirely alone. Only once the press has been held does it claim the gesture — it consumes the
+ * rest of it, so the tab's own click does not also fire on release.
+ */
+internal fun Modifier.longPress(key: Any?, onLongPress: () -> Unit): Modifier = composed {
+    val haptics = LocalHapticFeedback.current
+    val latest by rememberUpdatedState(onLongPress)
+    pointerInput(key) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val slop = viewConfiguration.touchSlop
+            // `withTimeoutOrNull` here is AwaitPointerEventScope's own: null means the press was
+            // HELD for the whole timeout; anything else means it ended or moved first.
+            val endedEarly = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                var held = true
+                while (held) {
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                        .firstOrNull { it.id == down.id }
+                    held = change != null && change.pressed &&
+                        (change.position - down.position).getDistance() <= slop
+                }
+                true
+            }
+            if (endedEarly != null) return@awaitEachGesture
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            latest()
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                event.changes.forEach { it.consume() }
+                if (event.changes.none { it.pressed }) break
+            }
+        }
+    }
+}
+
+/**
+ * A long-press menu around one tab, carrying "Move to New Window" — the touch stand-in for the
+ * desktop tab's right-click menu. [enabled] false (desktop, a host with one window) is a plain
+ * passthrough.
+ */
+@Composable
+private fun TabLongPressMenu(
+    enabled: Boolean,
+    itemId: String,
+    onMoveToNewWindow: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    if (!enabled) {
+        content()
+        return
+    }
+    var open by remember(itemId) { mutableStateOf(false) }
+    Box(Modifier.longPress(itemId) { open = true }) {
+        content()
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.testTag("tab-menu-$itemId"),
+        ) {
+            DropdownMenuItem(
+                text = { Text("Move to New Window") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null) },
+                onClick = {
+                    open = false
+                    onMoveToNewWindow()
+                },
+                modifier = Modifier.testTag("tab-menu-new-window-$itemId"),
+            )
+        }
+    }
+}

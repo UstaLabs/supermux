@@ -47,6 +47,7 @@ import dev.supermux.android.settings.readLegacyAppearancePrefs
 import dev.supermux.android.settings.seedAppearancePrefs
 import dev.supermux.android.theme.AndroidTheme
 import dev.supermux.android.update.AppUpdateNotifier
+import dev.supermux.android.windows.AndroidWindows
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.auth.SecureTokenStoreContext
 import dev.supermux.host.workspaceForSession
@@ -211,6 +212,17 @@ class MainActivity : ComponentActivity() {
                         setSidebarWidth(shellSeed.sidebarWidthDp.dp)
                         collapsedProjectPaths = collapsedPathsSeed
                     }
+                }
+                // Extra windows (windows/AndroidWindows.kt): the claim registry is the
+                // process's, not this activity's — it must outlive a rotation of the main window
+                // with an extra one open. Assigned here, before the shell's first read: `windows`
+                // is a plain field, and a later write would not recompose anything that read it.
+                ui.windows = AndroidWindows.shellWindows
+                // The extra windows draw from THIS shell state's workspace binds, so it is
+                // published for them while it is composed.
+                DisposableEffect(ui) {
+                    AndroidWindows.mainUi = ui
+                    onDispose { if (AndroidWindows.mainUi === ui) AndroidWindows.mainUi = null }
                 }
 
                 var groupByProject by rememberSaveable { mutableStateOf(groupByProjectSeed) }

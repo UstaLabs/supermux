@@ -12,6 +12,9 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.shell.WorkspaceEmptyHint
+import dev.supermux.ui.shell.windows.WindowBounds
+import dev.supermux.ui.shell.windows.WindowHostRegistry
+import dev.supermux.ui.shell.windows.emptyHostLayout
 import dev.supermux.workspace.LayoutNode
 import kotlin.test.Test
 import kotlin.test.assertNotNull

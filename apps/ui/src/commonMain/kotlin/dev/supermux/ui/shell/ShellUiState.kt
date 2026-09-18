@@ -8,7 +8,7 @@
 // Desktop creates one in `Main.kt` (so the native MenuBar can act on the same instance) and
 // Android holds one in `rememberSaveable(saver = ShellUiState.Saver)`, which is why the back stack
 // and the selection are saveable and the window-host wiring is a SEAM ([ShellWindows]) rather than
-// desktop's registry: only desktop has extra OS windows.
+// the registry itself: only desktop and Android have extra OS windows.
 package dev.supermux.ui.shell
 
 import androidx.compose.runtime.Stable
@@ -32,10 +32,10 @@ import kotlinx.serialization.builtins.ListSerializer
 /**
  * Extra OS windows hosting slices of a workspace layout.
  *
- * Desktop's `WindowHostRegistry` implements this; every other host installs [NoShellWindows],
- * where nothing is ever claimed, [layoutFor] is the whole tree and every verb is a no-op. The
- * registry itself (bounds, claims, persistence, the tear-out planners and the extra `Window {}`s)
- * stays on desktop — this is only what the SHARED pane host needs from it.
+ * `windows/RegistryShellWindows` implements this over the shared `WindowHostRegistry` on the
+ * hosts that have extra windows (desktop, Android); a host with none keeps
+ * [NoShellWindows], where nothing is ever claimed, [layoutFor] is the whole tree and every verb is
+ * a no-op. This is only what the SHARED pane host needs; opening the windows is each host's.
  */
 interface ShellWindows {
     /** The id of the window this shell is drawing (desktop's "main"). */
@@ -110,8 +110,9 @@ class ShellUiState {
     var appearance by mutableStateOf(AppearanceMode.DARK)
 
     /**
-     * Extra OS windows. [NoShellWindows] until a host that has them binds its own
-     * (desktop's `Main.kt`). A `var` because the registry outlives the composition that uses it.
+     * Extra OS windows. [NoShellWindows] until a host that has them binds its own (desktop's
+     * `Main.kt`, Android's `MainActivity`). A `var` because the registry outlives the composition
+     * that uses it.
      */
     var windows: ShellWindows = NoShellWindows
 

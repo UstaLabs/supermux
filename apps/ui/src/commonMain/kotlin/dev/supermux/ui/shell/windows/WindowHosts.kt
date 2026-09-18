@@ -1,9 +1,13 @@
-package dev.supermux.desktop.shell
+// The window-host registry: which OS window shows which slice of a workspace's layout tree.
+//
+// Moved out of desktop into `:ui` so every host with more than one window shares ONE claim
+// algebra — desktop's `Window {}`s and Android's extra activities alike. Nothing here
+// knows how a window is actually opened; the host does that once a claim succeeds.
+package dev.supermux.ui.shell.windows
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectViewIds
 import dev.supermux.workspace.firstGroupId
@@ -11,6 +15,7 @@ import dev.supermux.workspace.groupIdOf
 import dev.supermux.workspace.hideClaimed
 import dev.supermux.workspace.splitGroup
 import dev.supermux.workspace.subtreeCovering
+import kotlinx.serialization.Serializable
 
 data class WindowBounds(val x: Float, val y: Float, val width: Float, val height: Float) {
     fun contains(pointerX: Float, pointerY: Float): Boolean =
@@ -42,7 +47,7 @@ fun smallestContaining(node: LayoutNode, viewIds: Set<String>): LayoutNode? {
     return node
 }
 
-/** Workspaces that must keep a [WorkspaceSession] composed: the selected one plus every extra window. */
+/** Workspaces that must keep a `WorkspaceSession` composed: the selected one plus every extra window. */
 fun workspaceIdsNeedingSession(
     selectedWorkspaceId: String?,
     extraWorkspaceIds: Collection<String>,
@@ -76,6 +81,8 @@ class WindowHostRegistry(mainId: String = "main") {
         ),
     )
     private val extraHosts = linkedMapOf<String, WindowHost>()
+    /** Each workspace's view ids at the last [rebase] — what tells a newly opened tab apart. */
+    private val lastSeen = mutableMapOf<String, Set<String>>()
     /** Compose / snapshotFlow subscription tick — [extraHosts] is not a snapshot collection. */
     private var extraGeneration by mutableStateOf(0)
 
@@ -202,13 +209,22 @@ class WindowHostRegistry(mainId: String = "main") {
 
     fun rebase(workspaceId: String, tree: LayoutNode) {
         val live = collectViewIds(tree).toSet()
+        // Views that were not in this workspace's tree last time — a tab just opened.
+        val fresh = lastSeen[workspaceId]?.let { live - it }.orEmpty()
+        lastSeen[workspaceId] = live
         val taken = mutableSetOf<String>()
         val snapshot = extras(workspaceId)
         var changed = false
         for (host in snapshot) {
             if (host.claimedViewIds.isEmpty()) continue
-            val remaining = host.claimedViewIds.filter { it in live && it !in taken }.toSet()
-            if (remaining.isEmpty() || subtreeCovering(tree, remaining) == null) {
+            val others = snapshot.filter { it.id != host.id }.flatMap { it.claimedViewIds }.toSet() + taken
+            val surviving = host.claimedViewIds.filter { it in live && it !in taken }.toSet()
+            val remaining = if (surviving.isNotEmpty() && subtreeCovering(tree, surviving) == null) {
+                grownByFresh(tree, surviving, fresh, others) ?: emptySet()
+            } else {
+                surviving
+            }
+            if (remaining.isEmpty()) {
                 extraHosts.remove(host.id)
                 changed = true
                 continue
@@ -220,6 +236,25 @@ class WindowHostRegistry(mainId: String = "main") {
             taken += remaining
         }
         if (changed) bumpExtras()
+    }
+
+    /**
+     * [claim] no longer covers a subtree of its own. If only [fresh] views joined it — a tab
+     * opened IN that window's group, which the broker placed before the window could claim it —
+     * the window keeps the group, new tab and all. Anything else (a tab of the main window mixed
+     * in, another window's claim) means the claim really broke: null.
+     */
+    private fun grownByFresh(
+        tree: LayoutNode,
+        claim: Set<String>,
+        fresh: Set<String>,
+        others: Set<String>,
+    ): Set<String>? {
+        val cover = smallestContaining(tree, claim) ?: return null
+        val ids = collectViewIds(cover).toSet()
+        if (ids.any { it in others }) return null
+        if (!fresh.containsAll(ids - claim)) return null
+        return ids
     }
 
     fun setWorkspaceOnMain(workspaceId: String) {
@@ -272,6 +307,25 @@ class WindowHostRegistry(mainId: String = "main") {
         extraGeneration++
     }
 }
+
+/**
+ * One extra (non-main) window host, in a shape a host can store — desktop writes these to
+ * `ui-state.json`, Android puts one in the extra activity's intent. Separate from [WindowHost]
+ * because [WindowBounds] is not `@Serializable`.
+ */
+@Serializable
+data class PersistedWindowHost(
+    val id: String,
+    val workspaceId: String,
+    val claimedViewIds: List<String> = emptyList(),
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+)
+
+@OptIn(kotlin.uuid.ExperimentalUuidApi::class)
+private fun newWindowId(): String = kotlin.uuid.Uuid.random().toString()
 
 fun WindowHost.toPersisted(): PersistedWindowHost = PersistedWindowHost(
     id = id,
@@ -367,9 +421,9 @@ fun tearOutTabLive(
     tree = tree,
     viewId = viewId,
     workspaceId = workspaceId,
-    newGroupId = java.util.UUID.randomUUID().toString(),
+    newGroupId = newWindowId(),
     bounds = defaultTearOutBounds(registry.main().bounds),
-    hostId = java.util.UUID.randomUUID().toString(),
+    hostId = newWindowId(),
     edit = edit,
 )
 
@@ -384,7 +438,7 @@ fun tearOutGroupLive(
     groupId,
     workspaceId,
     defaultTearOutBounds(registry.main().bounds),
-    java.util.UUID.randomUUID().toString(),
+    newWindowId(),
 )
 
 fun tearOutCanvasLive(
@@ -394,7 +448,7 @@ fun tearOutCanvasLive(
     registry,
     workspaceId,
     defaultTearOutBounds(registry.main().bounds),
-    java.util.UUID.randomUUID().toString(),
+    newWindowId(),
 )
 
 private fun groupById(node: LayoutNode, groupId: String): LayoutNode.Group? = when (node) {

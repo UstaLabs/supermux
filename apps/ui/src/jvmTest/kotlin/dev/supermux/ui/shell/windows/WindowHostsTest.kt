@@ -1,4 +1,4 @@
-package dev.supermux.desktop.shell
+package dev.supermux.ui.shell.windows
 
 import dev.supermux.proto.ViewDto
 import dev.supermux.workspace.LayoutNode
@@ -357,9 +357,9 @@ class WindowHostsTest {
 
     @Test
     fun tryRestoreKeepsUnrestoredHostsInPending() {
-        // Cluster G8: the pending list + the restore live on desktop's own [DesktopShellWindows]
-        // (the shared `ShellUiState` only sees the `ShellWindows` seam), so the case moved with it.
-        val windows = DesktopShellWindows()
+        // The pending list + the restore live on [RegistryShellWindows] (the shared `ShellUiState`
+        // only sees the `ShellWindows` seam), so the case lives with it.
+        val windows = RegistryShellWindows()
         windows.pending = listOf(
             PersistedWindowHost("a", "ws", listOf("v1", "v2"), 0f, 0f, 100f, 100f),
             PersistedWindowHost("b", "other", listOf("v9"), 1f, 1f, 100f, 100f),
@@ -462,5 +462,58 @@ class WindowHostsTest {
         assertEquals(setOf("ws-a"), workspaceIdsNeedingSession(null, listOf("ws-a")))
         assertEquals(setOf("ws-b"), workspaceIdsNeedingSession("ws-b", emptyList()))
         assertEquals(emptySet(), workspaceIdsNeedingSession(null, emptyList()))
+    }
+
+    // ── A tab opened inside an extra window's own group ──────────────────────
+    // The broker places the new view (in the group the "+" was pressed in) and the frame lands
+    // BEFORE `expandClaim` can run — the claim {v2} then sits in a group {v2, new}, which covers
+    // no subtree of its own. It must keep the group rather than hand everything back to main.
+
+    private fun tornOut(): Pair<WindowHostRegistry, LayoutNode> {
+        val r = WindowHostRegistry()
+        r.setWorkspaceOnMain("ws")
+        val tree = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(LayoutNode.Group("g1", listOf("v1"), "v1"), LayoutNode.Group("g2", listOf("v2"), "v2")),
+        )
+        r.rebase("ws", tree)
+        assertNotNull(r.tryClaim("ws", setOf("v2"), bounds, "extra", tree))
+        return r to tree
+    }
+
+    @Test
+    fun rebaseKeepsAClaimWhoseGroupGainedAFreshTab() {
+        val (r, _) = tornOut()
+        val withNew = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(LayoutNode.Group("g1", listOf("v1"), "v1"), LayoutNode.Group("g2", listOf("v2", "new"), "new")),
+        )
+        r.rebase("ws", withNew)
+        assertEquals(setOf("v2", "new"), r.extras("ws").single().claimedViewIds)
+        assertEquals(listOf("v1"), collectViewIds(assertNotNull(r.layoutFor(r.main(), withNew))))
+    }
+
+    @Test
+    fun rebaseStillDropsAClaimMixedWithAMainTab() {
+        // The split was undone (a layout that was never written): v2 is back beside v1, which
+        // was there all along — not a fresh tab, so the claim is broken, not grown.
+        val (r, _) = tornOut()
+        r.rebase("ws", LayoutNode.Group("g1", listOf("v1", "v2"), "v1"))
+        assertTrue(r.extras("ws").isEmpty())
+    }
+
+    @Test
+    fun rebaseDoesNotGrowIntoAFreshTabOfTheMainGroupAlone() {
+        // A tab opened in MAIN's group leaves the extra's own group untouched: nothing to grow.
+        val (r, _) = tornOut()
+        val tree = LayoutNode.Split(
+            "row",
+            listOf(0.5, 0.5),
+            listOf(LayoutNode.Group("g1", listOf("v1", "new"), "new"), LayoutNode.Group("g2", listOf("v2"), "v2")),
+        )
+        r.rebase("ws", tree)
+        assertEquals(setOf("v2"), r.extras("ws").single().claimedViewIds)
     }
 }

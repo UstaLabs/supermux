@@ -30,7 +30,7 @@ class AndroidPlatformTest {
                 externalDisplay = true,
                 hardwareVideoDecode = true,
                 localBroker = false,
-                multiWindow = false,
+                multiWindow = true,
                 fileSystem = false,
                 clipboardImages = true,
                 saveAs = true,

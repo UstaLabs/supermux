@@ -156,13 +156,20 @@ object NoopNotificationManager : NotificationManager {
 // ── Extra OS windows ──────────────────────────────────────────────────────────
 
 /**
- * Detaching panes into real OS windows. Non-null only where [Caps.multiWindow] is true (desktop);
- * Android has no second window to tear a pane into, and reads null.
+ * Detaching panes into real OS windows. Non-null only where [Caps.multiWindow] is true: desktop,
+ * and Android (each extra window is its own activity, launched beside the app). iOS and the
+ * browser read null.
  *
- * The registry itself (`WindowHosts`, its claim/rebase/transfer algebra and its 32 tests) stays
- * desktop — this is only the three verbs a shared shell needs.
+ * The registry itself (`ui/shell/windows/WindowHosts.kt`, its claim/rebase/transfer algebra) is
+ * shared; this is only the verbs a shared shell needs, and each host opens its windows its own way.
  */
 interface WindowHostController {
+    /**
+     * Whether a tab dragged off every drop target is torn out into a new window. True for a mouse
+     * (desktop), false for touch, where letting go slightly off-target is not a request for a window.
+     */
+    val tearOutOnDragMiss: Boolean get() = true
+
     /** Tear the pane showing [viewId] out of the calling window into a new one. */
     fun tearOutTab(viewId: String)
 

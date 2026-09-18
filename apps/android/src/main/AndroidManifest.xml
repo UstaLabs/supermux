@@ -48,6 +48,18 @@
                 <data android:scheme="supermux" android:host="pair" />
             </intent-filter>
         </activity>
+        <!-- A pane moved out into its own window (windows/ExtraWindowActivity.kt).
+             Each one is launched into a NEW task beside the app; the distinct taskAffinity keeps
+             those tasks from being mistaken for the main one when something re-opens
+             MainActivity with NEW_TASK, and a closed window leaves no empty task in Recents. -->
+        <activity
+            android:name=".windows.ExtraWindowActivity"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:resizeableActivity="true"
+            android:taskAffinity="${applicationId}.window"
+            android:autoRemoveFromRecents="true"
+            android:windowSoftInputMode="adjustResize" />
         <!-- Native push: receives FCM data-only messages (relay `data:{d:<ciphertext>}`). -->
         <service
             android:name=".push.SupermuxMessagingService"

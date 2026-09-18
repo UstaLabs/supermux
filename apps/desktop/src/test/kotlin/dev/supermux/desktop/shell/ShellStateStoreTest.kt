@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.ui.shell.windows.PersistedWindowHost
 
 /**
  * Persistence proof for the desktop UI-state store.

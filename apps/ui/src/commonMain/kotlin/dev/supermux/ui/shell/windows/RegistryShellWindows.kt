@@ -1,11 +1,11 @@
-// Desktop's [ShellWindows]: the shared shell's view of `WindowHostRegistry` (cluster G8).
+// The [ShellWindows] of a host that has more than one window: the shared shell's view of
+// [WindowHostRegistry] (cluster G8; this was desktop's `DesktopShellWindows`).
 //
-// The registry itself — bounds, claims, the tear-out planners, the persisted extras and the real
-// extra `Window {}`s — stays here, because only desktop has more than one window. `ShellUiState`
-// carries this object so the SHARED pane host can hide what another window claimed, claim a newly
-// created view, and re-derive claims when the tree changes; every other host installs
-// `NoShellWindows` and none of it happens.
-package dev.supermux.desktop.shell
+// `ShellUiState` carries this object so the SHARED pane host can hide what another window claimed,
+// claim a newly created view, and re-derive claims when the tree changes. How an extra window is
+// actually shown — a desktop `Window {}`, an Android activity — is the host's business; a host with
+// a single window installs `NoShellWindows` and none of this happens.
+package dev.supermux.ui.shell.windows
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,7 +13,7 @@ import androidx.compose.runtime.setValue
 import dev.supermux.ui.shell.ShellWindows
 import dev.supermux.workspace.LayoutNode
 
-class DesktopShellWindows(
+open class RegistryShellWindows(
     val registry: WindowHostRegistry = WindowHostRegistry(),
 ) : ShellWindows {
 

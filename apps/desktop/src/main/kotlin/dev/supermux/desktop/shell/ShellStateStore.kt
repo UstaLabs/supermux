@@ -7,6 +7,7 @@
 package dev.supermux.desktop.shell
 
 import dev.supermux.desktop.auth.DesktopTokenStore
+import dev.supermux.ui.shell.windows.PersistedWindowHost
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.nio.file.Files
@@ -27,21 +28,6 @@ data class SidebarSnapshot(
     val sidebarWidthDp: Float = 320f,
     /** Project-group keys (workdir / group key) the user has collapsed in the sidebar. */
     val collapsedProjectPaths: List<String> = emptyList(),
-)
-
-/**
- * One detached (non-main) window host. Separate from [WindowHost] so kotlinx.serialization
- * stays on this store file — [WindowBounds] is not `@Serializable`.
- */
-@Serializable
-data class PersistedWindowHost(
-    val id: String,
-    val workspaceId: String,
-    val claimedViewIds: List<String> = emptyList(),
-    val x: Float,
-    val y: Float,
-    val width: Float,
-    val height: Float,
 )
 
 /** The persisted UI state: the sidebar snapshot + the last-selected session id. */

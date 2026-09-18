@@ -85,8 +85,8 @@ import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
 import dev.supermux.ui.shell.SupermuxApp
-import dev.supermux.desktop.shell.tearOutTabLive
-import dev.supermux.desktop.shell.tearOutCanvasLive
+import dev.supermux.ui.shell.windows.tearOutTabLive
+import dev.supermux.ui.shell.windows.tearOutCanvasLive
 import dev.supermux.desktop.settings.DesktopSettingsExtra
 import dev.supermux.desktop.settings.DesktopSettingsSection
 import dev.supermux.ui.prefs.seedLauncher
@@ -97,7 +97,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import androidx.compose.foundation.layout.height
-import dev.supermux.desktop.shell.DesktopShellWindows
+import dev.supermux.ui.shell.windows.RegistryShellWindows
 import dev.supermux.desktop.shell.DesktopStripChrome
 import dev.supermux.desktop.shell.MacSidebarToggle
 import dev.supermux.desktop.shell.MacTitleBarHeight
@@ -110,14 +110,14 @@ import dev.supermux.ui.session.SessionListMode
 import dev.supermux.ui.notify.NotificationController
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
-import dev.supermux.desktop.shell.extraWindowTitle
+import dev.supermux.ui.shell.windows.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
 import dev.supermux.ui.shell.ShellUiState
-import dev.supermux.desktop.shell.WindowBounds
-import dev.supermux.desktop.shell.tearOutGroupLive
+import dev.supermux.ui.shell.windows.WindowBounds
+import dev.supermux.ui.shell.windows.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
@@ -410,7 +410,7 @@ fun main() {
         }
         val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
         // The extra OS windows, and the shared shell's view of them (cluster G8).
-        val desktopWindows = remember { DesktopShellWindows() }
+        val desktopWindows = remember { RegistryShellWindows() }
         // Cluster G8: the sidebar chrome + the selection moved out of `ui-state.json` into the
         // shared settings store (`SettingsKeys.SHELL_*`), which is what Android reads too. The old
         // file is drained ONCE here and then only carries the window bounds. Synchronous for the
@@ -501,7 +501,7 @@ fun main() {
         }
         // Tearing a pane out needs the LIVE `panesBind` (only this scope holds it), so the window
         // owner binds the verbs into the `Platform.windows` seam. Was `AppShell`'s job until G8
-        // moved the shell into `:ui`, which cannot name a `WindowHostRegistry` at all.
+        // moved the shell into `:ui`, which knows no `panesBind` of its own to tear from.
         DisposableEffect(ui) {
             DesktopWindowHostController.bindTearOut(
                 tearOutTab = { viewId ->

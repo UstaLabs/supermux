@@ -1331,9 +1331,12 @@ private fun WorkspacePanel(
     val ws = rememberWorkspaceSession(
         workspace = current,
         overlayScope = overlayScope,
-        // The phone never PATCHes a layout — its tabs follow broker membership (D2/D3).
+        // The phone never PATCHes a layout — its tabs follow broker membership (D2/D3). Unless
+        // another window shows part of this workspace (the phone layout in split screen
+        // beside its own extra window): the tree is then what divides the views between the
+        // windows, and a tear-out's split that is never written is undone by the next frame.
         patchLayout = workspaceLayoutPatch(
-            compact = compact,
+            compact = compact && current.id !in ui.windows.extraWorkspaceIds(),
             onPatch = { tree ->
                 wsApp.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
             },
@@ -1369,6 +1372,10 @@ private fun WorkspacePanel(
     panesBind.overlayScope = overlayScope
     panesBind.launcherPane = launcherPane
     ui.panesBinds[current.id] = panesBind
+    androidx.compose.runtime.DisposableEffect(panesBind) {
+        panesBind.holders++
+        onDispose { panesBind.holders-- }
+    }
     if (isActive) ui.windows.setWorkspaceOnMain(current.id)
     LaunchedEffect(current.id, localLayout) { ui.windows.onWorkspaceTree(current.id, localLayout) }
 

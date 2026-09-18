@@ -1,5 +1,6 @@
 package dev.supermux.android.platform
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -33,6 +34,7 @@ import dev.supermux.android.display.AndroidVideoSurfaceFactory
 import dev.supermux.android.editor.AndroidEditorEngineFactory
 import dev.supermux.android.push.AndroidPushRegistrar
 import dev.supermux.android.terminal.TermlibTerminalViewFactory
+import dev.supermux.android.windows.AndroidWindowHostController
 import dev.supermux.android.update.AndroidAppUpdater
 import dev.supermux.ui.editor.engine.EditorEngineFactory
 import dev.supermux.android.pairing.rememberQrScanLauncher
@@ -103,8 +105,9 @@ class AndroidPlatform(
      */
     override val notifications: NotificationManager = NoopNotificationManager
 
-    /** One window per task; a pane cannot be torn out into another OS window here. */
-    override val windows: WindowHostController? = null
+    /** Extra windows: each is an activity launched beside this one — split screen on a phone or
+     *  a tablet, a free window under DeX. Null only off an activity (nothing to launch from). */
+    override val windows: WindowHostController? = (context as? Activity)?.let(::AndroidWindowHostController)
 
     /** FCM channel + POST_NOTIFICATIONS + relay registration. */
     override val push: PushRegistrar = AndroidPushRegistrar(context)
@@ -260,7 +263,8 @@ val ANDROID_CAPS = Caps(
     externalDisplay = true,
     hardwareVideoDecode = true,
     localBroker = false,
-    multiWindow = false,
+    // A pane can move to its own window (windows/ExtraWindowActivity.kt), on a phone too.
+    multiWindow = true,
     fileSystem = false,
     clipboardImages = true,
     saveAs = true,

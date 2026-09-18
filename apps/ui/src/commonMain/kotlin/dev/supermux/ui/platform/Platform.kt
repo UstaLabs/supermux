@@ -172,7 +172,7 @@ const val DEFAULT_REQUESTER: String = "default"
  * @property hardwareVideoDecode a hardware H.264 decoder is available (Android MediaCodec).
  * @property localBroker the app can run and supervise a broker process itself.
  * @property multiWindow panes can be detached into real OS windows ([Platform.windows] is
- *   non-null).
+ *   non-null): desktop and Android.
  * @property fileSystem the app can read and write arbitrary local paths (desktop only; Android is
  *   confined to SAF-granted URIs, which is NOT a general file system).
  * @property clipboardImages the system clipboard can hand back pasted images.
