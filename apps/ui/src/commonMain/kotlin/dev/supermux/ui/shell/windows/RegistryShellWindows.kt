@@ -15,6 +15,13 @@ import dev.supermux.workspace.LayoutNode
 
 open class RegistryShellWindows(
     val registry: WindowHostRegistry = WindowHostRegistry(),
+    /**
+     * Whether a window waiting in [pending] keeps its workspace composed. Desktop: no — it
+     * re-opens its saved windows only when the user gets back to their workspace. Android and
+     * iPad: yes — there the SYSTEM restored the window, which is already on screen waiting for
+     * the main window to compose its workspace so the registry can take the claim back.
+     */
+    private val keepPendingComposed: Boolean = false,
 ) : ShellWindows {
 
     /** Persisted extras not yet claimed (waiting for a matching workspace tree). */
@@ -51,7 +58,8 @@ open class RegistryShellWindows(
     override fun mainWorkspaceId(): String = registry.main().workspaceId
 
     override fun extraWorkspaceIds(): Set<String> =
-        registry.extras().mapTo(mutableSetOf()) { it.workspaceId }
+        registry.extras().mapTo(mutableSetOf()) { it.workspaceId } +
+            if (keepPendingComposed) pending.map { it.workspaceId } else emptyList()
 
     /** Hydrate persisted extras once the matching workspace tree is on screen. */
     fun tryRestore(workspaceId: String, tree: LayoutNode) {

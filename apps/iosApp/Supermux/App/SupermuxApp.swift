@@ -38,19 +38,21 @@ struct SupermuxApp: App {
     }
 
     var body: some Scene {
-        // The Compose shell: ONE scene whose content is the shared `SupermuxApp` root inside a
-        // navigation controller (see ComposeRootView). Deliberately absent, compared with the
+        // The Compose shell: the MAIN scene, whose content is the shared `SupermuxApp` root inside
+        // a navigation controller (see ComposeRootView). Deliberately absent, compared with the
         // SwiftUI shell this replaced:
         //  - `.preferredColorScheme` — Compose owns appearance now, reading `appearance:mode` from
         //    the shared settings store. Leaving it would let SwiftUI force a scheme the Compose
         //    theme disagrees with, and the two would fight on every change.
         //  - the pairing gate — `MainViewController` runs the shared intro/pairing flow itself, so
         //    Swift no longer decides what "paired" means.
-        WindowGroup {
+        WindowGroup(id: SceneWindows.mainGroupId) {
             ComposeRootView()
                 // Compose draws to the very edges and pads for the safe areas itself, through
                 // `WindowInsets.safeDrawing` in the shared shell.
                 .ignoresSafeArea()
+                // How Kotlin opens the extra windows below (`SceneWindows`).
+                .modifier(ExtraWindowOpener())
                 .onOpenURL { url in
                     // Handing over the raw string rather than parsing here: `PairUrl.parse` is
                     // shared code and already handles both `supermux://pair?...` and a pasted
@@ -70,6 +72,16 @@ struct SupermuxApp: App {
                     IosAppState.shared.setForeground(value: phase != .background)
                 }
         }
+
+        // iPad: a pane moved out of the main window ("Move to New Window") into a window of its
+        // own. The value is the window's claim — which views it shows — so iPadOS restores the
+        // window with it. See `IosWindows.kt`. An iPhone never opens one (one window per app).
+        WindowGroup(id: SceneWindows.groupId, for: String.self) { $claim in
+            ExtraWindowView(claim: $claim)
+                .ignoresSafeArea()
+        }
+        // Pair links and other URLs belong to the main window, never to an extra one.
+        .handlesExternalEvents(matching: [])
     }
 }
 

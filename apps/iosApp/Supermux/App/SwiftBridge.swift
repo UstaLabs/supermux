@@ -59,6 +59,28 @@ final class SwiftBridge: NSObject, IosBridge {
         UIApplication.shared.open(target)
     }
 
+    // MARK: windows (iPad)
+
+    /// True for the bridge of an `extra` scene: `closeWindow` closes only those, never the main one.
+    var isExtraWindow = false
+
+    func supportsExtraWindows() -> Bool {
+        UIApplication.shared.supportsMultipleScenes && UIDevice.current.userInterfaceIdiom == .pad
+    }
+
+    func openExtraWindow(claim: String) {
+        SceneWindows.open?(claim)
+    }
+
+    func closeWindow() {
+        guard isExtraWindow, let session = root?.view.window?.windowScene?.session else { return }
+        UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
+    }
+
+    func openMainWindow() {
+        SceneWindows.openMain?()
+    }
+
     // MARK: files
 
     func pickFiles(kind: String, onResult: @escaping ([IosPickedFile]) -> Void) {
@@ -501,4 +523,75 @@ struct ComposeRootView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UINavigationController, context: Context) {}
+}
+
+/// How Kotlin reaches SwiftUI's `openWindow`, which exists only as an environment value inside a
+/// view. `ExtraWindowOpener` (on the main scene's root) installs the two closures; the bridges
+/// call them.
+enum SceneWindows {
+    /// The `WindowGroup` id of the extra-window scenes; its value is the window's claim.
+    static let groupId = "extra"
+    /// The main scene's `WindowGroup` id.
+    static let mainGroupId = "main"
+
+    @MainActor static var open: ((String) -> Void)?
+    @MainActor static var openMain: (() -> Void)?
+}
+
+/// Installs [SceneWindows]' closures from the environment of whatever view it modifies.
+struct ExtraWindowOpener: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            SceneWindows.open = { claim in openWindow(id: SceneWindows.groupId, value: claim) }
+            SceneWindows.openMain = { openWindow(id: SceneWindows.mainGroupId) }
+        }
+    }
+}
+
+/// One extra window: the Kotlin `ExtraWindowViewController` for its claim, with its own bridge so
+/// sheets present from THIS window and `closeWindow` closes it.
+///
+/// The claim is the scene's `WindowGroup` value, so iPadOS restores the window with it. Kotlin
+/// hands it back whenever it changes (a tab opened in this window joins the claim), and the value
+/// is updated to match. When the scene's content goes away — the user closed the window, or the
+/// system discarded the scene — the claim is released and its views go back to the main window;
+/// a restored scene claims them again.
+struct ExtraWindowView: UIViewControllerRepresentable {
+    @Binding var claim: String?
+
+    final class Coordinator {
+        var bridge: SwiftBridge?
+        /// The claim the controller was built with — its host id is what gets released.
+        var initialClaim: String?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let bridge = SwiftBridge()
+        bridge.isExtraWindow = true
+        let initial = claim ?? ""
+        let binding = $claim
+        let controller = ExtraWindowViewControllerKt.ExtraWindowViewController(
+            bridge: bridge,
+            claim: initial,
+            onClaim: { updated in
+                DispatchQueue.main.async { binding.wrappedValue = updated }
+            }
+        )
+        bridge.root = controller
+        context.coordinator.bridge = bridge
+        context.coordinator.initialClaim = initial
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIViewController, context: Context) {}
+
+    static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
+        if let claim = coordinator.initialClaim {
+            ExtraWindowViewControllerKt.releaseExtraWindow(claim: claim)
+        }
+    }
 }

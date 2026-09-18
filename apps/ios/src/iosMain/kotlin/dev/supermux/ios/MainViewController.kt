@@ -1,11 +1,22 @@
 package dev.supermux.ios
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.window.ComposeUIViewController
 import dev.supermux.auth.SecureTokenStore
 import dev.supermux.host.IosHostStores
@@ -161,6 +172,22 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
             // recreation on iOS, so there is no saved state to restore across one.
             var paired by remember { mutableStateOf(isPaired()) }
 
+            // One main window owns the fleet (see `IosWindows.mainOwner`). Decided in the first
+            // composition, before anything below builds a second `FleetStore`.
+            val owner = remember { Any() }
+            val isMain = remember {
+                val current = IosWindows.mainOwner
+                if (current == null) IosWindows.mainOwner = owner
+                current == null || current === owner
+            }
+            DisposableEffect(owner) {
+                onDispose { if (IosWindows.mainOwner === owner) IosWindows.mainOwner = null }
+            }
+            if (!isMain) {
+                AlreadyOpenElsewhere()
+                return@IosTheme
+            }
+
             val openedUrl by IosAppState.openedUrl.collectAsState()
 
             if (!paired) {
@@ -208,6 +235,14 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                     setSidebarWidth(shellSeed.sidebarWidthDp.dp)
                     collapsedProjectPaths = collapsedPathsSeed
                 }
+            }
+            // Extra windows on iPad (IosWindows.kt): the claim registry is the process's, and the
+            // extra scenes draw from THIS shell state's workspace binds, so it is published for
+            // them while it is composed. `windows` is set here, before the shell's first read.
+            ui.windows = IosWindows.shellWindows
+            DisposableEffect(ui) {
+                IosWindows.mainUi = ui
+                onDispose { if (IosWindows.mainUi === ui) IosWindows.mainUi = null }
             }
             var groupByProject by remember { mutableStateOf(readGroupByProject(defaults)) }
             val foreground by IosAppState.foreground.collectAsState()
@@ -427,3 +462,21 @@ private fun readGroupByProject(defaults: NSUserDefaults): Boolean =
     else defaults.boolForKey(GROUP_BY_PROJECT_KEY)
 
 private const val GROUP_BY_PROJECT_KEY = "sessionList:groupByProject"
+
+/** A second main window on an iPad: the first one already runs the app, so this one says so. */
+@Composable
+private fun AlreadyOpenElsewhere() {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "supermux is already open in another window.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+    }
+}

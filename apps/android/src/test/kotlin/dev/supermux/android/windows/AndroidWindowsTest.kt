@@ -1,6 +1,7 @@
 package dev.supermux.android.windows
 
 import dev.supermux.ui.shell.windows.PersistedWindowHost
+import dev.supermux.ui.shell.windows.RegistryShellWindows
 import dev.supermux.ui.shell.windows.WindowBounds
 import dev.supermux.ui.shell.windows.tearOutTab
 import dev.supermux.workspace.LayoutNode
@@ -15,14 +16,14 @@ class AndroidWindowsTest {
 
     @Test
     fun `a window waiting to be restored keeps its workspace composed`() {
-        val windows = AndroidShellWindows()
+        val windows = RegistryShellWindows(keepPendingComposed = true)
         windows.pending = listOf(PersistedWindowHost("w1", "ws-restored", listOf("v1"), 0f, 0f, 0f, 0f))
         assertEquals(setOf("ws-restored"), windows.extraWorkspaceIds())
     }
 
     @Test
     fun `a restored window re-claims its views once the main window composes its workspace`() {
-        val windows = AndroidShellWindows()
+        val windows = RegistryShellWindows(keepPendingComposed = true)
         windows.pending = listOf(PersistedWindowHost("w1", "ws", listOf("v2"), 0f, 0f, 0f, 0f))
         val tree = LayoutNode.Split(
             "row",
@@ -44,7 +45,7 @@ class AndroidWindowsTest {
 
     @Test
     fun `a tab torn out of the main window splits into its own group and is claimed`() {
-        val windows = AndroidShellWindows()
+        val windows = RegistryShellWindows(keepPendingComposed = true)
         windows.setWorkspaceOnMain("ws")
         var tree: LayoutNode = LayoutNode.Group("g1", listOf("v1", "v2"), "v1")
         val host = assertNotNull(

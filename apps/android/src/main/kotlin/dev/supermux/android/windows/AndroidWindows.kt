@@ -21,20 +21,10 @@ import dev.supermux.ui.shell.windows.WindowHost
 import dev.supermux.ui.shell.windows.tearOutCanvasLive
 import dev.supermux.ui.shell.windows.tearOutTabFrom
 
-/**
- * Android's claims. A window the system restored after process death sits in [pending] until the
- * main window composes its workspace again — and its workspace must BE composed for that to
- * happen, so pending windows count as extra workspaces too (desktop re-opens its pending windows
- * only when the user gets back to their workspace; here the window is already on screen, waiting).
- */
-class AndroidShellWindows : RegistryShellWindows() {
-    override fun extraWorkspaceIds(): Set<String> =
-        super.extraWorkspaceIds() + pending.map { it.workspaceId }
-}
-
 /** The process-wide window state every activity reads. */
 object AndroidWindows {
-    val shellWindows = AndroidShellWindows()
+    /** Windows the system restores keep their workspace composed (see [RegistryShellWindows]). */
+    val shellWindows = RegistryShellWindows(keepPendingComposed = true)
 
     /** The main window's shell state while it is composed; null otherwise. */
     var mainUi by mutableStateOf<ShellUiState?>(null)

@@ -187,6 +187,23 @@ interface IosBridge {
 
     /** Open [url] with `UIApplication.openURL`. Fire-and-forget. */
     fun openUrl(url: String)
+
+    // ── Windows (iPad) ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Whether this device can show a pane in a window of its own: an iPad with multiple scenes.
+     * An iPhone has exactly one window per app, so false there.
+     */
+    fun supportsExtraWindows(): Boolean
+
+    /** Open a scene of the `extra` WindowGroup for [claim] (`PersistedWindowHost.encode()`). */
+    fun openExtraWindow(claim: String)
+
+    /** Close THIS bridge's scene — an extra window whose claim is gone. No-op on the main one. */
+    fun closeWindow()
+
+    /** Bring the main window back (an extra window's placeholder, once the main one closed). */
+    fun openMainWindow()
 }
 
 /**
@@ -275,4 +292,9 @@ object NoopIosBridge : IosBridge {
     override fun terminalVendor(): IosTerminalVendor? = null
 
     override fun openUrl(url: String) = Unit
+
+    override fun supportsExtraWindows(): Boolean = false
+    override fun openExtraWindow(claim: String) = Unit
+    override fun closeWindow() = Unit
+    override fun openMainWindow() = Unit
 }

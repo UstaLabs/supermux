@@ -97,6 +97,10 @@ targets:
             CFBundleURLSchemes:
               - supermux
         UILaunchScreen: {}
+        # iPad: panes can move to windows of their own (a second WindowGroup, see IosWindows.kt).
+        # SwiftUI's App lifecycle supplies the scene delegate; only the flag is ours.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
         # Required by Compose Multiplatform's iOS runtime, which refuses to start without it
         # (`PlistSanityCheck`). Without the key CoreAnimation caps an app at 60 fps on a ProMotion
         # iPhone, so every scroll in the shared shell would run at half the display's rate — the

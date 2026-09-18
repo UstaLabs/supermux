@@ -50,7 +50,10 @@ class IosPlatform(
     val bridge: IosBridge = NoopIosBridge,
 ) : Platform {
 
-    override val caps: Caps = IOS_CAPS
+    /** An iPad shows panes in extra windows ([IosWindowHostController]); an iPhone cannot. */
+    private val extraWindows = bridge.supportsExtraWindows()
+
+    override val caps: Caps = IOS_CAPS.copy(multiWindow = extraWindows)
 
     // ── Answered ────────────────────────────────────────────────────────────────────────────
 
@@ -105,8 +108,9 @@ class IosPlatform(
      */
     override val notifications: NotificationManager = NoopNotificationManager
 
-    /** One window. Panes cannot be torn out into an OS window on iOS. */
-    override val windows: WindowHostController? = null
+    /** Extra windows on an iPad: each is a scene of the `extra` WindowGroup. Null on an iPhone. */
+    override val windows: WindowHostController? =
+        if (extraWindows) IosWindowHostController(bridge) else null
 
     /**
      * Swift's `PushManager`, behind the shared seam. See [IosPushRegistrar] for why two of its
@@ -217,7 +221,7 @@ class IosPlatform(
  * owns updating, so `appUpdate` stays false forever. `push` is true from H3: `IosPushRegistrar`
  * drives the same APNs → relay → broker registration the SwiftUI shell used, and the notification
  * service extension that decrypts the sealed alerts is untouched by this cluster. Everything else is a permanent property of the
- * platform: one window, no tray, no arbitrary file system (the app is confined to what a document
+ * platform: no tray, no arbitrary file system (the app is confined to what a document
  * picker grants it), no local broker process.
  */
 val IOS_CAPS: Caps = Caps(
@@ -227,6 +231,7 @@ val IOS_CAPS: Caps = Caps(
     externalDisplay = true,
     hardwareVideoDecode = false,
     localBroker = false,
+    // An iPhone's table; `IosPlatform` flips it on an iPad (see `IosWindows.kt`).
     multiWindow = false,
     fileSystem = false,
     clipboardImages = true,
