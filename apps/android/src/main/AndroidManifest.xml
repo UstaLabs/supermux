@@ -51,9 +51,13 @@
         <!-- A pane moved out into its own window (windows/ExtraWindowActivity.kt).
              Each one is launched into a NEW task beside the app; the distinct taskAffinity keeps
              those tasks from being mistaken for the main one when something re-opens
-             MainActivity with NEW_TASK, and a closed window leaves no empty task in Recents. -->
+             MainActivity with NEW_TASK, and a closed window leaves no empty task in Recents.
+             Theme.Supermux.Main directly: the app theme is the SPLASH theme, which only
+             MainActivity's installSplashScreen() swaps for this one — without it the window
+             keeps the platform action bar, a big title bar above the panes. -->
         <activity
             android:name=".windows.ExtraWindowActivity"
+            android:theme="@style/Theme.Supermux.Main"
             android:exported="false"
             android:hardwareAccelerated="true"
             android:resizeableActivity="true"
