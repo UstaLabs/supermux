@@ -2,7 +2,13 @@
 // Pattern matches android/nav3-recipes BottomSheetSceneStrategy (OverlayScene + metadata mark).
 package dev.supermux.ui.shell
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -55,8 +61,19 @@ private data class FullPaneOverlayScene<T : Any>(
     override val entries: List<NavEntry<T>> = listOf(entry)
 
     override val content: @Composable (() -> Unit) = {
-        Box(Modifier.fillMaxSize()) {
-            entry.Content()
+        // Overlays draw outside the wide frame's inset-consuming Row, so an edge-to-edge Android
+        // window would put their header under the status bar. Step inside the system bars here
+        // (painting the strip behind them) and consume them so a screen that pads itself doesn't
+        // pad twice. Desktop insets are zero.
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.systemBars)
+                    .consumeWindowInsets(WindowInsets.systemBars),
+            ) {
+                entry.Content()
+            }
         }
     }
 }

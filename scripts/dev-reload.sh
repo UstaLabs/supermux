@@ -35,8 +35,8 @@ java -cp "$HD/wrapper:$CP" HotSwap "$ADB" "$SERIAL" $PKG fullswap "$REPO_ROOT/$A
   --installers-path="$HD/installers/tools/base/deploy/installer/android-installer"
 rc=$?
 set -e
-if [ "$rc" = "16" ]; then
-  echo "==> manifest changed — falling back to install -r + relaunch"
+if [ "$rc" = "16" ] || [ "$rc" = "51" ]; then
+  echo "==> manifest or structural change — falling back to install -r + relaunch"
   "$ADB" -s "$SERIAL" install -r "$APK"
   "$ADB" -s "$SERIAL" shell am start -n $PKG/.MainActivity
 elif [ "$rc" != "0" ]; then

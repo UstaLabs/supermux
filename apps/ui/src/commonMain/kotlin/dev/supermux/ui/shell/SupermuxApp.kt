@@ -254,7 +254,7 @@ fun SupermuxApp(
     autoSelect: Boolean = false,
     autoSelectName: String? = null,
     defaultDeviceName: String = "This device",
-    sessionListMode: SessionListMode = SessionListMode.Fleet,
+    sessionListMode: SessionListMode = SessionListMode.Workspaces,
     groupByProject: Boolean = true,
     onGroupByProjectChange: (Boolean) -> Unit = {},
     onAddedHost: () -> Unit = {},
@@ -262,7 +262,9 @@ fun SupermuxApp(
     settingsSection: @Composable (SettingsSection, SettingsSlotScope) -> Unit = { _, _ -> },
 ) {
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
-    val usageIsPopover = !compact
+    // The anchored popover needs a pointer (UsagePopover draws nothing without one), so a wide
+    // touch-only host — an unfolded foldable, a tablet — gets the full-pane Usage route instead.
+    val usageIsPopover = !compact && dev.supermux.ui.adaptive.LocalPointerAvailable.current
     val openByWorkspace = sessionListMode == SessionListMode.Workspaces
 
     val sessions by fleet.sessions.collectAsState()
@@ -650,7 +652,7 @@ fun SupermuxApp(
                                 // home layer it IS the whole surface and paints both.
                                 standalone = standalone,
                                 topBarShown = !standalone,
-                                footer = if (standalone) null else {
+                                footer = run {
                                     {
                                         SessionListFooter(
                                             appearance = appearance,
@@ -728,7 +730,7 @@ fun SupermuxApp(
                             entry<Route.Usage>(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
-                                if (compact) {
+                                if (!usageIsPopover) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {
                                         key(activeHostId) {
                                             UsageScreen(

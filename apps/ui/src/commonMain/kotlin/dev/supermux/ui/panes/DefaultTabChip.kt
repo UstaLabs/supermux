@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
@@ -51,19 +52,22 @@ fun DefaultTabChip(
     val cs = MaterialTheme.colorScheme
     val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
     val fg = if (state.selected) cs.primary else cs.onSurfaceVariant
+    // Touch: a roomier chip — wider tap area and a larger label; the pointer look is unchanged.
+    val touch = !dev.supermux.ui.adaptive.LocalPointerAvailable.current
     Row(
         Modifier
             .fillMaxHeight()
+            .then(if (touch) Modifier.widthIn(min = 112.dp) else Modifier)
             .background(bg)
-            .padding(start = 14.dp, end = 8.dp),
+            .padding(start = if (touch) 20.dp else 14.dp, end = if (touch) 12.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (touch) 10.dp else 4.dp, Alignment.CenterHorizontally),
     ) {
         Text(
             text = title,
             color = fg,
             fontFamily = labelFont,
-            fontSize = 11.sp,
+            fontSize = if (touch) 13.sp else 11.sp,
             fontWeight = if (state.selected) FontWeight.Medium else FontWeight.Normal,
         )
         Box(

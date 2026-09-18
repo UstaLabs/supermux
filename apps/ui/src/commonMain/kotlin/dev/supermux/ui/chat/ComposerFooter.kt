@@ -82,6 +82,9 @@ fun ComposerFooter(
     val detail by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
     var detailOpen by remember { mutableStateOf(false) }
     var gitOpen by remember { mutableStateOf(false) }
+    // Touch AND narrow (Compact) opens both menus as bottom sheets; anything else keeps the popovers.
+    val sheets = !dev.supermux.ui.adaptive.LocalPointerAvailable.current &&
+        dev.supermux.ui.adaptive.LocalWindowWidthClass.current == dev.supermux.ui.adaptive.WindowWidthClass.Compact
     var gitResult by remember(session.id) { mutableStateOf<String?>(null) }
     // Monotonic op token — same guard GitBadgeMenu uses: a slow op launched first must not
     // clobber the label of a fast op launched after it.
@@ -113,7 +116,25 @@ fun ComposerFooter(
                 tag = "footer_detail",
                 onClick = { detailOpen = true },
             )
-            DropdownMenu(expanded = detailOpen, onDismissRequest = { detailOpen = false }) {
+            val detailRows = listOf(
+                ChatDetailLevel.LOW to "Messages only · tools on status line",
+                ChatDetailLevel.MEDIUM to "Messages + tool summaries",
+                ChatDetailLevel.HIGH to "Everything, tool args and all",
+            )
+            if (sheets && detailOpen) {
+                PickerSheet(
+                    title = "Detail",
+                    options = detailRows.map { (level, hint) -> level.wire to "${level.label} · $hint" },
+                    current = detail.wire,
+                    onPick = { wire ->
+                        detailRows.firstOrNull { it.first.wire == wire }?.let { (level, _) ->
+                            scope.launch { uiPrefs.putChatDetailLevel(level) }
+                        }
+                    },
+                    onDismiss = { detailOpen = false },
+                )
+            }
+            DropdownMenu(expanded = detailOpen && !sheets, onDismissRequest = { detailOpen = false }) {
                 // Same three rows (and the same one-line explanations) the ⋮ submenu offers, so
                 // the two entry points can never drift apart.
                 listOf(
@@ -179,7 +200,28 @@ fun ComposerFooter(
                             gitOpen = true
                         }),
                     )
-                    DropdownMenu(expanded = gitOpen, onDismissRequest = { gitOpen = false }) {
+                    if (sheets && gitOpen) {
+                        val publish = shouldPublish(session.git)
+                        PickerSheet(
+                            title = branch,
+                            options = listOf(
+                                "fetch" to "Fetch",
+                                "pull" to "Pull",
+                                if (publish) "publish" to "Publish" else "push" to "Push",
+                            ),
+                            current = null,
+                            onPick = { id ->
+                                when (id) {
+                                    "fetch" -> onFetch?.let { run("Fetch", it) }
+                                    "pull" -> onPull?.let { run("Pull", it) }
+                                    "publish" -> onPublish?.let { run("Publish", it) }
+                                    "push" -> onPush?.let { run("Push", it) }
+                                }
+                            },
+                            onDismiss = { gitOpen = false },
+                        )
+                    }
+                    DropdownMenu(expanded = gitOpen && !sheets, onDismissRequest = { gitOpen = false }) {
                         DropdownMenuItem(
                             text = { Text("Fetch") },
                             modifier = Modifier.testTag("footer_git_fetch"),

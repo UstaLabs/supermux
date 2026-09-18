@@ -68,6 +68,7 @@ import dev.supermux.ui.push.resolvePushTap
 import dev.supermux.ui.settings.FleetSettingsExtra
 import dev.supermux.ui.settings.FleetSettingsSection
 import dev.supermux.ui.theme.AppearanceMode
+import kotlinx.coroutines.launch
 import dev.supermux.workspace.toDomainOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -150,6 +151,12 @@ class MainActivity : ComponentActivity() {
             val themeUiPrefs = remember { UiPrefs(settingsStore) }
             val appearance by themeUiPrefs.appearance(AppearanceMode.SYSTEM)
                 .collectAsState(appearanceSeed.appearance)
+            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            val effectiveAppearance = when (appearance) {
+                AppearanceMode.SYSTEM -> if (systemDark) AppearanceMode.DARK else AppearanceMode.LIGHT
+                else -> appearance
+            }
+            val themeScope = androidx.compose.runtime.rememberCoroutineScope()
             val textScale by themeUiPrefs.textScale.collectAsState(appearanceSeed.textScale)
             AndroidTheme(appearance = appearance, textScale = textScale, uiPrefs = themeUiPrefs) {
                 val store = remember { SecureTokenStore() }
@@ -300,6 +307,13 @@ class MainActivity : ComponentActivity() {
                     homeFallback = DevConfig.HOME,
                     // A phone opens on the session list, never on the chat it was last in.
                     persistSelection = false,
+                    // The sidebar footer's theme toggle (wide/unfolded only). SYSTEM resolves to
+                    // what's on screen, so the icon and the flip match what the user sees.
+                    appearance = effectiveAppearance,
+                    onToggleTheme = {
+                        val next = if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT else AppearanceMode.DARK
+                        themeScope.launch { themeUiPrefs.putAppearance(next) }
+                    },
                     defaultDeviceName = android.os.Build.MODEL?.ifBlank { "Android phone" } ?: "Android phone",
                     groupByProject = groupByProject,
                     onGroupByProjectChange = { value ->

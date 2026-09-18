@@ -564,6 +564,8 @@ fun PaneTabStrip(
     addSlot: (@Composable () -> Unit)? = null,
     chrome: PaneStripChrome = PaneStripChrome.None,
     labelFont: FontFamily = FontFamily.Monospace,
+    /** Overrides how one tab is drawn, as on [PaneHost]; null is [DefaultTabChip]. */
+    tabSlot: (@Composable (itemId: String, state: TabSlotState) -> Unit)? = null,
 ) {
     // Back-compat for call sites that do not participate in drag (previews, older tests).
     PaneTabStrip(
@@ -577,7 +579,7 @@ fun PaneTabStrip(
         modifier = modifier,
         addSlot = addSlot,
         chrome = chrome,
-        tabSlot = { itemId, state -> DefaultTabChip(itemId, titleFor(itemId), state, labelFont, onClose) },
+        tabSlot = tabSlot ?: { itemId, state -> DefaultTabChip(itemId, titleFor(itemId), state, labelFont, onClose) },
     )
 }
 
@@ -637,8 +639,10 @@ fun PaneTabStrip(
         }
         return x
     }
+    // Touch gets a + as roomy as its tab chips (see DefaultTabChip).
+    val addSlotWidth = if (dev.supermux.ui.adaptive.LocalPointerAvailable.current) 36.dp else 64.dp
     val stripContentWidthPx = displayIds.sumOf { widthOf(it).toDouble() }.toFloat() +
-        if (addSlot != null) with(density) { 36.dp.toPx() } else 0f
+        if (addSlot != null) with(density) { addSlotWidth.toPx() } else 0f
 
     Box(
         modifier
@@ -784,7 +788,7 @@ fun PaneTabStrip(
                             .zIndex(0.5f)
                             .graphicsLayer { translationX = animatedAddX }
                             .fillMaxHeight()
-                            .width(36.dp),
+                            .width(addSlotWidth),
                     ) {
                         addSlot()
                     }

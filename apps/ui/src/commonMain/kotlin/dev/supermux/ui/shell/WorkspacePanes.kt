@@ -10,9 +10,12 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,6 +74,7 @@ import dev.supermux.ui.panes.DefaultTabChip
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneHost
 import dev.supermux.ui.panes.PaneStripChrome
+import dev.supermux.ui.panes.PaneTabStrip
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.session.LocalContextMenuAvailable
 import dev.supermux.ui.session.RowContextMenu
@@ -346,7 +350,6 @@ fun PhoneWorkspacePanes(
 
     Column(modifier.fillMaxSize().testTag("phone_workspace_tabs")) {
         if (tabs.viewIds.isNotEmpty()) {
-            val selectedIndex = tabs.viewIds.indexOf(tabs.selectedId).coerceAtLeast(0)
             // The strip is the TOP-MOST surface on a phone when a workspace has views: the compact
             // branch of the shell does not pad for the system bars (only the tablet frame does —
             // "the phone-layer screens do it themselves"), and this strip is a phone-layer screen
@@ -379,76 +382,44 @@ fun PhoneWorkspacePanes(
                     .testTag("phone_workspace_tab_strip"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ScrollableTabRow(
-                    selectedTabIndex = selectedIndex,
+                // Desktop's strip, not M3's `ScrollableTabRow`: one tab component at every width.
+                PaneTabStrip(
+                    viewIds = tabs.viewIds,
+                    activeViewId = tabs.selectedId ?: "",
+                    titleFor = { id -> viewsById[id]?.let { viewTitle(it) } ?: "view" },
+                    onSelect = { id -> app.setActiveView(current.id, id) },
+                    onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                     modifier = Modifier.weight(1f),
-                    containerColor = Color.Transparent,
-                    edgePadding = 0.dp,
-                ) {
-                    tabs.viewIds.forEach { id ->
-                        val view = viewsById[id]
-                        val title = view?.let { viewTitle(it) } ?: "view"
-                        // The title and its close button on ONE line. M3's `text` + `icon` slots
-                        // stack them vertically, which on a phone spent ~72dp of a small screen on
-                        // a tab bar and put the close button ABOVE its own label — no phone tab
-                        // strip on either platform looks like that, and the pane below is the
-                        // thing the user came for.
+                    // Touch: long-press a tab for "Move to New Window" (see the wide strip).
+                    tabSlot = { id, state ->
                         TabLongPressMenu(
                             enabled = windowsSeam != null && !LocalContextMenuAvailable.current,
                             itemId = id,
                             onMoveToNewWindow = { windowsSeam?.tearOutTab(id) },
                         ) {
-                        Tab(
-                            selected = id == tabs.selectedId,
-                            onClick = { app.setActiveView(current.id, id) },
-                            modifier = Modifier.height(48.dp),
+                            DefaultTabChip(
+                                itemId = id,
+                                title = viewsById[id]?.let { viewTitle(it) } ?: "view",
+                                state = state,
+                                labelFont = MonoFontFamily,
+                                onClose = { vid -> viewsById[vid]?.let { closeOrConfirm(it) } },
+                            )
+                        }
+                    },
+                    addSlot = {
+                        // As roomy as a touch tab chip, so the + is as easy to hit as a tab.
+                        Box(
+                            Modifier
+                                .width(64.dp)
+                                .fillMaxHeight()
+                                .clickable { showAdd = true }
+                                .testTag("phone_add_view"),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(start = 14.dp, end = 4.dp),
-                            ) {
-                                // The generic `Tab` overload has no `text` slot, so nothing
-                                // applies M3's tab typography for us — `TabBaselineLayout` is what
-                                // does that, and it is only reached through the `text`/`icon`
-                                // slots. Say it here or the label silently falls back to
-                                // `bodyLarge` and the strip stops looking like a tab strip. The
-                                // 14dp start padding stands in for `TabBaselineLayout`'s 16dp
-                                // horizontal text padding, which cannot be used unchanged because
-                                // the close button shares the line.
-                                Text(
-                                    title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                IconButton(
-                                    onClick = {
-                                        val v = view ?: return@IconButton
-                                        closeOrConfirm(v)
-                                    },
-                                    modifier = Modifier.size(36.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Close,
-                                        contentDescription = "Close $title",
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                            }
+                            Icon(Icons.Filled.Add, contentDescription = "Add view", modifier = Modifier.size(20.dp))
                         }
-                        }
-                    }
-                    Tab(
-                        selected = false,
-                        onClick = { showAdd = true },
-                        modifier = Modifier.height(48.dp),
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add view")
-                    }
-                }
-                viewsById[tabs.selectedId]?.chatSessionId()?.let { sid ->
-                    PhoneTabChatOverflow(sid, shell) { ui.selectSession(it) }
-                }
+                    },
+                )
             }
         }
         val liveIds = tabs.viewIds.toSet()
