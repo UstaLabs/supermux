@@ -137,6 +137,14 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
         val platform = remember { IosPlatform(bridge) }
         val appearance by uiPrefs.appearance(AppearanceMode.SYSTEM).collectAsState(appearanceSeed)
         val textScale by uiPrefs.textScale.collectAsState(textScaleSeed)
+        // The sidebar footer's theme toggle, exactly as Android resolves it: SYSTEM is not a
+        // state the toggle can flip, so resolve it to what is actually on screen first — the
+        // icon and the flip then match what the user sees.
+        val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+        val effectiveAppearance = when (appearance) {
+            AppearanceMode.SYSTEM -> if (systemDark) AppearanceMode.DARK else AppearanceMode.LIGHT
+            else -> appearance
+        }
 
         IosTheme(
             platform = platform,
@@ -297,6 +305,15 @@ fun MainViewController(bridge: IosBridge = NoopIosBridge): UIViewController {
                 appForeground = foreground,
                 // A phone opens on the session list, never on the chat it was last in.
                 persistSelection = false,
+                // Without these two the footer's theme icon was a no-op with a fixed (DARK)
+                // icon: `SupermuxApp` defaults `onToggleTheme` to `{}`, so nothing was wired.
+                appearance = effectiveAppearance,
+                onToggleTheme = {
+                    val next =
+                        if (effectiveAppearance == AppearanceMode.DARK) AppearanceMode.LIGHT
+                        else AppearanceMode.DARK
+                    appScope.launch { uiPrefs.putAppearance(next) }
+                },
                 defaultDeviceName = UIDevice.currentDevice.name,
                 groupByProject = groupByProject,
                 onGroupByProjectChange = { value ->
