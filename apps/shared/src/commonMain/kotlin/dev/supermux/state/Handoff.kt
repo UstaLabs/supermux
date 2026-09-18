@@ -44,6 +44,8 @@ fun continueSpawnRequest(
         model = handoff.model?.ifBlank { null },
         reasoningLevel = handoff.reasoningLevel?.ifBlank { null },
         workspaceId = workspaceId,
+        // Same checkout as the source — never a (nested) worktree of its own.
+        worktree = false,
         inheritFrom = sourceSessionId,
         firstMessage = text.ifBlank { null },
     )
@@ -68,6 +70,9 @@ fun newChatHereRequest(
     model = model?.ifBlank { null },
     reasoningLevel = reasoningLevel?.ifBlank { null },
     workspaceId = workspaceId,
+    // The broker cuts a worktree when this is omitted; a chat started HERE stays in
+    // the workspace's own checkout.
+    worktree = false,
     inheritFrom = null,
     firstMessage = null,
 )
