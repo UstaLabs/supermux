@@ -54,6 +54,7 @@ class HandoffModelTest {
         assertNull(body.workspaceId)
         assertEquals("s-old", body.inheritFrom)
         assertEquals("go", body.firstMessage)
+        assertEquals(false, body.worktree)
         assertEquals(HandoffPrefill.defaultAgent("mystery"), body.agent)
         assertTrue(brokerDeliversFirstMessage(body))
     }
@@ -70,6 +71,7 @@ class HandoffModelTest {
         assertNull(body.inheritFrom)
         assertNull(body.firstMessage)
         assertEquals("claude", body.agent)
+        assertEquals(false, body.worktree) // omitted would make the broker cut a worktree
     }
 
     @Test
