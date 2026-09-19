@@ -153,6 +153,7 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.widgets.keepAlivePanel
+import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.chatSessionIds
@@ -1330,34 +1331,17 @@ private fun WorkspacePanel(
 ) {
     // Set by PaneHost onCloseView; never ends work by itself.
     var closeCandidate by remember { mutableStateOf<ViewDto?>(null) }
-    val ws = rememberWorkspaceSession(
-        workspace = current,
+    val ws = rememberHostWorkspaceSession(
+        current = current,
+        wsApp = wsApp,
         overlayScope = overlayScope,
         // The phone never PATCHes a layout — its tabs follow broker membership (D2/D3). Unless
         // another window shows part of this workspace (the phone layout in split screen
         // beside its own extra window): the tree is then what divides the views between the
         // windows, and a tear-out's split that is never written is undone by the next frame.
-        patchLayout = workspaceLayoutPatch(
-            compact = compact && current.id !in ui.windows.extraWorkspaceIds(),
-            onPatch = { tree ->
-                wsApp.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
-            },
-            onSkip = { },
-        ),
-        fsRead = { p -> wsApp.workspaceFsRead(current.id, p) },
-        fsWrite = { p, content -> wsApp.workspaceFsWrite(current.id, p, content) },
-        postView = { id, state, groupId ->
-            val created = runCatching {
-                wsApp.api.addView(
-                    current.id,
-                    AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
-                )
-            }.onFailure { println("[SupermuxApp] open file view failed: $it") }.getOrNull()?.id
-            // A phone has no groups to place a pane into: make the new file the active tab.
-            if (created != null && compact) wsApp.setActiveView(current.id, created)
-            created
-        },
-        newId = { randomViewId() },
+        writesLayout = !compact || current.id in ui.windows.extraWorkspaceIds(),
+        // A phone has no groups to place a pane into: make the new file the active tab.
+        activateOpenedFile = compact,
     )
     val layoutSync = ws.layoutSync
     val localLayout = layoutSync.tree
@@ -1518,3 +1502,44 @@ private fun UnavailableSessionPane(onBack: () -> Unit) {
         }
     }
 }
+
+/**
+ * One window's live session over workspace [current] of host [wsApp]: its layout sync, open
+ * documents and file opener. Every window that draws the workspace holds its own, exactly as two
+ * devices showing it do — the broker's frames keep them in step — so a window never depends on
+ * another window's composition to stay current.
+ *
+ * [writesLayout] false never PATCHes the tree (the phone layout, whose tabs follow broker
+ * membership). [activateOpenedFile] makes a newly opened file the workspace's active tab.
+ */
+@Composable
+internal fun rememberHostWorkspaceSession(
+    current: WorkspaceDto,
+    wsApp: HostStore,
+    overlayScope: kotlinx.coroutines.CoroutineScope,
+    writesLayout: Boolean,
+    activateOpenedFile: Boolean,
+): WorkspaceSession = rememberWorkspaceSession(
+    workspace = current,
+    overlayScope = overlayScope,
+    patchLayout = workspaceLayoutPatch(
+        compact = !writesLayout,
+        onPatch = { tree ->
+            wsApp.api.patchWorkspace(current.id, PatchWorkspaceBody(layout = tree.toDto()))
+        },
+        onSkip = { },
+    ),
+    fsRead = { p -> wsApp.workspaceFsRead(current.id, p) },
+    fsWrite = { p, content -> wsApp.workspaceFsWrite(current.id, p, content) },
+    postView = { id, state, groupId ->
+        val created = runCatching {
+            wsApp.api.addView(
+                current.id,
+                AddViewBody(kind = "editor", state = state, id = id, groupId = groupId),
+            )
+        }.onFailure { println("[SupermuxApp] open file view failed: $it") }.getOrNull()?.id
+        if (created != null && activateOpenedFile) wsApp.setActiveView(current.id, created)
+        created
+    },
+    newId = { randomViewId() },
+)

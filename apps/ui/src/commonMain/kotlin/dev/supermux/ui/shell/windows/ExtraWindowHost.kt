@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.supermux.ui.shell.ShellUiState
+import dev.supermux.ui.shell.rememberHostWorkspaceSession
+import dev.supermux.workspace.subtreeCovering
 import kotlinx.coroutines.delay
 
 /** How long a window waits for the main one before saying it is gone (a resize recreates it). */
@@ -113,16 +116,37 @@ fun ExtraWindowHost(
     }
     if (host != null) SideEffect { onClaim(host.toClaim()) }
 
+    // The bind lends what does not depend on the main window REDRAWING — the host store, drafts,
+    // its scope — so it only has to exist (`holders`: the main window is composed, if perhaps
+    // paused off screen). The workspace itself and its session are this window's own.
     val bind = host?.let { mainUi?.panesBindFor(it.workspaceId) }?.takeIf { it.holders > 0 }
     if (mainUi == null || host == null || bind == null) {
         MainWindowGone(onOpenMain)
         return
     }
-    val title = extraWindowTitle(
-        bind.current.name,
-        mainUi.windows.layoutFor(host.id, bind.ws.layoutSync.tree),
-        bind.ws.viewsById,
+    val workspaces by bind.app.workspaces.collectAsState()
+    val current = workspaces.firstOrNull { it.id == host.workspaceId } ?: bind.current
+    val ws = rememberHostWorkspaceSession(
+        current = current,
+        wsApp = bind.app,
+        overlayScope = bind.overlayScope,
+        writesLayout = true,
+        activateOpenedFile = false,
     )
+    val tree = ws.layoutSync.tree
+    // This window's tree re-derives the claims too, or a paused main window would leave a closed
+    // tab's window open. But only once the tree has caught up with the claim: a window opened by
+    // a tear-out starts from the broker's layout, which lacks the tear-out's split until that
+    // PATCH comes back, and re-deriving from it would drop the claim it was just given.
+    var caughtUp by remember(host.id) { mutableStateOf(false) }
+    LaunchedEffect(current.id, tree) {
+        if (!caughtUp) {
+            caughtUp = host.claimedViewIds.isEmpty() || subtreeCovering(tree, host.claimedViewIds) != null
+            if (!caughtUp) return@LaunchedEffect
+        }
+        windows.onWorkspaceTree(current.id, tree)
+    }
+    val title = extraWindowTitle(current.name, mainUi.windows.layoutFor(host.id, tree), ws.viewsById)
     SideEffect { onTitle(title) }
     ExtraWindowPanes(
         hostId = host.id,
@@ -132,7 +156,11 @@ fun ExtraWindowHost(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .testTag("workspace_layout_host_extra"),
-        onTearOutTab = { viewId -> tearOutTabFrom(windows.registry, bind, viewId)?.let(onOpened) },
+        onTearOutTab = { viewId ->
+            tearOutTabFrom(windows.registry, ws, current.id, viewId)?.let(onOpened)
+        },
+        current = current,
+        ws = ws,
     )
 }
 

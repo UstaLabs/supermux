@@ -79,6 +79,9 @@ struct SupermuxApp: App {
         WindowGroup(id: SceneWindows.groupId, for: String.self) { $claim in
             ExtraWindowView(claim: $claim)
                 .ignoresSafeArea()
+                // Installed here too: a launch can restore ONLY an extra window, and its "Open
+                // supermux" must still reach `openWindow`.
+                .modifier(ExtraWindowOpener())
         }
         // Pair links and other URLs belong to the main window, never to an extra one.
         .handlesExternalEvents(matching: [])

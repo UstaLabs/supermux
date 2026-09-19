@@ -12,11 +12,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
 import dev.supermux.ui.panes.PaneDragController
 import dev.supermux.ui.panes.PaneStripChrome
 import dev.supermux.ui.shell.ShellUiState
 import dev.supermux.ui.shell.WorkspacePanes
 import dev.supermux.ui.shell.WorkspacePanesBind
+import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.viewTitle
@@ -46,9 +48,14 @@ fun ExtraWindowPanes(
     modifier: Modifier,
     onTearOutTab: (String) -> Unit,
     stripChrome: PaneStripChrome = PaneStripChrome.None,
+    /**
+     * The workspace as this window knows it, and its session. The bind's (the main window's)
+     * where every window is one composition (desktop); a window of its own ([ExtraWindowHost])
+     * passes its own, so it stays current while the main window is paused off screen.
+     */
+    current: WorkspaceDto = bind.current,
+    ws: WorkspaceSession = bind.ws,
 ) {
-    val current = bind.current
-    val ws = bind.ws
     val hosted = ui.windows.layoutFor(hostId, ws.layoutSync.tree)
     val tabDragState = remember(hostId) { PaneDragController() }
     var closeCandidate by remember(hostId) { mutableStateOf<ViewDto?>(null) }
@@ -85,9 +92,17 @@ fun tearOutTabFrom(
     registry: WindowHostRegistry,
     bind: WorkspacePanesBind,
     viewId: String,
+): WindowHost? = tearOutTabFrom(registry, bind.ws, bind.current.id, viewId)
+
+/** [tearOutTabFrom] over one window's own [ws] of workspace [workspaceId]. */
+fun tearOutTabFrom(
+    registry: WindowHostRegistry,
+    ws: WorkspaceSession,
+    workspaceId: String,
+    viewId: String,
 ): WindowHost? {
-    val layoutSync = bind.ws.layoutSync
-    return tearOutTabLive(registry, layoutSync.tree, viewId, bind.current.id) { next ->
+    val layoutSync = ws.layoutSync
+    return tearOutTabLive(registry, layoutSync.tree, viewId, workspaceId) { next ->
         layoutSync.edit { next }
         layoutSync.tree
     }

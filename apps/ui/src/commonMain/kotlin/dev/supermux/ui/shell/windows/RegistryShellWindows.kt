@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.supermux.ui.shell.ShellWindows
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.collectViewIds
 
 open class RegistryShellWindows(
     val registry: WindowHostRegistry = WindowHostRegistry(),
@@ -64,6 +65,7 @@ open class RegistryShellWindows(
     /** Hydrate persisted extras once the matching workspace tree is on screen. */
     fun tryRestore(workspaceId: String, tree: LayoutNode) {
         if (pending.isEmpty()) return
+        val live = collectViewIds(tree).toSet()
         val leftover = mutableListOf<PersistedWindowHost>()
         for (p in pending) {
             if (p.workspaceId != workspaceId) {
@@ -71,11 +73,16 @@ open class RegistryShellWindows(
                 continue
             }
             if (registry.extras().any { it.id == p.id }) continue
+            // Views closed while the window was away are not coming back: claim what is left, and
+            // a claim with nothing left is dropped — its window then closes, rather than waiting
+            // forever for views that no longer exist. (An empty tree has not loaded yet: wait.)
+            val surviving = p.claimedViewIds.filter { it in live }.toSet()
+            if (p.claimedViewIds.isNotEmpty() && surviving.isEmpty() && live.isNotEmpty()) continue
             val bounds = WindowBounds(p.x, p.y, p.width, p.height)
             val claimed = if (p.claimedViewIds.isEmpty()) {
                 registry.tryClaimCanvas(p.workspaceId, bounds, p.id)
             } else {
-                registry.tryClaim(p.workspaceId, p.claimedViewIds.toSet(), bounds, p.id, tree)
+                registry.tryClaim(p.workspaceId, surviving, bounds, p.id, tree)
             }
             if (claimed == null) leftover += p
         }

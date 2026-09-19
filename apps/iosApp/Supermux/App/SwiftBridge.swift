@@ -68,17 +68,23 @@ final class SwiftBridge: NSObject, IosBridge {
         UIApplication.shared.supportsMultipleScenes && UIDevice.current.userInterfaceIdiom == .pad
     }
 
+    // Both come from a tap or a composition, on the main thread — same as the recorder calls.
     func openExtraWindow(claim: String) {
-        SceneWindows.open?(claim)
+        MainActor.assumeIsolated { SceneWindows.open?(claim) }
     }
 
     func closeWindow() {
         guard isExtraWindow, let session = root?.view.window?.windowScene?.session else { return }
+        // Bring the main window forward first: destroying the only foreground scene would
+        // otherwise drop the user on the Home Screen, with supermux still running behind it.
+        MainActor.assumeIsolated { SceneWindows.activateMain() }
         UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
     }
 
     func openMainWindow() {
-        SceneWindows.openMain?()
+        MainActor.assumeIsolated {
+            if !SceneWindows.activateMain() { SceneWindows.openMain?() }
+        }
     }
 
     // MARK: files
@@ -519,6 +525,8 @@ struct ComposeRootView: UIViewControllerRepresentable {
         // Present sheets from the navigation controller, not from the Compose controller: it is the
         // one that is actually in the window's hierarchy.
         bridge.root = nav
+        // What an extra window brings forward when it closes (`SceneWindows.activateMain`).
+        SceneWindows.mainRoot = nav
         return nav
     }
 
@@ -536,6 +544,18 @@ enum SceneWindows {
 
     @MainActor static var open: ((String) -> Void)?
     @MainActor static var openMain: (() -> Void)?
+
+    /// The main window's root controller, set as it is built. Weak: the scene owns it.
+    @MainActor static weak var mainRoot: UIViewController?
+
+    /// Bring the EXISTING main window forward. False when there is none to bring (it was closed):
+    /// `openWindow` would make a new main window, which is what `openMainWindow` then does.
+    @MainActor @discardableResult
+    static func activateMain() -> Bool {
+        guard let session = mainRoot?.view.window?.windowScene?.session else { return false }
+        UIApplication.shared.requestSceneSessionActivation(session, userActivity: nil, options: nil)
+        return true
+    }
 }
 
 /// Installs [SceneWindows]' closures from the environment of whatever view it modifies.
