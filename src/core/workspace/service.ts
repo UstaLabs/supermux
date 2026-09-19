@@ -58,7 +58,16 @@ export class WorkspaceService {
    * Spec §9.2 "Chat". A second agent joins an existing workspace. The primary
    * session pointer does NOT move — the workspace keeps the name it already has.
    */
-  addChatSession(workspaceId: string, sessionId: string): ViewRecord {
+  addChatSession(workspaceId: string, sessionId: string, pendingViewId?: string): ViewRecord {
+    // The "+ → Chat" tab already exists as a pending chat (no sessionId). Bind that
+    // tab rather than adding a second one beside it.
+    const pending = pendingViewId ? this.store.getView(pendingViewId) : undefined
+    if (pending && pending.workspace_id === workspaceId && pending.kind === "chat"
+        && !(pending.state as { sessionId?: string } | null)?.sessionId) {
+      this.store.setViewState(pending.id, { sessionId })
+      this.linkSession(sessionId, workspaceId)
+      return this.store.getView(pending.id)!
+    }
     const view = this.store.addView(workspaceId, { kind: "chat", state: { sessionId } })
     this.linkSession(sessionId, workspaceId)
     return view

@@ -257,6 +257,23 @@ class DesktopLauncherTest {
         assertEquals(false, req.worktree) // same checkout — never a new (nested) worktree
     }
 
+    @Test fun create_session_from_a_workspace_tab_joins_the_workspace_and_names_the_tab() = runBlocking {
+        val recorded = mutableListOf<Rec>()
+        val app = appRecording(recorded)
+
+        app.createSessionWithFirstMessageOrThrow(
+            workdir = "/proj", agent = "opencode", model = null, reasoningLevel = null,
+            text = "hey", staged = emptyList(), worktree = false, baseBranch = null,
+            workspaceId = "ws-1", viewId = "view-pending",
+        )
+
+        // Without workspaceId the broker mints a SECOND workspace; without viewId it adds a
+        // second chat tab beside the pending one.
+        val req = json.decodeFromString<SpawnRequest>(recorded.first { it.path == "/sessions" }.body)
+        assertEquals("ws-1", req.workspaceId)
+        assertEquals("view-pending", req.viewId)
+    }
+
     @Test fun create_session_resolves_a_blank_spawn_id_by_name() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded, spawnId = "", spawnName = "feat-x")

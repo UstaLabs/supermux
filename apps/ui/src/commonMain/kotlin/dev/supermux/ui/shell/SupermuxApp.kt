@@ -464,7 +464,9 @@ fun SupermuxApp(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
-    ) -> Unit = { onBack, onCreated, _, seedWorkdir ->
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
+    ) -> Unit = { onBack, onCreated, joinWorkspaceId, seedWorkdir, pendingViewId ->
         SessionLauncherScreen(
             sessions = activeHostSessions,
             home = home,
@@ -483,9 +485,19 @@ fun SupermuxApp(
             // this path no longer sends it a second time by hand.
             onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId ->
                 onCreated(
-                    launcherActions.createSessionWithFirstMessage(
-                        workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
-                    ),
+                    if (joinWorkspaceId == null) {
+                        launcherActions.createSessionWithFirstMessage(
+                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
+                        )
+                    } else {
+                        // A workspace tab's composer: JOIN that workspace and fill this very tab.
+                        // Without workspaceId the broker mints a second workspace for the session.
+                        fleet.createSessionWithFirstMessageOrThrow(
+                            workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
+                            workspaceId = joinWorkspaceId,
+                            viewId = pendingViewId,
+                        )
+                    },
                 )
                 null
             },
@@ -722,7 +734,7 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
                                 if (compact) {
-                                    launcherPane({ ui.goBack() }, { ui.selectSession(it) }, null, null)
+                                    launcherPane({ ui.goBack() }, { ui.selectSession(it) }, null, null, null)
                                 }
                             }
                             entry<Route.Usage>(
@@ -1002,6 +1014,8 @@ private fun ShellHome(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
     onNewSession: () -> Unit,
     onTearOutTab: (String) -> Unit,
@@ -1231,6 +1245,8 @@ private fun ShellDetailForeground(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
     chatFallback: (@Composable (session: SessionInfo, visible: Boolean, onBack: () -> Unit) -> Unit)?,
 ) {
@@ -1271,7 +1287,7 @@ private fun ShellDetailForeground(
                         }
                     },
             ) {
-                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null, null)
+                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null, null, null)
             }
         }
         selectedSession == null -> {
@@ -1320,6 +1336,8 @@ private fun WorkspacePanel(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
     tabDragState: PaneDragController,
     stripChrome: PaneStripChrome,
