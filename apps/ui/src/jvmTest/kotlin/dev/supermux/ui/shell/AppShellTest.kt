@@ -190,13 +190,10 @@ class AppShellTest {
         assertFalse(ui.launcherOpen)
         onNodeWithTag("launcher_overlay").assertDoesNotExist()
 
-        // Cluster G8: the shell no longer hand-sends the first message. The store ARMS it
-        // (`FleetStore.armPendingFirst`) and the chat panel that opens sends it through the SAME
-        // composer funnel every other message uses — one path, on both hosts. Desktop used to
-        // POST it here itself, which with the fleet builder would now send it twice.
+        // The BROKER delivers the first message (POST /sessions `firstMessage`), so neither the
+        // shell nor the chat that opens sends it — a client Send would deliver it twice.
         assertTrue(sent.filterIsInstance<ClientFrame.Send>().isEmpty())
-        val pending = app.consumePendingFirst("sess-new")
-        assertEquals("hello there", pending?.text)
+        assertEquals(null, app.consumePendingFirst("sess-new"))
 
         // The screen's own post-onSubmit onClearDraft() must win even though `ui.launcherOpen =
         // false` (set by OUR onSubmit, before returning) disposes the SessionLauncherScreen

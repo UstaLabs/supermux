@@ -216,6 +216,16 @@ fun ViewDto.stateString(key: String): String? =
 fun ViewDto.chatSessionId(): String? =
     if (kind == "chat") stateString("sessionId") else null
 
+/**
+ * The composer text typed into a PENDING chat tab (no session yet). It lives in the tab's own state
+ * so it syncs across devices and dies with the tab: the broker replaces the state with
+ * `{sessionId}` when it binds the tab, and closing the tab drops the row.
+ */
+fun ViewDto.pendingChatDraft(): String =
+    if (kind == "chat" && chatSessionId() == null) stateString(PENDING_CHAT_DRAFT_KEY).orEmpty() else ""
+
+const val PENDING_CHAT_DRAFT_KEY = "draftText"
+
 @Serializable
 data class WorkspaceDto(
     val id: String,

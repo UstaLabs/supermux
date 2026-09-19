@@ -141,6 +141,7 @@ class SessionLauncherScreenTest {
         // genuine "workdir is not among the known projects" reset.
         projects: List<String> = emptyList(),
         standalone: Boolean = false,
+        workspaceWorkdir: String? = null,
         onBack: () -> Unit = {},
         onPrefsChange: (LauncherPrefs) -> Unit = {},
         onDraftChange: (LauncherDraft) -> Unit = {},
@@ -170,6 +171,7 @@ class SessionLauncherScreenTest {
                 onSubmit = onSubmit,
                 onOpenSession = onOpenSession,
                 standalone = standalone,
+                workspaceWorkdir = workspaceWorkdir,
             )
         }
     }
@@ -282,6 +284,49 @@ class SessionLauncherScreenTest {
         mainClock.advanceTimeBy(600) // any still-pending 400ms save would fire here — with the fix, cancelled
         waitForIdle()
         assertTrue(drafts.isEmpty(), "the cleared draft must not be resurrected by a stale debounce; got $drafts")
+    }
+
+    @Test fun a_workspace_tab_is_locked_to_its_workspace_and_restores_only_the_text() = runComposeUiTest {
+        var captured: Submitted? = null
+        pointerContent {
+            Harness(
+                // Everything but the text belongs to some OTHER launcher and must not leak in.
+                draft = LauncherDraft(workdir = "/other/proj", useWorktree = true, baseBranch = "dev", text = "tab text"),
+                repoInfo = repo,
+                workspaceWorkdir = "/ws/tree",
+                onSubmit = { w, a, m, r, t, s, wt, b, _ ->
+                    captured = Submitted(w, a, m, r, t, s.size, wt, b)
+                    null
+                },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_project_field").assertDoesNotExist()
+        onNodeWithTag("launcher_worktree").assertDoesNotExist()
+        onNodeWithTag("launcher_save_draft").assertDoesNotExist()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals(Submitted("/ws/tree", "claude", null, null, "tab text", 0, false, null), captured)
+    }
+
+    @Test fun a_failed_submit_saves_the_draft_again() = runComposeUiTest {
+        // The draft is cleared BEFORE the spawn (a workspace tab is disposed the moment the broker
+        // binds it), so a refusal must re-arm the save — the text is still the user's.
+        mainClock.autoAdvance = false
+        val drafts = mutableListOf<LauncherDraft>()
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(workdir = "/proj/x", text = "keep me"),
+                onDraftChange = { drafts.add(it) },
+                onSubmit = { _, _, _, _, _, _, _, _, _ -> throw IllegalStateException("nope") },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        mainClock.advanceTimeBy(600)
+        waitForIdle()
+        assertEquals("keep me", drafts.lastOrNull()?.text)
     }
 
     @Test fun agent_change_resets_model_to_default() = runComposeUiTest {

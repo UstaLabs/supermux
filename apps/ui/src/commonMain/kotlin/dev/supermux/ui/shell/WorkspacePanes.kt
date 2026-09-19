@@ -65,6 +65,7 @@ import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
+import dev.supermux.proto.pendingChatDraft
 import dev.supermux.proto.stateString
 import dev.supermux.state.HostStore
 import dev.supermux.ui.chat.rememberChatActions
@@ -95,6 +96,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 
+
+/**
+ * A pending "+ → Chat" tab hosting the launcher: the chat it starts JOINS [workspaceId], is born in
+ * [workdir] and fills tab [viewId]. [draftText] is the tab's own saved composer text (restored
+ * once), [onDraftText] saves it back into the tab's state.
+ */
+data class LauncherTab(
+    val workspaceId: String,
+    val workdir: String,
+    val viewId: String,
+    val draftText: String,
+    val onDraftText: (String) -> Unit,
+)
 /**
  * Shared objects for one workspace's panes, in every window that draws them (the shell's own, and
  * on desktop each extra OS window).
@@ -110,10 +124,8 @@ class WorkspacePanesBind(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
 ) {
     var current by mutableStateOf(current)
@@ -155,10 +167,8 @@ fun WorkspacePanes(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
     tabDragState: PaneDragController,
     closeCandidate: ViewDto?,
@@ -328,10 +338,8 @@ fun PhoneWorkspacePanes(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
     sessionNames: Map<String, String>,
     modifier: Modifier = Modifier,
@@ -539,10 +547,8 @@ private fun WorkspacePaneContent(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
     walkthroughSessionId: String?,
     onWalkthroughSessionId: (String?) -> Unit,
@@ -555,16 +561,23 @@ private fun WorkspacePaneContent(
     val fileOpener = ws.fileOpener
     val v = viewsById[viewId]
     if (v != null && v.kind == "chat" && v.chatSessionId() == null) {
-        launcherPane(
-            { app.closeWorkspaceView(current.id, v.id) },
-            { newId ->
-                app.bindChatView(current.id, v.id, newId)
-                ui.selectedId = newId
-            },
-            current.id,
-            current.workdir,
-            v.id,
-        )
+        // key: a different pending tab is a different launcher (its own draft, its own state).
+        key(hostId, viewId) {
+            launcherPane(
+                { app.closeWorkspaceView(current.id, v.id) },
+                { newId ->
+                    app.bindChatView(current.id, v.id, newId)
+                    ui.selectedId = newId
+                },
+                LauncherTab(
+                    workspaceId = current.id,
+                    workdir = current.workdir,
+                    viewId = v.id,
+                    draftText = v.pendingChatDraft(),
+                    onDraftText = { app.savePendingChatDraft(current.id, v.id, it) },
+                ),
+            )
+        }
     } else if (v != null) {
         key(hostId, viewId) {
             // The store this VIEW belongs to (its chat session's host, else the workspace's).

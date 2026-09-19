@@ -12,7 +12,7 @@
 //     even on a phone with a keyboard paired, a real Enter submits.
 // Additive on both hosts: Android's "/" command menu (desktop gains it), the glossary +
 // `transcribeDraft` dictation cleanup, camera capture through `Platform.captureImage/captureVideo`
-// + `pendingPicks`; desktop's omnibox project picker, `initialWorkdir` (the launcher inside a
+// + `pendingPicks`; desktop's omnibox project picker, `workspaceWorkdir` (the launcher inside a
 // workspace tab), `onClearDraft`, the injectable `micCapture` and the inline broker-refusal text.
 //
 // THE CARD IS NOT THIS FILE'S (cluster F7). The capsule, its focus border, the staged-chip strip,
@@ -200,7 +200,7 @@ private val LAUNCHER_MAX_WIDTH = 720.dp
 /**
  * The New-Session launcher. Broker access is injected through [actions] (cluster F1) — no store ref
  * in the composable — and both hosts mount the same composable: desktop as its launcher pane (and
- * inside a workspace tab, via [initialWorkdir]), Android at `Route.NewSession`.
+ * inside a workspace tab, via [workspaceWorkdir]), Android at `Route.NewSession`.
  *
  * @param onSubmit spawns the session + stages the first message, returning the new session id (or
  *   null when the caller navigated itself). On normal completion the draft is cleared
@@ -255,12 +255,12 @@ fun SessionLauncherScreen(
     ) -> String? = { _, _, _, _, _, _ -> null },
     onOpenSession: ((String) -> Unit)? = null,
     /**
-     * Start the project picker on this directory instead of the most-recent
-     * default. Set when the composer runs inside a workspace tab so a new chat
-     * lands in that workspace's work tree. A DEFAULT, not a lock — the follow
-     * effect below stops as soon as it is set, so the user can still pick freely.
+     * Set when the launcher runs inside a workspace tab: the new chat JOINS that workspace, so it
+     * is LOCKED to the workspace's directory. No project, host or worktree picker and no Save
+     * draft; the draft's workdir/worktree/branch are ignored (only its text is restored — the
+     * caller keeps that per tab), and the spawn never cuts a new worktree.
      */
-    initialWorkdir: String? = null,
+    workspaceWorkdir: String? = null,
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
     /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
@@ -300,7 +300,7 @@ fun SessionLauncherScreen(
     // clobber server draft_payload (the race both hosts hit independently).
     var reasoningLevel by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(initialDraftId, initialDraft?.id, launcherRestoring) {
-        if (launcherRestoring) return@LaunchedEffect
+        if (launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
         val s = initialDraft ?: return@LaunchedEffect
         activeDraftId = s.id
         workdir = s.workdir
@@ -413,13 +413,15 @@ fun SessionLauncherScreen(
         launcherReasoning = prefs.reasoningLevels
         model = prefs.models[agent]
         val draft = loadDraft()
-        val restoredWorkdir = draft.workdir
+        val restoredWorkdir = workspaceWorkdir ?: draft.workdir
         if (restoredWorkdir != null) {
             workdir = restoredWorkdir
             workdirTouched = true
         }
-        useWorktree = draft.useWorktree
-        baseBranch = draft.baseBranch
+        if (workspaceWorkdir == null) {
+            useWorktree = draft.useWorktree
+            baseBranch = draft.baseBranch
+        }
         message = TextFieldValue(draft.text, TextRange(draft.text.length))
         launcherRestoring = false
     }
@@ -507,8 +509,8 @@ fun SessionLauncherScreen(
     val composing = message.text.isNotBlank() || staged.isNotEmpty()
     // A workspace-seeded workdir wins over the most-recent-project default: the
     // whole point is that a chat opened in a workspace starts in ITS directory.
-    LaunchedEffect(initialWorkdir) {
-        if (!initialWorkdir.isNullOrBlank()) { workdir = initialWorkdir; workdirTouched = true }
+    LaunchedEffect(workspaceWorkdir) {
+        if (!workspaceWorkdir.isNullOrBlank()) { workdir = workspaceWorkdir; workdirTouched = true }
     }
     LaunchedEffect(recentProjectPaths, workdirTouched, composing, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
@@ -593,12 +595,17 @@ fun SessionLauncherScreen(
         submitting = true
         error = null
         val eligible = repoInfo?.eligible == true
-        val wantsWorktree = eligible && useWorktree
+        // A workspace tab joins the workspace's own checkout — never a new worktree beside it.
+        val wantsWorktree = eligible && useWorktree && workspaceWorkdir == null
         val base = if (wantsWorktree && baseBranch.isNotEmpty()) baseBranch else null
         val toUpload = staged.map {
             // Audio → "voice"; everything else null so the broker infers the kind from the MIME.
             StagedUpload(it.source, it.name, it.mime, if (it.mime.startsWith("audio")) "voice" else null)
         }
+        // Cleared BEFORE the spawn, not after: a workspace tab flips to its chat (disposing this
+        // screen and cancelling this coroutine) as soon as the broker binds it, and the dispose
+        // flush must not write the just-sent text back. A failure re-arms the draft save.
+        draftCleared = true
         scope.launch {
             try {
                 val sessionId = onSubmit(
@@ -606,9 +613,10 @@ fun SessionLauncherScreen(
                     toUpload, wantsWorktree, base, activeDraftId,
                 )
                 onClearDraft()
-                draftCleared = true
                 if (sessionId != null) onOpenSession?.invoke(sessionId)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                draftCleared = false
                 error = e.message ?: "Failed to create session"
             } finally {
                 submitting = false
@@ -652,7 +660,7 @@ fun SessionLauncherScreen(
                 ) {
                     // Multi-host: which broker this session spawns on (defaults to the active host).
                     // A pointer window puts it top-right; touch keeps Android's under-the-heading pill.
-                    if (hosts.size > 1 && pointer) {
+                    if (hosts.size > 1 && pointer && workspaceWorkdir == null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { hostPill() }
                     }
 
@@ -675,7 +683,9 @@ fun SessionLauncherScreen(
                         // Project name IS the dropdown (iOS projectPicker / web heading-variant
                         // parity). The Box is the ANCHOR: where a pointer drives, the shared picker
                         // renders as a dropdown that must hang off this heading.
-                        Box {
+                        // A workspace tab is locked to its directory: the folder caption under the
+                        // composer names it, so there is no project dropdown here.
+                        if (workspaceWorkdir == null) Box {
                             Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(Space.sm))
@@ -716,11 +726,11 @@ fun SessionLauncherScreen(
                                 onDismiss = { projectMenu = false },
                             )
                         }
-                        if (hosts.size > 1 && !pointer) {
+                        if (hosts.size > 1 && !pointer && workspaceWorkdir == null) {
                             Spacer(Modifier.height(Space.sm))
                             hostPill()
                         }
-                        if (repoInfo?.eligible == true) {
+                        if (repoInfo?.eligible == true && workspaceWorkdir == null) {
                             Spacer(Modifier.height(Space.sm))
                             val worktreeLabel = when {
                                 !useWorktree -> "No worktree"
@@ -922,7 +932,8 @@ fun SessionLauncherScreen(
                         }
                     }
                     val saveDraftButton: @Composable () -> Unit = {
-                        TextButton(
+                        // A workspace tab keeps its draft in the tab itself — no draft session.
+                        if (workspaceWorkdir == null) TextButton(
                             onClick = { doSaveDraft() },
                             enabled = canSaveDraft && !submitting,
                             modifier = Modifier.testTag("launcher_save_draft"),

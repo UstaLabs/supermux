@@ -1010,10 +1010,10 @@ fun main() {
                     // SM_LAUNCH_PAUSE_MS holds it open first, for a screenshot of the composer card /
                     // a restored draft) exercises the real spawn→first-message→uploads path:
                     // createSessionWithFirstMessage(workdir, agent, model=null, reasoning=null, message,
-                    // staged, worktree=false, baseBranch=null) → select the new session → sendMessage
-                    // with consumeFirstUploads → close the overlay. PIPE-delimited (not colon) so the
+                    // staged, worktree=false, baseBranch=null) — the broker delivers the first turn —
+                    // → select the new session → close the overlay. PIPE-delimited (not colon) so the
                     // message may contain colons/spaces; an optional 4th field stages one real file
-                    // (FileChunkSource) that uploads post-spawn. A BLANK message opens the launcher
+                    // (FileChunkSource) that uploads before the spawn. A BLANK message opens the launcher
                     // without submitting (draft/prefs screenshot mode). This SPAWNS a real session —
                     // point it at a throwaway temp workdir, never a real project. Off by default.
                     val launchTest = System.getenv("SM_LAUNCH_TEST")?.takeIf { it.isNotBlank() }
@@ -1068,7 +1068,6 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = id
-                            app.sendMessage(id, message, app.consumeFirstUploads(id))
                             ui.closeLauncher()
                             println("[launch] spawned session $id in '$workdir' (agent=$agent, staged=${staged.size}); first message sent")
                         }

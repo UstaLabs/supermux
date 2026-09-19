@@ -82,7 +82,7 @@ class FleetStoreLauncherTest {
         else -> HttpStatusCode.OK to "{}"
     }
 
-    @Test fun launcherArmsThePendingFirstMessageSoTheComposerSendsIt() = runTest(UnconfinedTestDispatcher()) {
+    @Test fun launcherLeavesTheFirstMessageToTheBroker() = runTest(UnconfinedTestDispatcher()) {
         val f = fleet(this, bodyFor = ::spawnOk)
         val id = withContext(Dispatchers.Default) {
             f.createSessionWithFirstMessageOrThrow(
@@ -91,10 +91,9 @@ class FleetStoreLauncherTest {
             )
         }
         assertEquals("s-new", id)
-        val pending = f.consumePendingFirst(id)
-        assertNotNull(pending, "the composer must find a pending first message")
-        assertEquals("first turn", pending.text)
-        assertNull(f.consumePendingFirst(id), "consuming is one-shot")
+        // POST /sessions carried it as firstMessage (DesktopLauncherTest); a composer Send too
+        // would deliver it twice.
+        assertNull(f.consumePendingFirst(id), "the broker delivers the first turn; nothing is armed")
         f.close()
     }
 

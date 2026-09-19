@@ -117,6 +117,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
+ * The `session` label on a launcher upload. The session does not exist yet when the file goes up
+ * (the broker delivers it with the spawn's first turn); the broker only checks the device.
+ */
+internal const val LAUNCHER_UPLOAD_SESSION = "launcher"
+
+/**
  * @param connectOnInit when false (tests), the constructor does NOT collect frames, launch the
  *   WS client, or start the viewing heartbeat — so [reduce] and the send helpers can run without
  *   a network. Production uses the default `true`.
@@ -1242,6 +1248,26 @@ class HostStore(
     }
 
     /**
+     * Save a pending chat tab's composer text into the tab's own state (see
+     * [dev.supermux.proto.pendingChatDraft]). The broker refuses this once the tab is bound, so a
+     * late save racing the spawn can't turn the tab back into a composer.
+     */
+    fun savePendingChatDraft(workspaceId: String, viewId: String, text: String) {
+        stateScope.launch {
+            runCatching {
+                api.patchView(
+                    workspaceId, viewId,
+                    PatchViewBody(
+                        state = buildJsonObject {
+                            if (text.isNotBlank()) put(dev.supermux.proto.PENDING_CHAT_DRAFT_KEY, JsonPrimitive(text))
+                        },
+                    ),
+                )
+            }.onFailure { println("[HostStore] savePendingChatDraft failed: $it") }
+        }
+    }
+
+    /**
      * Bind a pending chat view to the session that was just created for it, so
      * the tab stops being a composer and becomes the conversation. Same tab, same
      * position — only its contents change.
@@ -1792,45 +1818,19 @@ class HostStore(
             api.uploadResumable(session, source, name, mime, kind, onProgress).file_id
         }
 
-    /** The uploaded attachment file_ids from the most recent [createSessionWithFirstMessage],
-     *  keyed by the new session id, awaiting the caller's first-message send. See that method's
-     *  KDoc for why the desktop handoff is a consumable holder (not Android's setPendingFirst). */
-    private var firstUploads: Pair<String, List<String>>? = null
-
     /**
-     * Take (and clear) the attachment file_ids that [createSessionWithFirstMessage] uploaded for
-     * [sessionId], for the caller to pass into [sendMessage] as the first message's attachments.
-     * Returns [] when nothing was staged for this session (or it was already consumed). Single-slot
-     * by design — only one launcher submit is ever in flight. Mirrors the *shape* of Android's
-     * consumePendingFirst, but carries ONLY the file_ids (the first-message TEXT stays with the
-     * caller on desktop — see [createSessionWithFirstMessage]'s divergence note).
-     */
-    fun consumeFirstUploads(sessionId: String): List<String> {
-        val entry = firstUploads ?: return emptyList()
-        if (entry.first != sessionId) return emptyList()
-        firstUploads = null
-        return entry.second
-    }
-
-    /**
-     * Create a new session and stage its first message's attachments; returns the new session id,
-     * or null when the workdir is invalid or the spawn fails.
+     * Create a new session whose first turn the BROKER delivers; returns the new session id, or
+     * null when the workdir is invalid or the spawn fails.
      *
-     * Flow (Android AppViewModel.createSessionWithFirstMessage parity): validate the workdir
-     * (POST /paths/validate) and resolve the real path → POST /sessions with the launcher's
-     * agent / model / reasoning / worktree / baseBranch → resolve the (possibly-BLANK) spawn id
-     * against the live session list ([resolveSpawnId]) → upload each staged file post-spawn
-     * (uploads need a session id) via [uploadResumable]. A staged file that fails to upload is
-     * skipped — session creation never blocks on an attachment. [worktree]/[baseBranch] are only
-     * honored when the workdir is an eligible git repo (the broker ignores them otherwise);
+     * Flow: validate the workdir (POST /paths/validate) and resolve the real path → upload each
+     * staged file via [uploadResumable] (BEFORE the spawn — an upload's session field is only a
+     * label, ownership is the device) → POST /sessions carrying [text] as `firstMessage` plus the
+     * uploaded ids as `firstAttachments` → resolve the (possibly-BLANK) spawn id against the live
+     * session list ([resolveSpawnId]). A staged file that fails to upload is skipped. Nothing
+     * about the first turn is left to the client after the POST returns, so a caller whose UI
+     * goes away mid-flight (a workspace tab flipping to its chat) cannot lose it.
+     * [worktree]/[baseBranch] are only honored when the workdir is an eligible git repo;
      * baseBranch null → cut from the repo's current branch.
-     *
-     * DIVERGENCE FROM ANDROID: Android queues the first message via `setPendingFirst` and lets
-     * `ChatScreen` send it on open. Desktop has no pending-first plumbing — this method deliberately
-     * does NOT send [text]. The caller (the launcher, M4a Task 5) selects the returned session and
-     * sends the first message itself via [sendMessage] (the SM_SMOKE_SEND path), passing the
-     * uploaded attachment ids it takes from [consumeFirstUploads]. [text] is accepted here only so
-     * the launcher's onSubmit signature stays aligned with Android's; it is neither sent nor stored.
      *
      * The whole body runs through [runApi]: any broker failure (invalid path, spawn 4xx, transport)
      * logs and yields null, so the launcher can surface "couldn't create session" without a catch.
@@ -1862,7 +1862,7 @@ class HostStore(
      * OWN reason instead of a generic "couldn't create the session": an unusable workdir raises
      * [IllegalArgumentException] carrying [PathValidation.error], and a refused POST /sessions goes
      * through [remapSpawnFailure] so the JSON `error` field surfaces. Same side effects otherwise
-     * (draft replaced, staged files uploaded after spawn, [consumeFirstUploads] armed).
+     * (draft replaced, staged files uploaded, first turn handed to the broker).
      */
     suspend fun createSessionWithFirstMessageOrThrow(
         workdir: String,
@@ -1880,7 +1880,7 @@ class HostStore(
         name: String? = null,
         /** Source session id for "Continue in new conversation" (broker inheritFrom). */
         inheritFrom: String? = null,
-        /** Broker delivers this after spawn (continue handoff). Not sent on the client WS. */
+        /** Overrides [text] as the broker-delivered first turn (continue handoff). */
         firstMessage: String? = null,
         /** The pending chat tab in [workspaceId] this session fills (see [SpawnRequest.viewId]). */
         viewId: String? = null,
@@ -1893,6 +1893,10 @@ class HostStore(
         val resolvedPath = validation.path
         if (!validation.ok || resolvedPath.isNullOrBlank()) {
             throw IllegalArgumentException(validation.error ?: "Invalid working directory")
+        }
+        // Before the spawn: the broker delivers them with the first turn (see the KDoc).
+        val attachmentIds = staged.mapNotNull { s ->
+            uploadResumable(LAUNCHER_UPLOAD_SESSION, s.source, s.name, s.mime, s.kind) { _, _ -> }
         }
         val resp = try {
             api.spawn(
@@ -1908,21 +1912,15 @@ class HostStore(
                     workspaceId = workspaceId,
                     viewId = viewId?.ifBlank { null },
                     inheritFrom = inheritFrom?.ifBlank { null },
-                    firstMessage = firstMessage?.ifBlank { null },
+                    firstMessage = (firstMessage ?: text).ifBlank { null },
+                    firstAttachments = attachmentIds.ifEmpty { null },
                 ),
             )
         } catch (t: Throwable) {
             remapSpawnFailure(t)
         }
-        val sessionId = resolveSpawnId(resp, _state.value.sessions)
+        return resolveSpawnId(resp, _state.value.sessions)
             ?: throw IllegalStateException("Session created but id not available yet")
-        // Attachments need a session id, so they upload *after* spawn (mirrors iOS
-        // NewSessionView.spawn() and the web launcher). A file that fails to upload is skipped.
-        val attachmentIds = staged.mapNotNull { s ->
-            uploadResumable(sessionId, s.source, s.name, s.mime, s.kind) { _, _ -> }
-        }
-        firstUploads = sessionId to attachmentIds
-        return sessionId
     }
 
     /**
@@ -1959,7 +1957,6 @@ class HostStore(
             inheritFrom = source.id,
             firstMessage = text,
         ) ?: return null
-        consumeFirstUploads(newId)
         return newId
     }
 

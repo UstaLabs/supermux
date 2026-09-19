@@ -198,6 +198,11 @@ data class SpawnRequest(
      * fills. The broker binds that tab instead of adding a second chat view beside it.
      */
     val viewId: String? = null,
+    /**
+     * Already-uploaded file_ids that ride with [firstMessage]: the launcher uploads its staged
+     * files BEFORE the spawn so the broker owns the whole first turn (text + files).
+     */
+    val firstAttachments: List<String>? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
     /**
