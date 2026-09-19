@@ -1849,10 +1849,11 @@ class HostStore(
         name: String? = null,
         inheritFrom: String? = null,
         firstMessage: String? = null,
+        viewId: String? = null,
     ): String? = runApi("createSessionWithFirstMessage") {
         createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
         )
     }
 
@@ -1881,6 +1882,8 @@ class HostStore(
         inheritFrom: String? = null,
         /** Broker delivers this after spawn (continue handoff). Not sent on the client WS. */
         firstMessage: String? = null,
+        /** The pending chat tab in [workspaceId] this session fills (see [SpawnRequest.viewId]). */
+        viewId: String? = null,
     ): String {
         if (!replaceDraftId.isNullOrBlank()) {
             runCatching { api.kill(replaceDraftId) }
@@ -1903,6 +1906,7 @@ class HostStore(
                     baseBranch = baseBranch?.ifBlank { null },
                     reasoningLevel = reasoningLevel?.ifBlank { null },
                     workspaceId = workspaceId,
+                    viewId = viewId?.ifBlank { null },
                     inheritFrom = inheritFrom?.ifBlank { null },
                     firstMessage = firstMessage?.ifBlank { null },
                 ),

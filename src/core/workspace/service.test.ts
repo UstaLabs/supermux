@@ -51,6 +51,36 @@ test("addChatSession attaches a second session to an existing workspace", () => 
   expect(link.workspace_id).toBe(w.id)
 })
 
+test("addChatSession binds the pending chat tab it names instead of adding a second one", () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  const pending = store.addView(w.id, { kind: "chat", state: {} as any })   // the wire shape of a pending tab: no sessionId yet
+
+  const v = svc.addChatSession(w.id, "s2", pending.id)
+
+  expect(v.id).toBe(pending.id)
+  expect(store.listViews(w.id).filter((x) => x.kind === "chat")).toHaveLength(2)
+  expect(store.chatSessionIds(w.id)).toEqual(["s1", "s2"])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's2'").get() as any
+  expect(link.workspace_id).toBe(w.id)
+})
+
+test("addChatSession adds a fresh tab when the named view is not a pending chat of that workspace", () => {
+  const { store, svc, db } = make()
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s2','b','active','claude','/wt','t')`)
+  const w = svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })
+  const bound = store.listViews(w.id)[0]!   // already s1's chat — must not be stolen
+
+  const v = svc.addChatSession(w.id, "s2", bound.id)
+
+  expect(v.id).not.toBe(bound.id)
+  expect(store.getView(bound.id)!.state).toEqual({ sessionId: "s1" })
+  expect(store.chatSessionIds(w.id)).toEqual(["s1", "s2"])
+})
+
 test("addChatSession does NOT move the primary session pointer", () => {
   const { store, svc, db } = make()
   db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)

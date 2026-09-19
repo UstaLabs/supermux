@@ -1541,7 +1541,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           joinWorkspaceId = undefined
         }
         if (joinWorkspaceId) {
-          workspaceService.addChatSession(joinWorkspaceId, entry.id)
+          workspaceService.addChatSession(joinWorkspaceId, entry.id, args.viewId?.trim() || undefined)
           const dto = wsDto(joinWorkspaceId)
           if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
         } else {
