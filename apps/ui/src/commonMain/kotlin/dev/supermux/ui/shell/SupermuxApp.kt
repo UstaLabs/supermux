@@ -752,14 +752,14 @@ fun SupermuxApp(
                             // deliberately EMPTY there: Home stays composed underneath and paints
                             // exactly what desktop always painted.
                             entry<Route.NewSession>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(opaque = compact),
                             ) {
                                 if (compact) {
                                     launcherPane({ ui.goBack() }, { ui.selectSession(it) }, null)
                                 }
                             }
                             entry<Route.Usage>(
-                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
+                                metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(opaque = !usageIsPopover),
                             ) {
                                 if (!usageIsPopover) {
                                     HostScopedPage(hostViews, activeHostId, fleet::setActiveHost) {

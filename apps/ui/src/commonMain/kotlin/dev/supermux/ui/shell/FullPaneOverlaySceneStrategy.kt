@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavMetadataKey
 import androidx.navigation3.runtime.contains
+import androidx.navigation3.runtime.get
 import androidx.navigation3.runtime.metadata
 import androidx.navigation3.scene.OverlayScene
 import androidx.navigation3.scene.Scene
@@ -39,15 +40,22 @@ class FullPaneOverlaySceneStrategy<T : Any> : SceneStrategy<T> {
             previousEntries = entries.dropLast(1),
             overlaidEntries = entries.dropLast(1),
             entry = last,
+            opaque = last.metadata[FullPaneOverlayKey] != false,
         )
     }
 
     companion object {
-        /** Attach to a [NavEntry] so this strategy claims it as a full-pane overlay. */
-        fun fullPaneOverlay(): Map<String, Any> = metadata {
-            put(FullPaneOverlayKey, true)
+        /**
+         * Attach to a [NavEntry] so this strategy claims it as a full-pane overlay. [opaque] false
+         * for an entry that draws NOTHING in this layout (the launcher / Usage on a wide host, which
+         * Home underneath paints in place): the scene then paints no backdrop, or it would cover
+         * Home with a blank page.
+         */
+        fun fullPaneOverlay(opaque: Boolean = true): Map<String, Any> = metadata {
+            put(FullPaneOverlayKey, opaque)
         }
 
+        /** Value = whether the overlay paints its own opaque backdrop. */
         object FullPaneOverlayKey : NavMetadataKey<Boolean>
     }
 }
@@ -57,6 +65,7 @@ private data class FullPaneOverlayScene<T : Any>(
     override val previousEntries: List<NavEntry<T>>,
     override val overlaidEntries: List<NavEntry<T>>,
     private val entry: NavEntry<T>,
+    private val opaque: Boolean,
 ) : OverlayScene<T> {
     override val entries: List<NavEntry<T>> = listOf(entry)
 
@@ -65,7 +74,8 @@ private data class FullPaneOverlayScene<T : Any>(
         // window would put their header under the status bar. Step inside the system bars here
         // (painting the strip behind them) and consume them so a screen that pads itself doesn't
         // pad twice. Desktop insets are zero.
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        val backdrop = if (opaque) Modifier.background(MaterialTheme.colorScheme.background) else Modifier
+        Box(Modifier.fillMaxSize().then(backdrop)) {
             Box(
                 Modifier
                     .fillMaxSize()
