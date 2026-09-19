@@ -154,7 +154,7 @@ class DesktopLauncherTest {
         assertEquals("high", req.reasoningLevel)
     }
 
-    @Test fun create_session_uploads_staged_files_after_spawn_and_stashes_ids() = runBlocking {
+    @Test fun create_session_uploads_staged_files_before_spawn_and_hands_the_first_turn_to_the_broker() = runBlocking {
         val recorded = mutableListOf<Rec>()
         val app = appRecording(recorded)
 
@@ -165,11 +165,12 @@ class DesktopLauncherTest {
         )
 
         assertEquals("sess-1", id)
-        // Sequencing: validate → spawn → the two uploads, strictly after spawn.
-        assertEquals(listOf("/paths/validate", "/sessions", "/upload", "/upload"), recorded.map { it.path })
-        // The uploaded file_ids are stashed for the caller's first-message send, then consumed once.
-        assertEquals(listOf("file-1", "file-2"), app.consumeFirstUploads("sess-1"))
-        assertTrue(app.consumeFirstUploads("sess-1").isEmpty()) // single-shot: cleared after consume
+        // Sequencing: validate → the two uploads → spawn. Nothing about the first turn is left to
+        // the client once POST /sessions returns.
+        assertEquals(listOf("/paths/validate", "/upload", "/upload", "/sessions"), recorded.map { it.path })
+        val req = json.decodeFromString<SpawnRequest>(recorded.last().body)
+        assertEquals("hi", req.firstMessage)
+        assertEquals(listOf("file-1", "file-2"), req.firstAttachments)
     }
 
     @Test fun create_session_blank_model_is_omitted_and_worktree_false_is_sent() = runBlocking {

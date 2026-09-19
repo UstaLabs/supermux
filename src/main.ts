@@ -1588,8 +1588,23 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         // Continue / spawn first turn: deliver AFTER session_added so the
         // client already has the row when message_append lands. spawnSession
         // has already waited for a persistent agent to connect.
+        // The launcher's first turn may carry files (uploaded before the spawn);
+        // those go through the same log+deliver tail as a WS `send`.
         const first = args.firstMessage?.trim()
-        if (first) {
+        if (args.firstAttachments?.length) {
+          const messageId = `spawn-${Date.now()}`
+          await routeWebInbound({
+            channel: "web",
+            chat_id: "web",
+            message_id: messageId,
+            user: args.device ?? "web",
+            user_id: args.device ?? "web",
+            ts: new Date().toISOString(),
+            text: first,
+            target_session_id: entry.id,
+            attachments: args.firstAttachments,
+          })
+        } else if (first) {
           const delivered = await deliverUserMessage(entry.id, first)
           if (!delivered.ok) {
             log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
@@ -1844,6 +1859,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return v ? viewDto(v) : undefined
     },
     patchWorkspaceView: (viewId, patch) => {
+      // A bound chat tab never goes back to pending: a late launcher-draft PATCH
+      // ({draft}) racing the spawn that bound it must not wipe its sessionId.
+      const before = registry.workspaces.getView(viewId)
+      if (patch.state !== undefined && before?.kind === "chat"
+          && (before.state as { sessionId?: string } | null)?.sessionId
+          && !(patch.state as { sessionId?: string } | null)?.sessionId) {
+        throw new Error("chat view is already bound to a session")
+      }
       if (patch.title !== undefined) registry.workspaces.setViewTitle(viewId, patch.title)
       if (patch.state !== undefined) registry.workspaces.setViewState(viewId, patch.state as any)
       const v = registry.workspaces.getView(viewId)
@@ -2775,6 +2798,40 @@ messageLog.on("reaction", (sessionId, entry_id, emoji, ts) => {
 // "remove" and "rename" listeners removed — we no longer broadcast remove on kill,
 // and messages reference UUIDs so renaming doesn't affect them
 
+/**
+ * Log + deliver one web turn to a live session — the tail of the WS `send` path,
+ * shared with the spawn's broker-owned first message so both record and route a
+ * turn (text AND attachments) identically.
+ */
+function routeWebInbound(msg: InboundMessage): Promise<void> {
+  return handleWebInbound(msg, {
+    messageLog,
+    hasSession: (id) => !!registry.get(id),
+    // The app sent to a session the broker does not have — it was killed or
+    // archived while that client was away. There is no session to hang a
+    // message on, so this stays a log line. The app is what must not send
+    // into a session it no longer has.
+    replyNoSuchSession: async (chat_id, sessionId) => {
+      log.warn("web_inbound_no_session", { chat_id, sessionId })
+    },
+    deliver: async (sid, text, meta) => {
+      const sessionEntry = registry.get(sid)
+      const sessionId = sessionEntry?.id ?? sid
+      log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      try {
+        const r = await deliverInbound(sessionId, text, meta)
+        if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      } catch (err: any) {
+        const msgText = err?.message ?? String(err)
+        log.error("web_inbound_adapter_failed", { sid, err: msgText })
+        // Safety net for agents that throw from send() without emitting `error`
+        // (or when that event is missed) — show the real message to the user.
+        void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
+      }
+    },
+  })
+}
+
 // Wire web inbound → routing → shim
 if (webChannel) {
   webChannel.on("inbound", async (msg) => {
@@ -2864,32 +2921,7 @@ if (webChannel) {
       }
       inbound = { ...msg, target_session_id: started.id }
     }
-    handleWebInbound(inbound, {
-      messageLog,
-      hasSession: (id) => !!registry.get(id),
-      // The app sent to a session the broker does not have — it was killed or
-      // archived while that client was away. There is no session to hang a
-      // message on, so this stays a log line. The app is what must not send
-      // into a session it no longer has.
-      replyNoSuchSession: async (chat_id, sessionId) => {
-        log.warn("web_inbound_no_session", { chat_id, sessionId })
-      },
-      deliver: async (sid, text, meta) => {
-        const sessionEntry = registry.get(sid)
-        const sessionId = sessionEntry?.id ?? sid
-        log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
-        try {
-          const r = await deliverInbound(sessionId, text, meta)
-          if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
-        } catch (err: any) {
-          const msgText = err?.message ?? String(err)
-          log.error("web_inbound_adapter_failed", { sid, err: msgText })
-          // Safety net for agents that throw from send() without emitting `error`
-          // (or when that event is missed) — show the real message to the user.
-          void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
-        }
-      },
-    })
+    void routeWebInbound(inbound)
   })
 }
 

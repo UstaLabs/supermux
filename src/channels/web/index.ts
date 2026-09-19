@@ -225,7 +225,7 @@ export interface WebChannelOpts {
   reviewSession?: (id: string) => { workdir: string; repoRoot?: string; baseCommits?: Record<string, string> } | undefined
   verifySuggest?: (id: string) => { content: string; source: string } | undefined
   verifySave?: (id: string, content: string) => { ok: boolean; reason?: string }
-  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
+  spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
   renameSession?: (oldName: string, newName: string) => Promise<void>
@@ -2563,6 +2563,20 @@ export class WebChannel implements Channel {
         const firstMessage = typeof body.firstMessage === "string" && body.firstMessage.trim()
           ? body.firstMessage
           : undefined
+        // The launcher uploads its staged files BEFORE the spawn and names them here, so
+        // the broker owns the whole first turn (text + files). Same ownership rule as a
+        // WS `send`: only this device's own web uploads.
+        const requestedAttachments: unknown[] = Array.isArray(body.firstAttachments) ? body.firstAttachments : []
+        let firstAttachments: InboundAttachment[] | undefined
+        if (requestedAttachments.length > 0) {
+          if (!this.fileStore) return this.json({ error: "file store not mounted" }, 500)
+          firstAttachments = []
+          for (const id of requestedAttachments) {
+            const meta = typeof id === "string" ? await this.fileStore.resolveOwnedWebUpload(id, auth.device.name) : null
+            if (!meta) return this.json({ error: "invalid attachment reference" }, 400)
+            firstAttachments.push({ kind: meta.kind, file_id: meta.file_id, mime: meta.mime, size: meta.size, name: meta.name })
+          }
+        }
         const result = await this.opts.spawnSession({
           name: body.name as string | undefined,
           workdir: normalizedWorkdir,
@@ -2575,6 +2589,8 @@ export class WebChannel implements Channel {
           workspaceId,
           viewId,
           firstMessage,
+          firstAttachments,
+          device: auth.device.name,
         })
         return this.json(result)
       } catch (err: any) {

@@ -465,11 +465,9 @@ fun SupermuxApp(
     val launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
-    ) -> Unit = { onBack, onCreated, joinWorkspaceId, seedWorkdir, pendingViewId ->
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
+    ) -> Unit = { onBack, onCreated, tab ->
         SessionLauncherScreen(
             sessions = activeHostSessions,
             home = home,
@@ -478,17 +476,36 @@ fun SupermuxApp(
             actions = launcherActions,
             loadPrefs = { uiPrefs.launcherPrefs.first() },
             onPrefsChange = { overlayScope.launch { uiPrefs.putLauncherPrefs(it) } },
-            loadDraft = { uiPrefs.launcherDraft.first() },
-            onDraftChange = { overlayScope.launch { uiPrefs.putLauncherDraft(it) } },
-            onClearDraft = { overlayScope.launch { uiPrefs.clearLauncherDraft() } },
-            onDraftFlush = onLauncherDraftFlush ?: launcherDraftFlushDefault,
+            // A workspace tab keeps ITS OWN draft (just the text, in the tab's state) — never the
+            // New Session screen's global one, which would drag another project's workdir,
+            // worktree and text into this tab. The broker drops it when it binds the tab.
+            loadDraft = if (tab == null) {
+                { uiPrefs.launcherDraft.first() }
+            } else {
+                { dev.supermux.state.LauncherDraft(text = tab.draftText) }
+            },
+            onDraftChange = if (tab == null) {
+                { overlayScope.launch { uiPrefs.putLauncherDraft(it) } }
+            } else {
+                { tab.onDraftText(it.text) }
+            },
+            onClearDraft = if (tab == null) {
+                { overlayScope.launch { uiPrefs.clearLauncherDraft() } }
+            } else {
+                {}
+            },
+            onDraftFlush = if (tab == null) {
+                onLauncherDraftFlush ?: launcherDraftFlushDefault
+            } else {
+                { tab.onDraftText(it.text) }
+            },
             // Throws the broker's OWN refusal (bad workdir / spawn 4xx), which the screen's
-            // doSubmit try/catch turns into the inline launcher_error text. The first message is
-            // ARMED by the store (`armPendingFirst`) and sent by the chat panel that opens — so
-            // this path no longer sends it a second time by hand.
+            // doSubmit try/catch turns into the inline launcher_error text. The BROKER delivers
+            // the first message (text + pre-uploaded files) with the spawn, so nothing about it
+            // depends on this pane staying composed.
             onSubmit = { workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId ->
                 onCreated(
-                    if (joinWorkspaceId == null) {
+                    if (tab == null) {
                         launcherActions.createSessionWithFirstMessage(
                             workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
                         )
@@ -497,8 +514,8 @@ fun SupermuxApp(
                         // Without workspaceId the broker mints a second workspace for the session.
                         fleet.createSessionWithFirstMessageOrThrow(
                             workdir, agent, model, level, text, staged, worktree, baseBranch, replaceDraftId,
-                            workspaceId = joinWorkspaceId,
-                            viewId = pendingViewId,
+                            workspaceId = tab.workspaceId,
+                            viewId = tab.viewId,
                         )
                     },
                 )
@@ -507,9 +524,10 @@ fun SupermuxApp(
             onSaveDraft = { workdir, agent, model, level, text, replaceDraftId ->
                 launcherActions.createDraftSession(workdir, agent, model, level, text, replaceDraftId)
             },
-            initialWorkdir = seedWorkdir,
-            initialDraftId = ui.launcherDraftId,
-            initialDraft = ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } },
+            workspaceWorkdir = tab?.workdir,
+            // A reopened task-list draft belongs to the New Session route, never to a tab.
+            initialDraftId = if (tab == null) ui.launcherDraftId else null,
+            initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
             hosts = hostViews,
             selectedHost = activeHostId,
             // The shell owns this pane's chrome on a wide host (the sidebar / the tab strip), so
@@ -737,7 +755,7 @@ fun SupermuxApp(
                                 metadata = FullPaneOverlaySceneStrategy.fullPaneOverlay(),
                             ) {
                                 if (compact) {
-                                    launcherPane({ ui.goBack() }, { ui.selectSession(it) }, null, null, null)
+                                    launcherPane({ ui.goBack() }, { ui.selectSession(it) }, null)
                                 }
                             }
                             entry<Route.Usage>(
@@ -1015,10 +1033,8 @@ private fun ShellHome(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
     onNewSession: () -> Unit,
     onTearOutTab: (String) -> Unit,
@@ -1246,10 +1262,8 @@ private fun ShellDetailForeground(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
     chatFallback: (@Composable (session: SessionInfo, visible: Boolean, onBack: () -> Unit) -> Unit)?,
 ) {
@@ -1290,7 +1304,7 @@ private fun ShellDetailForeground(
                         }
                     },
             ) {
-                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null, null, null)
+                launcherPane({ ui.closeLauncher() }, { ui.selectSession(it) }, null)
             }
         }
         selectedSession == null -> {
@@ -1337,10 +1351,8 @@ private fun WorkspacePanel(
     launcherPane: @Composable (
         onBack: () -> Unit,
         onCreated: (String) -> Unit,
-        joinWorkspaceId: String?,
-        seedWorkdir: String?,
-        /** The pending chat tab the new session fills (null outside a workspace tab). */
-        pendingViewId: String?,
+        /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
+        tab: LauncherTab?,
     ) -> Unit,
     tabDragState: PaneDragController,
     stripChrome: PaneStripChrome,

@@ -4,6 +4,9 @@ import dev.supermux.host.HostPersistence
 import dev.supermux.host.PairedHost
 import dev.supermux.host.PairedHostStore
 import dev.supermux.net.BrokerApi
+import dev.supermux.proto.LayoutNodeDto
+import dev.supermux.proto.ServerFrame
+import dev.supermux.proto.WorkspaceDto
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -134,13 +137,11 @@ class FleetStoreLockingTest {
     }
 
     /**
-     * The launcher's first message is armed on the host the spawn RAN on and consumed there —
-     * never on "whatever is active by the time the chat opens". With two hosts and the session
-     * created on the NON-active one, `_sessionHost` has not absorbed the new id yet, so the old
-     * `appFor` fallback asked the active host, got null, and the composer's one-shot effect
-     * dropped the message.
+     * A chat that JOINS a workspace is born on the broker that owns it — not on "whatever host is
+     * active". Any other broker doesn't know the workspace id and would mint a second workspace.
+     * An explicit hostRecordId still wins.
      */
-    @Test fun theFirstMessageIsConsumedOnTheHostItWasArmedOn() {
+    @Test fun aSpawnJoiningAWorkspaceGoesToTheWorkspacesHost() {
         val scope = CoroutineScope(Dispatchers.Default + Job())
         try {
             val hostStore = store(host("h1"), host("h2"))
@@ -169,24 +170,28 @@ class FleetStoreLockingTest {
                     )
                 },
             )
-            // h1 is active (first record); spawn explicitly on h2.
+            // h1 is active (first record); the workspace lives on h2.
             assertEquals("h1", f.activeHost.value)
-            val id = runBlocking {
-                f.createSessionWithFirstMessageOrThrow(
-                    workdir = "/repo", agent = "claude", model = null, reasoningLevel = null,
-                    text = "first turn", staged = emptyList(), worktree = false, baseBranch = null,
-                    hostRecordId = "h2",
-                    
-                )
+            f.appForRecord("h2")!!.reduce(
+                ServerFrame.WorkspaceAdded(
+                    WorkspaceDto(
+                        id = "ws-2", name = "w", workdir = "/repo",
+                        layout = LayoutNodeDto.Group(id = "g", viewIds = emptyList(), activeViewId = null),
+                    ),
+                ),
+            )
+            val spawn = { workspaceId: String?, hostRecordId: String? ->
+                runBlocking {
+                    f.createSessionWithFirstMessageOrThrow(
+                        workdir = "/repo", agent = "claude", model = null, reasoningLevel = null,
+                        text = "first turn", staged = emptyList(), worktree = false, baseBranch = null,
+                        workspaceId = workspaceId, hostRecordId = hostRecordId,
+                    )
+                }
             }
-            assertEquals("s-on-h2", id)
-            // `_sessionHost` still knows nothing about this id — exactly the window the bug lived in.
-            assertEquals(null, f.sessionHost.value[id])
-
-            val pending = f.consumePendingFirst(id)
-            assertNotNull(pending, "the first message must come back from the ARMING host")
-            assertEquals("first turn", pending.text)
-            assertEquals(null, f.consumePendingFirst(id), "consuming stays one-shot")
+            assertEquals("s-on-h2", spawn("ws-2", null))
+            assertEquals("s-on-h1", spawn(null, null), "no workspace → the active host")
+            assertEquals("s-on-h1", spawn("ws-2", "h1"), "an explicit host wins")
             f.close()
         } finally {
             scope.cancel()

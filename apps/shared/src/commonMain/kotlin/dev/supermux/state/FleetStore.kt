@@ -638,12 +638,18 @@ class FleetStore(
     fun appForRecord(recordId: String?): HostStore? = recordId?.let { conns[it]?.app }
 
     /**
-     * Where a spawn goes, as a (recordId, store) PAIR — the id matters as much as the store,
-     * because the first message is armed against it (see [armPendingFirst]).
+     * Where a spawn goes: [recordId] when connected, else the host that owns [workspaceId] (a chat
+     * joining a workspace must be born on that workspace's broker — any other broker doesn't know
+     * the id and mints a second workspace), else the active host.
      */
-    private fun spawnTarget(recordId: String?): Pair<String, HostStore>? = synchronized(lock) {
-        val id = recordId?.takeIf { conns.containsKey(it) } ?: activeRecordId() ?: return@synchronized null
-        conns[id]?.app?.let { id to it }
+    private fun spawnTarget(recordId: String?, workspaceId: String? = null): HostStore? = synchronized(lock) {
+        val owner = workspaceId?.let { ws ->
+            conns.entries.firstOrNull { (_, c) ->
+                c.app.workspaces.value.any { it.id == ws } || c.app.archivedWorkspaces.value.any { it.id == ws }
+            }?.key
+        }
+        val id = recordId?.takeIf { conns.containsKey(it) } ?: owner ?: activeRecordId() ?: return@synchronized null
+        conns[id]?.app
     }
 
     /** The active host's app (host-global ops), falling back to the first connected host. */
@@ -949,11 +955,6 @@ class FleetStore(
     fun clearFinishJob(id: String) { appFor(id)?.clearFinishJob(id) }
     fun ackFinish(id: String, startedAt: Double) { appFor(id)?.ackFinish(id, startedAt) }
     fun isFinishAcked(id: String, startedAt: Double): Boolean = appFor(id)?.isFinishAcked(id, startedAt) == true
-    /** Same host affinity as [consumePendingFirst] — the uploads were staged where the spawn ran. */
-    fun consumeFirstUploads(sessionId: String): List<String> {
-        val armed = synchronized(lock) { pendingFirstHost[sessionId]?.let { conns[it]?.app } }
-        return (armed ?: appFor(sessionId))?.consumeFirstUploads(sessionId).orEmpty()
-    }
 
     fun connectTerminal(sessionId: String, terminalId: String = "main"): TerminalClient =
         requireHost(appFor(sessionId)).connectTerminal(sessionId, terminalId)
@@ -1394,12 +1395,11 @@ class FleetStore(
         firstMessage: String? = null,
         hostRecordId: String? = null,
     ): String? {
-        val (recordId, app) = spawnTarget(hostRecordId) ?: return null
+        val app = spawnTarget(hostRecordId, workspaceId) ?: return null
         val newId = app.createSessionWithFirstMessage(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
             replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
         ) ?: return null
-        armPendingFirst(recordId, app, newId, text, firstMessage)
         return newId
     }
 
@@ -1424,35 +1424,13 @@ class FleetStore(
         hostRecordId: String? = null,
         viewId: String? = null,
     ): String {
-        val (recordId, app) = spawnTarget(hostRecordId)
+        val app = spawnTarget(hostRecordId, workspaceId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
             replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
         )
-        armPendingFirst(recordId, app, newId, text, firstMessage)
         return newId
-    }
-
-    /**
-     * Hand the composer the first message + its uploaded attachment ids so the chat sends them on
-     * open. Skipped when [firstMessage] is set: the BROKER delivers that one after spawn, and a
-     * client Send would duplicate it.
-     */
-    private fun armPendingFirst(
-        recordId: String?,
-        app: HostStore,
-        sessionId: String,
-        text: String,
-        firstMessage: String?,
-    ) {
-        if (!firstMessage.isNullOrBlank()) return
-        app.setPendingFirst(
-            sessionId,
-            HostStore.PendingFirstMessage(text, app.consumeFirstUploads(sessionId)),
-        )
-        // Remember WHERE, so [consumePendingFirst] never has to guess (see its KDoc).
-        if (recordId != null) synchronized(lock) { pendingFirstHost[sessionId] = recordId }
     }
 
     /**
