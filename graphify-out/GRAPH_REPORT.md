@@ -1,2782 +1,3805 @@
-# Graph Report - .  (2026-08-29)
+# Graph Report - .  (2026-09-19)
 
 ## Corpus Check
-- 194 files · ~1,338,931 words
+- 774 files · ~1,286,276 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 22747 nodes · 50380 edges · 792 communities (539 shown, 253 thin omitted)
-- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 2932 edges (avg confidence: 0.79)
+- 21704 nodes · 48344 edges · 1976 communities (519 shown, 1457 thin omitted)
+- Extraction: 93% EXTRACTED · 7% INFERRED · 0% AMBIGUOUS · INFERRED: 3200 edges (avg confidence: 0.79)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- Android CodeMirror Editor Bundle
-- Web Conversation View
-- iOS CodeMirror Editor Bundle
-- Agent Adapters And Hooks
-- Storage Migrations And Seeds
-- Web Channel Auth Devices
-- Shared Broker API Client
-- Broker Entrypoint And Prompts
-- Web Prompt Input
-- Channel Abstraction And Files
-- iOS Broker Session
-- Desktop Settings Screens
-- Agent Home Pairing
-- Android Editor View Layer
-- iOS Editor Transactions
-- Desktop App State Bridge
-- LSP Settings Screens
-- iOS Background Task Chips
-- iOS Editor DOM Mapping
-- Web Tool Message Cards
-- iOS Fleet Host Management
-- Desktop App Shell
-- iOS Platform Shims
-- Android Editor Measurement
-- Chat Store And Policy
-- Web Session Pills
-- Web API Client Types
-- Android Change Sets
-- iOS Composer Keyboard
-- iOS Editor Text Tree
-- Asset Probe And Memory
-- Android Editor Transactions
-- Desktop Agent Settings
-- Web Navigation Components
-- iOS Editor Autocomplete
-- iOS Chat Git Actions
-- Web App Shell Websocket
-- iOS Audio Recording
-- Workspace File Opening
-- Test Desktop App
-- iOS Device Pairing Sheets
-- Agents Broker Core
-- Supermux iOS App
-- Supermux iOS App
-- Android App
-- Supermux iOS App
-- Supermux iOS App
-- Components Web App
-- Assets Android App
-- Supermux iOS App
-- Slash Commands Broker Core
-- Android App
-- Assets Android App
-- Desktop App
-- Assets Android App
-- Assets Android App
-- Workspace Broker Core
-- Components Web App
-- Android Root
-- Assets Android App
-- Assets Android App
-- Android App
-- Supermux iOS App
-- Supermux iOS App
-- Desktop App
-- Assets Android App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- CommonTest Shared KMP
-- Desktop App
-- Commands Ts Broker Core
-- Android App
-- Assets Android App
-- Supermux iOS App
-- Components Web App
-- Supermux iOS App
-- Supermux iOS App
-- CommonTest Shared KMP
-- Android App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Src
-- Supermux iOS App
-- Android App
-- Agents Broker Core
-- Desktop App
-- CommonMain Root
-- Push Broker Core
-- Relay Broker Core
-- Components Web App
-- Test Desktop App
-- CommonTest Shared KMP
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Assets Android App
-- Supermux iOS App
-- Supermux iOS App
-- Editor Broker Core
-- Display Broker Core
-- Android App
-- Shared UI
-- Supermux iOS App
-- Relay Broker Core
-- Assets Android App
-- Desktop App
-- Desktop App
-- Supermux iOS App
-- Test Desktop App
-- Android App
-- Terminal Broker Core
-- Assets Android App
-- Tunnels Broker Core
-- Desktop App
-- Test Desktop App
-- Sessiond Broker Core
-- Desktop App
-- Test Shared UI
-- Package Json Web App
-- Tunnels Src
-- Usage Broker Core
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- Desktop App
-- Sessiond Broker Core
-- Views Web App
-- Android App
-- Assets Android App
-- CommonTest Shared KMP
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Agents Broker Core
-- Lsp Broker Core
-- Assets Android App
-- Desktop App
-- SupermuxWatch iOS App
-- Sessiond Broker Core
-- Assets Android App
-- Android App
-- Settings Broker Core
-- Assets Android App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Desktop App
-- Desktop App
-- Components Web App
-- Components Web App
-- Test Desktop App
-- Components Web App
-- CommonTest Shared KMP
-- Supermux iOS App
-- Session Manager Src
-- Android App
-- CommonMain Shared KMP
-- Supermux iOS App
-- Worktree Broker Core
-- Components Web App
-- Components Web App
-- Android App
-- CommonTest Shared KMP
-- Components Web App
-- Assets Android App
-- NonAppleMain Shared KMP
-- Desktop Root
-- Supermux iOS App
-- Supermux iOS App
-- Session Manager Broker Core
-- Sessiond Broker Core
-- Terminal Broker Core
-- Views Web App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Components Web App
-- Android App
-- Android Shared KMP
-- Android App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Plugins Broker Core
-- Tts Broker Core
-- Test Desktop App
-- NonAppleTest Shared KMP
-- Components Web App
-- Supermux iOS App
-- Worktree Broker Core
-- Supermux iOS App
-- Views Web App
-- Components Web App
-- CommonTest Shared KMP
-- SupermuxTests iOS App
-- Agent Api Broker Core
-- Agents Broker Core
-- Agents Broker Core
-- Views Web App
-- Desktop App
-- Test Desktop App
-- Web Messaging Channels
-- Shim Tools Test Ts Src
-- Components Json Web App
-- Android App
-- Test Android App
-- CommonTest Shared KMP
-- Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- CommonTest Shared KMP
-- Lib Web App
-- Components Web App
-- Assets Android App
-- Test Desktop App
-- CommonMain Shared KMP
-- Package Json
-- Views Web App
-- Supermux iOS App
-- Android App
-- Desktop App
-- Test Desktop App
-- CommonTest Shared KMP
-- Test Desktop App
-- SupermuxTests iOS App
-- Supermux iOS App
-- CommonMain Shared KMP
-- CommonMain Shared KMP
-- CommonTest Shared KMP
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- Desktop App
-- Test Desktop App
-- SupermuxTests iOS App
-- Plugins Broker Core
-- Terminal Broker Core
-- Codemirror Android App
-- Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Agents Broker Core
-- Components Web App
-- Update Broker Core
-- Lib Web App
-- Supermux iOS App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- CommonMain Shared KMP
-- Supermux iOS App
-- Supermux iOS App
-- SupermuxWatch iOS App
-- Whatsapp Messaging Channels
-- Git Broker Core
-- Sessiond Broker Core
-- Settings Broker Core
-- Transcription Broker Core
-- Components Web App
-- Desktop App
-- Test Desktop App
-- Test Desktop App
-- Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Agents Broker Core
-- Agents Broker Core
-- Session Manager Broker Core
-- Android App
-- Assets Android App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- SupermuxNotifContent iOS App
-- CommonTest Shared KMP
-- Agent Api Broker Core
-- Transcription Broker Core
-- Components Web App
-- Play Store Android App
-- Assets Android App
-- Test Desktop App
-- Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- SupermuxTests iOS App
-- Forge Broker Core
-- Lib Web App
-- Android App
-- Android App
-- Desktop App
-- CommonTest Shared KMP
-- Agents Broker Core
-- Plugins Broker Core
-- Plugins Broker Core
-- Sessiond Broker Core
-- Sessiond Broker Core
-- Transcription Broker Core
-- Lib Web App
-- Components Web App
-- Assets Android App
-- Android App
-- Android App
-- Desktop App
-- Desktop App
-- Desktop App
-- Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- CommonTest Shared KMP
-- Package Json
-- Plugins Broker Core
-- Lib Web App
-- Desktop App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- AndroidMain Shared KMP
-- CommonMain Shared KMP
-- Package Json Web App
-- Tsconfig Json Web App
-- Components Web App
-- Android App
-- Desktop App
-- CommonMain Shared KMP
-- Supermux iOS App
-- SupermuxPushNSE iOS App
-- SupermuxTests iOS App
-- SupermuxWatch iOS App
-- Tsconfig Json
-- Agents Broker Core
-- Forge Broker Core
-- Plugins Broker Core
-- Transcription Broker Core
-- Supermux iOS App
-- Test Desktop App
-- Desktop App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux Root
-- Supermux iOS App
-- Supermux iOS App
-- SupermuxTests iOS App
-- SupermuxTests iOS App
-- SupermuxTests iOS App
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- Src
-- Agent Api Broker Tests
-- Review Broker Core
-- Lib Web App
-- Android App
-- Android App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- CommonMain Shared KMP
-- Test Desktop App
-- SupermuxTests iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- Package Json
-- Forge Broker Core
-- Update Broker Core
-- Src
-- CommonTest Shared KMP
-- Test Desktop App
-- Android App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- SupermuxTests iOS App
-- Supermux iOS App
-- SupermuxTests iOS App
-- SupermuxWatch iOS App
-- Update Broker Core
-- Session Manager Broker Core
-- Plugins Broker Core
-- Worktree Broker Core
-- Views Web App
-- Release Workflow Test Ts Broker
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- AppleMain Shared KMP
-- CommonMain Shared KMP
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- Shadow Broker Sh Maintenance Scripts
-- Forge Broker Core
-- Forge Broker Core
-- Ui Broker Tests
-- Assets Android App
-- Test Android App
-- Android App
-- Android App
-- Test Desktop App
-- Desktop App
-- Desktop App
-- Desktop App
-- Shared UI
-- Project Yml iOS App
-- SupermuxTests iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Agent Api Broker Core
-- Editor Broker Core
-- Git Broker Core
-- Session Manager Broker Core
-- Transcription Broker Core
-- Components Web App
-- Components Web App
-- Assets Android App
-- Android App
-- Test Android App
-- Test Desktop App
-- Desktop Root
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- CommonMain Shared KMP
-- CommonMain Shared KMP
-- CommonTest Shared KMP
-- Display Broker Core
-- Git Broker Core
-- Src
-- Composables Web App
-- Android App
-- Desktop App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- SupermuxTests iOS App
-- SupermuxTests iOS App
-- SupermuxWatch iOS App
-- CommonMain Shared KMP
-- Testflight Assign Ts Maintenance Scripts
-- Windows Maintenance Scripts
-- Agent Rpc Broker Core
-- Agents Broker Core
-- Forge Broker Core
-- Git Broker Core
-- Lsp Broker Core
-- Components Web App
-- Components Web App
-- Windows Vm Maintenance Scripts
-- Assets Android App
-- Android App
-- Test Desktop App
-- Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- Push Broker Core
-- Generate Logo Assets Ts Maintenance
-- Web Messaging Channels
-- Forge Broker Core
-- CI Workflows
-- CI Workflows
-- Test Android App
-- Test Desktop App
-- Supermux iOS App
-- CommonTest Shared KMP
-- Environment Md Agent Prompts
-- Dump Last 24h Ts Maintenance
-- Windows Vm Maintenance Scripts
-- Routing Broker Core
-- Test Ids Parity Test Ts
-- Lib Web App
-- Journeys Broker Tests
-- Codemirror Android App
-- Assets Android App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- SupermuxTests iOS App
-- Supermux iOS App
-- SupermuxTests iOS App
-- SupermuxTests iOS App
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- SETUP Md
-- Environment Md Docker Compose Yml
-- Migrate To Mux Ts Maintenance
-- Forge Broker Core
-- Forge Broker Core
-- Forge Broker Core
-- Package Json Web App
-- Knowledge Curator Md Agent Prompts
-- Assets Android App
-- Android App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- SupermuxWatch Root
-- CommonMain Shared KMP
-- CommonTest Shared KMP
-- CommonTest Shared KMP
-- Windows Vm Maintenance Scripts
-- Generate Versions Json Ts Maintenance
-- Web Messaging Channels
-- Agents Src
-- Lib Web App
-- Play Store Android App
-- AndroidTest Android App
-- Assets Android App
-- Android App
-- Test Android App
-- Desktop App
-- Test Desktop App
-- Test Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- AppleMain Shared KMP
-- JvmMain Shared KMP
-- JvmTest Shared KMP
-- Windows Vm Maintenance Scripts
-- Agent Api Broker Core
-- Git Broker Core
-- Storage Broker Core
-- Vite Config Ts Src
-- Play Store Android App
-- Test Android App
-- Test Android App
-- Desktop App
-- Desktop App
-- Test Desktop App
-- Supermux Root
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- AndroidMain Shared KMP
-- JvmMain Shared KMP
-- JvmTest Shared KMP
-- Deploy Android Sh Maintenance Scripts
-- Mutation Probe Ts Maintenance Scripts
-- Transcription Broker Core
-- Xr Probe Cm Entry Mjs
-- Voice Cleanup Test Ts Broker
-- Assets Android App
-- Desktop App
-- Supermux iOS App
-- Supermux iOS App
-- CommonMain Shared KMP
-- CommonTest Shared KMP
-- Feel Deploy Sh Maintenance Scripts
-- Generate Static Manifest Ts Maintenance
-- Lib Maintenance Scripts
-- Test Android Sh Maintenance Scripts
-- Src
-- Index Html Web App
-- Codemirror Android App
-- Test Desktop App
-- Apps
-- Supermux iOS App
-- Supermux iOS App
-- Supermux iOS App
-- AppleMain Shared KMP
-- CommonMain Shared KMP
-- JvmTest Shared KMP
-- Smoke Binary Sh Maintenance Scripts
-- Test Broker Sh Maintenance Scripts
-- Test Update Flow Sh Maintenance
-- Windows Vm Maintenance Scripts
-- Agent Api Broker Tests
-- Logo Assets Test Ts Broker
-- Preload Isolate State Ts Broker
-- Windows Staging Test Ts Broker
-- Play Store Android App
-- Android App
-- Android App
-- Desktop App
-- Supermux iOS App
-- JvmTest Shared KMP
-- Package Json
-- Build Binary Sh Maintenance Scripts
-- Build Portable Tmux Sh Maintenance
-- Dump Ws Frames Ts Maintenance
-- Ios Sim Run Sh Maintenance
-- Mac App Run Sh Maintenance
-- Mac Rail Ui Test Sh
-- Package Macos Dmg Sh Maintenance
-- Telegram Callbacks Ts Broker Core
-- Assets Web App
-- Sw Ts Web App
-- No Legacy Names Test Ts
-- Package Json Web App
-- Android App
-- Test Desktop App
-- Package Json Web App
-- Package Json Web App
-- Package Json Web App
-- Package Json Web App
-- Package Json Web App
-- Mux
-- Package Json Web App
-- Build Sessiond Sh Maintenance Scripts
-- Fetch Frpc Sh Maintenance Scripts
-- Lib Maintenance Scripts
-- Migrate From Telegram Plugin Sh
-- Stage Desktop Binaries Sh Maintenance
-- Src
-- Package Json Web App
-- Package Json Web App
-- Package Json Web App
-- Components Web App
-- Env D Ts Web App
-- Novnc D Ts Web App
-- SessionInfo Standalone Symbol
-- Image Standalone Symbol
-- Key Standalone Symbol
-- ModelInfo Standalone Symbol
-- Transferable Standalone Symbol
-- KCEFBrowser Standalone Symbol
-- KCEFClient Standalone Symbol
-- DiffFile Standalone Symbol
-- DiffLine Standalone Symbol
-- RepoDiff Standalone Symbol
-- Modifier Standalone Symbol
-- ReviewComment Standalone Symbol
-- SharedFlow Standalone Symbol
-- StateFlow Standalone Symbol
-- EditorTab Standalone Symbol
-- EditorState Standalone Symbol
-- FsEntry Standalone Symbol
-- CoroutineScope Standalone Symbol
-- KCEFBrowser Standalone Symbol
-- KCEFClient Standalone Symbol
-- StateFlow Standalone Symbol
-- EditorState Standalone Symbol
-- AgentStatus Standalone Symbol
-- LogEntry Standalone Symbol
-- SessionInfo Standalone Symbol
-- id Standalone Symbol
-- Modifier Standalone Symbol
-- kind Standalone Symbol
-- LayoutNode Standalone Symbol
-- Modifier Standalone Symbol
-- MouseEvent Standalone Symbol
-- ImageVector Standalone Symbol
-- Modifier Standalone Symbol
-- ClosedFloatingPointRange Standalone Symbol
-- Composable Standalone Symbol
-- Modifier Standalone Symbol
-- AgentStatus Standalone Symbol
-- FilePathRef Standalone Symbol
-- Modifier Standalone Symbol
-- PendingEditorOpen Standalone Symbol
-- SessionInfo Standalone Symbol
-- message Standalone Symbol
-- SessionInfo Standalone Symbol
-- Dp Standalone Symbol
-- Saver Standalone Symbol
-- Offset Standalone Symbol
-- Rect Standalone Symbol
-- ViewDto Standalone Symbol
-- LayoutNode Standalone Symbol
-- AgentStatus Standalone Symbol
-- LogEntry Standalone Symbol
-- MutableInteractionSource Standalone Symbol
-- SessionInfo Standalone Symbol
-- WorkspaceDto Standalone Symbol
-- ActivityEvent Standalone Symbol
-- AgentLoginState Standalone Symbol
-- AgentStatus Standalone Symbol
-- CodexResetResult Standalone Symbol
-- DisplayStream Standalone Symbol
-- FsEntry Standalone Symbol
-- Job Standalone Symbol
-- LogEntry Standalone Symbol
-- ModelInfo Standalone Symbol
-- RepoInfo Standalone Symbol
-- Result Standalone Symbol
-- SessionInfo Standalone Symbol
-- SharedFlow Standalone Symbol
-- SlashCommand Standalone Symbol
-- StagedUpload Standalone Symbol
-- TerminalSummary Standalone Symbol
-- UpdateStatus Standalone Symbol
-- UsageResponse Standalone Symbol
-- WorkspaceDto Standalone Symbol
-- FiniteAnimationSpec Standalone Symbol
-- T Standalone Symbol
-- MutableSharedFlow Standalone Symbol
-- RepoDiff Standalone Symbol
-- androidx Standalone Symbol
-- androidx Standalone Symbol
-- MutableSharedFlow Standalone Symbol
-- MutableStateFlow Standalone Symbol
-- AgentLoginState Standalone Symbol
-- HostPersistence Standalone Symbol
-- HttpStatusCode Standalone Symbol
-- AddCustomLspArgs Standalone Symbol
-- Component Standalone Symbol
-- LayoutNode Standalone Symbol
-- LayoutNode Standalone Symbol
-- Composable Standalone Symbol
-- PendingEditorOpen Standalone Symbol
-- LayoutNode Standalone Symbol
-- ViewDto Standalone Symbol
-- ViewDto Standalone Symbol
-- ActivityEvent Standalone Symbol
-- AgentLoginState Standalone Symbol
-- CodexResetResult Standalone Symbol
-- Data Standalone Symbol
-- DisplayStream Standalone Symbol
-- Double Standalone Symbol
-- EditorState Standalone Symbol
-- FinishResult Standalone Symbol
-- FsEntry Standalone Symbol
-- GitRemoteStatus Standalone Symbol
-- Int64 Standalone Symbol
-- LogEntry Standalone Symbol
-- ModelInfo Standalone Symbol
-- Never Standalone Symbol
-- NSObjectProtocol Standalone Symbol
-- RemoteRepo Standalone Symbol
-- RepoInfo Standalone Symbol
-- ServerFrameBgTask Standalone Symbol
-- SessionInfo Standalone Symbol
-- SlashCommand Standalone Symbol
-- UInt64 Standalone Symbol
-- UpdateStatus Standalone Symbol
-- UsageResponse Standalone Symbol
-- ModelInfo Standalone Symbol
-- SessionInfo Standalone Symbol
-- CGFloat Standalone Symbol
-- ForgeCliStatus Standalone Symbol
-- Content Standalone Symbol
-- Font Standalone Symbol
-- IndexSet Standalone Symbol
-- NSRegularExpression Standalone Symbol
-- SessionInfo Standalone Symbol
-- LogEntry Standalone Symbol
-- ViewDto Standalone Symbol
-- WorkspaceDto Standalone Symbol
-- AgentStatus Standalone Symbol
-- WorkspaceDto Standalone Symbol
-- LayoutNode Standalone Symbol
-- ViewDto Standalone Symbol
-- B Standalone Symbol
-- CodexWindow Standalone Symbol
-- KCEFFrame Standalone Symbol
-- placement Standalone Symbol
+- Android CodeMirror Bundle
+- iOS CodeMirror Bundle
+- Broker File Store
+- Shared BrokerApi
+- Worktree Pairing
+- Web Channel Migrations
+- Broker Main Prompts
+- Shared HostStore
+- Desktop Theme Displays
+- iOS CodeMirror Parser
+- Claude OpenCode Adapters
+- Paired Host Persistence
+- Agent Launcher Auth
+- Android CM6 Ranges
+- Android CM6 Completions
+- Channel Inbound Messages
+- AppViewModel UiPrefs
+- Shell UI State Tests
+- ChatStore Session Policy
+- iOS CM6 Markdown
+- Walkthrough State Projection
+- iOS CM6 Ranges
+- Android CM6 Tree Cursor
+- Usage Screens Models
+- iOS CM6 Internals
+- iOS CM6 Completions
+- iOS CM6 Markdown Tokens
+- Agent RPC Login
+- Android Platform Seams
+- Android CM6 Language
+- Android Chat Seams
+- iOS CM6 View Plugin
+- Android CM6 Changes
+- Composer Reasoning Pills
+- Default Project Recency
+- iOS CM6 DOM
+- Slash Command Registry
+- iOS CM6 Tree Cursor
+- Android CM6 View Plugin
+- iOS CM6 Syntax
+- Git Ops Session Header
+- iOS CM6 Mount
+- iOS CM6 Hidden Nodes
+- Host Finish Views
+- Workspace Layout Windows
+- Predictive Echo Adapters
+- Workspace Routes DTO
+- Devices Settings Pairing
+- iOS CM6 Measure
+- Archived Session Grouping
+- Desktop Archived State
+- ViewHost Chat Content
+- Android ChatScreen
+- Archived Screen UI
+- Android CM6 Markdown
+- Android CM6 Hidden Nodes
+- iOS CM6 Changes
+- Command Menu Entries
+- Device Push Tokens
+- Editor Engine Factory
+- Voice Settings Context Menu
+- Relay APNS Push
+- Android CM6 Measure
+- iOS CM6 Language
+- Android CM6 Markdown Tokens
+- Desktop Settings HTTP
+- Android CM6 Internals
+- Android CM6 Syntax
+- Android CM6 Mount
+- Composer Attachments
+- FRP Relay Provider
+- Finish Flow Choices
+- Android Input Mode
+- BrokerApi Workspace Tests
+- Layout Tree Groups
+- Session List Screen
+- Display Manager
+- Android CM6 DOM
+- Relay Control Plane
+- Forge CLI Import
+- Community 80
+- Community 81
+- Community 82
+- Community 83
+- Community 84
+- Community 85
+- Community 86
+- Community 87
+- Community 88
+- Community 89
+- Community 90
+- Community 91
+- Community 92
+- Community 93
+- Community 94
+- Community 95
+- Community 96
+- Community 97
+- Community 98
+- Community 99
+- Community 100
+- Community 101
+- Community 102
+- Community 103
+- Community 104
+- Community 105
+- Community 106
+- Community 107
+- Community 108
+- Community 109
+- Community 110
+- Community 111
+- Community 112
+- Community 113
+- Community 114
+- Community 115
+- Community 116
+- Community 117
+- Community 118
+- Community 119
+- Community 120
+- Community 121
+- Community 122
+- Community 123
+- Community 124
+- Community 125
+- Community 126
+- Community 127
+- Community 128
+- Community 129
+- Community 130
+- Community 131
+- Community 132
+- Community 133
+- Community 134
+- Community 135
+- Community 136
+- Community 137
+- Community 138
+- Community 139
+- Community 140
+- Community 141
+- Community 142
+- Community 143
+- Community 144
+- Community 145
+- Community 146
+- Community 147
+- Community 148
+- Community 149
+- Community 150
+- Community 151
+- Community 152
+- Community 153
+- Community 154
+- Community 155
+- Community 156
+- Community 157
+- Community 158
+- Community 159
+- Community 160
+- Community 161
+- Community 162
+- Community 163
+- Community 164
+- Community 165
+- Community 166
+- Community 167
+- Community 168
+- Community 169
+- Community 170
+- Community 171
+- Community 172
+- Community 173
+- Community 174
+- Community 175
+- Community 176
+- Community 177
+- Community 178
+- Community 179
+- Community 180
+- Community 181
+- Community 182
+- Community 183
+- Community 184
+- Community 185
+- Community 186
+- Community 187
+- Community 188
+- Community 189
+- Community 190
+- Community 191
+- Community 192
+- Community 193
+- Community 194
+- Community 195
+- Community 196
+- Community 197
+- Community 198
+- Community 199
+- Community 200
+- Community 201
+- Community 202
+- Community 203
+- Community 204
+- Community 205
+- Community 206
+- Community 207
+- Community 208
+- Community 209
+- Community 210
+- Community 211
+- Community 212
+- Community 213
+- Community 214
+- Community 215
+- Community 216
+- Community 217
+- Community 218
+- Community 219
+- Community 220
+- Community 221
+- Community 222
+- Community 223
+- Community 224
+- Community 225
+- Community 226
+- Community 227
+- Community 228
+- Community 229
+- Community 230
+- Community 231
+- Community 232
+- Community 233
+- Community 234
+- Community 235
+- Community 236
+- Community 237
+- Community 238
+- Community 239
+- Community 240
+- Community 241
+- Community 242
+- Community 243
+- Community 244
+- Community 245
+- Community 246
+- Community 247
+- Community 248
+- Community 249
+- Community 250
+- Community 251
+- Community 252
+- Community 253
+- Community 254
+- Community 255
+- Community 256
+- Community 257
+- Community 258
+- Community 259
+- Community 260
+- Community 261
+- Community 262
+- Community 263
+- Community 264
+- Community 265
+- Community 266
+- Community 267
+- Community 268
+- Community 269
+- Community 270
+- Community 271
+- Community 272
+- Community 273
+- Community 274
+- Community 275
+- Community 276
+- Community 277
+- Community 278
+- Community 279
+- Community 280
+- Community 281
+- Community 282
+- Community 283
+- Community 284
+- Community 285
+- Community 286
+- Community 287
+- Community 288
+- Community 289
+- Community 290
+- Community 291
+- Community 292
+- Community 293
+- Community 294
+- Community 295
+- Community 296
+- Community 297
+- Community 298
+- Community 299
+- Community 300
+- Community 301
+- Community 302
+- Community 303
+- Community 304
+- Community 305
+- Community 306
+- Community 307
+- Community 308
+- Community 309
+- Community 310
+- Community 311
+- Community 312
+- Community 313
+- Community 314
+- Community 315
+- Community 316
+- Community 317
+- Community 318
+- Community 319
+- Community 320
+- Community 321
+- Community 322
+- Community 323
+- Community 324
+- Community 325
+- Community 326
+- Community 327
+- Community 328
+- Community 329
+- Community 330
+- Community 331
+- Community 332
+- Community 333
+- Community 334
+- Community 335
+- Community 336
+- Community 337
+- Community 338
+- Community 339
+- Community 340
+- Community 341
+- Community 342
+- Community 343
+- Community 344
+- Community 345
+- Community 346
+- Community 347
+- Community 348
+- Community 349
+- Community 350
+- Community 351
+- Community 352
+- Community 353
+- Community 354
+- Community 355
+- Community 356
+- Community 357
+- Community 358
+- Community 359
+- Community 360
+- Community 361
+- Community 362
+- Community 363
+- Community 364
+- Community 365
+- Community 366
+- Community 367
+- Community 368
+- Community 369
+- Community 370
+- Community 371
+- Community 372
+- Community 373
+- Community 374
+- Community 375
+- Community 376
+- Community 377
+- Community 378
+- Community 379
+- Community 380
+- Community 381
+- Community 382
+- Community 383
+- Community 384
+- Community 385
+- Community 386
+- Community 387
+- Community 388
+- Community 389
+- Community 390
+- Community 391
+- Community 392
+- Community 393
+- Community 394
+- Community 395
+- Community 396
+- Community 397
+- Community 398
+- Community 399
+- Community 400
+- Community 401
+- Community 402
+- Community 403
+- Community 404
+- Community 405
+- Community 406
+- Community 407
+- Community 408
+- Community 409
+- Community 410
+- Community 411
+- Community 412
+- Community 413
+- Community 414
+- Community 415
+- Community 416
+- Community 417
+- Community 418
+- Community 419
+- Community 420
+- Community 421
+- Community 422
+- Community 423
+- Community 424
+- Community 425
+- Community 426
+- Community 427
+- Community 428
+- Community 429
+- Community 430
+- Community 431
+- Community 432
+- Community 433
+- Community 434
+- Community 435
+- Community 436
+- Community 437
+- Community 438
+- Community 439
+- Community 440
+- Community 441
+- Community 442
+- Community 443
+- Community 444
+- Community 445
+- Community 446
+- Community 447
+- Community 448
+- Community 449
+- Community 450
+- Community 451
+- Community 452
+- Community 453
+- Community 454
+- Community 455
+- Community 456
+- Community 457
+- Community 458
+- Community 459
+- Community 460
+- Community 461
+- Community 462
+- Community 463
+- Community 464
+- Community 465
+- Community 466
+- Community 467
+- Community 468
+- Community 469
+- Community 470
+- Community 471
+- Community 472
+- Community 473
+- Community 474
+- Community 475
+- Community 476
+- Community 477
+- Community 478
+- Community 479
+- Community 480
+- Community 481
+- Community 482
+- Community 483
+- Community 484
+- Community 485
+- Community 486
+- Community 487
+- Community 488
+- Community 489
+- Community 490
+- Community 491
+- Community 492
+- Community 493
+- Community 494
+- Community 495
+- Community 496
+- Community 497
+- Community 498
+- Community 499
+- Community 500
+- Community 501
+- Community 502
+- Community 503
+- Community 504
+- Community 505
+- Community 506
+- Community 507
+- Community 508
+- Community 509
+- Community 510
+- Community 511
+- Community 512
+- Community 513
+- Community 514
+- Community 515
+- Community 516
+- Community 517
+- Community 518
+- Community 519
+- Community 520
+- Community 521
+- Community 522
+- Community 523
+- Community 524
+- Community 525
+- Community 526
+- Community 527
+- Community 528
+- Community 529
+- Community 530
+- Community 531
+- Community 532
+- Community 533
+- Community 534
+- Community 535
+- Community 536
+- Community 537
+- Community 538
+- Community 539
+- Community 540
+- Community 541
+- Community 542
+- Community 543
+- Community 544
+- Community 545
+- Community 546
+- Community 547
+- Community 548
+- Community 549
+- Community 550
+- Community 551
+- Community 552
+- Community 553
+- Community 554
+- Community 555
+- Community 556
+- Community 557
+- Community 558
+- Community 559
+- Community 560
+- Community 561
+- Community 562
+- Community 563
+- Community 564
+- Community 565
+- Community 566
+- Community 567
+- Community 569
+- Community 570
+- Community 571
+- Community 572
+- Community 573
+- Community 574
+- Community 575
+- Community 576
+- Community 577
+- Community 578
+- Community 580
+- Community 583
+- Community 587
+- Community 588
+- Community 589
+- Community 590
+- Community 591
+- Community 592
+- Community 594
+- Community 595
+- Community 596
+- Community 597
+- Community 598
+- Community 599
+- Community 600
+- Community 601
+- Community 602
+- Community 603
+- Community 604
+- Community 605
+- Community 606
+- Community 607
+- Community 608
+- Community 609
+- Community 610
+- Community 611
+- Community 621
+- Community 622
+- Community 623
+- Community 624
+- Community 625
+- Community 626
+- Community 627
+- Community 628
+- Community 630
+- Community 631
+- Community 632
+- Community 633
+- Community 634
+- Community 635
+- Community 636
+- Community 638
+- Community 639
+- Community 640
+- Community 641
+- Community 642
+- Community 643
+- Community 644
+- Community 645
+- Community 646
+- Community 647
+- Community 648
+- Community 649
+- Community 650
+- Community 651
+- Community 652
+- Community 653
+- Community 654
+- Community 655
+- Community 656
+- Community 657
+- Community 658
+- Community 659
+- Community 660
+- Community 661
+- Community 662
+- Community 663
+- Community 664
+- Community 665
+- Community 666
+- Community 667
+- Community 668
+- Community 669
+- Community 670
+- Community 671
+- Community 672
+- Community 673
+- Community 674
+- Community 675
+- Community 676
+- Community 677
+- Community 678
+- Community 679
+- Community 680
+- Community 681
+- Community 682
+- Community 683
+- Community 684
+- Community 685
+- Community 686
+- Community 687
+- Community 688
+- Community 689
+- Community 690
+- Community 691
+- Community 692
+- Community 693
+- Community 694
+- Community 695
+- Community 696
+- Community 697
+- Community 698
+- Community 699
+- Community 700
+- Community 701
+- Community 702
+- Community 703
+- Community 704
+- Community 705
+- Community 706
+- Community 707
+- Community 708
+- Community 709
+- Community 710
+- Community 711
+- Community 712
+- Community 713
+- Community 714
+- Community 715
+- Community 716
+- Community 717
+- Community 718
+- Community 719
+- Community 720
+- Community 721
+- Community 722
+- Community 723
+- Community 724
+- Community 725
+- Community 726
+- Community 727
+- Community 728
+- Community 729
+- Community 730
+- Community 731
+- Community 732
+- Community 733
+- Community 734
+- Community 735
+- Community 736
+- Community 737
+- Community 738
+- Community 739
+- Community 740
+- Community 741
+- Community 742
+- Community 743
+- Community 744
+- Community 745
+- Community 746
+- Community 747
+- Community 748
+- Community 749
+- Community 750
+- Community 751
+- Community 752
+- Community 753
+- Community 754
+- Community 755
+- Community 756
+- Community 757
+- Community 758
+- Community 759
+- Community 760
+- Community 761
+- Community 762
+- Community 763
+- Community 764
+- Community 765
+- Community 766
+- Community 767
+- Community 768
+- Community 769
+- Community 770
+- Community 771
+- Community 772
+- Community 773
+- Community 774
+- Community 775
+- Community 776
+- Community 777
+- Community 778
+- Community 779
+- Community 780
+- Community 781
+- Community 782
+- Community 783
+- Community 784
+- Community 785
+- Community 786
+- Community 787
+- Community 788
+- Community 789
+- Community 790
+- Community 791
+- Community 792
+- Community 793
+- Community 794
+- Community 795
+- Community 796
+- Community 797
+- Community 798
+- Community 799
+- Community 800
+- Community 801
+- Community 802
+- Community 803
+- Community 804
+- Community 805
+- Community 806
+- Community 807
+- Community 808
+- Community 809
+- Community 810
+- Community 811
+- Community 812
+- Community 813
+- Community 814
+- Community 815
+- Community 816
+- Community 817
+- Community 818
+- Community 819
+- Community 820
+- Community 821
+- Community 822
+- Community 823
+- Community 824
+- Community 825
+- Community 826
+- Community 827
+- Community 828
+- Community 829
+- Community 830
+- Community 831
+- Community 832
+- Community 833
+- Community 834
+- Community 835
+- Community 836
+- Community 837
+- Community 838
+- Community 839
+- Community 840
+- Community 841
+- Community 842
+- Community 843
+- Community 844
+- Community 845
+- Community 846
+- Community 847
+- Community 848
+- Community 849
+- Community 850
+- Community 851
+- Community 852
+- Community 853
+- Community 854
+- Community 855
+- Community 856
+- Community 857
+- Community 858
+- Community 859
+- Community 860
+- Community 861
+- Community 862
+- Community 863
+- Community 864
+- Community 865
+- Community 866
+- Community 867
+- Community 868
+- Community 869
+- Community 870
+- Community 871
+- Community 872
+- Community 873
+- Community 874
+- Community 875
+- Community 876
+- Community 877
+- Community 878
+- Community 879
+- Community 880
+- Community 882
+- Community 883
+- Community 884
+- Community 885
+- Community 886
+- Community 887
+- Community 888
+- Community 889
+- Community 890
+- Community 891
+- Community 892
+- Community 893
+- Community 894
+- Community 895
+- Community 896
+- Community 897
+- Community 898
+- Community 899
+- Community 900
+- Community 901
+- Community 902
+- Community 903
+- Community 904
+- Community 905
+- Community 906
+- Community 907
+- Community 908
+- Community 909
+- Community 910
+- Community 911
+- Community 912
+- Community 913
+- Community 914
+- Community 915
+- Community 916
+- Community 917
+- Community 918
+- Community 919
+- Community 920
+- Community 921
+- Community 922
+- Community 923
+- Community 924
+- Community 925
+- Community 926
+- Community 927
+- Community 928
+- Community 929
+- Community 930
+- Community 931
+- Community 932
+- Community 933
+- Community 934
+- Community 935
+- Community 936
+- Community 937
+- Community 938
+- Community 939
+- Community 940
+- Community 941
+- Community 942
+- Community 943
+- Community 944
+- Community 945
+- Community 946
+- Community 947
+- Community 948
+- Community 949
+- Community 950
+- Community 951
+- Community 952
+- Community 953
+- Community 954
+- Community 955
+- Community 956
+- Community 957
+- Community 958
+- Community 959
+- Community 960
+- Community 961
+- Community 962
+- Community 963
+- Community 964
+- Community 965
+- Community 966
+- Community 967
+- Community 968
+- Community 969
+- Community 970
+- Community 971
+- Community 972
+- Community 973
+- Community 974
+- Community 975
+- Community 976
+- Community 977
+- Community 978
+- Community 979
+- Community 980
+- Community 981
+- Community 982
+- Community 983
+- Community 984
+- Community 985
+- Community 986
+- Community 987
+- Community 988
+- Community 989
+- Community 990
+- Community 991
+- Community 992
+- Community 993
+- Community 994
+- Community 995
+- Community 996
+- Community 997
+- Community 998
+- Community 999
+- Community 1000
+- Community 1001
+- Community 1002
+- Community 1003
+- Community 1004
+- Community 1005
+- Community 1006
+- Community 1007
+- Community 1008
+- Community 1009
+- Community 1010
+- Community 1011
+- Community 1012
+- Community 1013
+- Community 1014
+- Community 1015
+- Community 1016
+- Community 1017
+- Community 1018
+- Community 1019
+- Community 1020
+- Community 1021
+- Community 1022
+- Community 1023
+- Community 1024
+- Community 1025
+- Community 1026
+- Community 1027
+- Community 1028
+- Community 1029
+- Community 1030
+- Community 1031
+- Community 1032
+- Community 1033
+- Community 1034
+- Community 1035
+- Community 1036
+- Community 1037
+- Community 1038
+- Community 1039
+- Community 1040
+- Community 1041
+- Community 1042
+- Community 1043
+- Community 1044
+- Community 1045
+- Community 1046
+- Community 1047
+- Community 1048
+- Community 1049
+- Community 1050
+- Community 1051
+- Community 1052
+- Community 1053
+- Community 1054
+- Community 1055
+- Community 1056
+- Community 1057
+- Community 1058
+- Community 1059
+- Community 1060
+- Community 1061
+- Community 1062
+- Community 1063
+- Community 1064
+- Community 1065
+- Community 1066
+- Community 1067
+- Community 1068
+- Community 1069
+- Community 1070
+- Community 1071
+- Community 1072
+- Community 1073
+- Community 1074
+- Community 1075
+- Community 1076
+- Community 1077
+- Community 1078
+- Community 1079
+- Community 1080
+- Community 1081
+- Community 1082
+- Community 1083
+- Community 1084
+- Community 1085
+- Community 1086
+- Community 1087
+- Community 1088
+- Community 1089
+- Community 1090
+- Community 1091
+- Community 1092
+- Community 1093
+- Community 1094
+- Community 1095
+- Community 1096
+- Community 1097
+- Community 1098
+- Community 1099
+- Community 1100
+- Community 1101
+- Community 1102
+- Community 1103
+- Community 1104
+- Community 1105
+- Community 1106
+- Community 1107
+- Community 1108
+- Community 1109
+- Community 1110
+- Community 1111
+- Community 1112
+- Community 1113
+- Community 1114
+- Community 1115
+- Community 1116
+- Community 1117
+- Community 1118
+- Community 1119
+- Community 1120
+- Community 1121
+- Community 1122
+- Community 1123
+- Community 1124
+- Community 1125
+- Community 1126
+- Community 1127
+- Community 1128
+- Community 1129
+- Community 1130
+- Community 1131
+- Community 1132
+- Community 1133
+- Community 1134
+- Community 1135
+- Community 1136
+- Community 1137
+- Community 1138
+- Community 1139
+- Community 1140
+- Community 1141
+- Community 1142
+- Community 1143
+- Community 1144
+- Community 1145
+- Community 1146
+- Community 1147
+- Community 1148
+- Community 1149
+- Community 1151
+- Community 1152
+- Community 1153
+- Community 1154
+- Community 1155
+- Community 1156
+- Community 1157
+- Community 1158
+- Community 1159
+- Community 1160
+- Community 1161
+- Community 1162
+- Community 1163
+- Community 1164
+- Community 1165
+- Community 1166
+- Community 1167
+- Community 1168
+- Community 1169
+- Community 1170
+- Community 1171
+- Community 1172
+- Community 1173
+- Community 1174
+- Community 1175
+- Community 1176
+- Community 1177
+- Community 1178
+- Community 1179
+- Community 1180
+- Community 1181
+- Community 1182
+- Community 1183
+- Community 1184
+- Community 1185
+- Community 1186
+- Community 1187
+- Community 1188
+- Community 1189
+- Community 1190
+- Community 1191
+- Community 1192
+- Community 1193
+- Community 1194
+- Community 1195
+- Community 1196
+- Community 1197
+- Community 1198
+- Community 1199
+- Community 1200
+- Community 1201
+- Community 1202
+- Community 1203
+- Community 1204
+- Community 1205
+- Community 1206
+- Community 1207
+- Community 1208
+- Community 1209
+- Community 1210
+- Community 1211
+- Community 1212
+- Community 1213
+- Community 1214
+- Community 1215
+- Community 1216
+- Community 1217
+- Community 1218
+- Community 1219
+- Community 1220
+- Community 1221
+- Community 1222
+- Community 1223
+- Community 1224
+- Community 1225
+- Community 1226
+- Community 1227
+- Community 1228
+- Community 1229
+- Community 1230
+- Community 1231
+- Community 1232
+- Community 1233
+- Community 1234
+- Community 1235
+- Community 1236
+- Community 1237
+- Community 1238
+- Community 1239
+- Community 1240
+- Community 1241
+- Community 1242
+- Community 1243
+- Community 1244
+- Community 1245
+- Community 1246
+- Community 1247
+- Community 1248
+- Community 1249
+- Community 1250
+- Community 1251
+- Community 1252
+- Community 1253
+- Community 1254
+- Community 1255
+- Community 1256
+- Community 1257
+- Community 1258
+- Community 1259
+- Community 1260
+- Community 1261
+- Community 1262
+- Community 1263
+- Community 1264
+- Community 1265
+- Community 1266
+- Community 1267
+- Community 1268
+- Community 1269
+- Community 1270
+- Community 1271
+- Community 1272
+- Community 1273
+- Community 1274
+- Community 1275
+- Community 1276
+- Community 1277
+- Community 1278
+- Community 1279
+- Community 1280
+- Community 1281
+- Community 1282
+- Community 1283
+- Community 1284
+- Community 1285
+- Community 1286
+- Community 1287
+- Community 1288
+- Community 1289
+- Community 1290
+- Community 1291
+- Community 1292
+- Community 1293
+- Community 1294
+- Community 1295
+- Community 1296
+- Community 1297
+- Community 1298
+- Community 1299
+- Community 1300
+- Community 1301
+- Community 1302
+- Community 1303
+- Community 1304
+- Community 1305
+- Community 1306
+- Community 1307
+- Community 1308
+- Community 1309
+- Community 1310
+- Community 1311
+- Community 1312
+- Community 1313
+- Community 1314
+- Community 1315
+- Community 1316
+- Community 1317
+- Community 1318
+- Community 1319
+- Community 1320
+- Community 1321
+- Community 1322
+- Community 1323
+- Community 1324
+- Community 1325
+- Community 1326
+- Community 1327
+- Community 1328
+- Community 1329
+- Community 1330
+- Community 1331
+- Community 1332
+- Community 1333
+- Community 1334
+- Community 1335
+- Community 1336
+- Community 1337
+- Community 1338
+- Community 1339
+- Community 1340
+- Community 1341
+- Community 1342
+- Community 1343
+- Community 1344
+- Community 1345
+- Community 1346
+- Community 1347
+- Community 1348
+- Community 1349
+- Community 1350
+- Community 1351
+- Community 1352
+- Community 1353
+- Community 1354
+- Community 1355
+- Community 1356
+- Community 1357
+- Community 1358
+- Community 1359
+- Community 1360
+- Community 1361
+- Community 1362
+- Community 1363
+- Community 1364
+- Community 1365
+- Community 1366
+- Community 1367
+- Community 1368
+- Community 1369
+- Community 1370
+- Community 1371
+- Community 1372
+- Community 1373
+- Community 1374
+- Community 1375
+- Community 1376
+- Community 1377
+- Community 1378
+- Community 1379
+- Community 1380
+- Community 1381
+- Community 1382
+- Community 1383
+- Community 1384
+- Community 1385
+- Community 1386
+- Community 1387
+- Community 1388
+- Community 1389
+- Community 1390
+- Community 1391
+- Community 1392
+- Community 1393
+- Community 1394
+- Community 1395
+- Community 1396
+- Community 1397
+- Community 1398
+- Community 1399
+- Community 1400
+- Community 1401
+- Community 1402
+- Community 1403
+- Community 1404
+- Community 1405
+- Community 1406
+- Community 1407
+- Community 1408
+- Community 1409
+- Community 1410
+- Community 1411
+- Community 1412
+- Community 1413
+- Community 1414
+- Community 1415
+- Community 1416
+- Community 1417
+- Community 1418
+- Community 1419
+- Community 1420
+- Community 1421
+- Community 1422
+- Community 1423
+- Community 1424
+- Community 1425
+- Community 1426
+- Community 1427
+- Community 1428
+- Community 1429
+- Community 1430
+- Community 1431
+- Community 1432
+- Community 1433
+- Community 1434
+- Community 1435
+- Community 1436
+- Community 1437
+- Community 1438
+- Community 1439
+- Community 1440
+- Community 1441
+- Community 1442
+- Community 1443
+- Community 1444
+- Community 1445
+- Community 1446
+- Community 1447
+- Community 1448
+- Community 1449
+- Community 1450
+- Community 1451
+- Community 1452
+- Community 1453
+- Community 1454
+- Community 1455
+- Community 1456
+- Community 1457
+- Community 1458
+- Community 1459
+- Community 1460
+- Community 1461
+- Community 1462
+- Community 1463
+- Community 1464
+- Community 1465
+- Community 1466
+- Community 1467
+- Community 1468
+- Community 1469
+- Community 1470
+- Community 1471
+- Community 1472
+- Community 1473
+- Community 1474
+- Community 1475
+- Community 1476
+- Community 1477
+- Community 1478
+- Community 1479
+- Community 1480
+- Community 1481
+- Community 1482
+- Community 1483
+- Community 1484
+- Community 1485
+- Community 1486
+- Community 1487
+- Community 1488
+- Community 1489
+- Community 1490
+- Community 1491
+- Community 1492
+- Community 1493
+- Community 1494
+- Community 1495
+- Community 1496
+- Community 1497
+- Community 1498
+- Community 1499
+- Community 1500
+- Community 1501
+- Community 1502
+- Community 1503
+- Community 1504
+- Community 1505
+- Community 1506
+- Community 1507
+- Community 1508
+- Community 1509
+- Community 1510
+- Community 1511
+- Community 1512
+- Community 1513
+- Community 1514
+- Community 1515
+- Community 1516
+- Community 1517
+- Community 1518
+- Community 1519
+- Community 1520
+- Community 1521
+- Community 1522
+- Community 1523
+- Community 1524
+- Community 1525
+- Community 1526
+- Community 1527
+- Community 1528
+- Community 1529
+- Community 1530
+- Community 1531
+- Community 1532
+- Community 1533
+- Community 1534
+- Community 1535
+- Community 1536
+- Community 1537
+- Community 1538
+- Community 1539
+- Community 1540
+- Community 1541
+- Community 1542
+- Community 1543
+- Community 1544
+- Community 1545
+- Community 1546
+- Community 1547
+- Community 1548
+- Community 1549
+- Community 1550
+- Community 1551
+- Community 1552
+- Community 1553
+- Community 1554
+- Community 1555
+- Community 1556
+- Community 1557
+- Community 1558
+- Community 1559
+- Community 1560
+- Community 1561
+- Community 1562
+- Community 1563
+- Community 1564
+- Community 1565
+- Community 1566
+- Community 1567
+- Community 1568
+- Community 1569
+- Community 1570
+- Community 1571
+- Community 1572
+- Community 1573
+- Community 1574
+- Community 1575
+- Community 1576
+- Community 1577
+- Community 1578
+- Community 1579
+- Community 1580
+- Community 1581
+- Community 1582
+- Community 1583
+- Community 1584
+- Community 1585
+- Community 1586
+- Community 1587
+- Community 1588
+- Community 1589
+- Community 1590
+- Community 1591
+- Community 1592
+- Community 1593
+- Community 1594
+- Community 1595
+- Community 1596
+- Community 1597
+- Community 1598
+- Community 1599
+- Community 1600
+- Community 1601
+- Community 1602
+- Community 1603
+- Community 1604
+- Community 1605
+- Community 1606
+- Community 1607
+- Community 1608
+- Community 1609
+- Community 1610
+- Community 1611
+- Community 1612
+- Community 1613
+- Community 1614
+- Community 1615
+- Community 1616
+- Community 1617
+- Community 1618
+- Community 1619
+- Community 1620
+- Community 1621
+- Community 1622
+- Community 1623
+- Community 1624
+- Community 1625
+- Community 1626
+- Community 1627
+- Community 1628
+- Community 1629
+- Community 1630
+- Community 1631
+- Community 1632
+- Community 1633
+- Community 1634
+- Community 1635
+- Community 1636
+- Community 1637
+- Community 1638
+- Community 1639
+- Community 1640
+- Community 1641
+- Community 1642
+- Community 1643
+- Community 1644
+- Community 1645
+- Community 1646
+- Community 1647
+- Community 1648
+- Community 1649
+- Community 1650
+- Community 1651
+- Community 1652
+- Community 1653
+- Community 1654
+- Community 1655
+- Community 1656
+- Community 1657
+- Community 1658
+- Community 1659
+- Community 1660
+- Community 1661
+- Community 1662
+- Community 1663
+- Community 1664
+- Community 1665
+- Community 1666
+- Community 1667
+- Community 1668
+- Community 1669
+- Community 1670
+- Community 1671
+- Community 1672
+- Community 1673
+- Community 1674
+- Community 1675
+- Community 1676
+- Community 1677
+- Community 1678
+- Community 1679
+- Community 1680
+- Community 1681
+- Community 1682
+- Community 1683
+- Community 1684
+- Community 1685
+- Community 1686
+- Community 1687
+- Community 1688
+- Community 1689
+- Community 1690
+- Community 1691
+- Community 1692
+- Community 1693
+- Community 1694
+- Community 1695
+- Community 1696
+- Community 1697
+- Community 1698
+- Community 1699
+- Community 1700
+- Community 1701
+- Community 1702
+- Community 1703
+- Community 1704
+- Community 1705
+- Community 1706
+- Community 1707
+- Community 1708
+- Community 1709
+- Community 1710
+- Community 1711
+- Community 1712
+- Community 1713
+- Community 1714
+- Community 1715
+- Community 1716
+- Community 1717
+- Community 1718
+- Community 1719
+- Community 1720
+- Community 1721
+- Community 1722
+- Community 1723
+- Community 1724
+- Community 1725
+- Community 1726
+- Community 1727
+- Community 1728
+- Community 1729
+- Community 1730
+- Community 1731
+- Community 1732
+- Community 1733
+- Community 1734
+- Community 1735
+- Community 1736
+- Community 1737
+- Community 1738
+- Community 1739
+- Community 1740
+- Community 1741
+- Community 1742
+- Community 1743
+- Community 1744
+- Community 1745
+- Community 1746
+- Community 1747
+- Community 1748
+- Community 1749
+- Community 1750
+- Community 1751
+- Community 1752
+- Community 1753
+- Community 1754
+- Community 1755
+- Community 1756
+- Community 1757
+- Community 1758
+- Community 1759
+- Community 1760
+- Community 1761
+- Community 1762
+- Community 1763
+- Community 1764
+- Community 1765
+- Community 1766
+- Community 1767
+- Community 1768
+- Community 1769
+- Community 1770
+- Community 1771
+- Community 1772
+- Community 1773
+- Community 1774
+- Community 1775
+- Community 1776
+- Community 1777
+- Community 1778
+- Community 1779
+- Community 1780
+- Community 1781
+- Community 1782
+- Community 1783
+- Community 1784
+- Community 1785
+- Community 1786
+- Community 1787
+- Community 1788
+- Community 1789
+- Community 1790
+- Community 1791
+- Community 1792
+- Community 1793
+- Community 1794
+- Community 1795
+- Community 1796
+- Community 1799
+- Community 1800
+- Community 1801
+- Community 1802
+- Community 1803
+- Community 1804
+- Community 1805
+- Community 1806
+- Community 1807
+- Community 1808
+- Community 1809
+- Community 1810
+- Community 1811
+- Community 1812
+- Community 1817
+- Community 1818
+- Community 1819
+- Community 1820
+- Community 1821
+- Community 1822
+- Community 1823
+- Community 1824
+- Community 1825
+- Community 1826
+- Community 1832
+- Community 1833
+- Community 1834
+- Community 1835
+- Community 1836
+- Community 1837
+- Community 1838
+- Community 1839
+- Community 1840
+- Community 1841
+- Community 1842
+- Community 1843
+- Community 1844
+- Community 1845
+- Community 1846
+- Community 1847
+- Community 1848
+- Community 1849
+- Community 1850
+- Community 1851
+- Community 1852
+- Community 1853
+- Community 1854
+- Community 1855
+- Community 1856
+- Community 1857
+- Community 1858
+- Community 1859
+- Community 1860
+- Community 1861
+- Community 1862
+- Community 1863
+- Community 1864
+- Community 1865
+- Community 1866
+- Community 1867
+- Community 1868
+- Community 1869
+- Community 1870
+- Community 1871
+- Community 1872
+- Community 1873
+- Community 1874
+- Community 1875
+- Community 1876
+- Community 1877
+- Community 1878
+- Community 1879
+- Community 1880
+- Community 1881
+- Community 1882
+- Community 1883
+- Community 1884
+- Community 1885
+- Community 1886
+- Community 1887
+- Community 1888
+- Community 1889
+- Community 1890
+- Community 1891
+- Community 1892
+- Community 1893
+- Community 1894
+- Community 1895
+- Community 1896
+- Community 1897
+- Community 1898
+- Community 1899
+- Community 1900
+- Community 1901
+- Community 1902
+- Community 1903
+- Community 1904
+- Community 1905
+- Community 1906
+- Community 1907
+- Community 1908
+- Community 1909
+- Community 1910
+- Community 1911
+- Community 1912
+- Community 1913
+- Community 1914
+- Community 1915
+- Community 1916
+- Community 1917
+- Community 1918
+- Community 1919
+- Community 1920
+- Community 1921
+- Community 1922
+- Community 1923
+- Community 1924
+- Community 1925
+- Community 1926
+- Community 1927
+- Community 1928
+- Community 1929
+- Community 1930
+- Community 1931
+- Community 1932
+- Community 1933
+- Community 1934
+- Community 1935
+- Community 1936
+- Community 1937
+- Community 1939
+- Community 1940
+- Community 1941
+- Community 1942
+- Community 1943
+- Community 1944
+- Community 1945
+- Community 1947
+- Community 1948
+- Community 1949
+- Community 1950
+- Community 1951
+- Community 1952
+- Community 1953
+- Community 1954
+- Community 1955
+- Community 1956
+- Community 1957
+- Community 1958
+- Community 1959
+- Community 1960
+- Community 1961
+- Community 1962
+- Community 1963
+- Community 1964
+- Community 1965
+- Community 1966
+- Community 1967
+- Community 1968
+- Community 1969
+- Community 1970
+- Community 1971
+- Community 1973
+- Community 1974
+- Community 1975
 
 ## God Nodes (most connected - your core abstractions)
-1. `_Z` - 458 edges
-2. `BrokerSession` - 262 edges
-3. `DesktopAppState` - 254 edges
-4. `BrokerApi` - 237 edges
-5. `AppViewModel` - 194 edges
-6. `SupermuxTheme()` - 159 edges
-7. `SessionInfo` - 136 edges
-8. `cn()` - 115 edges
-9. `openDb()` - 111 edges
-10. `ShellUiState` - 109 edges
+1. `$$` - 848 edges
+2. `$$` - 848 edges
+3. `HostStore` - 372 edges
+4. `setPlatformContent()` - 369 edges
+5. `SupermuxTheme()` - 353 edges
+6. `BrokerApi` - 277 edges
+7. `SessionInfo` - 194 edges
+8. `FakePlatform` - 157 edges
+9. `ShellUiState` - 153 edges
+10. `PairedHost` - 115 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `ConPTY / Job Object runtime release gate` --semantically_similar_to--> `Journey 03 — Resume across a broker restart`  [INFERRED] [semantically similar]
-  scripts/windows-vm/README.md → tests/journeys/03-resume-across-restart.md
-- `Cloudflare Tunnel (quick vs named)` --semantically_similar_to--> `Built-in connectivity relay (relay.supermux.dev)`  [INFERRED] [semantically similar]
-  SETUP.md → README.md
+- `Relay control service (Ed25519 proofs, HMAC leases)` --semantically_similar_to--> `Device token storage and comparison`  [INFERRED] [semantically similar]
+  deploy/connectivity-relay/README.md → SECURITY.md
+- `Curator guardrails (no secrets, high-confidence, preserve, skills read-only)` --semantically_similar_to--> `Secrets at rest (~/.mux/state/.env, push-keys.json)`  [INFERRED] [semantically similar]
+  prompts/knowledge-curator.md → SECURITY.md
 - `Pinned release compose (broker service on a tagged image)` --semantically_similar_to--> `broker compose service (local build)`  [INFERRED] [semantically similar]
   .github/release-assets/docker-compose.release.yml → docker-compose.yml
-- `Web app PWA HTML shell` --semantically_similar_to--> `Android WebView editor host page`  [INFERRED] [semantically similar]
-  src/web-app/index.html → apps/android/src/main/assets/editor/index.html
-- `build-ios-testflight job (archive, export .ipa, upload)` --conceptually_related_to--> `supermux (mobile-first agentic development environment)`  [AMBIGUOUS]
-  .github/workflows/release.yml → README.md
+- `ConPTY / Job Object runtime release gate` --semantically_similar_to--> `Journey 03 — Resume across a broker restart`  [INFERRED] [semantically similar]
+  scripts/windows-vm/README.md → tests/journeys/03-resume-across-restart.md
+- `Shared test ids (src/shared/test-ids.ts) with parity test` --semantically_similar_to--> `wire protocol filter`  [INFERRED] [semantically similar]
+  tests/journeys/README.md → .github/workflows/ci.yml
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **supermux release pipeline (build, sign, publish across every platform)** — _github_workflows_release_release_workflow, _github_workflows_release_build_binaries, _github_workflows_release_docker, _github_workflows_release_build_android, _github_workflows_release_build_desktop_linux, _github_workflows_release_build_desktop_windows, _github_workflows_release_build_desktop_macos, _github_workflows_release_build_compose_desktop_macos, _github_workflows_release_build_ios_testflight, _github_workflows_release_assign_testflight, _github_workflows_release_release_job, _github_workflows_release_publish_website [EXTRACTED 1.00]
-- **Device trust and pairing flow (claim, cookie, hashed token, verified journey)** — readme_pairing, setup_auto_pairing, security_device_cookie, security_device_tokens, tests_journeys_01_pair_a_device_journey, _maestro_pair_and_converse_flow, scripts_windows_vm_readme_auth_smoke [INFERRED 0.85]
-- **Journey-driven verification: prose specs, shared ids, and the CI lanes that run them** — tests_journeys_readme_prose_journeys, tests_journeys_readme_shared_test_ids, tests_journeys_readme_no_agents_in_gate, tests_journeys_01_pair_a_device_journey, tests_journeys_02_spawn_and_converse_journey, _maestro_pair_and_converse_flow, _github_workflows_ci_ui, _github_workflows_ci_android_journey [EXTRACTED 1.00]
+- **Release client artifacts pipeline** — _github_workflows_release_build_binaries, _github_workflows_release_build_android, _github_workflows_release_build_desktop_linux, _github_workflows_release_build_desktop_windows, _github_workflows_release_build_compose_desktop_macos, _github_workflows_release_docker, _github_workflows_release_github_release, _github_workflows_release_versions_json [EXTRACTED 1.00]
+- **iOS Compose-shell Maestro suite** — apps_iosapp_maestro_compose_shell_smoke_compose_shell_smoke, apps_iosapp_maestro_parity_phone_parity_phone, apps_iosapp_maestro_parity_ipad_parity_ipad, apps_iosapp_maestro_surfaces_surfaces [EXTRACTED 1.00]
+- **Shared CodeMirror WebView editor** — apps_android_codemirror_readme_cm6_bundle, apps_android_src_main_assets_editor_index_editor_host, apps_iosapp_supermux_editorweb_index_editor_host, apps_iosapp_project_synceditorweb, apps_iosapp_maestro_surfaces_surfaces [INFERRED 0.85]
+- **Device trust and pairing flow (claim, cookie, hashed token, verified journey)** — readme_pairing, setup_auto_pairing, security_device_cookie, security_device_tokens, tests_journeys_01_pair_a_device_journey, scripts_windows_vm_readme_auth_smoke [INFERRED 0.85]
+- **Journey-driven verification: prose specs, shared ids, and the CI lanes that run them** — tests_journeys_readme_prose_journeys, tests_journeys_readme_shared_test_ids, tests_journeys_readme_no_agents_in_gate, tests_journeys_01_pair_a_device_journey, _github_workflows_ci_ui, _github_workflows_ci_android_journey [EXTRACTED 1.00]
 - **Play Console App content declaration set** — apps_android_play_store_codex_handoff_app_content_declarations, apps_android_play_store_codex_handoff_advertising_id_declaration, apps_android_play_store_codex_handoff_reviewer_pairing_url, apps_android_play_store_data_safety_and_rating_data_safety_declaration, apps_android_play_store_data_safety_and_rating_content_rating, apps_android_play_store_release_checklist_app_access_for_reviewers [EXTRACTED 1.00]
 - **Self-hosted, no-developer-backend posture (privacy, data safety, marketing)** — apps_android_play_store_privacy_policy_no_backend, apps_android_play_store_data_safety_and_rating_no_developer_backend, apps_android_play_store_store_listing_yours_end_to_end, apps_android_play_store_store_listing_requires_own_server_paragraph, apps_android_play_store_data_safety_and_rating_fcm_third_party [INFERRED 0.85]
 - **Android FCM push registration flow (app → relay → broker DB)** — apps_android_play_store_firebase_push_supermuxmessagingservice, apps_android_play_store_firebase_push_registerifpaired, apps_android_play_store_firebase_push_credential_sources, apps_android_play_store_firebase_push_http_routingtoken, apps_android_play_store_firebase_push_relay_service, apps_android_play_store_firebase_push_device_push_tokens_table [EXTRACTED 1.00]
 
-## Communities (792 total, 253 thin omitted)
+## Communities (1976 total, 1457 thin omitted)
 
-### Community 0 - "Android CodeMirror Editor Bundle"
+### Community 0 - "Android CodeMirror Bundle"
 Cohesion: 0.01
-Nodes (271): _0(), $9(), ah(), aJ(), AL(), aO(), AU, B9() (+263 more)
+Nodes (251): $$, _1(), $2, _9(), a0(), A2(), A4(), A6() (+243 more)
 
-### Community 1 - "Web Conversation View"
+### Community 1 - "iOS CodeMirror Bundle"
 Cohesion: 0.01
-Nodes (245): delegatedProps, Props, classes, Props, Props, { isAtBottom, scrollToBottom }, Props, showScrollButton (+237 more)
+Nodes (231): $$, _1(), $2, _9(), A2(), A4(), A6(), a8() (+223 more)
 
-### Community 2 - "iOS CodeMirror Editor Bundle"
+### Community 2 - "Broker File Store"
 Cohesion: 0.01
-Nodes (187): $1(), _2(), $6(), A8(), aG(), aq(), ATXHeading(), AU() (+179 more)
+Nodes (136): db, registry, TEST_DEVICE_NAME, TEST_SESSION_ID, TEST_SESSION_NAME, { token }, handleWebInbound(), log (+128 more)
 
-### Community 3 - "Agent Adapters And Hooks"
-Cohesion: 0.01
-Nodes (120): claudeHookToAgentEvent(), ClaudeAdapterOpts, ClaudeCodeAdapter, harness(), wireClaudeStateEvents(), CODEX_TOOL_ITEM_TYPES, CodexAdapter, CodexAdapterOpts (+112 more)
-
-### Community 4 - "Storage Migrations And Seeds"
+### Community 3 - "Shared BrokerApi"
 Cohesion: 0.02
-Nodes (121): main(), MIGRATIONS_DIR, MUX_WEB_PORT, sh(), waitFor(), db, registry, TEST_DEVICE_NAME (+113 more)
+Nodes (89): AddCustomLspBody, AddDeviceBody, AddForgeBody, AgentCodeBody, BrokerApi, CloseWorkspaceTerminalBody, ConfigPatchBody, CreatedRepo (+81 more)
 
-### Community 5 - "Web Channel Auth Devices"
+### Community 4 - "Worktree Pairing"
 Cohesion: 0.02
-Nodes (73): RFC-4122, base(), bearer(), burstBadAuth(), DeviceRecord, DeviceStore, sha256(), tokenEqualsConstantTime() (+65 more)
+Nodes (166): relayDomain, store, { token, name: finalName }, agentsDir, db, dbPath, knownHomes, { linked } (+158 more)
 
-### Community 6 - "Shared Broker API Client"
+### Community 5 - "Web Channel Migrations"
 Cohesion: 0.02
-Nodes (76): AddCustomLspBody, AddDeviceBody, AddForgeBody, AgentCodeBody, BrokerApi, CloseWorkspaceTerminalBody, ConfigPatchBody, CreatedRepo (+68 more)
+Nodes (74): RFC-4122, main(), MIGRATIONS_DIR, MUX_WEB_PORT, sh(), waitFor(), base(), bearer() (+66 more)
 
-### Community 7 - "Broker Entrypoint And Prompts"
-Cohesion: 0.01
-Nodes (149): EMBEDDED_STATIC, buildRpcPrompt(), TASK_INSTRUCTIONS, claudeTranscriptPath(), encodeProjectDir(), agentModules, CuratorDeps, deliverUntilActive() (+141 more)
-
-### Community 8 - "Web Prompt Input"
-Cohesion: 0.01
-Nodes (127): usePromptInput(), usePromptInputProvider(), emit, formRef, inheritedContext, instance, props, { openFileDialog } (+119 more)
-
-### Community 9 - "Channel Abstraction And Files"
+### Community 6 - "Broker Main Prompts"
 Cohesion: 0.02
-Nodes (101): Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundAttachmentRef, OutboundContext, OutboundResult (+93 more)
+Nodes (150): EMBEDDED_STATIC, buildRpcPrompt(), TASK_INSTRUCTIONS, agentModules, CuratorScheduler, log, sweepRuntimeAssets(), runInterrupt() (+142 more)
 
-### Community 10 - "iOS Broker Session"
+### Community 7 - "Shared HostStore"
 Cohesion: 0.02
-Nodes (75): BrokerSession, ConnectionFlag, EditorFocusRequest, SessionChatBuffer, .activity, .messages, ChunkSource, FilePathRef (+67 more)
+Nodes (21): FsEntry, SessionInfo, HostStore, ByteArray, ChunkSource, CodexResetResult, Flow, Job (+13 more)
 
-### Community 11 - "Desktop Settings Screens"
+### Community 8 - "Desktop Theme Displays"
 Cohesion: 0.03
-Nodes (60): LauncherStore, AssistantLoadState, AssistantSettingsScreen(), Error, Modifier, soul, Loading, Ready (+52 more)
+Nodes (59): DesktopTheme(), DisplaysHubTest, java, WalkthroughSeamTest, ArchivedHubTest, java, AgentSettingsHubTest, HttpStatusCode (+51 more)
 
-### Community 12 - "Agent Home Pairing"
+### Community 9 - "iOS CodeMirror Parser"
+Cohesion: 0.02
+Nodes (66): accept(), AM(), BG(), BM(), BR(), C9(), constructor(), CR() (+58 more)
+
+### Community 10 - "Claude OpenCode Adapters"
+Cohesion: 0.02
+Nodes (53): claudeHookToAgentEvent(), ClaudeAdapterOpts, ClaudeCodeAdapter, CursorAdapter, CursorAdapterOpts, CursorRunner, log, applyConfig() (+45 more)
+
+### Community 11 - "Paired Host Persistence"
 Cohesion: 0.03
-Nodes (128): relayDomain, store, { token, name: finalName }, agentsDir, db, dbPath, knownHomes, { linked } (+120 more)
+Nodes (53): DesktopHostStores, HostPersistence, HostPersistence, HostPersistence, HostPersistence, HostPersistence, HostPersistence, FleetStore (+45 more)
 
-### Community 13 - "Android Editor View Layer"
+### Community 12 - "Agent Launcher Auth"
 Cohesion: 0.02
-Nodes (79): A6(), A8(), accept(), B2(), B6, BD(), blur(), BQ() (+71 more)
+Nodes (106): spawnOneShot(), AgentAuthResult, CLAUDE_ENV_MODES, claudeAuthMode, ClaudeAuthProbe, ClaudeAuthResult, claudeCliIsAuthenticated(), claudeCredentialsPath() (+98 more)
 
-### Community 14 - "iOS Editor Transactions"
+### Community 13 - "Android CM6 Ranges"
 Cohesion: 0.02
-Nodes (82): accept(), aV(), B3(), BB(), blur(), C1(), C3(), CJ() (+74 more)
+Nodes (39): $4, BG(), CU, d6(), destroy(), DM(), DU(), E_() (+31 more)
 
-### Community 15 - "Desktop App State Bridge"
+### Community 14 - "Android CM6 Completions"
+Cohesion: 0.02
+Nodes (47): $5(), a, accept(), AD(), AM(), b8(), BA(), BD() (+39 more)
+
+### Community 15 - "Channel Inbound Messages"
+Cohesion: 0.02
+Nodes (77): Channel, ChannelCapabilities, InboundAttachment, InboundMessage, OutboundAction, OutboundAttachmentRef, OutboundContext, OutboundResult (+69 more)
+
+### Community 16 - "AppViewModel UiPrefs"
 Cohesion: 0.03
-Nodes (14): AgentReplyEvent, DesktopLspBridge, DesktopAppState, ByteArray, dev, FinishReadiness, ForgeConnection, ReviewComment (+6 more)
+Nodes (54): AndroidViewModel, AppViewModel, Application, FleetStore, HostSnapshotStore, asPairingStore(), PairingTokenStore, PairingTokenStore (+46 more)
 
-### Community 16 - "LSP Settings Screens"
-Cohesion: 0.02
-Nodes (116): AddLspForm(), EditorLspSection(), extSummary(), AddCustomLspArgs, id, StateFlow, LspField(), LspServerRow() (+108 more)
-
-### Community 17 - "iOS Background Task Chips"
-Cohesion: 0.03
-Nodes (110): Anchor, BgTaskChipsView, .body, PulsingHourglass, .body, Content, Date, Int64 (+102 more)
-
-### Community 18 - "iOS Editor DOM Mapping"
-Cohesion: 0.02
-Nodes (27): c7, CV(), D3, E4, eY(), f1(), focus(), H5() (+19 more)
-
-### Community 19 - "Web Tool Message Cards"
-Cohesion: 0.02
-Nodes (123): displayLabel, hasContent, open, primaryText, props, secondaryText, titleAttr, toolIcon (+115 more)
-
-### Community 20 - "iOS Fleet Host Management"
-Cohesion: 0.03
-Nodes (95): .log, URL, AddHostResult, added, error, needsClaim, Fleet, .activeBroker (+87 more)
-
-### Community 21 - "Desktop App Shell"
+### Community 17 - "Shell UI State Tests"
 Cohesion: 0.04
-Nodes (32): isMacOs(), main(), MdImageVerifyOverlay(), AppShell(), HostScopeBar(), AppearanceMode, Dp, HostView (+24 more)
+Nodes (48): java, UsageHubTest, visibleWorkspaceChatIds(), NotificationController, FleetStore, LauncherActions, rememberLauncherActions(), rememberSessionListActions() (+40 more)
 
-### Community 22 - "iOS Platform Shims"
-Cohesion: 0.03
-Nodes (39): AppKit, Notification.Name, SearchFieldPlacement, .smNavDrawerAlways, ToolbarItemPlacement, .smTopLeading, .smTopTrailing, String (+31 more)
-
-### Community 23 - "Android Editor Measurement"
+### Community 18 - "ChatStore Session Policy"
 Cohesion: 0.02
-Nodes (29): A5, B5(), BU, d4(), fD(), G_(), gD(), h6() (+21 more)
+Nodes (35): ChatStore, Message, canOrchestrate(), Capabilities, isFallbackEligible(), isPersistent(), POLICY, SessionRole (+27 more)
 
-### Community 24 - "Chat Store And Policy"
+### Community 19 - "iOS CM6 Markdown"
 Cohesion: 0.02
-Nodes (23): ChatStore, canOrchestrate(), Capabilities, isFallbackEligible(), isPersistent(), POLICY, SessionRole, ProxyRow (+15 more)
+Nodes (51): ATXHeading(), AX(), B7(), Blockquote(), BulletList(), eD(), emStrong(), Entity() (+43 more)
 
-### Community 25 - "Web Session Pills"
-Cohesion: 0.03
-Nodes (86): agent, currentLevel, fetchedLevel, props, sessions, visible, displayName, fallbackLabel() (+78 more)
-
-### Community 26 - "Web API Client Types"
+### Community 20 - "Walkthrough State Projection"
 Cohesion: 0.02
-Nodes (91): api, AppConfig, ClonedRepo, ForgeAddInput, ForgeCliStatus, ForgeConnection, GitBranchList, GitLocalBranch (+83 more)
+Nodes (65): harness(), wireClaudeStateEvents(), AdbDevice, listDevices(), parseAdbDevices(), ChangeCallback, FsWatcher, IGNORE_PATTERNS (+57 more)
 
-### Community 27 - "Android Change Sets"
+### Community 21 - "iOS CM6 Ranges"
 Cohesion: 0.03
-Nodes (35): _4, ATXHeading(), b1, cJ(), $D(), emStrong(), f0, FencedCode() (+27 more)
+Nodes (26): $4, CU, d6(), DM(), E_(), i6(), IU(), j7 (+18 more)
 
-### Community 28 - "iOS Composer Keyboard"
-Cohesion: 0.04
-Nodes (70): Bool, .kb, ComposerHardwareKeyboardSubmit, Content, View, Void, View, MacHostNetwork (+62 more)
-
-### Community 29 - "iOS Editor Text Tree"
+### Community 22 - "Android CM6 Tree Cursor"
 Cohesion: 0.03
-Nodes (15): _7, a9, C5, d4, e6(), fY(), HO, j2() (+7 more)
+Nodes (22): $7, ak(), BQ, CQ, cY(), F1, FY(), gI() (+14 more)
 
-### Community 30 - "Asset Probe And Memory"
-Cohesion: 0.04
-Nodes (77): curatorBytes, curatorPath, curatorText, done(), ELF_MAGIC, envBytes, envPath, envText (+69 more)
-
-### Community 31 - "Android Editor Transactions"
-Cohesion: 0.03
-Nodes (21): C_(), CD(), d0, DZ, focus(), G1(), g6, hO() (+13 more)
-
-### Community 32 - "Desktop Agent Settings"
+### Community 23 - "Usage Screens Models"
 Cohesion: 0.05
-Nodes (58): EditorSearchField(), EditorSearchOverlay(), Modifier, AgentRow(), AgentSettingsScreen(), AgentsLoadState, ApiKeyField(), AwaitingUser() (+50 more)
+Nodes (53): ClaudeExtraUsage, ClaudeUsage, ClaudeWindow, CodexCredits, CodexModelUsage, CodexResetResult, CodexUsage, CodexWindow (+45 more)
 
-### Community 33 - "Web Navigation Components"
+### Community 24 - "iOS CM6 Internals"
 Cohesion: 0.03
-Nodes (77): layout, panel, props, active, keybindings, props, route, router (+69 more)
+Nodes (57): $6(), aJ(), BK(), CO(), d1(), D2, d8(), DD() (+49 more)
 
-### Community 34 - "iOS Editor Autocomplete"
+### Community 25 - "iOS CM6 Completions"
 Cohesion: 0.03
-Nodes (36): B0(), BK(), c0(), CU(), D8(), DY, e9(), F2 (+28 more)
+Nodes (32): $5(), a, b8(), BA(), BD(), C4, CA(), EA() (+24 more)
 
-### Community 35 - "iOS Chat Git Actions"
+### Community 26 - "iOS CM6 Markdown Tokens"
 Cohesion: 0.03
-Nodes (62): ChatView, .agentAssetName, .agentTabIcon, .agentViewAvailable, .body, .finishBadge, .navMenu, .navSubtitle (+54 more)
+Nodes (26): Af(), aG(), blockTokens(), code(), codespan(), def(), dI(), dZ() (+18 more)
 
-### Community 36 - "Web App Shell Websocket"
-Cohesion: 0.03
-Nodes (67): BACKOFF_MS, useWS, auth, isDesktop, layout, needsPair, onboarding, route (+59 more)
-
-### Community 37 - "iOS Audio Recording"
-Cohesion: 0.03
-Nodes (68): AudioRecorder, ComposerBusyBar, .body, formatRecordTime(), RecordingBar, .body, StartResult, denied (+60 more)
-
-### Community 38 - "Workspace File Opening"
-Cohesion: 0.06
-Nodes (33): emptyHostLayout(), fileViewFor(), fileViewState(), firstGroupWithFileView(), isFileView(), viewIdsOfGroup(), WorkspaceFileOpener, rememberWorkspaceLayout() (+25 more)
-
-### Community 39 - "Test Desktop App"
+### Community 27 - "Agent RPC Login"
 Cohesion: 0.04
-Nodes (36): ChatPanel(), Composable, Modifier, timelineItemKey(), composerModelLabel(), ContinueHandoff, ContinuePickerPill(), GitBadgeMenu() (+28 more)
+Nodes (64): AgentRpc, AgentRpcCall, AgentRpcDeps, createAgentRpc(), log, Pending, QueuedCall, harness() (+56 more)
 
-### Community 40 - "iOS Device Pairing Sheets"
+### Community 28 - "Android Platform Seams"
+Cohesion: 0.04
+Nodes (29): AndroidNotices, AndroidPlatform, AndroidPushRegistrar, DesktopNotifications, TrayNotificationManager, TrayNotificationManagerTest, awaitCallback(), IosClipboardAccess (+21 more)
+
+### Community 29 - "Android CM6 Language"
+Cohesion: 0.03
+Nodes (42): B4, BU, C7(), C9(), EU(), FM(), GB(), gK() (+34 more)
+
+### Community 30 - "Android Chat Seams"
+Cohesion: 0.03
+Nodes (31): AndroidClipboardAccess, AndroidFileAccess, AndroidLiveTranscript, AndroidMicCapture, AndroidTts, AndroidTtsEngine, AudioChunkPlayer, AudioFileRecorder (+23 more)
+
+### Community 31 - "iOS CM6 View Plugin"
+Cohesion: 0.03
+Nodes (17): _0(), CZ, f8, focus(), HN(), I5(), K_(), l0 (+9 more)
+
+### Community 32 - "Android CM6 Changes"
+Cohesion: 0.03
+Nodes (23): aG(), B1, dI(), dZ(), eG(), HR(), J2, kX() (+15 more)
+
+### Community 33 - "Composer Reasoning Pills"
 Cohesion: 0.05
-Nodes (65): AddDeviceSheet, .body, AddDeviceView, .body, archivedDate(), ArchivedMessageRow, .body, .isAgent (+57 more)
+Nodes (36): ModelInfo, ModelsResponse, ReasoningLevel, ReasoningResponse, effortRank(), effortSpeedometerParams(), resolveReasoningLevel(), showReasoningPicker() (+28 more)
 
-### Community 41 - "Agents Broker Core"
-Cohesion: 0.03
-Nodes (57): spawnOneShot(), SpawnFn, CursorRunner, log, applyConfig(), row, log, makeRealGrokRunner() (+49 more)
-
-### Community 42 - "Supermux iOS App"
-Cohesion: 0.03
-Nodes (68): DisplayHost, scrcpy, vnc, ScrcpyHost, DisplayStream, String, VncHost, CGPoint (+60 more)
-
-### Community 43 - "Supermux iOS App"
-Cohesion: 0.03
-Nodes (84): Image, .nativePane, ForgeLogo, .body, CGFloat, String, GitBadgeView, .body (+76 more)
-
-### Community 44 - "Android App"
+### Community 34 - "Default Project Recency"
 Cohesion: 0.04
-Nodes (20): AndroidViewModel, AppViewModel, ActivityEvent, AddCustomLspArgs, AgentLoginState, CodexResetResult, Context, DisplayStream (+12 more)
+Nodes (65): agent, chooseDefaultProject(), orderProjectsByRecency(), recentWorkdirs(), sessionProjectPath(), sessionsByRecency(), DefaultProjectTest, ComposerActions (+57 more)
 
-### Community 45 - "Supermux iOS App"
+### Community 35 - "iOS CM6 DOM"
 Cohesion: 0.03
-Nodes (14): B, B2(), B4, E2(), F0, FV(), g1, I5() (+6 more)
+Nodes (21): blur(), cj(), E1, EI(), Ff(), FI(), GG, GY() (+13 more)
 
-### Community 46 - "Supermux iOS App"
-Cohesion: 0.03
-Nodes (26): B1(), BV(), c2, d6(), F4, FL(), FX(), G8 (+18 more)
-
-### Community 47 - "Components Web App"
-Cohesion: 0.03
-Nodes (76): logo, props, swapOnDark, agent, canStart, emit, message, model (+68 more)
-
-### Community 48 - "Assets Android App"
-Cohesion: 0.03
-Nodes (30): $2, $5(), c0, c6(), cA(), eN(), f4, f8 (+22 more)
-
-### Community 49 - "Supermux iOS App"
-Cohesion: 0.04
-Nodes (40): aN(), bF(), BG(), C9(), DA(), dN(), ez(), FU() (+32 more)
-
-### Community 50 - "Slash Commands Broker Core"
+### Community 36 - "Slash Command Registry"
 Cohesion: 0.05
 Nodes (46): controlCommands(), ctl(), ClaudeCommandProvider, claudeNamesToCommands(), log, parseClaudeInitLine(), Semaphore, SpawnFn (+38 more)
 
-### Community 51 - "Android App"
-Cohesion: 0.04
-Nodes (63): DevConfig, Context, DisplayRow(), DisplaysScreen(), DisplayViewerDialog(), DisplayStream, StateFlow, showMessage() (+55 more)
-
-### Community 52 - "Assets Android App"
+### Community 37 - "iOS CM6 Tree Cursor"
 Cohesion: 0.03
-Nodes (17): bZ, c2(), eF, FM(), I8, JZ(), map(), MK() (+9 more)
+Nodes (19): $7, CQ, cY(), F1, FY(), HQ(), HY, kU() (+11 more)
 
-### Community 53 - "Desktop App"
-Cohesion: 0.05
-Nodes (72): ActionRow(), Caption(), Chip(), DiscardRows(), DismissRow(), DoneRow(), FileList(), FinishSheet() (+64 more)
-
-### Community 54 - "Assets Android App"
-Cohesion: 0.04
-Nodes (41): aV(), B7(), bK, Ck(), code(), cS(), cX(), DL() (+33 more)
-
-### Community 55 - "Assets Android App"
-Cohesion: 0.04
-Nodes (19): A4, B8(), bb(), Blockquote(), E8, G0, HK(), K1() (+11 more)
-
-### Community 56 - "Workspace Broker Core"
-Cohesion: 0.05
-Nodes (46): viewsHarness(), viewDto, workspaceDto, addViewToGroup(), collectViewIds(), groupIdOf(), hasGroup(), insertIntoGroup() (+38 more)
-
-### Community 57 - "Components Web App"
-Cohesion: 0.04
-Nodes (73): activeIndex, draft, emit, filteredProjects, FilterOption, inputRef, listEl, moveActive() (+65 more)
-
-### Community 58 - "Android Root"
-Cohesion: 0.04
-Nodes (74): ChatScreen(), ActivityEvent, AgentStatus, AnimatedVisibilityScope, ByteArray, bytes, draft, filename (+66 more)
-
-### Community 59 - "Assets Android App"
+### Community 38 - "Android CM6 View Plugin"
 Cohesion: 0.03
-Nodes (22): AK(), BM(), d8, FI(), h1, MY, N5(), NI() (+14 more)
+Nodes (16): _0(), CZ, f8, focus(), HN(), I5(), l0, mousedown() (+8 more)
 
-### Community 60 - "Assets Android App"
-Cohesion: 0.04
-Nodes (18): aW, B, bG(), cO(), JQ(), KI(), KU(), q0 (+10 more)
-
-### Community 61 - "Android App"
-Cohesion: 0.05
-Nodes (74): AddDeviceDialog(), barColor(), clampPct(), ClaudeExtraUsageData, ClaudeUsageCard(), ClaudeUsageData, CodexCreditsData, codexResetNote() (+66 more)
-
-### Community 62 - "Supermux iOS App"
-Cohesion: 0.04
-Nodes (69): BashBits, buildChatBlocks(), ChatBlock, .id, message, tools, ChatDetailLevel, .effective (+61 more)
-
-### Community 63 - "Supermux iOS App"
-Cohesion: 0.04
-Nodes (14): CY, D9, dQ, J0, K7(), LR(), PZ(), reduce() (+6 more)
-
-### Community 64 - "Desktop App"
-Cohesion: 0.04
-Nodes (30): OnboardingScreen(), Confirm, Error, Idle, StateFlow, Paired, PairingUiState, PairingViewModel (+22 more)
-
-### Community 65 - "Assets Android App"
-Cohesion: 0.04
-Nodes (10): c4, E_(), $M(), P1, p9, Q5(), Q6(), s1 (+2 more)
-
-### Community 66 - "Supermux iOS App"
+### Community 39 - "iOS CM6 Syntax"
 Cohesion: 0.03
-Nodes (23): _9, A0, AJ(), aO(), BY(), create(), f6(), H4() (+15 more)
+Nodes (35): AD(), ak(), aq(), B, BQ, BW(), bY(), CI() (+27 more)
 
-### Community 67 - "Supermux iOS App"
-Cohesion: 0.04
-Nodes (22): aP(), AZ(), c, C8(), DC(), destroy(), FO, GC() (+14 more)
-
-### Community 68 - "Supermux iOS App"
-Cohesion: 0.06
-Nodes (36): .body, .session, .chat, B, PaneVisibility, Double, String, UserDefaults (+28 more)
-
-### Community 69 - "CommonTest Shared KMP"
+### Community 40 - "Git Ops Session Header"
 Cohesion: 0.05
-Nodes (37): ByteArray, Modifier, PredictionAdapter, PredictionEngine, TerminalStatus, PredictionPipeline, ScratchTerminalPanel(), singlePrintableChar() (+29 more)
+Nodes (33): Alignment, gitOpResultLabel(), shouldPublish(), GitOpResult, ProxyDto, displayUrl(), proxyDisplayUrl(), proxyUrl() (+25 more)
 
-### Community 70 - "Desktop App"
+### Community 41 - "iOS CM6 Mount"
+Cohesion: 0.04
+Nodes (18): DQ(), e4(), eK, fQ(), gI(), j4, jU, mP() (+10 more)
+
+### Community 42 - "iOS CM6 Hidden Nodes"
+Cohesion: 0.03
+Nodes (25): $8, C8, destroy(), G5, KI(), L8, N2, og() (+17 more)
+
+### Community 43 - "Host Finish Views"
+Cohesion: 0.05
+Nodes (56): HostView, FinishView, Menu, Outcome, Running, HostBadge(), HostDot(), hostDotColor() (+48 more)
+
+### Community 44 - "Workspace Layout Windows"
+Cohesion: 0.05
+Nodes (40): extraWindowTitle(), LayoutNode, chat(), main(), PreviewFixtures, view(), ws(), workspaceForSession() (+32 more)
+
+### Community 45 - "Predictive Echo Adapters"
 Cohesion: 0.08
-Nodes (21): PersistedWindowHost, defaultTearOutBounds(), dragEndedOutside(), groupById(), mergePersistedWindowHosts(), planTearOutTab(), smallestContaining(), tearOutCanvas() (+13 more)
+Nodes (28): cursor(), feed(), render(), PredictionAdapterTest, Backspace, CharInput, CursorLeft, CursorPos (+20 more)
 
-### Community 71 - "Commands Ts Broker Core"
-Cohesion: 0.06
-Nodes (61): BASE, buildMenuEntries(), dedupeCommand(), log, MenuEntry, sanitizeCommand(), SessionLister, SPAWN_ENTRIES (+53 more)
-
-### Community 72 - "Android App"
-Cohesion: 0.04
-Nodes (52): Alignment, DictationController, java, VoiceRecorder, EditorTabs(), EditorTab, Modifier, TabChip() (+44 more)
-
-### Community 73 - "Assets Android App"
-Cohesion: 0.04
-Nodes (15): aY, eJ, gZ, I6(), II(), KQ(), KY, PI() (+7 more)
-
-### Community 74 - "Supermux iOS App"
+### Community 46 - "Workspace Routes DTO"
 Cohesion: 0.05
-Nodes (34): PredictionAdapter, CursorPos, DisplayOp, Int32, String, TerminalView, Any, Data (+26 more)
+Nodes (43): viewsHarness(), viewDto, workspaceDto, addViewToGroup(), collectViewIds(), groupIdOf(), hasGroup(), insertIntoGroup() (+35 more)
 
-### Community 75 - "Components Web App"
-Cohesion: 0.04
-Nodes (64): InstallJob, AgentStatus, authCaps(), cancelLogin(), codeSubmitting, codeValues, emit, expanded (+56 more)
-
-### Community 76 - "Supermux iOS App"
-Cohesion: 0.04
-Nodes (11): $3(), bH(), E1(), f9, I0, J3(), M3, n (+3 more)
-
-### Community 77 - "Supermux iOS App"
-Cohesion: 0.03
-Nodes (18): d0, f, FJ(), fK(), j9, JF(), JV(), l9() (+10 more)
-
-### Community 78 - "CommonTest Shared KMP"
-Cohesion: 0.04
-Nodes (10): resolveSpawnId(), DesktopLauncherTest, Rec, AddViewBody, CreateWorkspaceBody, SpawnRequest, SpawnResponse, BrokerApiTest (+2 more)
-
-### Community 79 - "Android App"
-Cohesion: 0.05
-Nodes (46): EffortPill(), ModelPill(), PickerSheet(), PillChip(), activeSlashQuery(), SlashCommand, replaceSlashToken(), slashCommandMatches() (+38 more)
-
-### Community 80 - "Test Desktop App"
-Cohesion: 0.05
-Nodes (11): LogEntry, NotificationController, AgentReplyEvent, LogEntry, NotifyDecision, ArchivedScreenTest, DesktopAppStateReducerTest, DesktopArchivedTest (+3 more)
-
-### Community 81 - "Supermux iOS App"
+### Community 47 - "Devices Settings Pairing"
 Cohesion: 0.07
-Nodes (36): Color, .smBackground, .smGroupedBackground, .smSecondaryBackground, .smSeparator, .smTertiaryBackground, .smTertiaryFill, SMHaptics (+28 more)
+Nodes (29): AddDeviceResponse, DeviceDto, CoroutineScope, Job, Modifier, MintJobHolder, revokeIfUnused(), SetupPhoneStep() (+21 more)
 
-### Community 82 - "Supermux iOS App"
+### Community 48 - "iOS CM6 Measure"
 Cohesion: 0.04
-Nodes (25): CF(), cO(), code(), DU(), e(), E3(), E7(), emStrong() (+17 more)
+Nodes (13): AR(), D5(), EM(), lN, OM(), pN, RU, S4 (+5 more)
 
-### Community 83 - "Src"
+### Community 49 - "Archived Session Grouping"
 Cohesion: 0.05
-Nodes (43): ApnsConfig, base64url(), base64urlJson(), createApnsAdapter(), H2Post, log, pemToDer(), cfg (+35 more)
+Nodes (31): ArchivedDto, ArchivedProject, archivedProjects(), filterArchivedByProject(), projectKey(), asSettledSession(), buildTaskSections(), combinedTaskSessions() (+23 more)
 
-### Community 84 - "Supermux iOS App"
+### Community 50 - "Desktop Archived State"
+Cohesion: 0.04
+Nodes (24): DesktopArchivedTest, HttpStatusCode, Rec, DesktopDisplayTest, HttpStatusCode, Rec, DesktopLspSettingsTest, HttpStatusCode (+16 more)
+
+### Community 51 - "ViewHost Chat Content"
+Cohesion: 0.08
+Nodes (20): defaultChatHeaderMode(), hexBytes(), ByteArray, FakePlatform, ImageBitmap, setPlatformContent(), testDecodePng(), TimelineLayoutTest (+12 more)
+
+### Community 52 - "Android ChatScreen"
 Cohesion: 0.05
-Nodes (36): App, DebugSnapshot, Data, NSWindow, URL, deepLinkPair(), SupermuxApp, .body (+28 more)
+Nodes (47): ChatScreen(), AnimatedVisibilityScope, ByteArray, ChunkSource, dev, kotlinx, mime, name (+39 more)
 
-### Community 85 - "Android App"
+### Community 53 - "Archived Screen UI"
+Cohesion: 0.08
+Nodes (15): ArchivedActions, archivedMatchesQuery(), ArchivedScreen(), VoiceSettingsScreen(), SupermuxTheme(), ArchivedScreenTest, SessionStatusRailTest, HttpClient (+7 more)
+
+### Community 54 - "Android CM6 Markdown"
+Cohesion: 0.04
+Nodes (19): AX(), emStrong(), F2, FA(), GG, gv(), HV(), IG() (+11 more)
+
+### Community 55 - "Android CM6 Hidden Nodes"
+Cohesion: 0.04
+Nodes (23): C8, G5, KI(), L8, N2, og(), PG(), PR() (+15 more)
+
+### Community 56 - "iOS CM6 Changes"
+Cohesion: 0.04
+Nodes (15): AZ(), B1, g6(), gZ, K4, LZ(), map(), ON (+7 more)
+
+### Community 57 - "Command Menu Entries"
 Cohesion: 0.05
-Nodes (35): applyWorkingOrders(), SessionInfo, moveWithinScope(), reorderScope(), SessionDragWorkingState, SessionReorderMove, SessionReorderScope, SessionSwipeAction (+27 more)
+Nodes (60): BASE, buildMenuEntries(), dedupeCommand(), log, MenuEntry, sanitizeCommand(), SessionLister, SPAWN_ENTRIES (+52 more)
 
-### Community 86 - "Agents Broker Core"
+### Community 58 - "Device Push Tokens"
+Cohesion: 0.05
+Nodes (32): DevicePushTokenRecord, DevicePushTokenStore, extractPreview(), FirePushArgs, firePushForReply(), createNativePushSender(), NativePushSender, storeWith() (+24 more)
+
+### Community 59 - "Editor Engine Factory"
+Cohesion: 0.05
+Nodes (31): AndroidEditorEngineFactory, StateFlow, AndroidEditorEngineFactoryTest, asEngineState(), DesktopEditorEngineFactory, StateFlow, main(), DiffRegionSurface() (+23 more)
+
+### Community 60 - "Voice Settings Context Menu"
+Cohesion: 0.05
+Nodes (52): ContextMenuPositionProvider, IntOffset, IntRect, IntSize, LayoutDirection, SupermuxContextMenuRepresentation, HeavyweightModalShield(), Modifier (+44 more)
+
+### Community 61 - "Relay APNS Push"
+Cohesion: 0.05
+Nodes (44): PlatformPushAdapter, ApnsConfig, base64url(), base64urlJson(), createApnsAdapter(), H2Post, log, pemToDer() (+36 more)
+
+### Community 62 - "Android CM6 Measure"
+Cohesion: 0.05
+Nodes (9): D5(), EM(), lN, pN, RU, S4, VU, W_() (+1 more)
+
+### Community 63 - "iOS CM6 Language"
+Cohesion: 0.04
+Nodes (31): B4, BU, C7(), EU(), FM(), gK(), IX(), j0 (+23 more)
+
+### Community 64 - "Android CM6 Markdown Tokens"
+Cohesion: 0.04
+Nodes (22): Af(), AR(), code(), codespan(), def(), eK, fences(), If() (+14 more)
+
+### Community 65 - "Desktop Settings HTTP"
 Cohesion: 0.06
-Nodes (48): AgentAuthResult, CLAUDE_ENV_MODES, claudeAuthMode, ClaudeAuthProbe, ClaudeAuthResult, claudeCliIsAuthenticated(), claudeCredentialsPath(), claudeIsAuthed() (+40 more)
+Nodes (56): DesktopSettingsSection(), jsHttpFactory(), HttpClient, FleetStore, rememberAgentSettingsActions(), AssistantLoadState, AssistantSettingsActions, AssistantSettingsBody() (+48 more)
 
-### Community 87 - "Desktop App"
-Cohesion: 0.06
-Nodes (34): VoiceGlossaryPage(), DesktopHostStores, Added, AddHostResult, Error, HostConn, NeedsClaim, sync() (+26 more)
-
-### Community 88 - "CommonMain Root"
+### Community 66 - "Android CM6 Internals"
 Cohesion: 0.05
-Nodes (47): ChatDetailPrefs, ChatDetailLevel, Context, StateFlow, BgTaskChipsRow(), ChatPanel(), createImageUri(), createVideoUri() (+39 more)
+Nodes (38): aJ(), CO(), d8(), EX(), F0(), HH(), hK, HW() (+30 more)
 
-### Community 89 - "Push Broker Core"
+### Community 67 - "Android CM6 Syntax"
+Cohesion: 0.04
+Nodes (27): aq(), B, BW(), bY(), f, g8, i4, IY() (+19 more)
+
+### Community 68 - "Android CM6 Mount"
 Cohesion: 0.05
-Nodes (27): DevicePushTokenRecord, DevicePushTokenStore, extractPreview(), FirePushArgs, firePushForReply(), createNativePushSender(), NativePushSender, PlatformPushAdapter (+19 more)
+Nodes (11): e4(), JQ(), mP(), NQ(), reduce(), reuse(), shift(), use() (+3 more)
 
-### Community 90 - "Relay Broker Core"
+### Community 69 - "Composer Attachments"
+Cohesion: 0.07
+Nodes (14): canSendComposer(), ComposerAttachment, composerKind(), Done, Failed, Uploading, UploadState, rememberShellActions() (+6 more)
+
+### Community 70 - "FRP Relay Provider"
 Cohesion: 0.06
 Nodes (30): AcquireAttempt, AcquireFailureCode, AcquireTrigger, FrpChild, FrpProviderOpts, FrpRelayProvider, LeaseHttpError, PARENT_BOUND_SH (+22 more)
 
-### Community 91 - "Components Web App"
-Cohesion: 0.03
-Nodes (48): DropdownMenuProps, Props, DropdownMenuContentProps, Props, PromptInputActionMenuItemProps, Props, DropdownMenuTriggerProps, Props (+40 more)
+### Community 71 - "Finish Flow Choices"
+Cohesion: 0.08
+Nodes (41): canSkipTests(), finishDotIsError(), isFinishUnacked(), FinishReadiness, FinishResult, VerifySaveResult, VerifySuggestResult, FinishJobDto (+33 more)
 
-### Community 92 - "Test Desktop App"
+### Community 72 - "Android Input Mode"
 Cohesion: 0.06
-Nodes (26): ByteArray, Context, onChunk, MessageTts, UtteranceProgressListener, plainTextForSpeech(), MessageTtsTest, buildPairingPayload() (+18 more)
+Nodes (28): hasPointerDevice(), inputModeFor(), isChromebook(), isDeskUiMode(), isPointerDevice(), Context, pointerAvailableFor(), rememberInputMode() (+20 more)
 
-### Community 93 - "CommonTest Shared KMP"
-Cohesion: 0.07
-Nodes (39): filterSessions(), formatLastSeen(), SessionInfo, HostPickerPill(), agentDrawableRes(), groupedRowShape(), AnimatedVisibilityScope, Context (+31 more)
-
-### Community 94 - "Test Desktop App"
-Cohesion: 0.06
-Nodes (8): EditorState, RepoRefs, ReviewComment, EditorStateTest, CoroutineScope, RefCommit, RepoRefs, ReviewComment
-
-### Community 95 - "Supermux iOS App"
-Cohesion: 0.05
-Nodes (14): a3(), aW, bW(), GX, HTMLBlock(), hW(), IndentedCode(), o4 (+6 more)
-
-### Community 96 - "Supermux iOS App"
+### Community 73 - "BrokerApi Workspace Tests"
 Cohesion: 0.04
-Nodes (17): Blockquote(), C4(), def(), eq(), H3, I9, L1, LW() (+9 more)
+Nodes (10): AddViewBody, AppConfigDto, CreateWorkspaceBody, PatchWorkspaceBody, SpawnRequest, dev, JsonObject, activeViewPatchBody() (+2 more)
 
-### Community 97 - "Assets Android App"
-Cohesion: 0.04
-Nodes (21): $8, A_(), AD(), aG, aN(), f5(), FX, g5() (+13 more)
+### Community 74 - "Layout Tree Groups"
+Cohesion: 0.08
+Nodes (22): addViewToGroup(), collectActiveViewIds(), collectViewIds(), firstGroupId(), Group, groupIdOf(), hasGroup(), hideClaimed() (+14 more)
 
-### Community 98 - "Supermux iOS App"
-Cohesion: 0.05
-Nodes (40): ProviderLogo, .assetName, .body, .normalized, .usesTemplate, CGFloat, String, AgentRow (+32 more)
+### Community 75 - "Session List Screen"
+Cohesion: 0.08
+Nodes (14): Composable, SessionListFooter(), SessionListScreen(), SessionsSectionHeader(), SessionListScreenChromeTest, SessionListScreenHostGatingTest, chatView(), SessionListScreenTest (+6 more)
 
-### Community 99 - "Supermux iOS App"
-Cohesion: 0.05
-Nodes (34): ComposerInput, Coordinator, PassthroughLabel, PasteTextView, .clipboardHasAttachment, .keyCommands, Any, CGFloat (+26 more)
-
-### Community 100 - "Editor Broker Core"
-Cohesion: 0.06
-Nodes (32): DiffEntry, FsEntry, FsService, parseDiff(), SearchResult, WriteResult, RepoInfo, scanRepos() (+24 more)
-
-### Community 101 - "Display Broker Core"
+### Community 76 - "Display Manager"
 Cohesion: 0.07
 Nodes (24): DisplayManager, DisplayManagerOpts, Entry, log, allocateDisplayNumber(), allocateFreePort(), LinuxXvfbProvider, log (+16 more)
 
-### Community 102 - "Android App"
-Cohesion: 0.07
-Nodes (38): DisplayControlBar(), DisplayEmptyState(), DisplayPanel(), DisplayState, CONNECTED, CONNECTING, DISCONNECTED, NEEDS_PASSWORD (+30 more)
+### Community 77 - "Android CM6 DOM"
+Cohesion: 0.04
+Nodes (17): cj(), E1, EA(), EI(), F4, Ff(), FI(), Hf() (+9 more)
 
-### Community 103 - "Shared UI"
-Cohesion: 0.08
-Nodes (32): isMarkdownPath(), WorkspaceFileTab(), DefaultTabChip(), FontFamily, DropZone, Bottom, Centre, Left (+24 more)
-
-### Community 104 - "Supermux iOS App"
-Cohesion: 0.06
-Nodes (38): AddForgeSheet, .advancedControls, .body, .canConnect, .canImportCli, .cliDivider, .cliLoginLabel, .connectButton (+30 more)
-
-### Community 105 - "Relay Broker Core"
+### Community 78 - "Relay Control Plane"
 Cohesion: 0.06
 Nodes (36): control, log, port, base32(), HostIdentity, hostIdFromPublicKey(), loadOrCreateHostKey(), rawPublicKey() (+28 more)
 
-### Community 106 - "Assets Android App"
+### Community 79 - "Forge CLI Import"
 Cohesion: 0.05
-Nodes (5): E4, o1, UQ(), V9, XX
+Nodes (22): CLI, CliStatus, detectForgeClis(), importCliToken(), Runner, statusFor(), StatusRunner, githubAdapter (+14 more)
 
-### Community 107 - "Desktop App"
-Cohesion: 0.08
-Nodes (41): Badge(), baseLabel(), BaseNoneRow(), BaseOption(), BaseSectionHeader(), BaseSelector(), commentsFor(), CommentStatusBadge() (+33 more)
+### Community 80 - "Community 80"
+Cohesion: 0.04
+Nodes (24): Blockquote(), blur(), BulletList(), Entity(), Escape(), fj(), FX(), GY() (+16 more)
 
-### Community 108 - "Desktop App"
+### Community 81 - "Community 81"
+Cohesion: 0.06
+Nodes (4): RefCommit, EditorState, EditorStateTest, CoroutineScope
+
+### Community 82 - "Community 82"
+Cohesion: 0.09
+Nodes (18): Failed, Installed, KeepAlive, KeepAliveEnv, Os, LINUX, MAC, OTHER (+10 more)
+
+### Community 83 - "Community 83"
 Cohesion: 0.07
 Nodes (25): Dp, macTrafficLightsStartPadding(), Dp, Modifier, Offset, Rect, MacChromeRegionElement, MacChromeRegionNode (+17 more)
 
-### Community 109 - "Supermux iOS App"
-Cohesion: 0.05
-Nodes (45): GlossaryResponse, TranscribeResponse, GlossaryView, .body, .list, .trimmedNew, IndexSet, String (+37 more)
+### Community 84 - "Community 84"
+Cohesion: 0.04
+Nodes (42): ActivityAppend, AgentError, AgentState, BgTask, BgTasks, CommandsChanged, DisplayAdded, DisplayRemoved (+34 more)
 
-### Community 110 - "Test Desktop App"
-Cohesion: 0.08
-Nodes (18): UpdateStatus, lastCheckedText(), stateLabel(), StateRow(), SystemSettingsPage(), UpdateAvailabilityRow(), isRunningState(), Modifier (+10 more)
+### Community 85 - "Community 85"
+Cohesion: 0.06
+Nodes (42): addMarker, attachPinch(), authorLabel(), bridge(), changeMarker, clampFont(), completionOnTriggerChars(), composerDom() (+34 more)
 
-### Community 111 - "Android App"
+### Community 86 - "Community 86"
 Cohesion: 0.07
-Nodes (19): Dp, Saver, PaneVisibility, WorkspaceLayout, WorkspaceSnapshot, applyWorkspaceShortcut(), Modifier, mapWorkspaceShortcut() (+11 more)
+Nodes (41): ChatPreviewActivity, Bundle, ComponentActivity, AgentRow(), AgentSettingsBody(), AgentsLoadState, ApiKeyField(), AwaitingUser() (+33 more)
 
-### Community 112 - "Terminal Broker Core"
+### Community 87 - "Community 87"
+Cohesion: 0.06
+Nodes (12): AZ(), BR(), e8, g6(), K4, map(), ON, sQ() (+4 more)
+
+### Community 88 - "Community 88"
+Cohesion: 0.06
+Nodes (10): LogEntry, NotificationDedup, NotifyDecision, TimelineMergeTest, TimelineMessageTagTest, NotifyDecisionTest, SessionListUnreadRowTest, ClipboardManager (+2 more)
+
+### Community 89 - "Community 89"
 Cohesion: 0.05
-Nodes (15): RuntimeTarget, RuntimeViewer, createSessiondTerm(), encoder, errorMessage(), findPowerShell(), parseSessiondTerminalName(), processEnvironment() (+7 more)
+Nodes (22): $8, constructor(), createContainer(), createTooltip(), getDeco(), getDOMAfter(), HB(), highlight() (+14 more)
 
-### Community 113 - "Assets Android App"
-Cohesion: 0.05
-Nodes (14): b4(), gI(), hU(), j0, jI(), NQ, QG(), r1 (+6 more)
+### Community 90 - "Community 90"
+Cohesion: 0.14
+Nodes (9): AgentInstallJob, AgentInstallStatus, AgentLoginState, OpenCodeAuthMethod, OpenCodeOAuthStart, OpenCodeProvider, AgentSettingsScreenTest, FakePlatform (+1 more)
 
-### Community 114 - "Tunnels Broker Core"
+### Community 91 - "Community 91"
+Cohesion: 0.07
+Nodes (25): AddHost, Appearance, AppUpdate, Archived, Devices, Displays, Home, NewSession (+17 more)
+
+### Community 92 - "Community 92"
+Cohesion: 0.09
+Nodes (15): RuntimeViewer, TerminalManager, createSessiondTerm(), encoder, errorMessage(), findPowerShell(), hex(), parseSessiondTerminalName() (+7 more)
+
+### Community 93 - "Community 93"
+Cohesion: 0.06
+Nodes (18): T, onMainThread(), onMainThreadResult(), IosFileAccess, IosLiveTranscript, IosMicCapture, IosTtsEngine, ByteArray (+10 more)
+
+### Community 94 - "Community 94"
+Cohesion: 0.04
+Nodes (6): IosBridge, IosCapturedAudio, IosPickedFile, ByteArray, UIViewController, NoopIosBridge
+
+### Community 95 - "Community 95"
+Cohesion: 0.09
+Nodes (20): CaptureDelegate, DocumentPickDelegate, ScanDelegate, Bool, String, UIViewController, URL, Void (+12 more)
+
+### Community 96 - "Community 96"
+Cohesion: 0.06
+Nodes (25): GitLiteStatusDto, GitBadge, GitBadgeKind, BASE, INSYNC, REMOTE, UNPUBLISHED, GitBadgeTone (+17 more)
+
+### Community 97 - "Community 97"
+Cohesion: 0.07
+Nodes (20): BrokerApiUsageTest, ByteArray, vapidKeyBytes(), closeNotificationsJs(), getSubscriptionJs(), ByteArray, Int8Array, JsAny (+12 more)
+
+### Community 98 - "Community 98"
+Cohesion: 0.09
+Nodes (31): LspConnection, LspConnectionOpts, LspServerState, findDartBin(), findGoplsBin(), findRustAnalyzerBin(), INSTALL_DART_SDK, LANGUAGE_ID (+23 more)
+
+### Community 99 - "Community 99"
 Cohesion: 0.09
 Nodes (25): baseDomainOf(), buildTunnelConfig(), cloudflaredProvider, installHintLines(), linuxInstallScript(), parseTunnelId(), resolveTunnelId(), Canned (+17 more)
 
-### Community 115 - "Desktop App"
+### Community 100 - "Community 100"
+Cohesion: 0.07
+Nodes (22): createImageUri(), createVideoUri(), android, Uri, AndroidVideoSurfaceFactory, Modifier, CompletableDeferred, Context (+14 more)
+
+### Community 101 - "Community 101"
 Cohesion: 0.08
-Nodes (36): DetachedWorkspaceWindow(), extraWindowTitle(), KeepWorkspacePanesBinds(), CoroutineScope, Modifier, SnapshotStateMap, WorkspacePanes(), WorkspacePanesBind (+28 more)
+Nodes (21): initScript(), cancelTimeout(), DiffRegionRequest, frameMessageData(), DiffRegionRequest, Event, HTMLElement, JsString (+13 more)
 
-### Community 116 - "Test Desktop App"
-Cohesion: 0.10
-Nodes (27): PathGroupHeader(), Modifier, SidebarDivider(), ArchivedFoldButton(), ArchivedWorkspaceRow(), archivedWorkspaceRowContextLabels(), androidx, AppearanceMode (+19 more)
+### Community 102 - "Community 102"
+Cohesion: 0.07
+Nodes (12): AndroidWalkthroughSeam, DesktopWalkthroughSeam, IosWalkthroughSeam, T, WalkthroughSeam, CommentAnchor, Walkthrough, WalkthroughStep (+4 more)
 
-### Community 117 - "Sessiond Broker Core"
+### Community 103 - "Community 103"
+Cohesion: 0.07
+Nodes (25): bytesFrom(), dataFrom(), ByteArray, NSData, ByteArray, NSData, nsDataOf(), toByteArray() (+17 more)
+
+### Community 104 - "Community 104"
 Cohesion: 0.05
 Nodes (28): createProcessJob(), createProcessJobFromApi(), Handle, JobObjectApi, loadWindowsApi(), ProcessJob, windowsError(), encodeKey() (+20 more)
 
-### Community 118 - "Desktop App"
-Cohesion: 0.08
-Nodes (29): AddHostScreen(), FooterIcon(), androidx, AppearanceMode, Composable, Dp, HostView, Modifier (+21 more)
+### Community 105 - "Community 105"
+Cohesion: 0.06
+Nodes (15): awtPickFiles(), awtSaveFile(), DesktopPlatform, hasExtensionIn(), Flow, pickDialogFor(), probeMime(), DesktopWindowHostController (+7 more)
 
-### Community 119 - "Test Shared UI"
+### Community 106 - "Community 106"
 Cohesion: 0.07
-Nodes (13): WorkspaceAddButton(), WorkspaceEmptyHint(), WindowHostPaneTest, WorkspacePaneWiringTest, PaneHost(), PaneHostDragTest, PaneHostStaleEditTest, PaneHostTest (+5 more)
+Nodes (27): DesktopUpdateSource, HttpClient, assetKey(), canSideloadInstall(), ChannelInfo, ChannelsWrapper, ClientPlatform, ANDROID (+19 more)
 
-### Community 120 - "Package Json Web App"
-Cohesion: 0.04
-Nodes (51): class-variance-authority, clsx, codemirror, @codemirror/lang-css, @codemirror/language-data, @codemirror/lint, @codemirror/merge, @codemirror/theme-one-dark (+43 more)
+### Community 107 - "Community 107"
+Cohesion: 0.12
+Nodes (19): ForgeCliPresence, ForgeCliStatus, ForgeConnection, ForgeConnectionsResponse, AddForgeBody(), AddForgeForm(), CancelRow(), cliLogin() (+11 more)
 
-### Community 121 - "Tunnels Src"
+### Community 108 - "Community 108"
+Cohesion: 0.11
+Nodes (15): RunUpdateResult, isRunningState(), FleetStore, Modifier, UpdateStatus, lastCheckedText(), stateLabel(), StateRow() (+7 more)
+
+### Community 109 - "Community 109"
+Cohesion: 0.08
+Nodes (29): ComposerExternalAttach, ComposerExternalDictate, Document, DocumentStore, ExplorerPane(), EditorSearchField(), EditorSearchOverlay(), Modifier (+21 more)
+
+### Community 110 - "Community 110"
 Cohesion: 0.08
 Nodes (32): ConnectDeps, connectProvider(), disconnect(), Flags, hostedRelayUrl(), parseFlags(), printMenu(), PROVIDER_BLURB (+24 more)
 
-### Community 122 - "Usage Broker Core"
+### Community 111 - "Community 111"
+Cohesion: 0.05
+Nodes (21): CODEX_TOOL_ITEM_TYPES, CodexAdapter, CodexAdapterOpts, CodexInputItem, hasCodexWebSearchPreview(), isCodexToolItem(), isCodexWebSearchItem(), JsonRpcLike (+13 more)
+
+### Community 112 - "Community 112"
 Cohesion: 0.08
-Nodes (43): dateReset(), fmtClaude(), fmtCodex(), fmtCursor(), fmtGrok(), fmtOpenCode(), fmtTokens(), formatUsageTelegram() (+35 more)
+Nodes (21): AnyObject, UInt8, PredictionAdapter, String, TerminalView, Bool, Data, Int (+13 more)
 
-### Community 123 - "CommonTest Shared KMP"
+### Community 113 - "Community 113"
+Cohesion: 0.09
+Nodes (15): SidebarReorderKind, SESSIONS, WORKSPACES, ArchivedWorkspaceRowModel, deriveArchivedWorkspaceRow(), deriveWorkspaceRow(), resolveWorkspaceOpenSessionId(), sessionListShowsArchivedWorkspaceFold() (+7 more)
+
+### Community 114 - "Community 114"
 Cohesion: 0.08
-Nodes (13): AndroidSnapshotPersistence, HostStores, Context, HostSnapshot, Envelope, HostSnapshotCodec, HostSnapshotStore, SessionInfo (+5 more)
+Nodes (22): ByteArray, Body, ChunkReader, fetchImageBytesWithPolicy(), Hop, isHttpsImageUrl(), ByteArray, HttpClient (+14 more)
 
-### Community 124 - "CommonTest Shared KMP"
-Cohesion: 0.07
-Nodes (28): oklch(), SupermuxSemantics, supermuxSemanticsDark(), supermuxSemanticsLight(), HostBadge(), HostDot(), hostDotColor(), HostFilterChips() (+20 more)
-
-### Community 125 - "Desktop App"
-Cohesion: 0.07
-Nodes (43): appendLinkified(), AssistantMessage(), AttachmentChip(), AttachmentItem(), AttachmentList(), columnTextAlign(), FencedCodeBlock(), formatMessageTime() (+35 more)
-
-### Community 126 - "Sessiond Broker Core"
+### Community 115 - "Community 115"
 Cohesion: 0.09
 Nodes (14): adoptable(), ConnectSocket, currentProcessEnvironment(), expectVoid(), isRecord(), Pending, SessiondBackend, SessiondBackendOptions (+6 more)
 
-### Community 127 - "Views Web App"
-Cohesion: 0.04
-Nodes (36): containerRef, needsPassword, password, props, showPasswordPrompt, stream, surfaceRef, displays (+28 more)
-
-### Community 128 - "Android App"
-Cohesion: 0.09
-Nodes (44): ChatPreviewActivity, Bundle, ComponentActivity, appendLinkified(), AssistantMessage(), AttachmentChip(), AttachmentItem(), AttachmentList() (+36 more)
-
-### Community 129 - "Assets Android App"
-Cohesion: 0.06
-Nodes (24): A1, AI(), BI(), BY(), DQ(), DY(), fA(), fQ() (+16 more)
-
-### Community 130 - "CommonTest Shared KMP"
-Cohesion: 0.08
-Nodes (13): DesktopFinishTest, HttpStatusCode, Rec, GitLiteStatusDto, GitBadge, GitBadgeTone, ACTIVE, MUTED (+5 more)
-
-### Community 131 - "Supermux iOS App"
-Cohesion: 0.06
-Nodes (33): EditorPane, .activeIsMarkdown, .bodyContent, .effectiveKbHeight, .fileTree, .header, .isRegular, .isRegularWidth (+25 more)
-
-### Community 132 - "Supermux iOS App"
+### Community 116 - "Community 116"
 Cohesion: 0.07
-Nodes (10): A5, aY(), JK, k1(), k9, Oz(), Qz(), V8() (+2 more)
+Nodes (17): $6(), BZ(), d1(), DD(), IM(), JB(), jW, n_() (+9 more)
 
-### Community 133 - "Supermux iOS App"
-Cohesion: 0.09
-Nodes (27): MacHostPreparedClaim, MacHostCoordinator, MacHostEndpoint, MacHostQRCode, MacHostWizard, .body, .canAdvance, .content (+19 more)
-
-### Community 134 - "Agents Broker Core"
+### Community 117 - "Community 117"
 Cohesion: 0.06
-Nodes (17): abort(), asError(), create(), log, OpenCodeAdapter, OpenCodeAdapterOpts, OpenCodeClientLike, OpenCodeEvent (+9 more)
+Nodes (11): B9, checkAsyncSchedule(), DA(), i8, I9, scheduleWork(), US(), VQ() (+3 more)
 
-### Community 135 - "Lsp Broker Core"
+### Community 118 - "Community 118"
+Cohesion: 0.07
+Nodes (9): CapturedAudio, StateFlow, LiveTranscript, MicCapture, DictationControllerTest, FakeMicCapture, CompletableDeferred, FakeMic (+1 more)
+
+### Community 119 - "Community 119"
+Cohesion: 0.08
+Nodes (30): BrokerTransport, AttachmentThumb, .body, .isImage, MessageBubble, .body, .isAgent, SessionDetailView (+22 more)
+
+### Community 120 - "Community 120"
 Cohesion: 0.10
-Nodes (27): LspConnection, LspConnectionOpts, LspServerState, findDartBin(), findGoplsBin(), findRustAnalyzerBin(), INSTALL_DART_SDK, LANGUAGE_ID (+19 more)
+Nodes (20): CreateProxyResponse, Empty, Error, ExposePortDialog(), FleetStore, Modifier, Loading, ProxiesLoadState (+12 more)
 
-### Community 136 - "Assets Android App"
-Cohesion: 0.07
-Nodes (13): aF, cG(), destroy(), FG(), jH(), N3(), Ng(), OF() (+5 more)
-
-### Community 137 - "Desktop App"
-Cohesion: 0.07
-Nodes (37): HostBadge(), HostDot(), hostDotColor(), HostFilterChips(), HostScopePicker(), isDark(), Dp, HostView (+29 more)
-
-### Community 138 - "SupermuxWatch iOS App"
+### Community 121 - "Community 121"
 Cohesion: 0.08
-Nodes (28): SupermuxWatchApp, .body, .credsKey, Scene, BrokerTransport, PhoneRelayTransport, SessionDetailView, .body (+20 more)
+Nodes (34): AttachmentChip(), AttachmentItem(), ImageLightbox(), InlineDiff(), InlineImageAttachment(), InlineVideoPlayer(), VideoTransport, androidx (+26 more)
 
-### Community 139 - "Sessiond Broker Core"
+### Community 122 - "Community 122"
+Cohesion: 0.08
+Nodes (12): AndroidEditorBridge, AndroidEditorEngine, WebChromeClient, WebViewClient, DiffRegionRequest, DiffRegionRequest, StateFlow, WebView (+4 more)
+
+### Community 123 - "Community 123"
+Cohesion: 0.06
+Nodes (16): PairingHolder, SecureTokenStore, asPairingStore(), PairingTokenStore, Confirm, Error, Idle, HttpClient (+8 more)
+
+### Community 124 - "Community 124"
+Cohesion: 0.11
+Nodes (19): clipboardImageToTempFile(), clipboardImageWithinCaps(), composerClipboardImageFiles(), composerClipboardLikelyHasImage(), composerFilesFromClipboardTransferable(), composerMime(), desktopConfigDir(), ensurePasteCacheDir() (+11 more)
+
+### Community 125 - "Community 125"
+Cohesion: 0.06
+Nodes (10): B9, checkAsyncSchedule(), DA(), i8, I9, scheduleWork(), VQ(), work() (+2 more)
+
+### Community 126 - "Community 126"
+Cohesion: 0.10
+Nodes (19): AddCustomLspArgs, LspConfig, LspInstallResult, LspMutationResult, LspServer, EditorSettingsBody(), EditorSettingsScreen(), enabled (+11 more)
+
+### Community 127 - "Community 127"
 Cohesion: 0.09
-Nodes (28): createMemorySessionBackend(), createMemorySessionBackendHarness(), MemoryTarget, SessionBackendContractObservation, verifySessionBackendContract(), resolveSessiondExecutable(), cleanup, harness() (+20 more)
+Nodes (28): createMemorySessionBackend(), createMemorySessionBackendHarness(), MemoryTarget, SessionBackendContractObservation, verifySessionBackendContract(), startSocketServer(), resolveSessiondExecutable(), cleanup (+20 more)
 
-### Community 140 - "Assets Android App"
+### Community 128 - "Community 128"
+Cohesion: 0.09
+Nodes (19): AndroidHaptics, IosHaptics, Job, LazyListState, Modifier, MutableInteractionSource, rememberReorderableListState(), ReorderableItem() (+11 more)
+
+### Community 129 - "Community 129"
 Cohesion: 0.05
-Nodes (4): m4, p0, p6, r9
+Nodes (16): c, c6, d_, DU(), FD(), g_(), H4, i_() (+8 more)
 
-### Community 141 - "Android App"
-Cohesion: 0.10
-Nodes (43): AgentRow(), AgentSettingsPage(), ApiKeyField(), AwaitingUser(), CancelButton(), GeneratingRow(), AgentLoginState, kind (+35 more)
-
-### Community 142 - "Settings Broker Core"
-Cohesion: 0.12
-Nodes (33): extOf(), getCatalogServerById(), languageIdForPath(), SERVERS, listLspServerSettingsRows(), LspServerInstallState, LspServerSettingsRow, stateOf() (+25 more)
-
-### Community 143 - "Assets Android App"
-Cohesion: 0.07
-Nodes (30): a0(), C3(), dJ(), dS(), E3(), E6, FF(), GF() (+22 more)
-
-### Community 144 - "Test Desktop App"
+### Community 130 - "Community 130"
 Cohesion: 0.09
-Nodes (15): decodeImageBytes(), fetchHttpsImageBytes(), fetchImageBytesWithPolicy(), isHttpsImageUrl(), ImageBitmap, Modifier, loadMarkdownImageBitmap(), MarkdownBody() (+7 more)
+Nodes (29): AnalyzerInput, PrepareResult, downloading, failed, ready, unsupported, SpeechAnalyzerBackend, SpeechDictation (+21 more)
 
-### Community 145 - "Test Desktop App"
-Cohesion: 0.09
-Nodes (13): Clone, Create, filterProjects(), Local, OmniNav, ProjectPicker(), shouldResetBaseBranchOnWorkdirChange(), shouldResetModelOnAgentChange() (+5 more)
-
-### Community 146 - "Supermux iOS App"
-Cohesion: 0.10
-Nodes (27): Coordinator, MacNativeSplit, Metric, percentage, points, PaneDivider, .body, ResizableSplit (+19 more)
-
-### Community 147 - "Supermux iOS App"
-Cohesion: 0.11
-Nodes (18): EditorHost, URL, WKWebView, .editorOrEmpty, .keyboardDismissOverlay, Coordinator, EditorWebView, Any (+10 more)
-
-### Community 148 - "Supermux iOS App"
-Cohesion: 0.11
-Nodes (15): AnyObject, MacBrokerSidecar, .localBaseURL, MacHostManagerLock, MacHostProcess, Process, Int, Int32 (+7 more)
-
-### Community 149 - "Desktop App"
-Cohesion: 0.12
-Nodes (25): ComposerExternalDictate, ExplorerPane(), ExplorerState, Error, Idle, Initializing, JcefState, Ready (+17 more)
-
-### Community 150 - "Desktop App"
-Cohesion: 0.07
-Nodes (22): Blob, BrokerSidecar, StateFlow, Ownership, External, Managed, None, Phase (+14 more)
-
-### Community 151 - "Components Web App"
+### Community 131 - "Community 131"
 Cohesion: 0.05
-Nodes (29): RepoRefs, ReviewComment, addComment(), baseLabel, baseMenuOpen, baseSubmenu, chooseBase(), composerFor (+21 more)
+Nodes (5): c0, e6, Qu(), yD(), Z8
 
-### Community 152 - "Components Web App"
+### Community 132 - "Community 132"
+Cohesion: 0.07
+Nodes (13): AndroidAppUpdater, Context, StateFlow, UpdateStatus, DesktopAppUpdater, StateFlow, UpdateStatus, AppUpdater (+5 more)
+
+### Community 133 - "Community 133"
 Cohesion: 0.09
-Nodes (40): applyLanguage(), attachZoomGestures(), bumpFont(), containerRef, createState(), detachZoomGestures(), emit, flashFont() (+32 more)
+Nodes (13): FleetModelTest, filterSessions(), formatLastSeen(), hostColorIndex(), hostDisplayLabel(), hostDotArgb(), hostHueDegrees(), hostShortLabel() (+5 more)
 
-### Community 153 - "Test Desktop App"
-Cohesion: 0.11
-Nodes (21): AddForgeDialog(), cliLogin(), cliName(), ForgeConnectionRow(), ForgeEmptyState(), forgeHostUrlError(), GitHostingScreen(), importableKinds() (+13 more)
+### Community 134 - "Community 134"
+Cohesion: 0.07
+Nodes (14): FramebufferUpdate, ByteArray, Parsed, VncRect, FrameRegion, ByteArray, ImageBitmap, IntArray (+6 more)
 
-### Community 154 - "Components Web App"
+### Community 135 - "Community 135"
+Cohesion: 0.09
+Nodes (21): Modifier, TermlibSurface, TermlibTerminalViewFactory, JediTermSurface, JediTermTerminalViewFactory, Modifier, IosTerminalSurface, IosTerminalViewFactory (+13 more)
+
+### Community 136 - "Community 136"
 Cohesion: 0.06
-Nodes (31): { status, bannerDismissed, enable, dismissBanner }, finishOAuth(), HIDDEN, keyValues, load(), loading, oauth, prettyName() (+23 more)
+Nodes (8): AU, H5, IN(), n6(), NN(), O5, s9, t6
 
-### Community 155 - "CommonTest Shared KMP"
+### Community 137 - "Community 137"
 Cohesion: 0.08
-Nodes (11): HostPersistence, HostPersistence, HostPersistence, HostPersistence, HostPersistence, PairedHost, HostMetaCodecTest, FakePersistence (+3 more)
+Nodes (12): AndroidEditorBridgeTest, bridgeShimJs(), lspMessageJs(), DiffRegionRequest, IosWebEditorEngine, DiffRegionRequest, StateFlow, WKWebViewEditorEngine (+4 more)
 
-### Community 156 - "Supermux iOS App"
-Cohesion: 0.07
-Nodes (10): BQ, cZ, EJ(), g4(), IQ, KR(), u4(), UR() (+2 more)
+### Community 138 - "Community 138"
+Cohesion: 0.06
+Nodes (15): a0(), AU, CK(), GM(), IN(), kX(), l_(), LV() (+7 more)
 
-### Community 157 - "Session Manager Src"
+### Community 139 - "Community 139"
+Cohesion: 0.05
+Nodes (5): c0, e6, Qu(), yD(), Z8
+
+### Community 140 - "Community 140"
+Cohesion: 0.12
+Nodes (14): InMemoryPairingTokenStore, OnboardingFlow(), Modifier, PairUrl, OnboardingScreen(), PairTofuDialog(), IntroTest, OnboardingScreenTest (+6 more)
+
+### Community 141 - "Community 141"
+Cohesion: 0.08
+Nodes (19): SupermuxColors, supermuxDark(), supermuxLight(), ThemeTest, ProvideWindowWidthClass(), oklch(), SupermuxSemantics, supermuxSemanticsDark() (+11 more)
+
+### Community 142 - "Community 142"
 Cohesion: 0.09
-Nodes (29): localEndpoint(), safePipeComponent(), usesFilesystemEndpoint(), log, ServerHandler, SessionFrame, SocketServer, startSocketServer() (+21 more)
+Nodes (13): TreeNode, ExplorerState, childPath(), FileTree(), Modifier, loadAndExpand(), sortedForTree(), TreeNodeRow() (+5 more)
 
-### Community 158 - "Android App"
+### Community 143 - "Community 143"
+Cohesion: 0.08
+Nodes (30): localEndpoint(), safePipeComponent(), usesFilesystemEndpoint(), log, OpResult, RegisterReply, ServerHandler, SessionFrame (+22 more)
+
+### Community 144 - "Community 144"
+Cohesion: 0.08
+Nodes (23): android, Bundle, ComponentActivity, MainActivity, Context, readGroupByProject(), readLegacyCollapsedPaths(), writeGroupByProject() (+15 more)
+
+### Community 145 - "Community 145"
+Cohesion: 0.08
+Nodes (15): ByteArray, DefaultClientWebSocketSession, SharedFlow, StateFlow, TerminalClient, terminalFocusFrame(), terminalResizeFrame(), termWsUrl() (+7 more)
+
+### Community 146 - "Community 146"
 Cohesion: 0.10
-Nodes (41): Badge(), baseLabel(), BaseRow(), BaseSelectorSheet(), commentsFor(), CommentStatusBadge(), CommentThreadRow(), Composer() (+33 more)
+Nodes (31): stateString(), NewViewKind, CHAT, DIFF, DISPLAY, EDITOR, TERMINAL, NewViewPlacement (+23 more)
 
-### Community 159 - "CommonMain Shared KMP"
-Cohesion: 0.07
-Nodes (26): SessionListRailUiContractTest, ImageVector, Modifier, NeutralDot(), SessionStatusRail(), StatusIcon(), UnreadDot(), AgentStatus (+18 more)
+### Community 147 - "Community 147"
+Cohesion: 0.12
+Nodes (37): atxLevel(), Bullet, Code, codeSpanInner(), collectBlock(), directInlineText(), emitImage(), emitInline() (+29 more)
 
-### Community 160 - "Supermux iOS App"
-Cohesion: 0.07
-Nodes (18): BulletList(), cQ, dW(), [E.Blockquote](), [E.ListItem](), fQ(), IW, KW() (+10 more)
-
-### Community 161 - "Worktree Broker Core"
+### Community 148 - "Community 148"
 Cohesion: 0.09
 Nodes (16): GitStatusService, GitStatusServiceDeps, NOTE: refs/remotes is intentionally NOT watched — remote-mode (plain repo)…, sameStatus(), ServiceSession, Tracked, WatchHandle, computeLiteStatus() (+8 more)
 
-### Community 162 - "Components Web App"
-Cohesion: 0.07
-Nodes (34): FinishReadiness, busy, canSkip, chooseRun(), chooseSkip(), commitAndContinue(), commitMessage, confirmingDiscard (+26 more)
-
-### Community 163 - "Components Web App"
+### Community 149 - "Community 149"
 Cohesion: 0.06
-Nodes (29): emit, isDesktop, port, props, sessions, submit(), submitting, emit (+21 more)
+Nodes (29): composerContent(), CONFIRM_TIMEOUT_MS, count(), EFFORT_CONFIRM_MARKER, EFFORT_SUCCESS_MARKER, LiveSwitchSeams, LiveSwitchTarget, log (+21 more)
 
-### Community 164 - "Android App"
-Cohesion: 0.09
-Nodes (15): EditorEngine, object@L188, object@L214, WebChromeClient, WebViewClient, EditorWebViewHost(), Modifier, rememberEditorEngine() (+7 more)
+### Community 150 - "Community 150"
+Cohesion: 0.13
+Nodes (29): extOf(), getCatalogServerById(), languageIdForPath(), SERVERS, allServerSpecs(), getServerById(), languageIdForPath(), resolveServerForPath() (+21 more)
 
-### Community 165 - "CommonTest Shared KMP"
+### Community 151 - "Community 151"
+Cohesion: 0.08
+Nodes (29): SessionPanel, Chat, Display, Editor, Native, Terminal, ByteArray, Modifier (+21 more)
+
+### Community 152 - "Community 152"
+Cohesion: 0.08
+Nodes (11): plainTextForSpeech(), MessageTtsTest, ByteArray, text, MessageTts, PlatformReadAloud, TtsEngine, ByteArray (+3 more)
+
+### Community 153 - "Community 153"
+Cohesion: 0.07
+Nodes (30): DefaultClientWebSocketSession, SharedFlow, StateFlow, ScrcpyClient, ScrcpyFrame, ScrcpyStatus, CONNECTED, CONNECTING (+22 more)
+
+### Community 154 - "Community 154"
 Cohesion: 0.09
 Nodes (3): BrokerApiSettingsTest, HttpRequestData, io
 
-### Community 166 - "Components Web App"
-Cohesion: 0.06
-Nodes (38): bodyEl, editor, editorOpenFileFn, editorSettings, endResize(), fileChangedBanner, installLspServer(), isDesktop (+30 more)
+### Community 155 - "Community 155"
+Cohesion: 0.05
+Nodes (14): c, c6, d_, FD(), g_(), H4, kK(), n4() (+6 more)
 
-### Community 167 - "Assets Android App"
-Cohesion: 0.07
-Nodes (9): A7, checkAsyncSchedule(), g8, L4, MQ(), N9, o9, scheduleWork() (+1 more)
-
-### Community 168 - "NonAppleMain Shared KMP"
-Cohesion: 0.13
-Nodes (36): atxLevel(), Bullet, Code, codeSpanInner(), collectBlock(), directInlineText(), emitImage(), emitInline() (+28 more)
-
-### Community 169 - "Desktop Root"
+### Community 156 - "Community 156"
 Cohesion: 0.08
-Nodes (37): Activate, AgentPill(), Dismiss, filterBranches(), HideResolve, agent, ByteArray, bytes (+29 more)
+Nodes (27): attachArgv(), createAgentTmux(), hex(), makeRunner(), sq(), TmuxResult, TmuxRunner, viewerSessionName() (+19 more)
 
-### Community 170 - "Supermux iOS App"
+### Community 157 - "Community 157"
+Cohesion: 0.08
+Nodes (16): ContentResolverChunkSource, ByteArray, FileChunkSource, ByteArray, FileChunkSourceTest, java, close(), feed() (+8 more)
+
+### Community 158 - "Community 158"
+Cohesion: 0.08
+Nodes (20): isAttachableMediaMime(), mimeForFileName(), MediaMimeTest, BlobChunkSource, ByteArray, ChunkSource, ComposerContextMenu(), externalFileDropTarget() (+12 more)
+
+### Community 159 - "Community 159"
 Cohesion: 0.11
-Nodes (36): .lines, groupSegments(), headingLevel(), looksLikeTableRow(), MarkdownTableView, .body, .tableFont, MDBlock (+28 more)
+Nodes (36): RepoRefs, ReviewComment, Badge(), BaseNoneRow(), BaseOption(), BaseOptions(), BaseSectionHeader(), BaseSelector() (+28 more)
 
-### Community 171 - "Supermux iOS App"
-Cohesion: 0.10
-Nodes (22): ClaimBody, MacHostBootstrap, MeResult, MintResult, Payload, Data, Date, HTTPURLResponse (+14 more)
+### Community 160 - "Community 160"
+Cohesion: 0.11
+Nodes (15): DropZone, Bottom, Centre, Left, Right, Top, Offset, MoveToGroup (+7 more)
 
-### Community 172 - "Session Manager Broker Core"
-Cohesion: 0.07
-Nodes (23): AppendL, AttachmentRef, log, Message, MessageStore, ReactL, RemoveL, rowToMessage() (+15 more)
+### Community 161 - "Community 161"
+Cohesion: 0.09
+Nodes (10): EditorSurfaceTest, Surface(), FakeEditorEngine, FakeEditorEngineFactory, StateFlow, Modifier, WebPairScreen(), Modifier (+2 more)
 
-### Community 173 - "Sessiond Broker Core"
+### Community 162 - "Community 162"
 Cohesion: 0.11
 Nodes (5): asError(), productionProcessFactory(), SessionStore, settleWithin(), TerminalInputWriter
 
-### Community 174 - "Terminal Broker Core"
+### Community 163 - "Community 163"
 Cohesion: 0.09
-Nodes (26): attachArgv(), createAgentTmux(), hex(), makeRunner(), TmuxResult, TmuxRunner, viewerSessionName(), ensureConf() (+18 more)
+Nodes (13): DictationEngine, RecognitionListener, DictationStart, DENIED, STARTED, UNAVAILABLE, isRecoverableSttError(), joinSttSegments() (+5 more)
 
-### Community 175 - "Views Web App"
-Cohesion: 0.09
-Nodes (33): platformSupported(), playNextInQueue(), playQueue, props, revokeUrl(), speaking, startCodex(), startPlatform() (+25 more)
-
-### Community 176 - "Supermux iOS App"
+### Community 164 - "Community 164"
 Cohesion: 0.08
-Nodes (32): AnyView, .prRow, Kind, model, reasoning, Opt, OptionSwitchSheet, .body (+24 more)
+Nodes (11): DesktopEditorEngine, DiffRegionRequest, Component, DiffRegionRequest, StateFlow, evalResultJs(), lspConnectJs(), lspDisconnectJs() (+3 more)
 
-### Community 177 - "Supermux iOS App"
-Cohesion: 0.10
-Nodes (24): PlatformColor, .smLabel, .smSecondaryLabel, .smTertiaryBackground, .smTertiaryFill, .body, Coordinator, FilePathLinks (+16 more)
-
-### Community 178 - "Supermux iOS App"
+### Community 165 - "Community 165"
 Cohesion: 0.09
-Nodes (20): Comparable, EditorSettingsStore, .fontSize, .lineWrap, EditorSettingsView, .body, ClosedRange, Int (+12 more)
+Nodes (19): JediTermTerminalView(), JediTermWidget, Modifier, StatusChip(), SupermuxJediTermWidget, ByteArray, JediTermPredictionAdapter, JediTermWidget (+11 more)
 
-### Community 179 - "Supermux iOS App"
-Cohesion: 0.09
-Nodes (20): DisplayInput, Coordinator, DisplayKeyboardField, KeyCaptureField, .keyCommands, KeyCaptureView, .acceptsFirstResponder, Binding (+12 more)
-
-### Community 180 - "Components Web App"
-Cohesion: 0.07
-Nodes (25): failed, props, root, shouldLoad, src, failed, lightbox, props (+17 more)
-
-### Community 181 - "Android App"
-Cohesion: 0.09
-Nodes (13): Result, EditorState, EditorTab, DiffState, DiffPane(), Modifier, ReviewComment, dirUri() (+5 more)
-
-### Community 182 - "Android Shared KMP"
-Cohesion: 0.09
-Nodes (10): Conn, HostConnections, BrokerClient, ConnectionSyncState, DefaultClientWebSocketSession, SharedFlow, ReconnectPolicy, wsBaseUrl() (+2 more)
-
-### Community 183 - "Android App"
-Cohesion: 0.09
-Nodes (12): DictationEngine, RecognitionListener, DictationStart, DENIED, STARTED, UNAVAILABLE, isRecoverableSttError(), joinSttSegments() (+4 more)
-
-### Community 184 - "Test Desktop App"
-Cohesion: 0.10
-Nodes (16): Empty, Error, ExposePortDialog(), Modifier, port, Loading, ProxiesLoadState, ProxiesSettingsScreen() (+8 more)
-
-### Community 185 - "Supermux iOS App"
-Cohesion: 0.07
-Nodes (8): A, AE(), DE(), dV(), M9, tq(), YW(), zE()
-
-### Community 186 - "Supermux iOS App"
+### Community 166 - "Community 166"
 Cohesion: 0.11
-Nodes (19): KeychainHostPersistence, .macTokensURL, Any, Set, String, URL, UserDefaults, base64urlNoPad() (+11 more)
+Nodes (4): advanceLastRead(), isSessionUnread(), UnreadTest, DesktopAppStateReducerTest
 
-### Community 187 - "Plugins Broker Core"
+### Community 167 - "Community 167"
+Cohesion: 0.11
+Nodes (31): ColumnAlign, CENTER, LEFT, RIGHT, appendLinkified(), CoilMarkdownImage(), columnTextAlign(), DecodedImage (+23 more)
+
+### Community 168 - "Community 168"
+Cohesion: 0.12
+Nodes (26): BgTaskChipsRow(), ChatActions, ChatPanel(), ChatState, androidx, Composable, Modifier, TimelineItem (+18 more)
+
+### Community 169 - "Community 169"
+Cohesion: 0.13
+Nodes (5): shouldResetBaseBranchOnWorkdirChange(), shouldResetModelOnAgentChange(), FakePlatform, SessionLauncherScreenTest, Submitted
+
+### Community 170 - "Community 170"
 Cohesion: 0.14
-Nodes (11): CodexPluginAdapter, codexPluginId(), GrokPluginAdapter, hasSkillTrees(), listOpenCodePluginJs(), OpenCodePluginAdapter, isActiveForCli(), Plugin (+3 more)
+Nodes (9): GroupPreviewActivity, Bundle, ComponentActivity, AgentStatus, markLspState(), reduceHostFrame(), updateViews(), HostState (+1 more)
 
-### Community 188 - "Tts Broker Core"
+### Community 171 - "Community 171"
+Cohesion: 0.10
+Nodes (12): RepoBranches, RepoInfo, SpawnResponse, ByteArrayChunkSource, resolveSpawnId(), StagedUpload, BrokerApiResumableUploadTest, HttpRequestData (+4 more)
+
+### Community 172 - "Community 172"
+Cohesion: 0.10
+Nodes (10): groupId, state, PaneHost(), WorkspaceAddButton(), PaneHostDragTest, PaneHostTest, WorkspacePaneWiringTest, itemId (+2 more)
+
+### Community 173 - "Community 173"
 Cohesion: 0.10
 Nodes (26): codexPronunciationEngine(), CodexPronunciationEngineOpts, FetchFn, log, ReadFileFn, readJson(), WriteFileFn, plainTextForSpeech() (+18 more)
 
-### Community 189 - "Test Desktop App"
-Cohesion: 0.13
-Nodes (8): desktopConfigDir(), ensurePasteCacheDir(), isComposerImageFile(), isComposerPasteKey(), pasteCacheDir(), prunePasteCache(), DesktopComposerPasteTest, ByteArray
-
-### Community 190 - "NonAppleTest Shared KMP"
-Cohesion: 0.11
-Nodes (8): MdSpan, parseInlineMarkdown(), parseMarkdownBlocks(), splitLinks(), MarkdownBlocksTest, MarkdownGfmTest, MarkdownLinkTest, MarkdownTest
-
-### Community 191 - "Components Web App"
-Cohesion: 0.08
-Nodes (31): activeIndex, activeToken, agent, anchor, control, cursor, dismissed, emit (+23 more)
-
-### Community 192 - "Supermux iOS App"
-Cohesion: 0.08
-Nodes (18): MacHostDecision, adoptExternal, spawnManaged, spawnManagedAlternate, upgradeRequired, MacHostOwnership, external, managed (+10 more)
-
-### Community 193 - "Worktree Broker Core"
-Cohesion: 0.11
-Nodes (26): derivePrText(), discardSession(), FinishOpts, FinishResult, FinishSession, finishWorktree(), hasCommitsToIntegrate(), isMuxOwned() (+18 more)
-
-### Community 194 - "Supermux iOS App"
-Cohesion: 0.08
-Nodes (27): PlatformImage, SMPasteboard, .hasImages, .image, .string, String, UTType, AttachmentView (+19 more)
-
-### Community 195 - "Views Web App"
-Cohesion: 0.07
-Nodes (24): UpdateStatusDTO, emit, props, applyStatus(), loadStatus(), phase, recheck(), rechecking (+16 more)
-
-### Community 196 - "Components Web App"
+### Community 174 - "Community 174"
 Cohesion: 0.09
-Nodes (27): agentState, bgOpen, commitRename(), emit, handleKeydown(), handleNavigate(), isDraft, isSettled (+19 more)
+Nodes (23): errToString(), NOTE: manifest intentionally untouched (no assets/sha from this source)., Call, UpdateChecker, UpdateCheckerOptions, UpdateMode, UpdateState, UpdateStatus (+15 more)
 
-### Community 197 - "CommonTest Shared KMP"
-Cohesion: 0.12
-Nodes (19): chat(), ViewDto, main(), PreviewFixtures, view(), ws(), AgentStatus, chatSessionIds() (+11 more)
-
-### Community 198 - "SupermuxTests iOS App"
-Cohesion: 0.07
-Nodes (11): SessionListRailUITests, SmokeTests, BrokerSessionTeardownTests, ComposerKeyboardTests, DefaultProjectTests, SessionInfo, String, HandoffPrefillTests (+3 more)
-
-### Community 199 - "Agent Api Broker Core"
-Cohesion: 0.12
-Nodes (18): claudeAdapter(), log, accountId(), parseJsonOutput(), parseResponse(), parseSse(), WriteFileFn, opencodeAdapter() (+10 more)
-
-### Community 200 - "Agents Broker Core"
-Cohesion: 0.09
-Nodes (26): BgTaskDetector, BgTaskDetectorOpts, clip(), firstLine(), labelFor(), LAUNCH_TOOLS, resultText(), tag() (+18 more)
-
-### Community 201 - "Agents Broker Core"
-Cohesion: 0.08
-Nodes (28): composerContent(), CONFIRM_TIMEOUT_MS, count(), EFFORT_CONFIRM_MARKER, EFFORT_SUCCESS_MARKER, LiveSwitchSeams, LiveSwitchTarget, log (+20 more)
-
-### Community 202 - "Views Web App"
-Cohesion: 0.07
-Nodes (26): codexResetNote(), claude, ClaudeExtraUsage, claudeFable, claudeSonnet, ClaudeUsage, codex, CodexUsage (+18 more)
-
-### Community 203 - "Desktop App"
+### Community 175 - "Community 175"
 Cohesion: 0.10
-Nodes (4): DesktopTokenStore, DesktopTokenStoreBlob, IntroStateStore, DesktopTokenStoreTest
+Nodes (17): BridgeEvent, Change, CommentSubmit, ComposerState, DiffExpand, DiffLineClick, DiffPage, EvalResult (+9 more)
 
-### Community 204 - "Test Desktop App"
-Cohesion: 0.12
-Nodes (7): canSendComposer(), ComposerAttachment, ComposerExternalAttach, composerFilesFromDragData(), filterExistingFiles(), DesktopComposerAttachTest, UploadState
-
-### Community 205 - "Web Messaging Channels"
-Cohesion: 0.12
-Nodes (23): attrs(), AUTH_COOKIE, authedViaBearer(), authToken(), bearerToken(), buildAuthCookie(), buildClearCookie(), CookieOpts (+15 more)
-
-### Community 206 - "Shim Tools Test Ts Src"
+### Community 176 - "Community 176"
 Cohesion: 0.10
-Nodes (23): socketPathForSession(), createInboundGate(), FlushTrigger, InboundGate, InboundPayload, makeGate(), makeScheduler(), CHANNEL_INIT_TIMEOUT_MS (+15 more)
+Nodes (13): Blob, BrokerSidecar, StateFlow, Ownership, External, Managed, None, SidecarConfig (+5 more)
 
-### Community 207 - "Components Json Web App"
-Cohesion: 0.07
-Nodes (29): aliases, components, composables, lib, ui, utils, font, iconLibrary (+21 more)
+### Community 177 - "Community 177"
+Cohesion: 0.08
+Nodes (27): ExpandedNotificationView, .body, .spine, .teal, .tint, .transcript, ExpandedNotifModel, NotifMessage (+19 more)
 
-### Community 208 - "Android App"
-Cohesion: 0.12
-Nodes (3): LogEntry, AndroidLspBridge, SendArgs
+### Community 178 - "Community 178"
+Cohesion: 0.15
+Nodes (21): AddCommentBody, DiffFile, RepoDiff, WalkthroughStep, DiffRegionRange, anchorFromKey(), Modifier, WalkthroughStep (+13 more)
 
-### Community 209 - "Test Android App"
+### Community 179 - "Community 179"
+Cohesion: 0.10
+Nodes (19): clipboardReadAvailableJs(), installPasteListenerJs(), Blob, nowMsJs(), pastedExtensionFor(), readClipboardImagesJs(), WebClipboard, abortRecorderJs() (+11 more)
+
+### Community 180 - "Community 180"
 Cohesion: 0.09
-Nodes (11): ContentResolverChunkSource, ByteArray, LauncherDraft, LauncherPrefs, StagedUpload, LauncherStateTest, ByteArrayChunkSource, ChunkSource (+3 more)
+Nodes (23): FitAddon, FitAddonModule, JsAny, JsAny, WebglAddon, WebglAddonModule, disconnectResizeObserver(), HTMLElement (+15 more)
 
-### Community 210 - "CommonTest Shared KMP"
-Cohesion: 0.16
-Nodes (17): ArchivedRow(), ArchivedScreen(), ActivityEvent, LogEntry, mergeTimeline(), ArchivedChatView(), ArchivedList(), archivedMatchesQuery() (+9 more)
-
-### Community 211 - "Desktop App"
-Cohesion: 0.22
-Nodes (9): Failed, Installed, KeepAlive, KeepAliveEnv, Removed, Result, Spec, SystemKeepAliveEnv (+1 more)
-
-### Community 212 - "Supermux iOS App"
+### Community 181 - "Community 181"
 Cohesion: 0.12
-Nodes (17): EditorState, .activeTab, RevealRequest, FsEntry, Int, RepoDiff, RepoRefs, ReviewComment (+9 more)
+Nodes (5): LauncherDraft, LauncherPrefs, LauncherStateTest, FakeSettingsStore, UiPrefsLauncherTest
 
-### Community 213 - "Supermux iOS App"
+### Community 182 - "Community 182"
+Cohesion: 0.09
+Nodes (27): Phase, error, finishing, idle, listening, requesting, WatchSessionStatusTests, .orderedSessions (+19 more)
+
+### Community 183 - "Community 183"
 Cohesion: 0.13
-Nodes (16): FinishBox, MessageMetaRow, .body, .speaking, .speechKey, MessageSpeech, Data, Error (+8 more)
+Nodes (15): parseChatTs(), CuratorConfig, CuratorSettingsResponse, curatorNextRunLabel(), formatLocalDateTimeMedium(), ArchivedList(), archivedRelTime(), ArchivedRow() (+7 more)
 
-### Community 214 - "Supermux iOS App"
+### Community 184 - "Community 184"
+Cohesion: 0.09
+Nodes (20): framesForSnapshot(), previousHostClearSessionId(), viewingFramesFor(), ViewingSurface, viewingSurfaceVisible(), WorkspaceViewingSnapshot, ClientFrame, EditorClose (+12 more)
+
+### Community 185 - "Community 185"
+Cohesion: 0.13
+Nodes (17): Activate, AddToGroup, FileOpenPlan, fileViewFor(), firstGroupWithFileView(), isFileView(), LayoutNode, Nowhere (+9 more)
+
+### Community 186 - "Community 186"
+Cohesion: 0.14
+Nodes (17): AnimatedVisibilityScope, SharedTransitionScope, SessionChatFallback(), DisplayStream, DisplayActions, FleetStore, rememberDisplayActions(), DisplayStreamSurface() (+9 more)
+
+### Community 187 - "Community 187"
+Cohesion: 0.13
+Nodes (8): HostSnapshot, HostSnapshotStore, SessionInfo, SnapshotPersistence, FakeSnapshotPersistence, HostSnapshotCodecTest, HostSnapshotStoreTest, session()
+
+### Community 188 - "Community 188"
 Cohesion: 0.11
-Nodes (14): Coordinator, QRScannerView, ScannerController, Context, Coordinator, NSCoder, String, Void (+6 more)
+Nodes (23): ForgeAccount, buildOmniboxOptions(), Cloud, Create, Local, OmniOption, ProjectOption, conn() (+15 more)
 
-### Community 215 - "CommonTest Shared KMP"
+### Community 189 - "Community 189"
+Cohesion: 0.12
+Nodes (9): Group, LayoutNodeDto, Split, LayoutNode, toDomain(), toDomainOrNull(), toDto(), LayoutDtoTest (+1 more)
+
+### Community 190 - "Community 190"
+Cohesion: 0.14
+Nodes (5): ClientUpdateStatus, AppUpdaterContractTest, FakeAppUpdater, StateFlow, UpdateStatus
+
+### Community 191 - "Community 191"
+Cohesion: 0.09
+Nodes (25): BgTaskDetector, BgTaskDetectorOpts, clip(), firstLine(), labelFor(), LAUNCH_TOOLS, resultText(), tag() (+17 more)
+
+### Community 192 - "Community 192"
+Cohesion: 0.11
+Nodes (4): FakeSettingsStore, Flow, SettingsStore, UiPrefsTest
+
+### Community 193 - "Community 193"
+Cohesion: 0.14
+Nodes (30): ALL_SCOPES, main(), parseFlags(), parseScopes(), printList(), AddOptions, addPlugin(), applyEnable() (+22 more)
+
+### Community 194 - "Community 194"
+Cohesion: 0.12
+Nodes (24): attrs(), AUTH_COOKIE, authedViaBearer(), authToken(), bearerToken(), buildAuthCookie(), buildClearCookie(), CookieOpts (+16 more)
+
+### Community 195 - "Community 195"
+Cohesion: 0.09
+Nodes (25): socketPathForSession(), ToolOperation, createInboundGate(), FlushTrigger, InboundGate, InboundPayload, makeGate(), makeScheduler() (+17 more)
+
+### Community 196 - "Community 196"
+Cohesion: 0.10
+Nodes (6): CR(), D2, J6(), MB(), OW, wB()
+
+### Community 197 - "Community 197"
+Cohesion: 0.18
+Nodes (13): defaultTearOutBounds(), dragEndedOutside(), groupById(), LayoutNode, smallestContaining(), tearOutCanvas(), tearOutCanvasLive(), tearOutGroup() (+5 more)
+
+### Community 198 - "Community 198"
+Cohesion: 0.11
+Nodes (12): applyWorkspaceWorkingOrder(), moveWorkspaceWithinScope(), WorkspaceDragWorkingState, WorkspaceReorderMove, WorkspaceReorderScope, WorkspaceListInteractionsTest, FooterIcon(), ImageVector (+4 more)
+
+### Community 199 - "Community 199"
+Cohesion: 0.15
+Nodes (30): AgentMark, AgentsPage(), AlwaysOnPage(), ConnectPage(), darkPhases(), DayRail(), drawCloud(), easeInCubic() (+22 more)
+
+### Community 200 - "Community 200"
+Cohesion: 0.17
+Nodes (9): GrokPluginAdapter, hasSkillTrees(), listOpenCodePluginJs(), OpenCodePluginAdapter, isActiveForCli(), Plugin, PluginAdapter, PluginSession (+1 more)
+
+### Community 202 - "Community 202"
+Cohesion: 0.12
+Nodes (12): DesktopClipboardAccess, DesktopFileAccess, DesktopMicCapture, DesktopTtsEngine, ByteArray, openLocalFile(), playCommand(), safeFileName() (+4 more)
+
+### Community 203 - "Community 203"
+Cohesion: 0.11
+Nodes (11): chatTimeLabel(), civilFromDays(), daysFromCivil(), floorDiv(), floorMod(), formatChatTime(), parseIso8601Millis(), two() (+3 more)
+
+### Community 204 - "Community 204"
+Cohesion: 0.10
+Nodes (13): ByteArray, DefaultClientWebSocketSession, SharedFlow, StateFlow, VncClient, VncStatus, CONNECTED, CONNECTING (+5 more)
+
+### Community 205 - "Community 205"
+Cohesion: 0.15
+Nodes (8): controlCode(), modParam(), Mods, printableSequence(), specialKeySequence(), TerminalKeysTest, ByteArray, TerminalKeySinkModifiersTest
+
+### Community 206 - "Community 206"
+Cohesion: 0.13
+Nodes (16): applyWorkingOrders(), moveWithinScope(), reorderScope(), SessionDragWorkingState, SessionReorderMove, SessionReorderScope, SessionSwipeAction, Activate (+8 more)
+
+### Community 207 - "Community 207"
+Cohesion: 0.11
+Nodes (17): Dp, Saver, SidebarState, applyWorkspaceShortcut(), Modifier, mapWorkspaceShortcut(), shortcutLetter(), WorkspaceShortcut (+9 more)
+
+### Community 208 - "Community 208"
+Cohesion: 0.17
+Nodes (10): xtermCursorCol(), xtermCursorRow(), xtermReadCell(), ByteArray, Terminal, XtermPredictionPipeline, XtermPredictionSink, HTMLDivElement (+2 more)
+
+### Community 209 - "Community 209"
+Cohesion: 0.09
+Nodes (27): curatorBytes, curatorPath, curatorText, done(), ELF_MAGIC, envBytes, envPath, envText (+19 more)
+
+### Community 210 - "Community 210"
+Cohesion: 0.12
+Nodes (21): agentsMarketplacePath(), buildCodexMarketplace(), CODEX_MARKETPLACE_NAME, codexCommand(), CodexCommandDeps, CodexHomeInstaller, CodexMarketplace, CodexMarketplaceEntry (+13 more)
+
+### Community 211 - "Community 211"
+Cohesion: 0.13
+Nodes (13): FinishBox, MessageSpeech, Bool, Data, Error, Int, String, Void (+5 more)
+
+### Community 212 - "Community 212"
+Cohesion: 0.12
+Nodes (14): Coordinator, QRScannerView, ScannerController, Bool, Context, String, Void, AVCaptureConnection (+6 more)
+
+### Community 213 - "Community 213"
+Cohesion: 0.15
+Nodes (11): BitBuffer, ByteArray, QrCapacityException, QrEcLevel, HIGH, LOW, MEDIUM, QUARTILE (+3 more)
+
+### Community 214 - "Community 214"
+Cohesion: 0.18
+Nodes (11): allFolderPaths(), buildDiffTree(), DiffTreeNode, DiffTreeRow, File, flattenVisible(), Folder, folderDiffStats() (+3 more)
+
+### Community 215 - "Community 215"
+Cohesion: 0.19
+Nodes (11): CoroutineScope, Modifier, setupAgentsCanProceed(), SetupCenteredColumn(), SetupDoneStep(), SetupWelcomeStep(), SetupWizardScreen(), AgentSettingsActions (+3 more)
+
+### Community 216 - "Community 216"
+Cohesion: 0.17
+Nodes (3): WindowHostRegistry, LayoutNode, WindowHostsTest
+
+### Community 217 - "Community 217"
+Cohesion: 0.09
+Nodes (5): H5, KQ, O5, qI(), WI()
+
+### Community 218 - "Community 218"
+Cohesion: 0.10
+Nodes (10): HostPersistence, HostSnapshot, SnapshotPersistence, LocalStorageHostPersistence, LocalStorageSnapshotPersistence, CoroutineScope, HostSnapshotStore, WebHostStores (+2 more)
+
+### Community 219 - "Community 219"
+Cohesion: 0.12
+Nodes (10): fleetOwners(), FleetRow, SessionInfo, V, mergedSessions(), mergeFleetRows(), SessionKey, log() (+2 more)
+
+### Community 220 - "Community 220"
+Cohesion: 0.17
+Nodes (14): Attachment, AttachmentList(), attachmentTempName(), InlineVideo(), AttachmentImageTest, a_backend_error_falls_back_to_the_chip(), a_failed_download_falls_back_to_the_chip(), a_failed_staging_falls_back_to_the_chip() (+6 more)
+
+### Community 221 - "Community 221"
+Cohesion: 0.13
+Nodes (14): chatSessionId(), chatSessionIds(), groupArchivedWorkspaces(), groupWorkspaces(), WorkspaceActivity, IDLE, NONE, WORKING (+6 more)
+
+### Community 222 - "Community 222"
+Cohesion: 0.08
+Nodes (4): RuntimeTarget, FakeBackend, tick(), ManagerBackend
+
+### Community 223 - "Community 223"
+Cohesion: 0.15
+Nodes (16): CaptureHost, CaptureKind, Image, Video, CompletableDeferred, mime, name, StateFlow (+8 more)
+
+### Community 224 - "Community 224"
+Cohesion: 0.09
+Nodes (26): Attachment, .id, CodingKeys, agent, bgOpen, connected, git, id (+18 more)
+
+### Community 225 - "Community 225"
 Cohesion: 0.26
-Nodes (6): CharInput, CursorPos, MoveCaret, Passthrough, EngineHandle, PredictiveEchoTest
+Nodes (26): ForgeSearchResponse, PathValidation, RemoteRepo, compact_sheet_opens_selects_and_dismisses(), forgeConn(), Picker(), pickerContent(), project_picker_autofocuses_without_waiting_for_forges() (+18 more)
 
-### Community 216 - "Lib Web App"
-Cohesion: 0.12
-Nodes (24): activeIsMarkdown, emit, onOpenFile(), emit, onClick(), props, rendered, FILE_PATH_BODY (+16 more)
+### Community 226 - "Community 226"
+Cohesion: 0.16
+Nodes (7): fileViewState(), JsonObject, WorkspaceFileOpener, AndroidLayoutPatchTest, LayoutNode, FileOpenRoundTripTest, LayoutNode
 
-### Community 217 - "Components Web App"
-Cohesion: 0.10
-Nodes (23): altState, appCursorKeys(), consumeOnceModifiers(), containerRef, containerVisible(), ctrlState, currentMods(), cycleModifier() (+15 more)
-
-### Community 218 - "Assets Android App"
-Cohesion: 0.09
-Nodes (4): K5, LU, pU(), X5
-
-### Community 219 - "Test Desktop App"
-Cohesion: 0.19
-Nodes (4): DiffViewTest, androidx, RepoRefs, ReviewComment
-
-### Community 220 - "CommonMain Shared KMP"
-Cohesion: 0.11
-Nodes (22): assetKey(), canSideloadInstall(), ChannelInfo, ChannelsWrapper, ClientPlatform, ANDROID, DESKTOP_LINUX, DESKTOP_MACOS (+14 more)
-
-### Community 221 - "Package Json"
-Cohesion: 0.07
-Nodes (30): @codemirror/state, @codemirror/view, devDependencies, @codemirror/lsp-client, @codemirror/state, @codemirror/view, dompurify, marked (+22 more)
-
-### Community 222 - "Views Web App"
-Cohesion: 0.07
-Nodes (23): addSaving, fontSize, lineWrap, lspInstalling, lspLoading, lspRemoving, LspRow, lspSaving (+15 more)
-
-### Community 223 - "Supermux iOS App"
-Cohesion: 0.13
-Nodes (16): AnyHashable, PushAppDelegate, PushManager, Any, Data, Error, String, UNNotification (+8 more)
-
-### Community 224 - "Android App"
-Cohesion: 0.07
-Nodes (4): FinishReadiness, FsEntry, ReviewComment, TerminalSummary
-
-### Community 225 - "Desktop App"
-Cohesion: 0.08
-Nodes (19): composerClipboardImageFiles(), composerClipboardLikelyHasImage(), composerFilesFromClipboardTransferable(), composerKind(), composerMime(), composerModelSelectedId(), Done, Failed (+11 more)
-
-### Community 226 - "Test Desktop App"
-Cohesion: 0.11
-Nodes (4): NotificationDedup, Attachment, NotifyDecisionTest, Attachment
-
-### Community 227 - "CommonTest Shared KMP"
+### Community 228 - "Community 228"
 Cohesion: 0.14
-Nodes (13): TimelineMergeTest, ActivityEvent, LogEntry, mergeTimeline(), Msg, TimelineItem, Tool, ToolStatus (+5 more)
+Nodes (22): numField(), pickString(), bashBody(), codexFileChanges(), codexOutputContent(), DetailSummary, extractCursorExitCode(), extractCursorResult() (+14 more)
 
-### Community 228 - "Test Desktop App"
-Cohesion: 0.11
-Nodes (9): JediTermSmokeTest, CursorShape, MouseFormat, MouseMode, TerminalDisplay, TerminalSelection, Model, NoOpTerminalDisplay (+1 more)
-
-### Community 229 - "SupermuxTests iOS App"
-Cohesion: 0.14
-Nodes (6): Int, UTType, ComposerModelTests, SlashCommand, String, ControlAction
-
-### Community 230 - "Supermux iOS App"
+### Community 229 - "Community 229"
 Cohesion: 0.10
-Nodes (7): A7, checkAsyncSchedule(), i7, Q1, S4, scheduleWork(), work()
+Nodes (19): quotePosix(), renderPosixLoginShellCommand(), createTmuxSessionBackend(), runTmux(), Result, TmuxClient, TmuxCommandRunner, TmuxResult (+11 more)
 
-### Community 231 - "CommonMain Shared KMP"
+### Community 230 - "Community 230"
+Cohesion: 0.13
+Nodes (26): CLAUDE_CREDS, ClaudeExtraUsage, CODEX_AUTH, codexModelLabel(), CodexModelUsage, CodexResetCode, CodexResetResult, CURSOR_DB (+18 more)
+
+### Community 231 - "Community 231"
 Cohesion: 0.11
-Nodes (12): ByteArray, DefaultClientWebSocketSession, SharedFlow, StateFlow, VncClient, VncStatus, CONNECTED, CONNECTING (+4 more)
+Nodes (27): Advertising ID declaration = No, Play Console App content declarations (9 total), Static reviewer pairing URL (testing-credentials), IARC content rating questionnaire answers, Data Safety declaration — 'does not collect or share user data', Fallback declaration if a reviewer rejects the no-collection posture, Google FCM as the sole third party, No developer backend (key fact driving every answer) (+19 more)
 
-### Community 232 - "CommonMain Shared KMP"
-Cohesion: 0.12
-Nodes (13): ByteArray, DefaultClientWebSocketSession, SharedFlow, StateFlow, TerminalClient, terminalFocusFrame(), terminalResizeFrame(), TerminalStatus (+5 more)
+### Community 232 - "Community 232"
+Cohesion: 0.11
+Nodes (9): HardwareKeyboardTest, isFromPhysicalKeyboard(), isPhysicalKeyboardSource(), isComposerEnterKey(), isComposerSendEnter(), isFromPhysicalKeyboard(), shouldComposerSendOnEnter(), ComposerKeyboardTest (+1 more)
 
-### Community 233 - "CommonTest Shared KMP"
+### Community 233 - "Community 233"
+Cohesion: 0.11
+Nodes (14): WorkspaceChatPaneTestIdsTest, TestIds, AnimatedVisibilityScope, Dp, Modifier, SharedTransitionScope, SessionAvatar(), Modifier (+6 more)
+
+### Community 234 - "Community 234"
 Cohesion: 0.13
-Nodes (18): basename(), connectionId, name, owner, OmniRow(), ProjectPickerSheet(), SectionHeader(), buildOmniboxOptions() (+10 more)
+Nodes (8): ByteArray, RawMicCapture, WavEncoder, DictationTest, ByteArray, ByteArray, WebSeamsTest, AudioFormat
 
-### Community 234 - "Test Desktop App"
+### Community 235 - "Community 235"
+Cohesion: 0.15
+Nodes (10): FsDiffResult, FsRefsResult, ReviewSubmitResult, DesktopDiffBaseTest, HttpStatusCode, Rec, DiffState, DiffPane() (+2 more)
+
+### Community 236 - "Community 236"
+Cohesion: 0.14
+Nodes (10): FakePersistence, FakeSnapshots, FleetStoreLauncherTest, CoroutineScope, FleetStore, HostPersistence, HostSnapshot, HostSnapshotStore (+2 more)
+
+### Community 237 - "Community 237"
+Cohesion: 0.13
+Nodes (3): parseMarkdownBlocks(), MarkdownBlocksTest, MarkdownGfmTest
+
+### Community 238 - "Community 238"
 Cohesion: 0.19
-Nodes (12): allFolderPaths(), buildDiffTree(), DiffTreeNode, DiffTreeRow, File, flattenVisible(), Folder, folderDiffStats() (+4 more)
+Nodes (19): DefaultTabChip(), FontFamily, GroupHost(), Composable, FontFamily, LayoutNode, Modifier, PaneDragGhostChip() (+11 more)
 
-### Community 235 - "Test Desktop App"
+### Community 240 - "Community 240"
+Cohesion: 0.17
+Nodes (9): LayoutNode, rememberWorkspaceLayout(), toDomain(), WorkspaceLayoutState, Harness, LayoutNode, LayoutRebaseTest, LayoutNode (+1 more)
+
+### Community 241 - "Community 241"
+Cohesion: 0.15
+Nodes (22): ClaudeAdapterOpts, CodexAdapterOpts, RunFn, CursorAdapterOpts, OpencodeAdapterOpts, Engine, ENGINES, FALLBACK_ENGINE (+14 more)
+
+### Community 242 - "Community 242"
+Cohesion: 0.14
+Nodes (19): parseHostInput(), schemeOf(), withScheme(), ConnError, ForgeServiceConfig, bindSshCommand(), ensureKeypair(), keyDir() (+11 more)
+
+### Community 243 - "Community 243"
+Cohesion: 0.14
+Nodes (21): acquireSessiondLock(), cleanupSessiondResources(), CloseableSessiondServer, listenPathLock(), listenTcpLock(), parseSessiondArgs(), probeTcpIdentity(), runSessiondMain() (+13 more)
+
+### Community 244 - "Community 244"
+Cohesion: 0.11
+Nodes (13): App, SupermuxApp, Scene, TerminalTheme, AVFoundation, Combine, GameController, Speech (+5 more)
+
+### Community 245 - "Community 245"
 Cohesion: 0.13
+Nodes (3): DesktopTokenStore, DesktopTokenStoreBlob, DesktopTokenStoreTest
+
+### Community 246 - "Community 246"
+Cohesion: 0.15
 Nodes (7): DesktopHostPersistence, HostTokenStore, HostPersistence, RegistryFile, writeOwnerOnly(), DesktopHostPersistenceTest, FakeKeepAliveEnv
 
-### Community 236 - "Test Desktop App"
-Cohesion: 0.13
-Nodes (11): filterSessions(), formatLastSeen(), hostColorIndex(), hostDisplayLabel(), hostShortLabel(), HostView, hostViewsFrom(), SessionInfo (+3 more)
-
-### Community 237 - "Desktop App"
-Cohesion: 0.15
-Nodes (27): barColor(), clampPct(), ClaudeUsageCard(), codexResetNote(), CodexUsageCard(), CursorUsageCard(), dollars(), GrokUsageCard() (+19 more)
-
-### Community 238 - "Test Desktop App"
-Cohesion: 0.13
-Nodes (10): UsageScreenTest, ClaudeExtraUsage, ClaudeUsage, ClaudeWindow, CodexCredits, CodexResetResult, CodexUsage, CodexWindow (+2 more)
-
-### Community 239 - "SupermuxTests iOS App"
-Cohesion: 0.20
-Nodes (16): BottomProbe, FloatingProbe, Harness, .body, MacTranscriptScrollTests, ProbeRow, ProbeStore, CGFloat (+8 more)
-
-### Community 240 - "Plugins Broker Core"
-Cohesion: 0.17
-Nodes (25): ALL_SCOPES, main(), parseFlags(), parseScopes(), printList(), addPlugin(), applyEnable(), applyRemove() (+17 more)
-
-### Community 241 - "Terminal Broker Core"
-Cohesion: 0.21
-Nodes (4): TerminalManager, hex(), sessiondTerminalGroup(), sessiondTerminalName()
-
-### Community 242 - "Codemirror Android App"
-Cohesion: 0.14
-Nodes (25): attachPinch(), bridge(), clampFont(), completionOnTriggerChars(), detachPinch(), fontC, fontExt(), getLSPPlugin() (+17 more)
-
-### Community 243 - "Desktop App"
-Cohesion: 0.13
-Nodes (11): envFlag(), envValue(), JcefRuntime, CefAppHandlerAdapter, CefClient, CoroutineScope, StateFlow, parseJcefExtraArgs() (+3 more)
-
-### Community 244 - "Test Desktop App"
+### Community 247 - "Community 247"
 Cohesion: 0.11
-Nodes (7): Font, SupermuxTermSettings, SupermuxTermSettingsTest, InputStream, DefaultSettingsProvider, TerminalColor, TerminalTypeAheadSettings
+Nodes (8): DimensionOnlyImage, FakeFileListTransferable, FakeImageTransferable, FakeTextTransferable, Image, Transferable, DataFlavor, ImageObserver
 
-### Community 245 - "Supermux iOS App"
+### Community 248 - "Community 248"
+Cohesion: 0.12
+Nodes (9): BrokerClient, ConnectionSyncState, DefaultClientWebSocketSession, SharedFlow, ReconnectPolicy, bearer(), wsBaseUrl(), ReconnectTest (+1 more)
+
+### Community 249 - "Community 249"
 Cohesion: 0.14
-Nodes (14): SpeechDictation, .isListening, StartResult, denied, downloading, failed, started, unavailable (+6 more)
+Nodes (12): awaitChatViewForSession(), ChatViewTarget, isBrokerUnavailableCancellation(), isBrokerUnavailableMessage(), jsonErrorField(), Flow, remapSpawnFailure(), spawnFailureMessage() (+4 more)
 
-### Community 246 - "Supermux iOS App"
+### Community 250 - "Community 250"
+Cohesion: 0.14
+Nodes (8): WorkspaceKeepAliveCache, WorkspaceKeepAliveCacheTest, Modifier, rememberVisitedWorkspaces(), WorkspaceKeepAliveHost(), ProbeWorkspace(), WorkspaceKeepAliveTest, WorkspaceProbe
+
+### Community 251 - "Community 251"
+Cohesion: 0.14
+Nodes (8): handleComposerPasteKey(), isComposerPasteKey(), Key, KeyEventType, shouldStageClipboardPaste(), ComposerPasteTest, FakePlatform, FakePlatform
+
+### Community 252 - "Community 252"
+Cohesion: 0.15
+Nodes (5): activeSlashQuery(), replaceSlashToken(), slashCommandMatches(), slashInsertText(), SlashCommandsTest
+
+### Community 254 - "Community 254"
+Cohesion: 0.13
+Nodes (12): composerFilesFromDragData(), DroppedFileChunkSource, droppedPickedFile(), externalFileDropTarget(), DragAndDropTarget, filterExistingFiles(), ByteArray, ChunkSource (+4 more)
+
+### Community 255 - "Community 255"
 Cohesion: 0.08
-Nodes (21): ContinueAgent, claude, codex, cursor, grok, .id, .label, opencode (+13 more)
+Nodes (9): FakeLiveTranscript, FakeNotices, FakeNotifications, FakePush, FakeTerminalSurface, FakeWindows, Flow, Modifier (+1 more)
 
-### Community 247 - "Agents Broker Core"
-Cohesion: 0.15
-Nodes (22): numField(), pickString(), bashBody(), codexFileChanges(), codexOutputContent(), DetailSummary, editBodyFromArgs(), extractCursorExitCode() (+14 more)
+### Community 256 - "Community 256"
+Cohesion: 0.13
+Nodes (21): AGENT_CLIS, enableLinger(), Flags, installLaunchdAgent(), installService(), installSystemdUnit(), parseEnvFile(), parseFlags() (+13 more)
 
-### Community 248 - "Components Web App"
-Cohesion: 0.11
-Nodes (21): canvasRef, mapClient(), onPointerDown(), onPointerMove(), onPointerUp(), onTouchEnd(), onTouchMove(), onTouchStart() (+13 more)
-
-### Community 249 - "Update Broker Core"
-Cohesion: 0.15
-Nodes (19): acquireSwapLock(), ApplyState, applyUpdate(), archAssetKeyFor(), assetKeyFor(), errToString(), releaseSwapLock(), resolveAndApply() (+11 more)
-
-### Community 250 - "Lib Web App"
-Cohesion: 0.16
-Nodes (8): Pending, PredictionEngine, CursorPos, decodeInput(), DEFAULT_CONFIG, DisplayOp, InputEvent, PredictionConfig
-
-### Community 251 - "Supermux iOS App"
-Cohesion: 0.10
-Nodes (22): AddHostResult, PaneTab, chat, display, editor, native, terminal, AddHostView (+14 more)
-
-### Community 252 - "Test Desktop App"
+### Community 257 - "Community 257"
 Cohesion: 0.18
-Nodes (10): Activate, AddToGroup, FileOpenPlan, Nowhere, planFileOpen(), SplitFrom, editorView(), Harness (+2 more)
+Nodes (22): aheadBehind(), changedFiles(), diffStats(), dirtyFiles(), findBranchCheckout(), git(), gitOk(), integrateFastForward() (+14 more)
 
-### Community 253 - "Test Desktop App"
-Cohesion: 0.13
-Nodes (9): ByteArray, JediTermWidget, PredictionAdapter, PredictionEngine, PredictionPipeline, DisplayOp, PredictionAdapter, PredictionPipelineTest (+1 more)
-
-### Community 254 - "Test Desktop App"
-Cohesion: 0.17
-Nodes (14): applyNeuter(), java, javax, dumpTree(), findSkia(), Component, java, MouseEvent (+6 more)
-
-### Community 255 - "CommonMain Shared KMP"
-Cohesion: 0.14
-Nodes (6): PredictionAdapterTest, DisplayOp, DrawDim, ByteArray, PredictionEngine, RestoreCell
-
-### Community 256 - "Supermux iOS App"
-Cohesion: 0.09
-Nodes (13): SMDetent, fraction, height, large, medium, .native, SMScreen, .mainWidth (+5 more)
-
-### Community 257 - "Supermux iOS App"
-Cohesion: 0.10
-Nodes (19): AgentLogo, .assetName, .body, .normalized, CGFloat, String, CuratorSettingsView, .body (+11 more)
-
-### Community 258 - "SupermuxWatch iOS App"
-Cohesion: 0.13
-Nodes (19): WatchSessionStatusTests, .orderedSessions, .workingCount, .working, attentionBucket(), GitLite, isWorking(), sessionStatus() (+11 more)
-
-### Community 259 - "Whatsapp Messaging Channels"
-Cohesion: 0.14
-Nodes (10): GowaClient, GowaClientOpts, GowaMediaKind, GowaSendResult, extractCiCommands(), fromCi(), fromManifest(), readSafe() (+2 more)
-
-### Community 260 - "Git Broker Core"
-Cohesion: 0.20
-Nodes (23): aheadBehind(), changedFiles(), diffStats(), dirtyFiles(), findBranchCheckout(), git(), gitOk(), integrateFastForward() (+15 more)
-
-### Community 261 - "Sessiond Broker Core"
-Cohesion: 0.14
-Nodes (20): acquireSessiondLock(), cleanupSessiondResources(), CloseableSessiondServer, listenPathLock(), listenTcpLock(), parseSessiondArgs(), probeTcpIdentity(), runSessiondMain() (+12 more)
-
-### Community 262 - "Settings Broker Core"
+### Community 258 - "Community 258"
 Cohesion: 0.16
 Nodes (19): AppConfig, AppConfigEnv, applyCredentialEnv(), credentialEnvVars(), DEFAULT_VOICE_CLEANUP_GLOSSARY, defaultAppConfig, ExposureMode, firstNonEmpty() (+11 more)
 
-### Community 263 - "Transcription Broker Core"
+### Community 259 - "Community 259"
 Cohesion: 0.09
 Nodes (13): claudeVoiceEngine(), ConnectWsFn, ConnectWsOpts, DEFAULT_CREDS(), FetchFn, loadOauth(), log, ReadFileFn (+5 more)
 
-### Community 264 - "Components Web App"
-Cohesion: 0.11
-Nodes (20): draw(), canvasRef, cleaning, emit, extFromMime(), finalize(), onCancel(), onStop() (+12 more)
-
-### Community 265 - "Desktop App"
-Cohesion: 0.14
-Nodes (19): Modifier, NativeCodeEditor(), WebCodeEditor(), Typography, supermuxTypography(), easeInCubic(), easeInOutCubic(), easeOutCubic() (+11 more)
-
-### Community 266 - "Test Desktop App"
+### Community 260 - "Community 260"
 Cohesion: 0.13
-Nodes (10): BridgeEvent, Change, EvalResult, FontSize, LspOut, parseBridgeEvent(), parseLspOut(), Ready (+2 more)
+Nodes (7): ClaimBody, DesktopHostBootstrap, CoroutineScope, HttpClient, MeResult, MintResult, Uri
 
-### Community 267 - "Test Desktop App"
-Cohesion: 0.16
-Nodes (10): childPath(), FileTree(), Modifier, loadAndExpand(), sortedForTree(), TreeNode, TreeNodeRow(), FileTreeTest (+2 more)
-
-### Community 268 - "Desktop App"
+### Community 261 - "Community 261"
 Cohesion: 0.13
 Nodes (12): Binary, Broker, Frpc, Sessiond, Tmux, HostBinaries, Os, LINUX (+4 more)
 
-### Community 269 - "Supermux iOS App"
-Cohesion: 0.16
-Nodes (12): .state, Grouped, PushGroupState, .hasStore, .store, Rendered, Any, Int (+4 more)
+### Community 262 - "Community 262"
+Cohesion: 0.09
+Nodes (14): IosAppState, StateFlow, .body, PushAppDelegate, UNNotification, UNNotificationResponse, UNUserNotificationCenter, WatchAppDelegate (+6 more)
 
-### Community 271 - "Supermux iOS App"
-Cohesion: 0.08
-Nodes (7): _8, B8, h, I8, SC(), y5(), z2()
-
-### Community 272 - "Agents Broker Core"
+### Community 263 - "Community 263"
 Cohesion: 0.14
-Nodes (7): ActivityToolBody, ActivityEvent, parseTranscriptLine(), TITLE_FIELDS, TranscriptTailer, TranscriptTailerOpts, ActivityStore
+Nodes (18): buildFleet(), isPaired(), CoroutineScope, FleetStore, NSUserDefaults, UIViewController, MainViewController(), readGroupByProject() (+10 more)
 
-### Community 273 - "Agents Broker Core"
-Cohesion: 0.15
-Nodes (10): LoginManager, parserFor(), CodexDeviceAuth, parseCodexDeviceAuth(), parseCursorLoginUrl(), parseDeviceAuth(), parseGrokDeviceAuth(), stripAnsi() (+2 more)
-
-### Community 274 - "Session Manager Broker Core"
-Cohesion: 0.11
-Nodes (17): createTmuxSessionBackend(), runTmux(), Result, TmuxClient, TmuxCommandRunner, TmuxResult, CmdRunner, createTmuxClient() (+9 more)
-
-### Community 275 - "Android App"
-Cohesion: 0.14
-Nodes (16): GroupPreviewActivity, Bundle, ComponentActivity, AppearanceMode, DARK, LIGHT, SYSTEM, buildSupermuxScheme() (+8 more)
-
-### Community 276 - "Assets Android App"
+### Community 264 - "Community 264"
 Cohesion: 0.10
-Nodes (7): kW, o8(), Q2, qB(), tA(), YW, zB()
+Nodes (15): SpecialKey, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, ARROW_UP, BACKSPACE, ENTER, ESCAPE (+7 more)
 
-### Community 277 - "Test Desktop App"
-Cohesion: 0.18
-Nodes (6): Modifier, TerminalEmptyState(), TerminalTabChip(), TerminalTabs(), Composable, TerminalTabsTest
+### Community 265 - "Community 265"
+Cohesion: 0.14
+Nodes (10): GowaClient, GowaClientOpts, GowaMediaKind, GowaSendResult, extractCiCommands(), fromCi(), fromManifest(), readSafe() (+2 more)
 
-### Community 278 - "Test Desktop App"
-Cohesion: 0.20
-Nodes (3): DocumentStoreTest, CoroutineScope, Opened
+### Community 266 - "Community 266"
+Cohesion: 0.21
+Nodes (19): ActivityEditMode, BODY_MAX, cleanToolDescription(), clipBodyField(), clipToolBody(), DESCRIPTION_MAX, ensureEditDiff(), pickDescriptionField() (+11 more)
 
-### Community 279 - "Test Desktop App"
+### Community 267 - "Community 267"
+Cohesion: 0.17
+Nodes (14): buildAgentHeader(), CODEX_REPLY_RULE, writeCodexPreamble(), excludeFromGit(), RULE_REL, writeCursorPreamble(), NOTE: the Claude-only skills preamble (prompts/claude-skills.md) was retired, readEnvironmentMd() (+6 more)
+
+### Community 268 - "Community 268"
+Cohesion: 0.27
+Nodes (17): byTag(), byTagPrefix(), innerTextOf(), openSeededSession(), tap(), typeInto(), waitForTextWithin(), waitReady() (+9 more)
+
+### Community 269 - "Community 269"
+Cohesion: 0.16
+Nodes (13): buildPairingPayload(), encodePairingPayload(), Error, HostClaim, HostWizard(), HostWizardContent(), HostWizardModel, HostWizardUiState (+5 more)
+
+### Community 270 - "Community 270"
 Cohesion: 0.11
 Nodes (7): CursorShape, MouseFormat, MouseMode, TerminalDisplay, TerminalSelection, NoOpDisplay, TermTestHarness
 
-### Community 280 - "Supermux iOS App"
-Cohesion: 0.18
-Nodes (14): ComposerEnterAction, insertNewline, noop, send, LauncherDraft, LauncherPrefs, LauncherStateStore, .prefs (+6 more)
+### Community 271 - "Community 271"
+Cohesion: 0.17
+Nodes (11): Grouped, PushGroupState, .hasStore, .store, Rendered, Any, Int, String (+3 more)
 
-### Community 281 - "Supermux iOS App"
+### Community 272 - "Community 272"
+Cohesion: 0.14
+Nodes (12): Array, KotlinByteArray, ComposeTerminalHandle, .view, KotlinTerminalIO, Bool, Int, TerminalView (+4 more)
+
+### Community 273 - "Community 273"
+Cohesion: 0.16
+Nodes (10): BrokerRelay, Any, CGFloat, Data, Int, String, UIImage, BrokerRelayTests (+2 more)
+
+### Community 274 - "Community 274"
 Cohesion: 0.13
-Nodes (17): HostBadge, .body, HostDot, .body, hostDotColor(), HostFilterChips, .body, HostScopePicker (+9 more)
+Nodes (17): ActivityEvent, LogEntry, mergeTimeline(), Msg, TimelineItem, Tool, ToolStatus, DONE (+9 more)
 
-### Community 282 - "SupermuxNotifContent iOS App"
+### Community 275 - "Community 275"
 Cohesion: 0.12
-Nodes (17): ExpandedNotificationView, .body, .spine, .teal, .tint, .transcript, ExpandedNotifModel, NotifMessage (+9 more)
+Nodes (13): Added, AddHostResult, Error, NeedsClaim, AddHostScreen(), AddMode, Paste, Scan (+5 more)
 
-### Community 283 - "CommonTest Shared KMP"
+### Community 276 - "Community 276"
 Cohesion: 0.18
 Nodes (7): FilePathMatch, FilePathRef, findFilePathRefs(), formatFilePathRef(), parseFilePathRef(), stripFilePathRefSuffix(), FilePathRefTest
 
-### Community 284 - "Agent Api Broker Core"
-Cohesion: 0.16
-Nodes (17): cursorCliAdapter(), CursorCliAdapterOpts, RunFn, Engine, ENGINES, FALLBACK_ENGINE, registry, select() (+9 more)
+### Community 277 - "Community 277"
+Cohesion: 0.14
+Nodes (13): BridgePayload, DiffRegionComment, DiffRegionComposer, DiffRegionPayload, DiffRegionThread, EvalResultPayload, LinePayload, LspOutPayload (+5 more)
 
-### Community 285 - "Transcription Broker Core"
+### Community 278 - "Community 278"
+Cohesion: 0.20
+Nodes (3): DocumentStoreTest, CoroutineScope, Opened
+
+### Community 279 - "Community 279"
+Cohesion: 0.28
+Nodes (13): buildAgentsMd(), buildDomainIndex(), extractDescription(), copyTemplate(), getMuxHome(), initMux(), seedSoulName(), AgentRole (+5 more)
+
+### Community 280 - "Community 280"
 Cohesion: 0.12
 Nodes (14): codexRealtimeEngine(), ConnectWsFn, extractTranscript(), FetchFn, KNOWN_MODELS, log, mintBody(), mintEphemeralKey() (+6 more)
 
-### Community 286 - "Components Web App"
-Cohesion: 0.14
-Nodes (22): close(), start(), containerRef, emit, handleContinue(), handleDeleteDraft(), handleMute(), handleNavigate() (+14 more)
-
-### Community 287 - "Play Store Android App"
-Cohesion: 0.13
-Nodes (23): Advertising ID declaration = No, Play Console App content declarations (9 total), Static reviewer pairing URL (testing-credentials), IARC content rating questionnaire answers, Data Safety declaration — 'does not collect or share user data', Fallback declaration if a reviewer rejects the no-collection posture, No developer backend (key fact driving every answer), Bring-your-own app signing key (CN=Supermux) (+15 more)
-
-### Community 288 - "Assets Android App"
-Cohesion: 0.13
-Nodes (4): oS(), OU, S6, scroll()
-
-### Community 289 - "Test Desktop App"
-Cohesion: 0.17
-Nodes (8): DesktopVncFramebuffer, Bitmap, ByteArray, ImageBitmap, VncFrameOps, VncFramebufferTest, VncRect, MutableState
-
-### Community 290 - "Desktop App"
-Cohesion: 0.18
-Nodes (5): LauncherDraft, LauncherPrefs, LauncherStateBlob, StagedUpload, LauncherStoreTest
-
-### Community 291 - "Supermux iOS App"
-Cohesion: 0.15
-Nodes (12): MarkdownAttributed, .bodyFont, paragraph, NSFont, NSFontDescriptor.SymbolicTraits, .traitBold, .traitItalic, NSAttributedString (+4 more)
-
-### Community 292 - "Supermux iOS App"
-Cohesion: 0.15
-Nodes (13): Coordinator, SampleBufferView, .displayLayer, .layerClass, AnyClass, NSCoder, NSRect, UInt8 (+5 more)
-
-### Community 293 - "SupermuxTests iOS App"
-Cohesion: 0.17
-Nodes (10): BrokerRelay, Any, CGFloat, Data, Int, String, UIImage, BrokerRelayTests (+2 more)
-
-### Community 294 - "Forge Broker Core"
-Cohesion: 0.16
-Nodes (9): fakeAdapter(), svc(), work, ForgeStore, Row, ForgeConnection, ForgeCredential, ForgeKind (+1 more)
-
-### Community 295 - "Lib Web App"
-Cohesion: 0.12
-Nodes (19): Btn, buttons, emit, press(), props, controlCode(), CURSOR_FINAL, KeyPress (+11 more)
-
-### Community 296 - "Android App"
-Cohesion: 0.23
-Nodes (21): AgentMark, AgentsPage(), AlwaysOnPage(), ConnectPage(), darkPhases(), DayRail(), drawCloud(), GrainOverlay() (+13 more)
-
-### Community 297 - "Android App"
-Cohesion: 0.21
-Nodes (8): Creds, Context, HttpClient, SupermuxMessagingService, FirebaseMessagingService, PushKeypair, PushRouter, RemoteMessage
-
-### Community 298 - "Desktop App"
-Cohesion: 0.15
-Nodes (11): captureOutgoingScroll(), EditorLspHandle, EditorScrollReader, EditorSurface(), EditorSwingHost(), fallbackReason(), InitializingView(), Modifier (+3 more)
-
-### Community 300 - "Agents Broker Core"
+### Community 281 - "Community 281"
 Cohesion: 0.19
-Nodes (17): ActivityEditMode, BODY_MAX, cleanToolDescription(), clipBodyField(), clipToolBody(), DESCRIPTION_MAX, ensureEditDiff(), pickDescriptionField() (+9 more)
+Nodes (8): Creds, Context, HttpClient, SupermuxMessagingService, openSealedPush(), FirebaseMessagingService, PushRouter, RemoteMessage
 
-### Community 301 - "Plugins Broker Core"
+### Community 282 - "Community 282"
+Cohesion: 0.13
+Nodes (7): TextStyle, SupermuxTermSettings, SupermuxTermSettingsTest, DefaultSettingsProvider, Font, TerminalColor, TerminalTypeAheadSettings
+
+### Community 283 - "Community 283"
+Cohesion: 0.13
+Nodes (14): AudioRecorder, StartResult, denied, failed, started, Bool, Data, Never (+6 more)
+
+### Community 284 - "Community 284"
+Cohesion: 0.18
+Nodes (5): Keysyms, ByteArray, IntArray, RfbCodec, ServerInit
+
+### Community 286 - "Community 286"
+Cohesion: 0.15
+Nodes (21): DisplayControlBar(), DisplayEmptyState(), DisplayPanel(), DisplayState, CONNECTED, CONNECTING, DISCONNECTED, NEEDS_PASSWORD (+13 more)
+
+### Community 288 - "Community 288"
+Cohesion: 0.16
+Nodes (11): resolveUrl(), runRollbackCommand(), runUpdateCommand(), installCredentialLauncher(), InstallCredentialLauncherOpts, work, detectUpdateMode(), BUILD_COMMIT (+3 more)
+
+### Community 289 - "Community 289"
+Cohesion: 0.15
+Nodes (11): claudeAdapter(), log, opencodeAdapter(), OpencodeVariant, VariantConfig, VARIANTS, defaultRead(), readJson() (+3 more)
+
+### Community 291 - "Community 291"
+Cohesion: 0.24
+Nodes (8): SettingsStore, LegacyAppearancePrefs, migrateAppearancePrefs(), AppearancePrefsMigrationTest, SettingsStore, Flow, SettingsStore, MemStore
+
+### Community 292 - "Community 292"
+Cohesion: 0.16
+Nodes (14): b64url(), openSealedPush(), Data, P256, String, base64urlNoPad(), PushKeypair, .privateKey (+6 more)
+
+### Community 293 - "Community 293"
+Cohesion: 0.17
+Nodes (3): PairingTokenStore, PairUrl, PairingStateTest
+
+### Community 294 - "Community 294"
+Cohesion: 0.17
+Nodes (6): diffStats(), baseLabel(), DiffLine, newSideStart(), parseDiffLines(), DiffParsingTest
+
+### Community 295 - "Community 295"
+Cohesion: 0.12
+Nodes (3): EditorPushPlanner, jsQuote(), EditorZoomPersistenceTest
+
+### Community 296 - "Community 296"
+Cohesion: 0.21
+Nodes (3): FakePredictionSink, FakeTerminalViewFactory, TerminalViewFactoryTest
+
+### Community 297 - "Community 297"
 Cohesion: 0.14
-Nodes (18): buildCodexMarketplace(), CODEX_MARKETPLACE_NAME, codexCommand(), CodexCommandDeps, CodexHomeInstaller, CodexMarketplace, CodexMarketplaceEntry, CodexPluginAdapterOpts (+10 more)
+Nodes (8): lines, pipeline(), AgentStateFrame, toAgentStateFrame(), AgentEvent, AgentState, AgentStateStore, BackgroundTaskStore
 
-### Community 302 - "Plugins Broker Core"
-Cohesion: 0.11
-Nodes (17): agentsMarketplacePath(), GrokConfigEntries, OpenCodeConfigEntries, claudeAdapter, codexAdapter, codexPrepareGlobal(), cursorAdapter, ensureGrokPluginScopes() (+9 more)
-
-### Community 303 - "Sessiond Broker Core"
+### Community 298 - "Community 298"
 Cohesion: 0.18
 Nodes (20): isRecord(), optionalBoolean(), optionalDimension(), optionalString(), parseRequest(), PROTOCOL_VERSION, RequestEnvelope, requireBase64() (+12 more)
 
-### Community 304 - "Sessiond Broker Core"
+### Community 299 - "Community 299"
 Cohesion: 0.15
 Nodes (5): assertDimension(), ByteRing, ScreenDimensions, SessionScreen, encoder
 
-### Community 305 - "Transcription Broker Core"
+### Community 300 - "Community 300"
 Cohesion: 0.13
 Nodes (16): cursorSttEngine(), decodeTextField(), decodeVarint(), encodeLenField(), encodeStringField(), encodeTranscribeRequest(), encodeVarint(), FetchFn (+8 more)
 
-### Community 306 - "Lib Web App"
-Cohesion: 0.16
-Nodes (15): emit, entries, props, asLocations(), comparePosition(), dispatchAction(), isDeclarationLocation(), locationsAction() (+7 more)
+### Community 301 - "Community 301"
+Cohesion: 0.19
+Nodes (15): acquireSwapLock(), ApplyState, applyUpdate(), archAssetKeyFor(), assetKeyFor(), errToString(), releaseSwapLock(), resolveAndApply() (+7 more)
 
-### Community 307 - "Components Web App"
-Cohesion: 0.11
-Nodes (16): open, router, theme, themeIcon, themeLabel, layout, open, router (+8 more)
-
-### Community 308 - "Assets Android App"
-Cohesion: 0.13
-Nodes (11): langFor(), $6(), a2(), CZ(), fb(), gK(), hb(), MZ (+3 more)
-
-### Community 309 - "Android App"
-Cohesion: 0.17
-Nodes (8): AndroidHostPersistence, HostTokenStore, Context, HostPersistence, HostMetaCodec, Meta, recordId, SharedPreferences
-
-### Community 310 - "Android App"
-Cohesion: 0.16
-Nodes (12): CursorPos, DisplayOp, StateFlow, PredictionAdapter, cursor(), feed(), CursorPos, DisplayOp (+4 more)
-
-### Community 311 - "Desktop App"
-Cohesion: 0.16
-Nodes (6): DesktopEditorEngine, CefClient, Component, StateFlow, CefBrowser, CefMessageRouter
-
-### Community 313 - "Desktop App"
-Cohesion: 0.13
-Nodes (6): Document, DocumentStore, EditorTabs(), Modifier, TabChip(), Result
-
-### Community 314 - "Desktop App"
-Cohesion: 0.16
-Nodes (6): ClaimBody, DesktopHostBootstrap, CoroutineScope, HttpClient, MeResult, MintResult
-
-### Community 315 - "Test Desktop App"
-Cohesion: 0.21
-Nodes (6): Modifier, WorkspaceKeepAliveCache, WorkspaceKeepAliveHost(), ProbeWorkspace(), WorkspaceKeepAliveTest, WorkspaceProbe
-
-### Community 316 - "Supermux iOS App"
-Cohesion: 0.17
-Nodes (9): KotlinDouble, Never, String, UpdateStatus, Void, SystemSettingsView, .body, .form (+1 more)
-
-### Community 317 - "Supermux iOS App"
-Cohesion: 0.10
-Nodes (10): a1(), A2(), boundChange(), comparePoint(), compareRange(), D2(), JH(), M4() (+2 more)
-
-### Community 318 - "CommonTest Shared KMP"
+### Community 302 - "Community 302"
 Cohesion: 0.18
-Nodes (8): fleetOwners(), FleetRow, SessionInfo, mergedSessions(), mergeFleetRows(), log(), sess(), SessionKeyTest
+Nodes (19): CodexUsageWindow, UsageWindow, codexUsageFromRateLimits(), extractRateLimits(), isoFromIsoLike(), isoFromMs(), isoFromUnixSeconds(), limitReachedFrom() (+11 more)
 
-### Community 319 - "Package Json"
-Cohesion: 0.10
-Nodes (20): description, license, name, private, scripts, broker, connectivity-relay, generate:logo (+12 more)
+### Community 303 - "Community 303"
+Cohesion: 0.16
+Nodes (7): PairToken, String, URL, MessageSpeechTests, PairTokenTests, QRScannerTests, XCTestCase
 
-### Community 320 - "Plugins Broker Core"
-Cohesion: 0.13
-Nodes (14): session-start script, ensureMuxCoreRegistered(), ensureMuxCoreSkills(), ensureMuxCoreSoulSkill, json(), MANIFEST, MUX_CORE_SCOPES, MUX_HOOKS_CURSOR_JSON (+6 more)
+### Community 305 - "Community 305"
+Cohesion: 0.22
+Nodes (4): DesktopDiffReviewTest, HttpStatusCode, Rec, RecordingWalkthroughSeam
 
-### Community 321 - "Lib Web App"
+### Community 306 - "Community 306"
 Cohesion: 0.21
-Nodes (15): clampFont(), FONT_SIZE, pinchFont(), stepFont(), clamp(), clampTreeWidth(), ResizeAction, resolveTreeResize() (+7 more)
+Nodes (4): Fixture, HostStoreActionsTest, CoroutineScope, FakeSettingsStore
 
-### Community 322 - "Desktop App"
+### Community 308 - "Community 308"
+Cohesion: 0.16
+Nodes (5): ActivityToolBody, ActivityEvent, TranscriptTailer, TranscriptTailerOpts, ActivityStore
+
+### Community 309 - "Community 309"
+Cohesion: 0.16
+Nodes (9): claudeTranscriptPath(), encodeProjectDir(), Section, splitSections(), KnowledgeHit, SearchStore, SessionFilter, SessionHit (+1 more)
+
+### Community 310 - "Community 310"
+Cohesion: 0.19
+Nodes (18): DiffEntry, parseDiff(), computeWorkdirDiff(), DiffBaseSpec, listRepoRefs(), parseBaseSpec(), RepoDiff, RepoRefs (+10 more)
+
+### Community 311 - "Community 311"
+Cohesion: 0.12
+Nodes (17): GrokConfigEntries, OpenCodeConfigEntries, claudeAdapter, codexAdapter, codexPrepareGlobal(), cursorAdapter, ensureGrokPluginScopes(), ensureOpenCodePluginScopes() (+9 more)
+
+### Community 312 - "Community 312"
+Cohesion: 0.17
+Nodes (8): AnyHashable, PushManager, Bool, Data, Error, String, UIApplication, UIBackgroundFetchResult
+
+### Community 313 - "Community 313"
 Cohesion: 0.16
 Nodes (6): ByteArray, MuxTtyConnector, CharBuffer, CharsetDecoder, TermSize, TtyConnector
 
-### Community 323 - "Test Desktop App"
-Cohesion: 0.17
-Nodes (4): formatResetEpochSeconds(), formatResetFromEpochMillis(), formatResetIso(), UsageResetFormatTest
+### Community 314 - "Community 314"
+Cohesion: 0.22
+Nodes (6): RelayEnvelopeTests, RelayEnvelope, Any, Data, Int, String
 
-### Community 325 - "Supermux iOS App"
-Cohesion: 0.17
-Nodes (10): PlatformViewRepresentable, Context, ScrcpySurfaceView, VncSurfaceView, ScrcpyVideoView, VncMetalView, Context, TerminalView (+2 more)
+### Community 315 - "Community 315"
+Cohesion: 0.26
+Nodes (10): FakeTransport, FixedReachability, Recorder, .calls, .route, RoutingTransportTests, Data, Error (+2 more)
 
-### Community 326 - "Supermux iOS App"
-Cohesion: 0.14
-Nodes (14): CameraPicker, Coordinator, Mode, photo, video, Any, Context, Coordinator (+6 more)
+### Community 316 - "Community 316"
+Cohesion: 0.18
+Nodes (15): BrokerRoute, direct, offline, phone, DirectTransport, PhoneRelayTransport, RelayError, RelayReachability (+7 more)
 
-### Community 327 - "Supermux iOS App"
-Cohesion: 0.16
-Nodes (11): Coordinator, Int, NSCoder, NSRect, UInt8, CAMetalLayer, MTLCommandQueue, MTLDevice (+3 more)
-
-### Community 328 - "Supermux iOS App"
-Cohesion: 0.16
-Nodes (12): MacHostSidecarError, brokerUnavailable, Binaries, MacHostResources, ResourceError, missingBroker, Bundle, URL (+4 more)
-
-### Community 329 - "AndroidMain Shared KMP"
+### Community 317 - "Community 317"
 Cohesion: 0.13
 Nodes (10): Context, SecureTokenStore, SecureTokenStoreContext, hmacSha256(), ByteArray, openSealedPush(), hmacSha256(), ByteArray (+2 more)
 
-### Community 330 - "CommonMain Shared KMP"
-Cohesion: 0.21
-Nodes (4): ByteArray, IntArray, RfbCodec, ServerInit
+### Community 318 - "Community 318"
+Cohesion: 0.14
+Nodes (19): SpecialKey, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, End, Escape, Home (+11 more)
 
-### Community 331 - "Package Json Web App"
+### Community 319 - "Community 319"
+Cohesion: 0.23
+Nodes (3): ActivityEvent, TimelineItem, TimelineMergeTest
+
+### Community 321 - "Community 321"
 Cohesion: 0.10
-Nodes (20): typescript, typescript, devDependencies, tailwindcss, @tailwindcss/vite, @types/serviceworker, typescript, vite (+12 more)
+Nodes (19): *.cmd, *.css, */hooks/session-start, *.ico, *.js, *.md, *.mjs, *.otf (+11 more)
 
-### Community 332 - "Tsconfig Json Web App"
-Cohesion: 0.10
-Nodes (19): DOM, DOM.Iterable, src/**/*.ts, src/**/*.vue, compilerOptions, isolatedModules, jsx, lib (+11 more)
-
-### Community 333 - "Components Web App"
+### Community 322 - "Community 322"
 Cohesion: 0.12
-Nodes (13): PromptInputHoverCardProps, Props, PromptInputHoverCardContentProps, Props, PromptInputHoverCardTriggerProps, Props, emits, forwarded (+5 more)
+Nodes (5): CI(), CX, DQ(), fQ(), iI()
 
-### Community 334 - "Android App"
-Cohesion: 0.16
-Nodes (5): Added, AddHostResult, Error, HostView, NeedsClaim
+### Community 323 - "Community 323"
+Cohesion: 0.22
+Nodes (7): H264SurfaceDecoder, jsonStr(), ByteArray, Modifier, ScrcpyView(), SurfaceHolder, MediaCodec
 
-### Community 335 - "Desktop App"
+### Community 324 - "Community 324"
+Cohesion: 0.13
+Nodes (6): CursorShape, MouseFormat, MouseMode, TerminalDisplay, TerminalSelection, NoOpTerminalDisplay
+
+### Community 325 - "Community 325"
+Cohesion: 0.18
+Nodes (10): DesktopAppUpdaterTest, CompletableDeferred, UpdatePhase, Available, Checking, Downloading, Failed, Idle (+2 more)
+
+### Community 326 - "Community 326"
+Cohesion: 0.17
+Nodes (4): BZ(), IM(), SU, u6
+
+### Community 327 - "Community 327"
+Cohesion: 0.20
+Nodes (5): ByteArray, linesFromPixels(), ScrollStep, wheelEventsFromLines(), TerminalScrollTest
+
+### Community 328 - "Community 328"
+Cohesion: 0.25
+Nodes (3): DesktopFinishTest, HttpStatusCode, Rec
+
+### Community 329 - "Community 329"
+Cohesion: 0.21
+Nodes (5): MdSpan, parseInlineMarkdown(), splitLinks(), MarkdownLinkTest, MarkdownTest
+
+### Community 330 - "Community 330"
+Cohesion: 0.22
+Nodes (4): Offset, LightboxTransform, Size, ImageLightboxTest
+
+### Community 331 - "Community 331"
 Cohesion: 0.18
 Nodes (10): applyShellShortcut(), Modifier, mapShellShortcut(), ShellShortcut, MoveToNewWindow, NewSession, ToggleSidebar, shellShortcuts() (+2 more)
 
-### Community 336 - "CommonMain Shared KMP"
-Cohesion: 0.13
-Nodes (14): viewingFramesFor(), ViewingFrameTest, ClientFrame, EditorClose, EditorOpen, Inbound, LspClose, LspInstall (+6 more)
+### Community 332 - "Community 332"
+Cohesion: 0.23
+Nodes (3): FakeTransport, VideoControlsTest, VideoTransport
 
-### Community 337 - "Supermux iOS App"
-Cohesion: 0.20
-Nodes (14): FileTreeView, .body, .visibleRows, Double, EditorState, FsEntry, Int, String (+6 more)
-
-### Community 338 - "SupermuxPushNSE iOS App"
-Cohesion: 0.21
-Nodes (10): NotificationService, ParsedNotification, Int, String, UNNotification, Void, UNMutableNotificationContent, UNNotificationContent (+2 more)
-
-### Community 339 - "SupermuxTests iOS App"
-Cohesion: 0.29
-Nodes (10): FakeTransport, FixedReachability, Recorder, .calls, .route, RoutingTransportTests, Data, Error (+2 more)
-
-### Community 340 - "SupermuxWatch iOS App"
-Cohesion: 0.17
-Nodes (15): BrokerRoute, direct, offline, phone, DirectTransport, RelayError, RelayReachability, RoutingTransport (+7 more)
-
-### Community 341 - "Tsconfig Json"
-Cohesion: 0.11
-Nodes (18): bun-types, src, src/web-app, tests, compilerOptions, esModuleInterop, lib, module (+10 more)
-
-### Community 342 - "Agents Broker Core"
+### Community 333 - "Community 333"
 Cohesion: 0.18
 Nodes (14): agentBinDirs(), nodeBinDirs(), resolveNvmBin(), withAgentBinDirs(), withNodeBinDirs(), createInstallManager(), INSTALL_RECIPES, InstallDeps (+6 more)
 
-### Community 343 - "Forge Broker Core"
-Cohesion: 0.15
-Nodes (4): parseHostInput(), schemeOf(), withScheme(), ForgeService
+### Community 334 - "Community 334"
+Cohesion: 0.25
+Nodes (14): mergeInProgress(), syncBaseIntoBranch(), derivePrText(), discardSession(), FinishOpts, finishWorktree(), hasCommitsToIntegrate(), isMuxOwned() (+6 more)
 
-### Community 344 - "Plugins Broker Core"
-Cohesion: 0.21
-Nodes (17): reg(), asObject(), expandTilde(), log, parseOverrides(), parsePlugin(), parsePluginsRegistry(), parseScopes() (+9 more)
-
-### Community 345 - "Transcription Broker Core"
-Cohesion: 0.20
-Nodes (14): log, registry, runStt(), RunSttOpts, RunSttResult, selectStt(), DEFAULT_STT_ENGINE, FALLBACK_STT_ENGINE (+6 more)
-
-### Community 346 - "Supermux iOS App"
+### Community 335 - "Community 335"
 Cohesion: 0.14
-Nodes (15): AnalyzerInput, PrepareResult, downloading, failed, ready, unsupported, SpeechAnalyzerBackend, AttributedString (+7 more)
+Nodes (14): session-start script, ensureMuxCoreRegistered(), ensureMuxCoreSkills(), ensureMuxCoreSoulSkill, json(), MANIFEST, MUX_CORE_SCOPES, MUX_HOOKS_CURSOR_JSON (+6 more)
 
-### Community 347 - "Test Desktop App"
+### Community 336 - "Community 336"
 Cohesion: 0.12
-Nodes (4): handleComposerPasteKey(), isComposerSendKey(), DesktopComposerTest, KeyEventType
+Nodes (18): Compiled asset probe, build-binaries, multi-arch docker image, SPA base href /, Kotlin/Wasm PWA shell, PWA service worker registration, Session topology: PA orchestrators and workers, supermux broker (+10 more)
 
-### Community 348 - "Desktop App"
+### Community 337 - "Community 337"
+Cohesion: 0.14
+Nodes (9): a9, B5(), h_(), initialSpacer(), lineMarker(), markers(), r5, updateSpacer() (+1 more)
+
+### Community 338 - "Community 338"
+Cohesion: 0.15
+Nodes (3): jN, qN, zN
+
+### Community 339 - "Community 339"
 Cohesion: 0.14
 Nodes (12): decideHost(), ForeignProcess, HostDecision, AdoptExternal, PortConflict, SpawnManaged, UpgradeRequired, HostProbeResult (+4 more)
 
-### Community 351 - "Supermux iOS App"
-Cohesion: 0.20
-Nodes (13): MacHoverHighlight, sessionRowDragPreview(), SessionRowDragReorderModifier, SessionRowDragSourceConfig, SessionRowDragSourceModifier, SessionRowDragSourcePlacement, grip, wholeRow (+5 more)
+### Community 340 - "Community 340"
+Cohesion: 0.16
+Nodes (3): LayoutNode, NoShellWindows, ShellWindows
 
-### Community 352 - "Supermux Root"
-Cohesion: 0.18
-Nodes (13): FileDownloader, Double, Error, Int64, Result, URL, URLRequest, Void (+5 more)
+### Community 341 - "Community 341"
+Cohesion: 0.11
+Nodes (16): bun-types, ES2022, src, tests, compilerOptions, esModuleInterop, lib, module (+8 more)
 
-### Community 353 - "Supermux iOS App"
-Cohesion: 0.25
-Nodes (6): LspBridge, Status, .isReady, String, Void, ServerFrameLspStatus
+### Community 342 - "Community 342"
+Cohesion: 0.23
+Nodes (10): NotificationService, ParsedNotification, Int, String, UNNotification, Void, UNMutableNotificationContent, UNNotificationContent (+2 more)
 
-### Community 355 - "SupermuxTests iOS App"
-Cohesion: 0.19
-Nodes (7): projectTagsBySession(), SessionListRenderCostTests, .fixture, Double, Int, SessionInfo, Void
+### Community 343 - "Community 343"
+Cohesion: 0.14
+Nodes (13): NotConnectedView, .body, SupermuxWatchApp, .body, .credsKey, Scene, String, WatchPushRouter (+5 more)
 
-### Community 357 - "SupermuxTests iOS App"
-Cohesion: 0.25
-Nodes (6): RelayEnvelopeTests, RelayEnvelope, Any, Data, Int, String
+### Community 344 - "Community 344"
+Cohesion: 0.30
+Nodes (3): LegacySwiftPrefs, swiftPrefMigrations(), SwiftPrefsMigrationTest
 
-### Community 358 - "CommonTest Shared KMP"
-Cohesion: 0.24
-Nodes (7): ReasoningLevel, effortRank(), effortSpeedometerParams(), resolveReasoningLevel(), showReasoningPicker(), sortEffortLevelsLowToHigh(), ReasoningLevelsTest
+### Community 348 - "Community 348"
+Cohesion: 0.27
+Nodes (4): AssistantSettingsScreenTest, HttpMethod, paName, soul
 
-### Community 361 - "Src"
-Cohesion: 0.20
-Nodes (16): AGENT_CLIS, enableLinger(), Flags, installLaunchdAgent(), installService(), installSystemdUnit(), parseEnvFile(), parseFlags() (+8 more)
+### Community 349 - "Community 349"
+Cohesion: 0.14
+Nodes (8): tmp(), ClaudeUsage, CursorUsage, UsageResponse, filePath(), makeStore(), stores, UsageSnapshot
 
-### Community 362 - "Agent Api Broker Tests"
+### Community 350 - "Community 350"
 Cohesion: 0.17
 Nodes (14): cursorAdapter(), concatFrames(), dec, Field, fieldMsg(), frame(), lenField(), okStream() (+6 more)
 
-### Community 363 - "Review Broker Core"
-Cohesion: 0.18
-Nodes (7): esc(), serializeReview(), Comment, NewComment, ReviewStore, Row, toComment()
+### Community 351 - "Community 351"
+Cohesion: 0.20
+Nodes (15): asObject(), expandTilde(), log, parseOverrides(), parsePlugin(), parsePluginsRegistry(), parseScopes(), parseSource() (+7 more)
 
-### Community 364 - "Lib Web App"
-Cohesion: 0.23
-Nodes (15): beginLspInstall(), endLspInstall(), lspInstallToastId(), tickLspInstall(), trimLine(), closeAllWorkspaceFiles(), ClientEntry, joinPath() (+7 more)
-
-### Community 365 - "Android App"
-Cohesion: 0.21
-Nodes (16): BarKey, Gap, KeyButton(), KeyPress, Modifier, Mod, ModKey, ALT (+8 more)
-
-### Community 366 - "Android App"
-Cohesion: 0.27
-Nodes (6): AppUpdate, bytesReceived, contentLength, Context, HttpClient, Intent
-
-### Community 367 - "Test Desktop App"
-Cohesion: 0.18
-Nodes (6): FakeFileListTransferable, FakeImageTransferable, FakeTextTransferable, Image, Transferable, DataFlavor
-
-### Community 368 - "Test Desktop App"
-Cohesion: 0.24
-Nodes (3): DesktopDictationControllerTest, FakeMicCapture, ByteArray
-
-### Community 370 - "CommonMain Shared KMP"
+### Community 352 - "Community 352"
 Cohesion: 0.14
-Nodes (8): Group, LayoutNodeDto, Split, LayoutNode, toDomain(), toDomainOrNull(), toDto(), LayoutDtoTest
+Nodes (17): wire protocol filter, Relay control service (Ed25519 proofs, HMAC leases), frps soft systemd dependency on the control service, FRP connectivity relay deployment (*.relay.supermux.dev), Connectivity relay, Pairing not accounts, Authenticated terminal path smoke (device token + scratch term), ConPTY / Job Object runtime release gate (+9 more)
 
-### Community 372 - "SupermuxTests iOS App"
+### Community 353 - "Community 353"
+Cohesion: 0.20
+Nodes (3): LauncherStateBlob, LauncherStore, LauncherStoreTest
+
+### Community 354 - "Community 354"
 Cohesion: 0.18
-Nodes (8): NSAttributedString, UserMessageText, BareUrlLinks, MarkdownInlineTests, .baseFont, PlatformFont, String, NSMutableAttributedString
+Nodes (6): DesktopShellWindows, LayoutNode, PersistedWindowHost, emptyHostLayout(), mergePersistedWindowHosts(), toPersisted()
 
-### Community 373 - "Supermux iOS App"
-Cohesion: 0.12
-Nodes (7): ER(), G9(), l6, pQ(), r8(), S9, z4
+### Community 355 - "Community 355"
+Cohesion: 0.21
+Nodes (4): PersistedUiState, ShellStateStore, SidebarSnapshot, ShellStateStoreTest
 
-### Community 374 - "Supermux iOS App"
-Cohesion: 0.25
-Nodes (11): AppUpdateBanner, .body, AppUpdateChecker, AppUpdateView, .body, .currentBuild, .currentVersion, Result (+3 more)
+### Community 357 - "Community 357"
+Cohesion: 0.17
+Nodes (8): BrokerConfig, .baseURL, .isPaired, .token, String, KeychainStore, String, Security
 
-### Community 375 - "Supermux iOS App"
-Cohesion: 0.20
-Nodes (11): ContinueConversationSheet, .agents, .body, .canStart, .modelLabel, String, Void, DeadSessionBanner (+3 more)
+### Community 358 - "Community 358"
+Cohesion: 0.18
+Nodes (8): PhoneWatchProvisioner, Any, Error, String, Void, WCSession, WCSessionActivationState, WatchConnectivity
 
-### Community 376 - "CommonTest Shared KMP"
-Cohesion: 0.20
-Nodes (7): chooseDefaultProject(), SessionInfo, orderProjectsByRecency(), recentWorkdirs(), sessionProjectPath(), sessionsByRecency(), DefaultProjectTest
+### Community 359 - "Community 359"
+Cohesion: 0.17
+Nodes (9): ChatDetailLevel, HIGH, LOW, MEDIUM, effectiveChatDetail(), formatLowWorkingStatus(), isChatDetailImplemented(), sanitizeSetLevel() (+1 more)
 
-### Community 377 - "CommonTest Shared KMP"
+### Community 360 - "Community 360"
 Cohesion: 0.21
 Nodes (3): BrokerApiPushTest, HttpRequestData, HttpStatusCode
 
-### Community 378 - "CommonTest Shared KMP"
+### Community 361 - "Community 361"
 Cohesion: 0.20
 Nodes (14): buf, cat(), clientChunks, fbur(), finish(), pump(), readN(), s32() (+6 more)
 
-### Community 379 - "Package Json"
+### Community 362 - "Community 362"
 Cohesion: 0.12
 Nodes (17): croner, grammy, @modelcontextprotocol/sdk, @opencode-ai/sdk, dependencies, croner, grammy, @modelcontextprotocol/sdk (+9 more)
 
-### Community 380 - "Forge Broker Core"
-Cohesion: 0.22
-Nodes (9): installCredentialLauncher(), InstallCredentialLauncherOpts, work, UpdateMode, detectUpdateMode(), BUILD_COMMIT, BUILD_VERSION, IS_COMPILED (+1 more)
-
-### Community 381 - "Update Broker Core"
+### Community 363 - "Community 363"
 Cohesion: 0.18
-Nodes (14): AssetSchema, ChannelSchema, ClientsSchema, ClientVersionSchema, compareNumericCore(), compareVersions(), isUpdateAvailable(), ParsedVersion (+6 more)
+Nodes (12): ClaudeVoiceEngineOpts, CodexRealtimeEngineOpts, CursorSttEngineOpts, log, whisperEngine(), WhisperEngineOpts, SelectSttOpts, SpawnFn (+4 more)
 
-### Community 382 - "Src"
+### Community 364 - "Community 364"
+Cohesion: 0.23
+Nodes (13): log, registry, runStt(), RunSttOpts, RunSttResult, selectStt(), DEFAULT_STT_ENGINE, FALLBACK_STT_ENGINE (+5 more)
+
+### Community 365 - "Community 365"
 Cohesion: 0.12
 Nodes (16): BrokerToShim, DownloadArgs, EditMsgArgs, InboundMsg, OrchestrationMsg, OrchestrationOp, OutboundMsg, OutboundOp (+8 more)
 
-### Community 383 - "CommonTest Shared KMP"
-Cohesion: 0.17
-Nodes (5): AgentStatus, V, advanceLastRead(), isSessionUnread(), UnreadTest
+### Community 366 - "Community 366"
+Cohesion: 0.15
+Nodes (4): eD(), FU, kD(), ZM()
 
-### Community 385 - "Android App"
-Cohesion: 0.31
+### Community 367 - "Community 367"
+Cohesion: 0.24
+Nodes (7): SettingsStore, seedSessionListPrefs(), Flow, SettingsStore, MemStore, SessionPrefsMigrationTest, SettingsStore
+
+### Community 368 - "Community 368"
+Cohesion: 0.29
 Nodes (4): AppUpdateNotifier, Context, NotificationCompat, PendingIntent
 
-### Community 386 - "Test Desktop App"
-Cohesion: 0.17
-Nodes (5): ByteArray, MicCapture, ByteArray, ScriptedMicCapture, SessionLauncherDictationTest
-
-### Community 387 - "Test Desktop App"
-Cohesion: 0.25
-Nodes (4): FileChunkSource, ByteArray, FileChunkSourceTest, java
-
-### Community 388 - "Test Desktop App"
-Cohesion: 0.30
-Nodes (4): DesktopDiffReviewTest, HttpStatusCode, Rec, AddCommentBody
-
-### Community 389 - "Test Desktop App"
-Cohesion: 0.23
-Nodes (3): DesktopLspSettingsTest, HttpStatusCode, Rec
-
-### Community 390 - "SupermuxTests iOS App"
-Cohesion: 0.17
-Nodes (10): FilePathScanner, Match, FilePathRef, NSRange, NSRegularExpression, String, FilePathScannerTests, String (+2 more)
-
-### Community 391 - "Supermux iOS App"
-Cohesion: 0.20
-Nodes (4): eH(), Rj, scroll(), U3
-
-### Community 392 - "SupermuxTests iOS App"
-Cohesion: 0.22
-Nodes (4): EditorStateTests, EditorState, String, Void
-
-### Community 393 - "SupermuxWatch iOS App"
+### Community 369 - "Community 369"
 Cohesion: 0.20
 Nodes (9): String, WatchKeychain, Any, Error, String, WCSession, WCSessionActivationState, WatchProvisioning (+1 more)
 
-### Community 394 - "Update Broker Core"
-Cohesion: 0.16
-Nodes (6): resolveUrl(), runUpdateCommand(), errToString(), Call, UpdateChecker, VersionsJson
+### Community 370 - "Community 370"
+Cohesion: 0.26
+Nodes (4): BrokerApiVoiceTest, HttpRequestData, multipartText(), io
 
-### Community 395 - "Session Manager Broker Core"
+### Community 371 - "Community 371"
 Cohesion: 0.19
-Nodes (5): lines, pipeline(), AgentStateFrame, toAgentStateFrame(), BackgroundTaskStore
+Nodes (4): Flow, SettingsStore, LocalStorageSettingsStore, LocalStorageSettingsStoreTest
 
-### Community 396 - "Plugins Broker Core"
-Cohesion: 0.18
-Nodes (6): ClaudePluginAdapter, CursorPluginAdapter, PluginDirAdapter, AddOptions, PluginSummary, CliScope
+### Community 372 - "Community 372"
+Cohesion: 0.21
+Nodes (12): handleSpecialKey(), HiddenKeyboardField(), KeyEvent, EscapeBox(), IntOffset, IntRect, IntSize, LayoutDirection (+4 more)
 
-### Community 397 - "Worktree Broker Core"
-Cohesion: 0.27
-Nodes (12): copyWorktreeIncludes(), createWorktree(), deriveSessionBranch(), ensureWorktreeAt(), existingBranchNames(), git(), removeWorktree(), repoSlug() (+4 more)
-
-### Community 398 - "Views Web App"
-Cohesion: 0.17
-Nodes (14): checkPairing(), copied, copiedAt, Device, error, generatePairing(), loading, paired (+6 more)
-
-### Community 399 - "Release Workflow Test Ts Broker"
+### Community 374 - "Community 374"
 Cohesion: 0.12
 Nodes (12): androidEnd, androidJob, androidStart, composeMacEnd, composeMacJob, composeMacStart, publishJob, publishStart (+4 more)
 
-### Community 400 - "Test Desktop App"
+### Community 375 - "Community 375"
+Cohesion: 0.23
+Nodes (6): Activity, Application, Bundle, SupermuxApplication, ActivityLifecycleCallbacks, WebView
+
+### Community 376 - "Community 376"
+Cohesion: 0.27
+Nodes (5): AndroidHostPersistence, HostTokenStore, Context, HostPersistence, SharedPreferences
+
+### Community 377 - "Community 377"
+Cohesion: 0.24
+Nodes (8): envFlag(), envValue(), JcefRuntime, CefAppHandlerAdapter, CefClient, CoroutineScope, StateFlow, CefApp
+
+### Community 379 - "Community 379"
+Cohesion: 0.14
+Nodes (6): SessionListRailIndicator, Other, Unread, Working, sessionListShowsUnread(), SessionListRailTest
+
+### Community 380 - "Community 380"
+Cohesion: 0.25
+Nodes (5): FakePersistence, Fixture, FleetStoreRoutingTest, HostPersistence, kotlinx
+
+### Community 382 - "Community 382"
+Cohesion: 0.31
+Nodes (3): CookieSession, CookieSessionTest, HttpClient
+
+### Community 383 - "Community 383"
 Cohesion: 0.26
-Nodes (3): EditorPrefs, EditorPrefsStore, EditorPrefsStoreTest
+Nodes (10): cancelJs(), closeContextJs(), ByteArray, Int8Array, JsAny, newAudioContextJs(), playChunkJs(), speakJs() (+2 more)
 
-### Community 402 - "Test Desktop App"
-Cohesion: 0.25
-Nodes (3): DesktopDisplayTest, HttpStatusCode, Rec
+### Community 384 - "Community 384"
+Cohesion: 0.20
+Nodes (8): Event, JsString, StateFlow, navigateTarget(), serviceWorkerContainer(), startSwMessages(), WebAppState, EventTarget
 
-### Community 403 - "Supermux iOS App"
-Cohesion: 0.25
-Nodes (6): MacHostKeepAlive, Int, String, URL, MacHostKeepAliveTests, Darwin
+### Community 385 - "Community 385"
+Cohesion: 0.13
+Nodes (15): devDependencies, playwright, png-to-ico, @resvg/resvg-js, @types/bun, @types/qrcode-terminal, @types/web-push, typescript (+7 more)
 
-### Community 404 - "AppleMain Shared KMP"
-Cohesion: 0.16
-Nodes (8): close(), feed(), inflate(), ByteArray, ByteArray, NSFileHandleChunkSource, ByteArray, ZlibInflater
-
-### Community 405 - "CommonMain Shared KMP"
-Cohesion: 0.23
-Nodes (3): ByteArray, ZrleDecoder, FramebufferUpdateTest
-
-### Community 406 - "CommonTest Shared KMP"
-Cohesion: 0.23
-Nodes (5): expandHomePrefixedTilde(), normalizeHomeDir(), normalizeWorkdirKey(), toWorkdirRelativePath(), WorkdirPathTest
-
-### Community 407 - "CommonTest Shared KMP"
-Cohesion: 0.25
-Nodes (6): ClientUpdateChecker, ByteArray, bytesReceived, contentLength, ClientUpdateTest, HttpClient
-
-### Community 409 - "Shadow Broker Sh Maintenance Scripts"
+### Community 386 - "Community 386"
 Cohesion: 0.26
 Nodes (9): ensure_deps(), log(), pair(), prepare_state(), shadow-broker.sh script, start(), status(), status_one() (+1 more)
 
-### Community 410 - "Forge Broker Core"
-Cohesion: 0.24
-Nodes (9): credentialFill(), runCredentialHelper(), bindHttpsCredentials(), helperCommand(), resolveCredentialFill(), work, Scheme, adapterFor() (+1 more)
+### Community 387 - "Community 387"
+Cohesion: 0.15
+Nodes (14): iOS shell cutover guardrail, ios-tests lane, KMP sharing guardrail, kotlin host-side lane, assign-testflight, build-ios-testflight, compose-shell-smoke, CADisableMinimumFrameDurationOnPhone (+6 more)
 
-### Community 411 - "Forge Broker Core"
+### Community 388 - "Community 388"
 Cohesion: 0.26
-Nodes (12): ConnError, ForgeServiceConfig, bindSshCommand(), ensureKeypair(), keyDir(), Keypair, removeKeypair(), safeId() (+4 more)
+Nodes (14): dependencies, @codemirror/lang-cpp, @codemirror/lang-css, @codemirror/lang-go, @codemirror/lang-json, @codemirror/lang-php, @codemirror/lang-rust, @codemirror/lang-sql (+6 more)
 
-### Community 412 - "Ui Broker Tests"
-Cohesion: 0.30
-Nodes (9): main(), PIXEL_PNG, main(), browserLaunchOptions(), launchBrowser(), uiFixture, main(), main() (+1 more)
-
-### Community 414 - "Test Android App"
-Cohesion: 0.25
-Nodes (6): isComposerEnterKey(), isComposerSendEnter(), isFromPhysicalKeyboard(), isPhysicalKeyboardSource(), shouldComposerSendOnEnter(), ComposerKeyboardTest
-
-### Community 415 - "Android App"
-Cohesion: 0.16
-Nodes (10): SpecialKey, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, ARROW_UP, BACKSPACE, ENTER, ESCAPE (+2 more)
-
-### Community 416 - "Android App"
+### Community 390 - "Community 390"
 Cohesion: 0.27
 Nodes (5): EncodedKeypair, ByteArray, PushKeypair, PushKeypairCodec, ECPublicKey
 
-### Community 417 - "Test Desktop App"
-Cohesion: 0.27
-Nodes (4): clipboardImageToTempFile(), clipboardImageWithinCaps(), scaleBufferedImageToMaxEdge(), BufferedImage
-
-### Community 418 - "Desktop App"
+### Community 392 - "Community 392"
 Cohesion: 0.29
-Nodes (4): ByteArray, onChunk, MessageTts, plainTextForSpeech()
+Nodes (11): applyNeuter(), javax, dumpTree(), findSkia(), Component, MagentaTarget(), main(), makeTerminalStandIn() (+3 more)
 
-### Community 419 - "Desktop App"
-Cohesion: 0.15
-Nodes (10): SpecialKey, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, ARROW_UP, BACKSPACE, ENTER, ESCAPE (+2 more)
-
-### Community 420 - "Desktop App"
-Cohesion: 0.16
-Nodes (8): BridgePayload, bridgeShimJs(), evalResultJs(), EvalResultPayload, initScript(), lspDisconnectJs(), LspOutPayload, parseEvalResult()
-
-### Community 421 - "Shared UI"
-Cohesion: 0.22
-Nodes (5): DesktopStripChrome, Modifier, Modifier, None, PaneStripChrome
-
-### Community 422 - "Project Yml iOS App"
-Cohesion: 0.21
-Nodes (14): Release-only manual Apple Distribution signing, Kotlin Shared.framework embed-and-sign pre-build phase, Post-build phase: sign bundled native host helpers, Supermux iOS app target, SupermuxMac macOS app target, SupermuxMacPushNSE (macOS twin of the push NSE), SupermuxMacTests (macOS twin test bundle), SupermuxMacUITests (XCUITest smoke) (+6 more)
-
-### Community 423 - "SupermuxTests iOS App"
-Cohesion: 0.24
-Nodes (5): .imageFileName, mimeFileExtension(), previewFilename(), String, PreviewFilenameTests
-
-### Community 425 - "Supermux iOS App"
-Cohesion: 0.32
-Nodes (6): beginSessionRowDrag(), SessionSectionReorderState, .isDragging, SessionInfo, String, NSItemProvider
-
-### Community 426 - "Supermux iOS App"
+### Community 394 - "Community 394"
 Cohesion: 0.23
-Nodes (7): PhoneWatchProvisioner, Any, Error, String, Void, WCSession, WCSessionActivationState
+Nodes (3): Url, PairUrl, PairUrlTest
 
-### Community 427 - "Agent Api Broker Core"
+### Community 395 - "Community 395"
+Cohesion: 0.24
+Nodes (3): ByteArray, ZrleDecoder, FramebufferUpdateTest
+
+### Community 397 - "Community 397"
+Cohesion: 0.26
+Nodes (3): BrokerApiWebPushTest, HttpRequestData, HttpStatusCode
+
+### Community 398 - "Community 398"
+Cohesion: 0.23
+Nodes (9): AppUpdateBannerHost(), AppUpdateBody(), formatUpdateBytes(), formatUpdateProgress(), installCaption(), installerKindFrom(), Modifier, oneDecimal() (+1 more)
+
+### Community 399 - "Community 399"
+Cohesion: 0.14
+Nodes (14): scripts, broker, connectivity-relay, generate:logo, migrate:mux, pair, plugin, relay (+6 more)
+
+### Community 400 - "Community 400"
 Cohesion: 0.22
 Nodes (9): ConnectFrame, decodeStringField(), decodeVarint(), encodeGetChatRequest(), encodeLenField(), encodeStringField(), encodeVarint(), encodeVarintField() (+1 more)
 
-### Community 428 - "Editor Broker Core"
-Cohesion: 0.20
-Nodes (5): ChangeCallback, FsWatcher, IGNORE_PATTERNS, log, WatcherEntry
+### Community 401 - "Community 401"
+Cohesion: 0.22
+Nodes (8): RepoInfo, scanRepos(), SKIP_DIRS, getRepoInfo(), git(), RepoBranches, RepoInfo, safeLines()
 
-### Community 429 - "Git Broker Core"
+### Community 403 - "Community 403"
 Cohesion: 0.24
 Nodes (9): compareUrl(), ghAvailable(), OpenPrResult, openPullRequest(), originUrl(), parseOrigin(), run(), g() (+1 more)
 
-### Community 430 - "Session Manager Broker Core"
-Cohesion: 0.21
-Nodes (4): deliverInbound(), InboundDeliveryDeps, InboundDeliveryResult, RecentInboundIds
+### Community 404 - "Community 404"
+Cohesion: 0.32
+Nodes (12): doPush(), fetchRemote(), git(), isAuthError(), publishBranch(), pullBranch(), pushBranch(), PushResult (+4 more)
 
-### Community 431 - "Transcription Broker Core"
-Cohesion: 0.22
-Nodes (11): ClaudeVoiceEngineOpts, CodexRealtimeEngineOpts, CursorSttEngineOpts, log, whisperEngine(), WhisperEngineOpts, SelectSttOpts, SpawnFn (+3 more)
+### Community 405 - "Community 405"
+Cohesion: 0.35
+Nodes (13): dateReset(), fmtClaude(), fmtCodex(), fmtCursor(), fmtGrok(), fmtOpenCode(), fmtTokens(), formatUsageTelegram() (+5 more)
 
-### Community 432 - "Components Web App"
-Cohesion: 0.21
-Nodes (9): lines, modeLabel, props, renderedDiff, stats, statusLabel, DiffLine, diffStats() (+1 more)
+### Community 407 - "Community 407"
+Cohesion: 0.24
+Nodes (4): isMacOs(), parseJcefExtraArgs(), validateBundledRuntime(), JcefRuntimeTest
 
-### Community 433 - "Components Web App"
-Cohesion: 0.14
-Nodes (9): emits, forwarded, props, delegatedProps, emits, forwarded, props, props (+1 more)
+### Community 409 - "Community 409"
+Cohesion: 0.35
+Nodes (4): java, java, MouseEvent, java
 
-### Community 434 - "Assets Android App"
-Cohesion: 0.18
-Nodes (3): gW, m1(), q7
+### Community 410 - "Community 410"
+Cohesion: 0.19
+Nodes (4): a9, markers(), r5, v_()
 
-### Community 435 - "Android App"
-Cohesion: 0.29
-Nodes (4): Bitmap, ByteArray, Surface, VncFramebuffer
+### Community 411 - "Community 411"
+Cohesion: 0.26
+Nodes (3): mimeFileExtension(), previewFilename(), PreviewFilenameTest
 
-### Community 437 - "Test Desktop App"
-Cohesion: 0.36
-Nodes (4): WavEncoder, DictationTest, ByteArray, AudioFormat
-
-### Community 438 - "Desktop Root"
-Cohesion: 0.28
-Nodes (10): FullPaneOverlayKey, FullPaneOverlayScene, FullPaneOverlaySceneStrategy, Composable, Scene, T, NavEntry, NavMetadataKey (+2 more)
-
-### Community 439 - "Test Desktop App"
-Cohesion: 0.49
-Nodes (3): DesktopLspBridgeTest, MutableStateFlow, MutableSharedFlow
-
-### Community 441 - "Supermux iOS App"
-Cohesion: 0.22
-Nodes (4): CGFloat, Theme, View, InsettableShape
-
-### Community 442 - "CommonMain Shared KMP"
+### Community 412 - "Community 412"
 Cohesion: 0.31
 Nodes (4): Des, ByteArray, IntArray, LongArray
 
-### Community 443 - "CommonMain Shared KMP"
-Cohesion: 0.29
-Nodes (7): ActivityToolBody, BashParts, EditParts, ActivityToolBody, resolveBashParts(), resolveEditParts(), ActivityBodyTest
-
-### Community 444 - "CommonTest Shared KMP"
-Cohesion: 0.29
-Nodes (3): BrokerApiVoiceTest, HttpRequestData, io
-
-### Community 445 - "Display Broker Core"
+### Community 414 - "Community 414"
 Cohesion: 0.24
 Nodes (13): capture-rfb.ts (reference decoder / capture client), rfb-client-handshake.bin (golden client→server bytes), RFB/VNC binary test fixtures, rfb-zrle-session.bin (server→client RFB 3.8 capture), RfbCodec / VncClient / ZrleDecoder (Kotlin RFB stack under test), Broker VNC byte tunnel GET /ws/display?id=, Control socket message layout (INJECT_KEYCODE / TEXT / TOUCH / SCROLL), pts_flags frame header (CONFIG bit 63, KEY_FRAME bit 62) (+5 more)
 
-### Community 446 - "Git Broker Core"
+### Community 415 - "Community 415"
+Cohesion: 0.28
+Nodes (10): FullPaneOverlayKey, FullPaneOverlayScene, FullPaneOverlaySceneStrategy, Composable, Scene, T, NavEntry, NavMetadataKey (+2 more)
+
+### Community 416 - "Community 416"
+Cohesion: 0.29
+Nodes (4): androidx, Sent, VncPointerInputTest, IntSize
+
+### Community 417 - "Community 417"
+Cohesion: 0.49
+Nodes (3): MutableSharedFlow, MutableStateFlow, LspBridgeTest
+
+### Community 418 - "Community 418"
 Cohesion: 0.33
-Nodes (11): doPush(), fetchRemote(), git(), isAuthError(), publishBranch(), pullBranch(), pushBranch(), PushResult (+3 more)
+Nodes (3): ByteArray, dev, SessionLauncherDictationTest
 
-### Community 447 - "Src"
+### Community 419 - "Community 419"
+Cohesion: 0.18
+Nodes (13): Per-channel reply rules (telegram: vs web:), Shared file-based memory at ~/.mux, mux-shim MCP orchestration tools, Nightly knowledge curator, Domain digest distillation and inbox drain, Curator guardrails (no secrets, high-confidence, preserve, skills read-only), Reply-through-the-shim fallback rule, supermux (+5 more)
+
+### Community 420 - "Community 420"
 Cohesion: 0.15
-Nodes (12): *.cmd, *.css, */hooks/session-start, *.ico, *.js, *.md, *.png, */relay/frpc-embedded (+4 more)
+Nodes (12): GrokUsage, OpenCodeUsage, DEFAULT_FETCHERS, DEFAULT_LOCAL_READERS, errorMessage(), nullError(), PROVIDERS, UNTHROTTLED (+4 more)
 
-### Community 448 - "Composables Web App"
-Cohesion: 0.17
-Nodes (5): BACKOFF_MS, TerminalStatus, FakeWS, RecordingWS, useTerminal
+### Community 421 - "Community 421"
+Cohesion: 0.20
+Nodes (12): AndroidEditor JS interface, CodeMirror 6 Android bundle, Android editor host page, WebView height collapse workaround, parity-ipad, parity-phone, persistSelection false on phone, surfaces Maestro journey (+4 more)
 
-### Community 449 - "Android App"
+### Community 422 - "Community 422"
+Cohesion: 0.18
+Nodes (12): device_push_tokens broker table (verification surface), HTTP routingToken registration path, iOS PushManager.registerIfPaired parity, registerIfPaired() (Android push registration), supermux-relay.service (push relay, push.supermux.dev), SupermuxMessagingService (FCM client stack), SupermuxPushNSE, chat_id prefix determines channel capabilities (telegram: vs web:) (+4 more)
+
+### Community 423 - "Community 423"
+Cohesion: 0.21
+Nodes (6): BF(), eJ(), PF(), w6, Xf(), Yf()
+
+### Community 424 - "Community 424"
 Cohesion: 0.30
 Nodes (6): Bootstrap, JsonObject, Notification, PushRouter, Routed, Sealed
 
-### Community 450 - "Desktop App"
-Cohesion: 0.26
-Nodes (3): AppUpdate, HttpClient, Preferences
+### Community 425 - "Community 425"
+Cohesion: 0.29
+Nodes (7): ModalInteropOverlay, Component, main(), reportRenderApi2(), snapshotHeavyweights(), Container, JPanel
 
-### Community 452 - "Test Desktop App"
+### Community 426 - "Community 426"
+Cohesion: 0.20
+Nodes (4): IosTerminalHandle, IosTerminalVendor, ByteArray, UIView
+
+### Community 427 - "Community 427"
+Cohesion: 0.18
+Nodes (11): DictationBufferConverter, DictationError, conversionFailed, converterUnavailable, PushCryptoError, badFormat, AVAudioConverter, AVAudioFormat (+3 more)
+
+### Community 428 - "Community 428"
 Cohesion: 0.21
-Nodes (6): LauncherDraft, LauncherPrefs, RepoInfo, SessionInfo, Submitted, RepoBranches
+Nodes (6): BF(), eJ(), PF(), w6, Xf(), Yf()
 
-### Community 453 - "Test Desktop App"
-Cohesion: 0.38
-Nodes (3): DesktopDiffBaseTest, HttpStatusCode, Rec
+### Community 429 - "Community 429"
+Cohesion: 0.41
+Nodes (7): editorTabCloseTag(), editorTabLoadingTag(), EditorTabs(), editorTabTag(), Modifier, TabChip(), EditorTabsTest
 
-### Community 455 - "SupermuxTests iOS App"
-Cohesion: 0.30
-Nodes (5): ChatBlocksDerivationTests, ActivityEvent, Int32, LogEntry, String
+### Community 430 - "Community 430"
+Cohesion: 0.33
+Nodes (4): LayoutNode, visibleWorkspaceChatIdsAt(), LayoutNode, ViewingPresenceTest
 
-### Community 456 - "SupermuxWatch iOS App"
-Cohesion: 0.21
-Nodes (10): AttachmentThumb, .body, .isImage, MessageBubble, .body, .isAgent, Attachment, AttributedString (+2 more)
+### Community 431 - "Community 431"
+Cohesion: 0.29
+Nodes (4): encodeQr(), ImageBitmap, qrBitmap(), QrCodeTest
 
-### Community 457 - "CommonMain Shared KMP"
-Cohesion: 0.24
-Nodes (8): Backspace, CursorLeft, CursorRight, decodeInput(), InputEvent, Opaque, Pending, PredictionConfig
-
-### Community 458 - "Testflight Assign Ts Maintenance Scripts"
+### Community 432 - "Community 432"
 Cohesion: 0.20
 Nodes (9): api(), ApiResult, base64url(), group, issuerId, keyId, mintToken(), p8Base64 (+1 more)
 
-### Community 459 - "Windows Maintenance Scripts"
+### Community 433 - "Community 433"
 Cohesion: 0.38
 Nodes (10): buildInputMarkerCommand(), buildNestedChildCommand(), buildOutputMarkerCommand(), buildSmokeShellArgv(), encoder, main(), processExists(), waitForCapture() (+2 more)
 
-### Community 460 - "Agent Rpc Broker Core"
-Cohesion: 0.21
-Nodes (9): AgentRpc, AgentRpcCall, AgentRpcDeps, createAgentRpc(), log, Pending, QueuedCall, harness() (+1 more)
-
-### Community 461 - "Agents Broker Core"
+### Community 434 - "Community 434"
 Cohesion: 0.20
 Nodes (3): JsonRpcClient, NotificationHandler, Pending
 
-### Community 462 - "Forge Broker Core"
-Cohesion: 0.21
-Nodes (7): CLI, CliStatus, detectForgeClis(), importCliToken(), Runner, statusFor(), StatusRunner
-
-### Community 463 - "Git Broker Core"
+### Community 435 - "Community 435"
 Cohesion: 0.32
 Nodes (10): BranchList, classifySwitchFailure(), git(), listBranches(), LocalBranch, repoToplevel(), switchBranch(), SwitchResult (+2 more)
 
-### Community 464 - "Lsp Broker Core"
+### Community 436 - "Community 436"
 Cohesion: 0.23
 Nodes (5): encodeMessage(), HEADER_SEP, MessageReader, LspServerOpts, LspServerProcess
 
-### Community 465 - "Components Web App"
-Cohesion: 0.24
-Nodes (11): emit, expanded, FsEntry, handleClick(), loadDir(), loading, props, root (+3 more)
+### Community 437 - "Community 437"
+Cohesion: 0.23
+Nodes (3): ClaudePluginAdapter, CursorPluginAdapter, PluginDirAdapter
 
-### Community 466 - "Components Web App"
-Cohesion: 0.17
-Nodes (8): emits, forwarded, props, delegatedProps, emits, forwarded, props, props
-
-### Community 467 - "Windows Vm Maintenance Scripts"
+### Community 438 - "Community 438"
 Cohesion: 0.18
-Nodes (11): build-desktop-windows job (WiX .msi + native host), Relay control service (Ed25519 proofs, HMAC leases), Pairing, not accounts, Authenticated terminal path smoke (device token + scratch term), ConPTY / Job Object runtime release gate, Windows validation evidence rules, Native Windows VM validation (UTM guest), /internal/agent-hook/* per-boot secret gate (+3 more)
+Nodes (11): overrides, crelt, @lezer/css, @lezer/java, @lezer/markdown, @lezer/php, @lezer/python, @marijn/find-cluster-break (+3 more)
 
-### Community 468 - "Assets Android App"
-Cohesion: 0.20
-Nodes (4): GB(), R8, tJ, WB()
-
-### Community 470 - "Test Desktop App"
-Cohesion: 0.18
-Nodes (3): jsQuote(), lspConnectJs(), lspMessageJs()
-
-### Community 471 - "Desktop App"
-Cohesion: 0.20
-Nodes (4): NoopNotificationManager, NotificationManager, TrayNotificationManager, TrayNotificationManagerTest
-
-### Community 472 - "Supermux iOS App"
-Cohesion: 0.18
-Nodes (10): SpecialKey, arrowDown, arrowLeft, arrowRight, arrowUp, backspace, enter, escape (+2 more)
-
-### Community 473 - "Supermux iOS App"
+### Community 439 - "Community 439"
 Cohesion: 0.25
-Nodes (5): MetalLayerView, .layerClass, .metalLayer, AnyClass, NSSize
+Nodes (5): AndroidSnapshotPersistence, HostSnapshot, SnapshotPersistence, Envelope, HostSnapshotCodec
 
-### Community 476 - "CommonTest Shared KMP"
+### Community 440 - "Community 440"
+Cohesion: 0.22
+Nodes (7): launchOrder(), LaunchStep, CreateViewModel, DebugSeed, LegacyMigration, PairingGate, MainActivityLaunchOrderTest
+
+### Community 441 - "Community 441"
+Cohesion: 0.36
+Nodes (3): AndroidUpdateSource, Context, HttpClient
+
+### Community 442 - "Community 442"
+Cohesion: 0.22
+Nodes (6): decodeImageBytes(), ByteArray, ImageBitmap, ImageDecodeTest, ByteArray, Data
+
+### Community 443 - "Community 443"
+Cohesion: 0.25
+Nodes (7): ComposeRootView, Coordinator, Context, UIGestureRecognizer, UIGestureRecognizerDelegate, UINavigationController, UIViewControllerRepresentable
+
+### Community 444 - "Community 444"
 Cohesion: 0.27
 Nodes (3): ByteArray, RollingBuffer, RollingBufferTest
 
-### Community 478 - "Push Broker Core"
+### Community 446 - "Community 446"
+Cohesion: 0.31
+Nodes (5): DesktopDictationTest, HttpRequestData, HttpStatusCode, multipartText(), Rec
+
+### Community 447 - "Community 447"
+Cohesion: 0.33
+Nodes (5): Modifier, PaneDropOverlay(), T, Motion, FiniteAnimationSpec
+
+### Community 448 - "Community 448"
+Cohesion: 0.29
+Nodes (7): AttachState, DomEditorEngine, EditorEngineHost(), HTMLElement, Modifier, KeepAlivePanel(), Modifier
+
+### Community 449 - "Community 449"
 Cohesion: 0.25
 Nodes (7): RFC-4648, apns, payload, b64url(), fromB64url(), HKDF_INFO, sealForDevice()
 
-### Community 479 - "Generate Logo Assets Ts Maintenance"
+### Community 450 - "Community 450"
 Cohesion: 0.25
 Nodes (10): extractMasterInner(), faviconSizes, main(), MASTER_SVG, renderPng(), ROOT, Variant, variants (+2 more)
 
-### Community 480 - "Web Messaging Channels"
+### Community 451 - "Community 451"
 Cohesion: 0.25
 Nodes (4): ClaimStore, ClaimStoreOpts, MintedClaim, sha256()
 
-### Community 481 - "Forge Broker Core"
-Cohesion: 0.20
-Nodes (4): githubAdapter, c, CreateRepoInput, ForgeError
-
-### Community 482 - "CI Workflows"
+### Community 452 - "Community 452"
 Cohesion: 0.27
-Nodes (10): Pinned release compose (broker service on a tagged image), build-android job (signed release APK), build-binaries job (linux x64/arm64, darwin arm64), build-compose-desktop-macos job (Compose Multiplatform DMG), build-desktop-linux job (jpackage .deb), build-desktop-macos job (native SwiftUI Supermux.app DMG), docker job (multi-arch GHCR image), publish-website job (versions.json + pinned compose) (+2 more)
+Nodes (7): accountId(), codexAdapter(), parseJsonOutput(), parseResponse(), parseSse(), WriteFileFn, jwtClaims()
 
-### Community 483 - "CI Workflows"
-Cohesion: 0.24
-Nodes (10): android-journey lane (Maestro on a real emulator), changes job (dorny/paths-filter lane selection), ci workflow (push and PR gate), ios-tests lane (XCTest on a simulator), kotlin lane (host-side JVM + Compose Desktop UI tests), ts lane (broker + PWA tests and typecheck), ui lane (Playwright core browser journey), release workflow (v* tags and dry runs) (+2 more)
+### Community 453 - "Community 453"
+Cohesion: 0.27
+Nodes (10): android-journey lane, CI path-filter job, CI workflow, ts CI lane, ui browser-journey lane, pair-and-converse Maestro journey, shared test ids, Journey 02 spawn and converse (+2 more)
 
-### Community 484 - "Test Android App"
-Cohesion: 0.29
-Nodes (3): activeTerminalAfterSync(), reconcileTerminalTabs(), TerminalTabsTest
+### Community 454 - "Community 454"
+Cohesion: 0.33
+Nodes (3): Method, StateFlow, TermlibPredictionAdapter
 
-### Community 485 - "Test Desktop App"
-Cohesion: 0.40
-Nodes (4): CloseViewDialog(), ViewDto, CloseViewDialogTest, view()
+### Community 455 - "Community 455"
+Cohesion: 0.42
+Nodes (3): JediTermSmokeTest, Model, JediTerminal
 
-### Community 486 - "Supermux iOS App"
-Cohesion: 0.20
-Nodes (8): MacOnboardingStep, agents, connectivity, done, gitHosting, .title, welcome, CaseIterable
-
-### Community 487 - "CommonTest Shared KMP"
+### Community 457 - "Community 457"
 Cohesion: 0.36
 Nodes (3): BrokerApiUploadTest, ByteArray, HttpRequestData
 
-### Community 488 - "Environment Md Agent Prompts"
-Cohesion: 0.27
-Nodes (10): Per-channel reply rules (telegram: vs web:), Editor-style path:line code references, mux-shim MCP orchestration tools, Reply-through-the-shim fallback rule, supermux broker (source of truth), Optional Telegram channel, Web PWA client, Per-worker isolated git worktree (+2 more)
+### Community 458 - "Community 458"
+Cohesion: 0.31
+Nodes (6): EditorEngineHost(), Component, Modifier, SwingEditorEngine, KeepAlivePanel(), Modifier
 
-### Community 489 - "Dump Last 24h Ts Maintenance"
+### Community 459 - "Community 459"
 Cohesion: 0.29
 Nodes (7): db, hours, rows, since, formatLast24h(), MsgRow, queryLast24h()
 
-### Community 491 - "Routing Broker Core"
+### Community 461 - "Community 461"
+Cohesion: 0.31
+Nodes (7): cacheControlFor(), guessMime(), gzipCache, _gzipCacheStats(), maybeGzip(), SECURITY_HEADERS, serveStatic()
+
+### Community 463 - "Community 463"
 Cohesion: 0.24
 Nodes (3): InboundRow, lastInboundChatId(), ReplyTargets
 
-### Community 492 - "Test Ids Parity Test Ts"
-Cohesion: 0.24
-Nodes (7): sessionRowId(), TEST_IDS, TestId, canonical, KOTLIN, ROOT, SWIFT
+### Community 464 - "Community 464"
+Cohesion: 0.27
+Nodes (7): chatMessageId(), sessionRowId(), TEST_IDS, TestId, canonical, KOTLIN, ROOT
 
-### Community 493 - "Lib Web App"
-Cohesion: 0.29
-Nodes (7): clientDebug(), ClientLogEntry, flushClientLogs(), ring, scheduleFlush(), trimValue(), Window
-
-### Community 494 - "Journeys Broker Tests"
-Cohesion: 0.42
-Nodes (9): wire filter (protocol seam bypasses every filter), pair-and-converse Maestro flow (Android device journey), Trust-on-first-connect auto-pairing, Journey 01 — Pair a device, Journey 02 — Spawn and converse, Journey 03 — Resume across a broker restart, Journey 04 — Review a diff and merge, Prose journeys as the source of executable specs (+1 more)
-
-### Community 495 - "Codemirror Android App"
-Cohesion: 0.28
-Nodes (9): AndroidEditor JS interface (onChange / onSave / onReady), CodeMirror 6 Android bundle (cm6.js), cm6-entry.mjs (bundle source entry), cmInit / cmSetContent / cmGetContent / cmSetLineWrap / cmSetFontSize / cmSetLanguage globals, CodeEditor.vue (web app editor, mirrored setup), WebCodeEditor.kt (WebView code editor host), Android WebView editor host page, EditorWeb bundled as a folder reference (+1 more)
-
-### Community 497 - "Test Desktop App"
+### Community 466 - "Community 466"
 Cohesion: 0.33
-Nodes (5): Dp, Modifier, Speedometer(), speedometerProgress(), SpeedometerTest
+Nodes (4): HostStores, Context, newPaneKey(), UUID
 
-### Community 501 - "Supermux iOS App"
+### Community 467 - "Community 467"
 Cohesion: 0.22
-Nodes (8): SMKeyboardKind, asciiCapable, emailAddress, numberPad, plain, .uiKind, url, UIKeyboardType
+Nodes (9): Phase, Adopted, Conflict, Failed, Idle, NeedsUpgrade, Online, Starting (+1 more)
 
-### Community 502 - "Supermux iOS App"
-Cohesion: 0.25
-Nodes (8): DictationBufferConverter, DictationError, conversionFailed, converterUnavailable, AVAudioConverter, AVAudioFormat, AVAudioPCMBuffer, NSError
-
-### Community 503 - "SupermuxTests iOS App"
-Cohesion: 0.31
-Nodes (5): moveSessionId(), reorderedSessionIds(), IndexSet, Int, SessionListReorderTests
-
-### Community 504 - "Supermux iOS App"
-Cohesion: 0.33
-Nodes (4): SessionReorderDropDelegate, DropDelegate, DropInfo, DropProposal
-
-### Community 505 - "SupermuxTests iOS App"
+### Community 468 - "Community 468"
 Cohesion: 0.36
-Nodes (3): AgentDeadStateTests, AgentStatus, String
+Nodes (3): LayoutNode, WindowHostPaneTest, WorkspaceEmptyHint()
 
-### Community 506 - "SupermuxTests iOS App"
-Cohesion: 0.44
-Nodes (3): ChatDetailEquatableTests, SessionInfo, String
+### Community 469 - "Community 469"
+Cohesion: 0.28
+Nodes (5): boundChange(), comparePoint(), compareRange(), MU, v8()
 
-### Community 509 - "SETUP Md"
-Cohesion: 0.33
-Nodes (9): frps soft systemd dependency on the control service, FRP connectivity relay deployment (*.relay.supermux.dev), Pluggable agent CLIs (Claude Code, Codex, Cursor, OpenCode), Environment configuration (MUX_* variables), Built-in connectivity relay (relay.supermux.dev), Cloudflare Tunnel (quick vs named), ~/.mux/state/.env broker env file, Path B — Native install (local or SSH box) (+1 more)
+### Community 474 - "Community 474"
+Cohesion: 0.36
+Nodes (5): Bitmap, ImageBitmap, MutableState, State, VncFramebuffer
 
-### Community 510 - "Environment Md Docker Compose Yml"
+### Community 475 - "Community 475"
+Cohesion: 0.39
+Nodes (5): Bitmap, ImageBitmap, MutableState, State, VncFramebuffer
+
+### Community 476 - "Community 476"
+Cohesion: 0.39
+Nodes (5): Bitmap, ImageBitmap, MutableState, State, VncFramebuffer
+
+### Community 477 - "Community 477"
+Cohesion: 0.39
+Nodes (5): Bitmap, ImageBitmap, MutableState, State, VncFramebuffer
+
+### Community 478 - "Community 478"
 Cohesion: 0.22
-Nodes (9): broker compose service (local build), mux-state and claude-auth named volumes, ./workspace bind mount, Session topology: PA orchestrators and workers, Docker quickstart (clone + docker compose up), Optional personal-assistant (PA) session, "You're done when…" acceptance checklist, Path A — Docker install (+1 more)
+Nodes (3): FsEntry, SearchResult, WriteResult
 
-### Community 511 - "Migrate To Mux Ts Maintenance"
+### Community 479 - "Community 479"
 Cohesion: 0.36
 Nodes (6): CURATOR_KEYS, ENV_PREFIX_AS_IS, migrate(), MigrateOpts, MigratePlan, renameEnvKey()
 
-### Community 512 - "Forge Broker Core"
+### Community 480 - "Community 480"
 Cohesion: 0.36
 Nodes (6): ClonedRepo, dirSize(), isInsideRoot(), removeCloned(), scanCloned(), work
 
-### Community 513 - "Forge Broker Core"
+### Community 481 - "Community 481"
+Cohesion: 0.32
+Nodes (8): build-android, build-compose-desktop-macos, build-desktop-linux, build-desktop-windows, GitHub Release job, publish-website, versions.json, Java Chromium Embedded Framework
+
+### Community 482 - "Community 482"
 Cohesion: 0.25
-Nodes (3): gitlabAdapter, c, RemoteRepo
+Nodes (7): description, name, private, scripts, build, type, version
 
-### Community 515 - "Package Json Web App"
-Cohesion: 0.22
-Nodes (8): name, private, scripts, build, check-size, preview, type, version
+### Community 484 - "Community 484"
+Cohesion: 0.32
+Nodes (4): android, dev, java, VoiceRecorder
 
-### Community 516 - "Knowledge Curator Md Agent Prompts"
+### Community 488 - "Community 488"
+Cohesion: 0.36
+Nodes (6): feed(), inflate(), ByteArray, JsAny, Uint8Array, takeOutput()
+
+### Community 489 - "Community 489"
 Cohesion: 0.29
-Nodes (8): assign-testflight job (attach build to beta group), build-ios-testflight job (archive, export .ipa, upload), Shared file-based memory at ~/.mux, Nightly knowledge curator, Domain digest distillation and inbox drain, Curator guardrails (no secrets, high-confidence, preserve, skills read-only), supermux (mobile-first agentic development environment), Secrets at rest (~/.mux/state/.env, push-keys.json)
+Nodes (4): externalFileDropTarget(), Modifier, externalFileDropTarget(), Modifier
 
-### Community 518 - "Android App"
-Cohesion: 0.50
-Nodes (3): FiniteAnimationSpec, T, Motion
-
-### Community 521 - "Supermux iOS App"
-Cohesion: 0.25
-Nodes (8): Phase, adopted, failed, idle, needsUpgrade, online, starting, stopped
-
-### Community 522 - "Supermux iOS App"
-Cohesion: 0.29
-Nodes (7): b64url(), openSealedPush(), Data, P256, String, CryptoKit, Substring
-
-### Community 523 - "SupermuxWatch Root"
-Cohesion: 0.25
-Nodes (6): UNNotificationResponse, UNUserNotificationCenter, WatchAppDelegate, NSObject, UNUserNotificationCenterDelegate, WKApplicationDelegate
-
-### Community 528 - "Generate Versions Json Ts Maintenance"
+### Community 493 - "Community 493"
 Cohesion: 0.25
 Nodes (7): androidVer, assets, clients, desktopVer, iosVer, stable, [
   version,
@@ -2786,173 +3809,152 @@ Nodes (7): androidVer, assets, clients, desktopVer, iosVer, stable, [
   shaAndroid,
   shaDesktopLinux,
   shaDesktopWindows,
-  shaDesktopMacos,
   shaComposeDesktopMacos,
 ]
 
-### Community 529 - "Web Messaging Channels"
+### Community 494 - "Community 494"
 Cohesion: 0.39
-Nodes (5): cacheControlFor(), guessMime(), gzipCache, maybeGzip(), serveStatic()
+Nodes (5): bindHttpsCredentials(), helperCommand(), resolveCredentialFill(), work, Scheme
 
-### Community 530 - "Agents Src"
-Cohesion: 0.29
-Nodes (5): ENV_KEYS, envPath(), readEnvMap(), home(), stateDir()
+### Community 495 - "Community 495"
+Cohesion: 0.39
+Nodes (5): composeSidecar(), ExposureSnippets, hostOf(), reverseProxySnippets(), SidecarProvider
 
-### Community 532 - "Play Store Android App"
-Cohesion: 0.29
-Nodes (7): SecureTokenStore / PairedHostStore as push credential source, device_push_tokens broker table (verification surface), HTTP routingToken registration path, iOS PushManager.registerIfPaired parity, registerIfPaired() (Android push registration), supermux-relay.service (push relay, push.supermux.dev), Pairing credentials in EncryptedSharedPreferences
-
-### Community 533 - "AndroidTest Android App"
-Cohesion: 0.38
-Nodes (3): SwipeActionRowTest, Modifier, SwipeActionRow()
-
-### Community 535 - "Android App"
-Cohesion: 0.38
-Nodes (6): ClosedFloatingPointRange, Composable, ResizableSplit(), SplitAxis, Horizontal, Vertical
-
-### Community 540 - "Supermux iOS App"
+### Community 507 - "Community 507"
 Cohesion: 0.43
-Nodes (5): Flags, MarkdownInline, Run, AttributedString, OptionSet
+Nodes (4): CompactSidebarDivider(), Modifier, SidebarDivider(), SidebarDividerTest
 
-### Community 542 - "Supermux iOS App"
-Cohesion: 0.38
-Nodes (5): SupermuxMark, SVGPathParser, CGFloat, Path, String
-
-### Community 543 - "Supermux iOS App"
+### Community 512 - "Community 512"
 Cohesion: 0.29
-Nodes (4): PushRouter, String, WatchPushRouter, ObservableObject
+Nodes (6): description, license, name, private, type, version
 
-### Community 547 - "Windows Vm Maintenance Scripts"
+### Community 513 - "Community 513"
 Cohesion: 0.29
 Nodes (4): enc, env, lines, store
 
-### Community 548 - "Agent Api Broker Core"
-Cohesion: 0.48
-Nodes (7): ClaudeAdapterOpts, CodexAdapterOpts, CursorAdapterOpts, OpencodeAdapterOpts, SelectOpts, FetchFn, ReadFileFn
+### Community 514 - "Community 514"
+Cohesion: 0.33
+Nodes (3): cursorCliAdapter(), CursorCliAdapterOpts, AgentApi
 
-### Community 549 - "Git Broker Core"
-Cohesion: 0.38
-Nodes (4): CloneOpts, gitClone(), projectDir(), work
-
-### Community 550 - "Storage Broker Core"
+### Community 515 - "Community 515"
 Cohesion: 0.48
 Nodes (5): chat_history, chats, sessions, views, workspaces
 
-### Community 551 - "Vite Config Ts Src"
-Cohesion: 0.33
-Nodes (4): PRODUCT_DOMAIN, PRODUCT_NAME, PRODUCT_TAGLINE, repoRoot
+### Community 516 - "Community 516"
+Cohesion: 0.29
+Nodes (6): COMMITTED, ENTRY, hasDeps, PKG_DIR, ROOT, tmp
 
-### Community 552 - "Play Store Android App"
+### Community 522 - "Community 522"
 Cohesion: 0.40
-Nodes (6): Google FCM as the sole third party, SupermuxMessagingService (FCM client stack), FCM push token + end-to-end encrypted payload, Cursor/Codex passthrough replies, reply-conventions skill, mcp__mux-shim__reply (Claude Code reply path)
+Nodes (3): HostMetaCodec, Meta, recordId
 
-### Community 555 - "Desktop App"
-Cohesion: 0.60
-Nodes (5): AgentLogo(), agentSvgPath(), hasAgentLogo(), Dp, Modifier
+### Community 527 - "Community 527"
+Cohesion: 0.47
+Nodes (4): Inflate, JsAny, Uint8Array, Pako
 
-### Community 556 - "Desktop App"
-Cohesion: 0.33
-Nodes (5): AppUpdate, Archived, DesktopRoute, Home, Settings
+### Community 528 - "Community 528"
+Cohesion: 0.53
+Nodes (4): EditorEngineHost(), Modifier, WebView, WebViewEditorEngine
 
-### Community 558 - "Supermux Root"
-Cohesion: 0.40
-Nodes (4): Binding, C, Void, I
-
-### Community 559 - "Supermux iOS App"
-Cohesion: 0.33
-Nodes (6): Phase, error, finishing, idle, listening, requesting
-
-### Community 566 - "Deploy Android Sh Maintenance Scripts"
+### Community 529 - "Community 529"
 Cohesion: 0.47
 Nodes (4): ANDROID_SERIAL, ensure_android_secrets(), deploy-android.sh script, step()
 
-### Community 567 - "Mutation Probe Ts Maintenance Scripts"
+### Community 530 - "Community 530"
 Cohesion: 0.33
 Nodes (4): MUTATIONS, pairs, skipped, survived
 
-### Community 570 - "Voice Cleanup Test Ts Broker"
+### Community 532 - "Community 532"
 Cohesion: 0.33
 Nodes (3): failFetch, INPUT, NOTE: buildCleanupPrompt / CleanupInput are owned by src/core/agent-…
 
-### Community 572 - "Desktop App"
+### Community 533 - "Community 533"
 Cohesion: 0.40
-Nodes (5): Os, LINUX, MAC, OTHER, WINDOWS
+Nodes (5): Error, Idle, Initializing, JcefState, Ready
 
-### Community 575 - "CommonMain Shared KMP"
-Cohesion: 0.50
-Nodes (3): FramebufferUpdate, ByteArray, Parsed
+### Community 536 - "Community 536"
+Cohesion: 0.40
+Nodes (4): PhoneLayerBackAction, ClearSelection, HideIme, None
 
-### Community 577 - "Feel Deploy Sh Maintenance Scripts"
+### Community 538 - "Community 538"
+Cohesion: 0.70
+Nodes (4): Offline, Paired, SessionState, Unpaired
+
+### Community 539 - "Community 539"
 Cohesion: 0.60
 Nodes (3): die(), log(), feel-deploy.sh script
 
-### Community 578 - "Generate Static Manifest Ts Maintenance"
+### Community 540 - "Community 540"
 Cohesion: 0.40
 Nodes (4): files, outFile, repoRoot, root
 
-### Community 580 - "Test Android Sh Maintenance Scripts"
+### Community 542 - "Community 542"
 Cohesion: 0.40
 Nodes (4): MAESTRO_BIN, MUX_TEST_FLOWS, MUX_TEST_SKIP_WEB_BUILD, test-android.sh script
 
-### Community 582 - "Index Html Web App"
+### Community 543 - "Community 543"
 Cohesion: 0.50
-Nodes (5): chat_id prefix determines channel capabilities (telegram: vs web:), mux-shim side-effect tools (react / edit_message / download_attachment), #app-loading pre-hydration spinner, Inline color-mode bootstrap script, Web app PWA HTML shell
+Nodes (4): Pinned release compose (broker service on a tagged image), broker compose service (local build), mux-state and claude-auth named volumes, ./workspace bind mount
 
-### Community 583 - "Codemirror Android App"
+### Community 544 - "Community 544"
 Cohesion: 0.50
 Nodes (3): dir, entry, MAINSTREAM_EXTS
 
-### Community 585 - "Apps"
+### Community 548 - "Community 548"
+Cohesion: 0.83
+Nodes (3): qrScanOptions(), rememberQrScanLauncher(), ScanOptions
+
+### Community 552 - "Community 552"
+Cohesion: 0.83
+Nodes (3): Component, main(), reportRenderApi()
+
+### Community 553 - "Community 553"
 Cohesion: 0.83
 Nodes (3): gradlew script, die(), warn()
 
-### Community 588 - "Supermux iOS App"
+### Community 560 - "Community 560"
 Cohesion: 0.50
-Nodes (4): PushFetchResult, failed, newData, noData
+Nodes (4): PairMode, Manual, Paste, Scan
 
-### Community 600 - "Windows Staging Test Ts Broker"
+### Community 564 - "Community 564"
+Cohesion: 0.67
+Nodes (3): gzipSize(), ByteArray, sha8()
+
+### Community 571 - "Community 571"
+Cohesion: 0.50
+Nodes (3): PRODUCT_DOMAIN, PRODUCT_NAME, PRODUCT_TAGLINE
+
+### Community 574 - "Community 574"
 Cohesion: 0.50
 Nodes (3): destination, root, stagedNames
 
-### Community 601 - "Play Store Android App"
+### Community 575 - "Community 575"
 Cohesion: 0.67
 Nodes (3): Angular Material control click workaround, Chrome CDP + puppeteer-core Play Console automation environment, Navigate declarations via app-content/overview
 
-### Community 607 - "Package Json"
+### Community 594 - "Community 594"
 Cohesion: 0.67
-Nodes (3): @vueuse/core, @vueuse/core, @vueuse/core
-
-### Community 617 - "Assets Web App"
-Cohesion: 0.67
-Nodes (3): Agent logo asset convention (24x24 SVG light/dark pairs), AgentLogo.vue (logo wiring component), grok.svg in-house placeholder mark
-
-## Ambiguous Edges - Review These
-- `supermux (mobile-first agentic development environment)` → `build-ios-testflight job (archive, export .ipa, upload)`  [AMBIGUOUS]
-  .github/workflows/release.yml · relation: conceptually_related_to
-- `ci workflow (push and PR gate)` → `Prose journeys as the source of executable specs`  [AMBIGUOUS]
-  .github/workflows/ci.yml · relation: conceptually_related_to
-- `Play full description copy` → `Agent logo asset convention (24x24 SVG light/dark pairs)`  [AMBIGUOUS]
-  src/web-app/src/assets/agents/README.md · relation: conceptually_related_to
+Nodes (3): expose_port, Path expose mode, Subdomain expose mode
 
 ## Knowledge Gaps
-- **2988 isolated node(s):** `verify.sh script`, `Error`, `Chat`, `Native`, `Editor` (+2983 more)
+- **1483 isolated node(s):** `verify.sh script`, `STARTED`, `DENIED`, `UNAVAILABLE`, `None` (+1478 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **253 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **1457 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **What is the exact relationship between `supermux (mobile-first agentic development environment)` and `build-ios-testflight job (archive, export .ipa, upload)`?**
-  _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **What is the exact relationship between `ci workflow (push and PR gate)` and `Prose journeys as the source of executable specs`?**
-  _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **What is the exact relationship between `Play full description copy` and `Agent logo asset convention (24x24 SVG light/dark pairs)`?**
-  _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
-- **Why does `q` connect `iOS Editor Transactions` to `Supermux iOS App`, `iOS CodeMirror Editor Bundle`, `Supermux iOS App`, `iOS Editor Autocomplete`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Web API Client Types`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`?**
-  _High betweenness centrality (0.123) - this node is a cross-community bridge._
-- **Why does `BrokerSession` connect `iOS Broker Session` to `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `iOS Fleet Host Management`, `iOS Platform Shims`, `iOS Composer Keyboard`, `iOS Chat Git Actions`, `iOS Audio Recording`, `iOS Device Pairing Sheets`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `SupermuxTests iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `Supermux iOS App`, `SupermuxTests iOS App`, `SupermuxTests iOS App`?**
-  _High betweenness centrality (0.074) - this node is a cross-community bridge._
-- **Why does `useGitRemote` connect `Web API Client Types` to `Components Web App`, `Git Broker Core`?**
-  _High betweenness centrality (0.072) - this node is a cross-community bridge._
-- **Are the 29 inferred relationships involving `BrokerSession` (e.g. with `.checkMacOnboarding()` and `.dock`) actually correct?**
-  _`BrokerSession` has 29 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `HostStore` connect `Shared HostStore` to `Shared BrokerApi`, `Community 263`, `Desktop Theme Displays`, `Paired Host Persistence`, `AppViewModel UiPrefs`, `Shell UI State Tests`, `Community 145`, `Community 146`, `Usage Screens Models`, `Community 153`, `Composer Reasoning Pills`, `Community 166`, `Git Ops Session Header`, `Community 168`, `Community 170`, `Community 171`, `Workspace Layout Windows`, `Devices Settings Pairing`, `Archived Session Grouping`, `Desktop Archived State`, `Community 305`, `Community 306`, `Archived Screen UI`, `ViewHost Chat Content`, `Community 184`, `Community 186`, `Voice Settings Context Menu`, `Community 189`, `Community 446`, `Community 319`, `Desktop Settings HTTP`, `Composer Attachments`, `Finish Flow Choices`, `Community 328`, `BrokerApi Workspace Tests`, `Community 204`, `Community 84`, `Community 86`, `Community 88`, `Community 473`, `Community 90`, `Community 347`, `Community 120`, `Community 348`, `Community 221`, `Community 235`, `Community 236`, `Community 107`, `Community 108`, `Community 248`, `Community 380`, `Community 253`?**
+  _High betweenness centrality (0.022) - this node is a cross-community bridge._
+- **Why does `BrokerApi` connect `Shared BrokerApi` to `Shared HostStore`, `Desktop Theme Displays`, `Paired Host Persistence`, `Community 397`, `Shell UI State Tests`, `Community 153`, `Community 154`, `Community 281`, `Git Ops Session Header`, `Community 171`, `Devices Settings Pairing`, `Archived Session Grouping`, `Desktop Archived State`, `Community 305`, `Community 306`, `Archived Screen UI`, `Community 183`, `Community 312`, `Community 186`, `Community 446`, `Community 456`, `BrokerApi Workspace Tests`, `Community 457`, `Community 328`, `Community 84`, `Community 471`, `Community 473`, `Community 90`, `Community 347`, `Community 348`, `Community 97`, `Community 360`, `Community 107`, `Community 235`, `Community 236`, `Community 108`, `Community 370`, `Community 120`, `Community 123`, `Community 380`, `Community 382`?**
+  _High betweenness centrality (0.014) - this node is a cross-community bridge._
+- **Why does `$$` connect `iOS CodeMirror Bundle` to `Community 129`, `Community 520`, `iOS CodeMirror Parser`, `Community 138`, `Community 139`, `Community 393`, `iOS CM6 Markdown`, `iOS CM6 Ranges`, `iOS CM6 Internals`, `iOS CM6 Completions`, `iOS CM6 Markdown Tokens`, `Community 410`, `iOS CM6 View Plugin`, `iOS CM6 DOM`, `iOS CM6 Tree Cursor`, `iOS CM6 Syntax`, `iOS CM6 Mount`, `iOS CM6 Hidden Nodes`, `Community 554`, `Community 428`, `Community 555`, `iOS CM6 Measure`, `iOS CM6 Changes`, `iOS CM6 Language`, `Community 326`, `Community 469`, `Community 470`, `Community 217`, `Community 485`, `Community 501`, `Community 125`?**
+  _High betweenness centrality (0.012) - this node is a cross-community bridge._
+- **Are the 21 inferred relationships involving `HostStore` (e.g. with `.state()` and `.closeRecordCancelsHostProjections()`) actually correct?**
+  _`HostStore` has 21 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 123 inferred relationships involving `setPlatformContent()` (e.g. with `.a_failed_download_flips_the_chip_to_retry()` and `.failed_image_load_falls_back_to_download_chip()`) actually correct?**
+  _`setPlatformContent()` has 123 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 12 inferred relationships involving `SupermuxTheme()` (e.g. with `HostTheme()` and `supermuxSemanticsDark()`) actually correct?**
+  _`SupermuxTheme()` has 12 INFERRED edges - model-reasoned connections that need verification._
+- **What connects `verify.sh script`, `STARTED`, `DENIED` to the rest of the system?**
+  _1483 weakly-connected nodes found - possible documentation gaps or missing edges._

@@ -1422,12 +1422,13 @@ class FleetStore(
         inheritFrom: String? = null,
         firstMessage: String? = null,
         hostRecordId: String? = null,
+        viewId: String? = null,
     ): String {
         val (recordId, app) = spawnTarget(hostRecordId)
             ?: throw IllegalStateException("No host connected")
         val newId = app.createSessionWithFirstMessageOrThrow(
             workdir, agent, model, reasoningLevel, text, staged, worktree, baseBranch,
-            replaceDraftId, workspaceId, name, inheritFrom, firstMessage,
+            replaceDraftId, workspaceId, name, inheritFrom, firstMessage, viewId,
         )
         armPendingFirst(recordId, app, newId, text, firstMessage)
         return newId

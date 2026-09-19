@@ -193,6 +193,11 @@ data class SpawnRequest(
      * Phase 1b; the client simply had no field to send it in.
      */
     val workspaceId: String? = null,
+    /**
+     * The pending chat tab (a chat view with no sessionId yet) in [workspaceId] that this session
+     * fills. The broker binds that tab instead of adding a second chat view beside it.
+     */
+    val viewId: String? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
     /**

@@ -112,6 +112,8 @@ class WorkspacePanesBind(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
 ) {
     var current by mutableStateOf(current)
@@ -155,6 +157,8 @@ fun WorkspacePanes(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
     tabDragState: PaneDragController,
     closeCandidate: ViewDto?,
@@ -326,6 +330,8 @@ fun PhoneWorkspacePanes(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
     sessionNames: Map<String, String>,
     modifier: Modifier = Modifier,
@@ -535,6 +541,8 @@ private fun WorkspacePaneContent(
         onCreated: (String) -> Unit,
         joinWorkspaceId: String?,
         seedWorkdir: String?,
+        /** The pending chat tab the new session fills (null outside a workspace tab). */
+        pendingViewId: String?,
     ) -> Unit,
     walkthroughSessionId: String?,
     onWalkthroughSessionId: (String?) -> Unit,
@@ -555,6 +563,7 @@ private fun WorkspacePaneContent(
             },
             current.id,
             current.workdir,
+            v.id,
         )
     } else if (v != null) {
         key(hostId, viewId) {
