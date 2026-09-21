@@ -127,6 +127,7 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
 import dev.supermux.workspace.WorkspaceDragWorkingState
 import dev.supermux.workspace.WorkspaceReorderScope
@@ -211,6 +212,17 @@ fun SessionListScreen(
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
+    // ── Persistent projects; default-empty so an old broker keeps the path grouping ──
+    /** Every host's project catalog, host-qualified (the same id space as [workspaceHost]). */
+    projects: List<ProjectRef> = emptyList(),
+    /** Host record id owning a workspace — pairs a row's projectId with a [ProjectRef]. */
+    workspaceHost: (WorkspaceDto) -> String = { "" },
+    /** Authenticated project image bytes; null when missing or on failure. */
+    loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
+    /** Persist a host's new full project order (`PATCH /project-catalog/reorder`). */
+    onReorderProjects: (hostId: String, orderedIds: List<String>) -> Unit = { _, _ -> },
+    onProjectSettings: (ProjectRef) -> Unit = {},
+    onNewWorkspaceInProject: (ProjectRef) -> Unit = {},
     // ── Prefs (cluster F1: read synchronously by the host before the first frame) ──
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
@@ -281,15 +293,20 @@ fun SessionListScreen(
         ?: inferHomeDir(visibleSessions.firstOrNull()?.workdir)
         ?: home
 
-    val groups = remember(visibleWorkspaces, effectiveHome, roles) {
-        groupWorkspaces(visibleWorkspaces, effectiveHome) { w ->
+    // A host filter narrows the catalog too — an empty project of a filtered-out host is noise.
+    val visibleProjects = remember(projects, multiHost, hostFilter) {
+        if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
+    }
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost) {
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }
     }
-    val archivedGroups = remember(archivedWorkspaces, effectiveHome) {
-        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome)
+    val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost) {
+        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost)
     }
+    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage)
     val archivedByPath = remember(archivedGroups) { archivedGroups.associate { it.key to it.workspaces } }
 
     // ── Session/task fallback (Fleet mode with no workspaces) ─────────────────────────────────
@@ -724,6 +741,7 @@ fun SessionListScreen(
                 g.workspaces,
                 if (canDrag) wsWorkingOrders[g.key] else null,
             )
+            val ref = g.projectRef()
             item(key = "h:${g.key}") {
                 GroupHeaderRow {
                     PathGroupHeader(
@@ -736,10 +754,40 @@ fun SessionListScreen(
                                 if (isCollapsed) collapsedPaths - g.key else collapsedPaths + g.key,
                             )
                         },
+                        fullLabel = ref != null,
+                        leading = ref?.takeIf { it.project.imageId != null }?.let { r ->
+                            {
+                                ProjectImage(r, cachedProjectImage, size = 20.dp) {
+                                    GroupLetterTile(
+                                        r.project.name.firstOrNull()?.uppercaseChar()?.toString() ?: "·",
+                                        cs.secondary,
+                                        20.dp,
+                                    )
+                                }
+                            }
+                        },
+                        trailing = ref?.let { r ->
+                            {
+                                val up = reorderedProjectIds(projects, r, -1)
+                                val down = reorderedProjectIds(projects, r, +1)
+                                ProjectHeaderMenu(
+                                    groupKey = g.key,
+                                    label = g.label,
+                                    onSettings = { onProjectSettings(r) },
+                                    onMoveUp = up?.let { ids -> { onReorderProjects(r.hostId, ids) } },
+                                    onMoveDown = down?.let { ids -> { onReorderProjects(r.hostId, ids) } },
+                                )
+                            }
+                        },
                     )
                 }
             }
             if (isCollapsed) return@forEach
+            if (ref != null && ordered.isEmpty()) {
+                item(key = "empty:${g.key}") {
+                    EmptyProjectRow(g.key, onNew = { onNewWorkspaceInProject(ref) })
+                }
+            }
             itemsIndexed(ordered, key = { _, w -> "ws:${w.id}" }) { index, w ->
                 WorkspaceEntry(
                     w = w, scopeKey = g.key, grouped = true,

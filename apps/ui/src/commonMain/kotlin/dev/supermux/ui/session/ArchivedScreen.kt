@@ -100,6 +100,7 @@ import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WorkspaceGroup
 import dev.supermux.workspace.groupArchivedWorkspaces
 import kotlinx.coroutines.flow.StateFlow
@@ -184,6 +185,9 @@ fun ArchivedScreen(
     standalone: Boolean = false,
     forceOpenId: String? = null,
     onForceOpenConsumed: () -> Unit = {},
+    projects: List<ProjectRef> = emptyList(),
+    workspaceHost: (WorkspaceDto) -> String = { "" },
+    loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
 ) {
     val workspaces by actions.archivedWorkspaces.collectAsState()
     val live by actions.liveWorkspaces.collectAsState()
@@ -213,6 +217,9 @@ fun ArchivedScreen(
         modifier = modifier,
         topBarShown = topBarShown,
         standalone = standalone,
+        projects = projects,
+        workspaceHost = workspaceHost,
+        loadProjectImage = loadProjectImage,
     )
 }
 
@@ -258,6 +265,11 @@ fun ArchivedScreen(
     modifier: Modifier = Modifier,
     topBarShown: Boolean = false,
     standalone: Boolean = false,
+    /** Host-qualified project catalog: archived workspaces group under their persistent project. */
+    projects: List<ProjectRef> = emptyList(),
+    /** Host record id owning a workspace (same id space as [ProjectRef.hostId]). */
+    workspaceHost: (WorkspaceDto) -> String = { "" },
+    loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -278,11 +290,14 @@ fun ArchivedScreen(
         }
     }
 
-    val projects = remember(archived, home) { archivedProjects(archived, home) }
-    val groups = remember(workspaces, home) { groupArchivedWorkspaces(workspaces, home) }
+    val sessionProjects = remember(archived, home) { archivedProjects(archived, home) }
+    val groups = remember(workspaces, home, projects, workspaceHost) {
+        groupArchivedWorkspaces(workspaces, home, projects, workspaceHost)
+    }
+    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage)
     // Clear the filter if the selected project no longer has anything archived under it.
-    LaunchedEffect(projects, groups, useWorkspaces) {
-        val keys = if (useWorkspaces) groups.map { it.key } else projects.map { it.key }
+    LaunchedEffect(sessionProjects, groups, useWorkspaces) {
+        val keys = if (useWorkspaces) groups.map { it.key } else sessionProjects.map { it.key }
         if (selectedProject != null && keys.none { it == selectedProject }) {
             selectedProject = null
         }
@@ -332,7 +347,7 @@ fun ArchivedScreen(
             ArchivedList(
                 archived = archived,
                 loading = loading,
-                projects = projects,
+                projects = sessionProjects,
                 groups = groups,
                 useWorkspaces = useWorkspaces,
                 home = home,
@@ -355,6 +370,7 @@ fun ArchivedScreen(
                 restoredIds = restoredIds,
                 barOwned = barOwned,
                 onBack = onBack,
+                loadProjectImage = cachedProjectImage,
             )
         }
     }
@@ -382,6 +398,7 @@ private fun ArchivedList(
     restoredIds: Set<String>,
     barOwned: Boolean,
     onBack: () -> Unit,
+    loadProjectImage: suspend (ProjectRef) -> ByteArray?,
 ) {
     val cs = MaterialTheme.colorScheme
     val visible = remember(archived, selectedProject, query) {
@@ -504,15 +521,24 @@ private fun ArchivedList(
                     useWorkspaces -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = Space.sm)) {
                         visibleGroups.forEach { g ->
                             item(key = "hdr:${g.key}") {
-                                Text(
-                                    g.label,
-                                    color = cs.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier
+                                Row(
+                                    Modifier
                                         .padding(horizontal = Space.sm, vertical = Space.sm)
                                         .testTag("archived_workspace_group_${g.key}"),
-                                )
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                                ) {
+                                    val ref = g.projectRef()
+                                    if (ref?.project?.imageId != null) {
+                                        ProjectImage(ref, loadProjectImage, size = 20.dp) {}
+                                    }
+                                    Text(
+                                        g.label,
+                                        color = cs.onSurfaceVariant,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                    )
+                                }
                             }
                             items(g.workspaces, key = { it.id }) { w ->
                                 ArchivedWorkspaceRow(

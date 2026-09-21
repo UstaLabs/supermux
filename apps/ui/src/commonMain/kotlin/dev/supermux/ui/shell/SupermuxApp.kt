@@ -109,6 +109,7 @@ import dev.supermux.session.asSettledSession
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.inferHomeDir
 import dev.supermux.state.FleetStore
+import dev.supermux.state.HostProject
 import dev.supermux.state.HostStore
 import dev.supermux.state.SidebarReorderKind
 import dev.supermux.state.sidebarReorderKind
@@ -157,6 +158,7 @@ import dev.supermux.ui.widgets.keepAlivePanel
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
@@ -332,6 +334,18 @@ fun SupermuxApp(
     val notices = LocalPlatform.current.notices
 
     val listActions = rememberSessionListActions(fleet)
+
+    // Persistent projects, host-qualified by recordId — the same id space [workspaceHostOf] and
+    // sessionHost use, so a workspace's projectId only ever matches its own broker's catalog.
+    val fleetProjects by fleet.projects.collectAsState()
+    val projectRefs = remember(fleetProjects) { fleetProjects.map { ProjectRef(it.hostId, it.project) } }
+    val workspaceHostIds by fleet.workspaceHost.collectAsState()
+    val workspaceHostOf: (WorkspaceDto) -> String = remember(workspaceHostIds) {
+        { w -> workspaceHostIds[w.id] ?: "" }
+    }
+    val loadProjectImage: suspend (ProjectRef) -> ByteArray? = remember(fleet) {
+        { ref -> fleet.projectImageBytes(HostProject(ref.hostId, ref.project)) }
+    }
     val uiPrefs = LocalUiPrefs.current
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
@@ -680,6 +694,12 @@ fun SupermuxApp(
                                 hostFilter = hostFilter,
                                 onHostFilter = setHostFilter,
                                 onAddHost = { ui.openAddHost() },
+                                projects = projectRefs,
+                                workspaceHost = workspaceHostOf,
+                                loadProjectImage = loadProjectImage,
+                                onReorderProjects = { hostId, ids ->
+                                    overlayScope.launch { fleet.reorderProjects(hostId, ids) }
+                                },
                                 initialCollapsedPaths = ui.collapsedProjectPaths,
                                 onCollapsedPathsChange = onCollapsedPathsChange,
                                 initialGroupByProject = groupByProject,
@@ -872,6 +892,9 @@ fun SupermuxApp(
                                                 onBack = { ui.goBack() },
                                                 forceOpenId = ui.forceArchivedOpenFor,
                                                 onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
+                                                projects = projectRefs,
+                                                workspaceHost = workspaceHostOf,
+                                                loadProjectImage = loadProjectImage,
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
                                                 // `Route.AppUpdate`, now applied to all of them):

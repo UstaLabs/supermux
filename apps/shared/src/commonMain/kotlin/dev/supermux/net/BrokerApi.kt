@@ -1640,6 +1640,12 @@ class BrokerApi(
     fun projectImageUrl(id: String, imageId: String): String =
         "$httpBase/project-catalog/${urlEncode(id)}/image?v=${urlEncode(imageId)}"
 
+    /** GET [projectImageUrl] with this client's bearer — raw image bytes, null on non-2xx. */
+    suspend fun projectImageBytes(id: String, imageId: String): ByteArray? {
+        val resp = http.get(projectImageUrl(id, imageId)) { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
     /** POST /workspaces/{id}/views */
     suspend fun addView(workspaceId: String, body: AddViewBody): ViewDto =
         decode(http.post("$httpBase/workspaces/$workspaceId/views") {
