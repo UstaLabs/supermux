@@ -168,6 +168,9 @@ test("an alpha tag is a GitHub pre-release, so releases/latest keeps pointing at
 })
 
 test("docker :latest is stable-only; an alpha tag moves :alpha", () => {
+  // metadata-action adds `latest` to every git tag on its own unless told not to — that is how
+  // v0.12.0-alpha.1 landed on :latest.
+  expect(dockerJob).toMatch(/flavor: \|\n\s+latest=false/)
   expect(dockerJob).toContain(
     "type=raw,value=latest,enable=${{ github.ref_type == 'tag' && needs.classify.outputs.channel == 'stable' }}",
   )
