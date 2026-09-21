@@ -1160,14 +1160,13 @@ const workspaceService = new WorkspaceService(
  */
 let projectCatalogDirty = false
 
-/** Full-replacement catalog frame: every project plus active AND archived membership. */
+/**
+ * projects_changed: every project plus active AND archived membership. The frame is
+ * built by the web channel from the listProjectCatalog/getProjectMembership opts, so
+ * this and the catalog routes can never disagree on its shape.
+ */
 function broadcastProjects(): void {
-  const all = registry.workspaces.list({ includeArchived: true })
-  webChannel?.broadcastToAll({
-    type: "projects_changed",
-    projects: projectService.list(),
-    projectMembership: projectService.membership(all),
-  })
+  webChannel?.broadcastProjects()
 }
 
 /**
@@ -1899,6 +1898,17 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         .map(toWsDto)
     },
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
+    // Project catalog. The routes broadcast projects_changed after each mutation.
+    listProjectCatalog: () => projectService.list(),
+    getProjectMembership: () => projectService.membership(registry.workspaces.list({ includeArchived: true })),
+    createProject: (name) => projectService.create(name),
+    renameProject: (id, name) => projectService.rename(id, name),
+    reorderProjects: (ids) => projectService.reorder(ids),
+    addProjectLocation: (id, path) => projectService.addLocation(id, path),
+    moveProjectLocation: (locationId, projectId) => projectService.moveLocation(locationId, projectId),
+    setProjectImage: (id, bytes, mime) => projectService.setImage(id, bytes, mime),
+    clearProjectImage: (id) => projectService.clearImage(id),
+    projectImageFile: (id) => projectService.imageFile(id),
     addWorkspaceView: (workspaceId, args) => {
       const v = registry.workspaces.addView(workspaceId, {
         id: args.id, kind: args.kind as any, state: args.state as any, title: args.title, groupId: args.groupId,
