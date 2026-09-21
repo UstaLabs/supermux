@@ -2,10 +2,12 @@ import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 
+// A Windows checkout (autocrlf) hands back CRLF, and the Windows release job runs this file —
+// normalize so the multi-line assertions below mean the same thing on every runner.
 const workflow = readFileSync(
   resolve(import.meta.dir, "..", ".github", "workflows", "release.yml"),
   "utf8",
-)
+).replaceAll("\r\n", "\n")
 const windowsStart = workflow.indexOf("  build-desktop-windows:")
 const windowsEnd = workflow.indexOf("\n  release:", windowsStart)
 const windowsJob = workflow.slice(windowsStart, windowsEnd)
