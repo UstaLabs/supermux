@@ -548,6 +548,9 @@ fun SupermuxApp(
             // A reopened task-list draft belongs to the New Session route, never to a tab.
             initialDraftId = if (tab == null) ui.launcherDraftId else null,
             initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
+            // The sidebar's "+" on a project; a workspace tab never consults projects.
+            initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
+            initialProjectId = if (tab == null) ui.launcherProject?.second else null,
             hosts = hostViews,
             selectedHost = activeHostId,
             // The shell owns this pane's chrome on a wide host (the sidebar / the tab strip), so
@@ -699,6 +702,12 @@ fun SupermuxApp(
                                 loadProjectImage = loadProjectImage,
                                 onReorderProjects = { hostId, ids ->
                                     overlayScope.launch { fleet.reorderProjects(hostId, ids) }
+                                },
+                                // Target the project's OWN host (the launcher's host pill follows),
+                                // then open the launcher preselecting it.
+                                onNewWorkspaceInProject = { ref ->
+                                    fleet.setActiveHost(ref.hostId)
+                                    ui.openLauncherInProject(ref.hostId, ref.project.id)
                                 },
                                 initialCollapsedPaths = ui.collapsedProjectPaths,
                                 onCollapsedPathsChange = onCollapsedPathsChange,

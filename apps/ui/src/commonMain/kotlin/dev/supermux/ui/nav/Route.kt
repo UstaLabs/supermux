@@ -32,10 +32,18 @@ sealed interface Route {
     @SerialName("home")
     data object Home : Route
 
-    /** [draftId] non-empty → reopen that draft session in the launcher (web `/new?draft=`). */
+    /**
+     * [draftId] non-empty → reopen that draft session in the launcher (web `/new?draft=`).
+     * [projectId] non-empty → preselect that persistent project of host [projectHostId] (the
+     * sidebar's "+" on a project). Empty strings, not nulls, for navigation-compose arguments.
+     */
     @Serializable
     @SerialName("new_session")
-    data class NewSession(val draftId: String = "") : Route
+    data class NewSession(
+        val draftId: String = "",
+        val projectHostId: String = "",
+        val projectId: String = "",
+    ) : Route
 
     @Serializable
     @SerialName("add_host")

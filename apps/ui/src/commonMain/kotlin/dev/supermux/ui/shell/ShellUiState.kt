@@ -160,6 +160,10 @@ class ShellUiState {
     val launcherOpen: Boolean get() = currentRoute is Route.NewSession
     /** When set, the launcher reopens this draft session (web /new?draft=). */
     val launcherDraftId: String? get() = (currentRoute as? Route.NewSession)?.draftId?.takeIf { it.isNotBlank() }
+    /** When set, the launcher preselects this persistent project (host record id to project id). */
+    val launcherProject: Pair<String, String>? get() = (currentRoute as? Route.NewSession)
+        ?.takeIf { it.projectId.isNotBlank() }
+        ?.let { it.projectHostId to it.projectId }
     /** The Usage card is showing (an anchored popover on a wide host). */
     val usageOpen: Boolean get() = currentRoute is Route.Usage
     val lspSettingsOpen: Boolean
@@ -206,6 +210,10 @@ class ShellUiState {
 
     /** New-session UI: a detail-pane swap on a wide host, a pushed screen under Compact. */
     fun openLauncher(draftId: String? = null) = navigate(Route.NewSession(draftId.orEmpty()))
+
+    /** New-session UI preselecting persistent project [projectId] of host [hostId]. */
+    fun openLauncherInProject(hostId: String, projectId: String) =
+        navigate(Route.NewSession(projectHostId = hostId, projectId = projectId))
 
     fun closeLauncher() {
         if (launcherOpen) goBack()

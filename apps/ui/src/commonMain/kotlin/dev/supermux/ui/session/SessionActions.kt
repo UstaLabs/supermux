@@ -32,10 +32,17 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
+import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * Every broker call (and the two navigations) the New-Session launcher makes, in one holder.
@@ -47,6 +54,20 @@ import dev.supermux.state.StagedUpload
 class LauncherActions(
     /** Recent project directories on the target host. */
     val listProjects: suspend () -> List<String> = { emptyList() },
+    /**
+     * The target host's persistent project catalog, LIVE: a `StateFlow` projection that follows
+     * `projects_changed` broadcasts and the launcher's host pill, so a rename, a new location or a
+     * new project shows up without the launcher refetching. Empty when the broker predates the
+     * catalog (the launcher then keeps its path picker) — a one-shot `GET /project-catalog` would
+     * go stale the moment another client edited a project, which is why this is a flow and not
+     * the plan's `suspend () -> List`.
+     */
+    val projectCatalog: Flow<List<ProjectDto>> = flowOf(emptyList()),
+    /** Register [path] as a location of [projectId] on the target host (409 → Conflict). */
+    val addProjectLocation: suspend (projectId: String, path: String) -> ProjectLocationResult =
+        { _, _ -> ProjectLocationResult.Failed },
+    /** A catalog project's image bytes (authenticated), null without one or on failure. */
+    val projectImage: suspend (project: ProjectDto) -> ByteArray? = { null },
     /** `null` = transport failure; an INVALID path is a non-null `PathValidation(ok=false)`. */
     val validatePath: suspend (path: String) -> PathValidation? = { null },
     val launcherModels: suspend (agent: String) -> List<ModelInfo> = { emptyList() },
@@ -112,6 +133,11 @@ fun rememberLauncherActions(
     return remember(app) {
         LauncherActions(
             listProjects = { app.listProjects() },
+            projectCatalog = combine(app.projectCatalogKnown, app.projects) { known, list ->
+                if (known) list else emptyList()
+            },
+            addProjectLocation = { id, path -> app.addProjectLocation(id, path) },
+            projectImage = { app.projectImageBytes(it) },
             validatePath = { app.validatePath(it) },
             launcherModels = { app.launcherModels(it) },
             launcherReasoning = { agent, model -> app.launcherReasoning(agent, model) },
@@ -143,6 +169,7 @@ fun rememberLauncherActions(
 }
 
 /** [LauncherActions] against the fleet's ACTIVE host — Android's wiring. */
+@OptIn(ExperimentalCoroutinesApi::class)
 @Composable
 fun rememberLauncherActions(
     fleet: FleetStore,
@@ -152,6 +179,21 @@ fun rememberLauncherActions(
     return remember(fleet) {
         LauncherActions(
             listProjects = { fleet.listProjects() },
+            // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill).
+            projectCatalog = fleet.activeHost.flatMapLatest { rid ->
+                val app = fleet.appForRecord(rid) ?: fleet.activeApp()
+                if (app == null) {
+                    flowOf(emptyList())
+                } else {
+                    combine(app.projectCatalogKnown, app.projects) { known, list ->
+                        if (known) list else emptyList()
+                    }
+                }
+            },
+            addProjectLocation = { id, path ->
+                fleet.activeApp()?.addProjectLocation(id, path) ?: ProjectLocationResult.Failed
+            },
+            projectImage = { fleet.activeApp()?.projectImageBytes(it) },
             validatePath = { fleet.validatePath(it) },
             launcherModels = { fleet.launcherModels(it) },
             launcherReasoning = { agent, model -> fleet.launcherReasoning(agent, model) },
