@@ -209,6 +209,10 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
       - name: Install SDK packages
         run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - name: Resolve Android client version
