@@ -59,6 +59,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -88,6 +89,10 @@ import dev.supermux.ui.nav.SettingsSection
 import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.theme.Space
 import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.LocalIosBackSwipe
+import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.widgets.SwipeBackPages
+import dev.supermux.ui.widgets.rememberIosBackSwipe
 
 /**
  * Rows the hub offers beyond [SettingsSection] — host-local pages that are not broker settings and
@@ -268,24 +273,38 @@ fun SettingsHub(
     }
 
     if (compact) {
-        BackHandler { leave() }
         val target = opened
-        Column(Modifier.fillMaxSize().background(cs.background).testTag("settings_hub")) {
-            if (target == null) {
+        val detailSwipe = rememberIosBackSwipe()
+        // The index leaves the hub, so its swipe drags the whole Settings page off (the route's
+        // swipe). A section reporting unsaved edits asks first, so neither back may slide a page
+        // away underneath the discard dialog.
+        SwipeBackHandler(interactive = !identityDirty) { leave() }
+        // An open section goes back to the index. Registered second, so it runs first.
+        SwipeBackHandler(enabled = target != null, swipe = detailSwipe, interactive = !identityDirty) { leave() }
+        SwipeBackPages(
+            pushed = target != null,
+            swipe = detailSwipe,
+            pageBackground = cs.background,
+            modifier = Modifier.background(cs.background).testTag("settings_hub"),
+            under = {
                 SettingsIndex(
                     extras = extras,
                     onBack = { leave() },
                     onOpen = { open(it) },
                 )
-            } else {
-                CompactDetail(
-                    title = target.label(),
-                    onBack = { leave() },
-                ) {
-                    Box(Modifier.fillMaxSize().testTag("settings_hub_detail")) {
-                        when (target) {
-                            is Target.Sec -> content(target.section, scope)
-                            is Target.Ext -> extraContent(target.extra, scope)
+            },
+        ) {
+            if (target != null) {
+                CompositionLocalProvider(LocalIosBackSwipe provides detailSwipe) {
+                    CompactDetail(
+                        title = target.label(),
+                        onBack = { leave() },
+                    ) {
+                        Box(Modifier.fillMaxSize().testTag("settings_hub_detail")) {
+                            when (target) {
+                                is Target.Sec -> content(target.section, scope)
+                                is Target.Ext -> extraContent(target.extra, scope)
+                            }
                         }
                     }
                 }

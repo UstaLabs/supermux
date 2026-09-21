@@ -32,14 +32,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -68,8 +68,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -78,13 +78,14 @@ import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.platform.AppUpdater
 import dev.supermux.ui.platform.LocalPlatform
-import dev.supermux.ui.platform.UpdateStatus
 import dev.supermux.ui.platform.UpdatePhase
+import dev.supermux.ui.platform.UpdateStatus
 import dev.supermux.ui.widgets.SettingsCaption
 import dev.supermux.ui.widgets.SettingsDetailMaxWidth
 import dev.supermux.ui.widgets.SettingsSectionHeader
-import kotlinx.coroutines.launch
+import dev.supermux.ui.widgets.SwipeBackHandler
 import kotlin.math.roundToLong
+import kotlinx.coroutines.launch
 
 // ── Pure labels ───────────────────────────────────────────────────────────────
 
@@ -173,7 +174,7 @@ fun AppUpdateScreen(
     // The seam no-ops a check while a download/install owns the phase, so entering the page mid
     // download neither clobbers the progress nor re-enables the CTA.
     LaunchedEffect(updater) { updater.check() }
-    BackHandler(enabled = ownChrome) { onBack() }
+    SwipeBackHandler(enabled = ownChrome, onBack = onBack)
 
     if (ownChrome) {
         Scaffold(

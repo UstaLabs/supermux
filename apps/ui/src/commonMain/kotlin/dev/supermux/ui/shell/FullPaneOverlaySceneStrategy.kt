@@ -6,11 +6,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavMetadataKey
@@ -21,6 +23,11 @@ import androidx.navigation3.scene.OverlayScene
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
+import dev.supermux.ui.widgets.IosBackSwipe
+import dev.supermux.ui.widgets.LocalIosBackSwipe
+import dev.supermux.ui.widgets.SwipeBackHandler
+import dev.supermux.ui.widgets.iosStyleBackSwipe
+import dev.supermux.ui.widgets.iosSwipedLayer
 
 /**
  * Renders the top [NavEntry] as a full-size layer while [overlaidEntries] (typically [Route.Home])
@@ -60,6 +67,12 @@ class FullPaneOverlaySceneStrategy<T : Any> : SceneStrategy<T> {
     }
 }
 
+/** How a full-pane route leaves: the shell's back for it, and the swipe that drags it off (iOS). */
+class RouteBack(val swipe: IosBackSwipe, val onBack: () -> Unit)
+
+/** Provided by the shell around its NavDisplay; read by every full-pane overlay scene. */
+val LocalRouteBack = staticCompositionLocalOf<RouteBack?> { null }
+
 private data class FullPaneOverlayScene<T : Any>(
     override val key: T,
     override val previousEntries: List<NavEntry<T>>,
@@ -75,14 +88,25 @@ private data class FullPaneOverlayScene<T : Any>(
         // (painting the strip behind them) and consume them so a screen that pads itself doesn't
         // pad twice. Desktop insets are zero.
         val backdrop = if (opaque) Modifier.background(MaterialTheme.colorScheme.background) else Modifier
-        Box(Modifier.fillMaxSize().then(backdrop)) {
+        // iOS: the whole layer is what an edge swipe drags off, with Home underneath. A transparent
+        // layer (a wide host's in-place launcher / Usage) has nothing to drag, so it keeps a plain back.
+        val routeBack = LocalRouteBack.current
+        val swipe = routeBack?.swipe?.takeIf { opaque }
+        Box(Modifier.fillMaxSize().then(if (swipe != null) Modifier.iosSwipedLayer(swipe) else Modifier).then(backdrop)) {
             Box(
                 Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.systemBars)
                     .consumeWindowInsets(WindowInsets.systemBars),
             ) {
-                entry.Content()
+                CompositionLocalProvider(LocalIosBackSwipe provides swipe) {
+                    // Deeper than NavDisplay's own handler, so it wins; a screen's handler deeper
+                    // still (a pushed sub-page, a guarded close) wins over this one.
+                    if (iosStyleBackSwipe && routeBack != null) {
+                        SwipeBackHandler(swipe = swipe, onBack = routeBack.onBack)
+                    }
+                    entry.Content()
+                }
             }
         }
     }
