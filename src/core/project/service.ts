@@ -106,8 +106,20 @@ export class ProjectService {
     return this.get(id)!
   }
 
+  /**
+   * Validates ids (all known, no duplicates), then appends any project not listed
+   * after the listed ones, keeping their relative order — so the write is always a
+   * full, dense 0..n-1 permutation regardless of how partial `ids` is.
+   */
   reorder(ids: string[]): void {
-    this.store.reorder(ids)
+    const seen = new Set<string>()
+    for (const id of ids) {
+      if (!this.store.getById(id)) throw new Error(`unknown project id: ${id}`)
+      if (seen.has(id)) throw new Error(`duplicate project id: ${id}`)
+      seen.add(id)
+    }
+    const rest = this.store.list().map((p) => p.id).filter((id) => !seen.has(id))
+    this.store.reorder([...ids, ...rest])
   }
 
   /**
@@ -116,7 +128,7 @@ export class ProjectService {
    * path the project already owns is a no-op.
    */
   addLocation(projectId: string, rawPath: string): ProjectDto {
-    const path = normalizeLocationPath(rawPath.trim())
+    const path = normalizeLocationPath(rawPath)
     if (!path) throw new Error("absolute path required")
     return this.store.db.transaction(() => {
       this.mustGet(projectId)

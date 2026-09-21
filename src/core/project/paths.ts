@@ -19,7 +19,9 @@ export function effectiveLocation(
   if (w.repo_root) return normalizeLocationPath(w.repo_root)
   const p = normalizeLocationPath(w.workdir)
   if (!p) return undefined
-  if (managedWorktreesRoot && (p === managedWorktreesRoot || p.startsWith(managedWorktreesRoot + "/"))) return undefined
+  if (managedWorktreesRoot && (
+    managedWorktreesRoot === "/" || p === managedWorktreesRoot || p.startsWith(managedWorktreesRoot + "/")
+  )) return undefined
   return p
 }
 

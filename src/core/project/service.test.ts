@@ -54,6 +54,19 @@ test("ensureLocation leaves a bare managed worktree unresolved", () => {
   expect(counts(db)).toEqual({ p: 0, l: 0 })
 })
 
+test("ensureLocation rolls back the created project when the location insert fails (no orphan)", () => {
+  const { db, store, svc } = make()
+  const original = store.addLocation.bind(store)
+  store.addLocation = () => { throw new Error("boom") }
+  const before = counts(db)
+  try {
+    expect(() => svc.ensureLocation({ workdir: "/h/projects/app" })).toThrow("boom")
+    expect(counts(db)).toEqual(before)
+  } finally {
+    store.addLocation = original
+  }
+})
+
 test("a worktree workspace resolves to its repo_root project", () => {
   const { svc } = make()
   const { projectId } = svc.ensureLocation({ workdir: "/h/projects/app" })!
@@ -84,6 +97,12 @@ test("addLocation validates the path and the project", () => {
   const a = svc.create("A")
   expect(() => svc.addLocation(a.id, "rel/x")).toThrow("absolute path required")
   expect(() => svc.addLocation("nope", "/h/x")).toThrow(ProjectNotFoundError)
+})
+
+test("addLocation no longer trims — normalizeLocationPath is the only transform", () => {
+  const { svc } = make()
+  const a = svc.create("A")
+  expect(() => svc.addLocation(a.id, " /h/x")).toThrow("absolute path required")
 })
 
 test("moveLocation reassigns resolution and keeps the source project", () => {
@@ -154,6 +173,40 @@ test("create appends to the order; reorder rewrites it", () => {
   expect([a.sort_order, b.sort_order]).toEqual([0, 1])
   svc.reorder([b.id, a.id])
   expect(svc.list().map((p) => p.id)).toEqual([b.id, a.id])
+})
+
+test("reorder rejects an unknown id", () => {
+  const { svc } = make()
+  const a = svc.create("A")
+  expect(() => svc.reorder([a.id, "nope"])).toThrow("unknown project id: nope")
+})
+
+test("reorder rejects a duplicate id", () => {
+  const { svc } = make()
+  const a = svc.create("A")
+  const b = svc.create("B")
+  expect(() => svc.reorder([a.id, b.id, a.id])).toThrow(`duplicate project id: ${a.id}`)
+})
+
+test("reorder appends unlisted projects after the listed ones, keeping their relative order, as a dense permutation", () => {
+  const { svc } = make()
+  const a = svc.create("A")
+  const b = svc.create("B")
+  const c = svc.create("C")
+  svc.reorder([c.id])
+  expect(svc.list().map((p) => [p.id, p.sort_order])).toEqual([
+    [c.id, 0],
+    [a.id, 1],
+    [b.id, 2],
+  ])
+})
+
+test("a failed reorder leaves sort_order untouched", () => {
+  const { svc } = make()
+  const a = svc.create("A")
+  const b = svc.create("B")
+  expect(() => svc.reorder([b.id, "nope"])).toThrow()
+  expect(svc.list().map((p) => p.id)).toEqual([a.id, b.id])
 })
 
 test("setImage stores a file, replaces the old one, and clearImage removes it", () => {

@@ -140,6 +140,25 @@ test("PATCH /project-catalog/reorder applies the order and broadcasts", async ()
   expect(catalogFrames(frames)).toHaveLength(1)
 })
 
+test("PATCH /project-catalog/reorder with an unknown id → 400, no broadcast", async () => {
+  const { svc, call, frames } = await boot()
+  const a = svc.create("A")
+  const res = await call("PATCH", "/project-catalog/reorder", { orderedIds: [a.id, "nope"] })
+  expect(res.status).toBe(400)
+  expect(await res.json()).toEqual({ error: "unknown project id: nope" })
+  expect(svc.list().map((p) => p.id)).toEqual([a.id])
+  expect(catalogFrames(frames)).toHaveLength(0)
+})
+
+test("PATCH /project-catalog/reorder with a duplicate id → 400, no broadcast", async () => {
+  const { svc, call, frames } = await boot()
+  const a = svc.create("A")
+  const res = await call("PATCH", "/project-catalog/reorder", { orderedIds: [a.id, a.id] })
+  expect(res.status).toBe(400)
+  expect(await res.json()).toEqual({ error: `duplicate project id: ${a.id}` })
+  expect(catalogFrames(frames)).toHaveLength(0)
+})
+
 test("POST /project-catalog/:id/locations: adds an existing dir, 409 names the owner, 400 on a missing dir", async () => {
   const { svc, call, dir } = await boot()
   const a = svc.create("A")

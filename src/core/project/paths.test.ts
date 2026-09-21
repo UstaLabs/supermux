@@ -17,6 +17,11 @@ test("effectiveLocation leaves a bare managed worktree unresolved", () => {
   expect(effectiveLocation({ workdir: "/h/.mux/worktrees/x/y" }, "/h/.mux/worktrees")).toBeUndefined()
   expect(effectiveLocation({ workdir: "/h/.mux/worktrees/x/y", repo_root: "/r" }, "/h/.mux/worktrees")).toBe("/r")
 })
+test("effectiveLocation treats a root '/' managed worktrees root as covering every path", () => {
+  expect(effectiveLocation({ workdir: "/a/b" }, "/")).toBeUndefined()
+  expect(effectiveLocation({ workdir: "/" }, "/")).toBeUndefined()
+  expect(effectiveLocation({ workdir: "/a/b", repo_root: "/r" }, "/")).toBe("/r")
+})
 test("pathLabel matches the Kotlin formatWorkdir convention", () => {
   expect(pathLabel("/home/u", "/home/u")).toBe("~")
   expect(pathLabel("/home/u/app", "/home/u")).toBe("~/app")
