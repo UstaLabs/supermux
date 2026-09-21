@@ -276,7 +276,30 @@ private fun emitLink(node: ASTNode, src: String, sink: SpanSink) {
     }
     var label = node.findChildOfType(MarkdownElementTypes.LINK_TEXT)?.getTextInNode(src)?.toString()?.trim().orEmpty()
     if (label.startsWith("[") && label.endsWith("]")) label = label.substring(1, label.length - 1)
-    sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
+    val ref = linkFileRef(dest)
+    if (ref != null) sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, ref = ref))
+    else sink.addSpan(MdSpan(label.ifEmpty { dest }, SpanStyleKind.LINK, url = dest))
+}
+
+private val LINK_SCHEME_RE = Regex("""^[A-Za-z][A-Za-z0-9+.-]*:(?!\d)""")
+private val GITHUB_LINE_ANCHOR_RE = Regex("""#L(\d+)(?:-L?(\d+))?$""")
+private val BARE_FILE_NAME_RE = Regex("""^([\w.-]+\.\w+)(?::(\d+)(?:-(\d+))?)?$""")
+
+/** `[label](src/a.ts:12)` / `[label](src/a.ts#L10-L20)` / `[x](README.md)` point at a workspace file,
+ *  not a web page: resolve them to a [FilePathRef] so they open in the editor instead of the browser.
+ *  Anything with a scheme (`https:`, `mailto:`, `file:`) or a bare `#anchor` stays a URL. */
+internal fun linkFileRef(dest: String): FilePathRef? {
+    if (dest.startsWith("#") || LINK_SCHEME_RE.containsMatchIn(dest)) return null
+    val normalized = GITHUB_LINE_ANCHOR_RE.find(dest)?.let { m ->
+        val end = m.groups[2]?.value?.let { "-$it" }.orEmpty()
+        dest.substring(0, m.range.first) + ":" + m.groupValues[1] + end
+    } ?: dest
+    parseFilePathRef(normalized)?.let { return it }
+    val m = BARE_FILE_NAME_RE.matchEntire(normalized) ?: return null
+    val line = m.groups[2]?.value?.toInt()
+    val endLine = m.groups[3]?.value?.toInt()
+    if (line != null && endLine != null && line > endLine) return null
+    return FilePathRef(m.groupValues[1], line, endLine)
 }
 
 private fun emitImage(node: ASTNode, src: String, sink: SpanSink) {
