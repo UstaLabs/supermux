@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
@@ -48,6 +49,11 @@ fun DefaultTabChip(
      * knows what a tab holds — "view", "file", "tab" are all content vocabulary.
      */
     closeLabel: String = "Close view",
+    /**
+     * A status dot before the label (e.g. a chat's unread mark), null for none. The caller picks
+     * the colour, so this layer stays content-free.
+     */
+    dot: Color? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val bg = if (state.selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent
@@ -63,6 +69,9 @@ fun DefaultTabChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(if (touch) 10.dp else 4.dp, Alignment.CenterHorizontally),
     ) {
+        if (dot != null) {
+            Box(Modifier.size(6.dp).background(dot, CircleShape).testTag("tab-dot-$itemId"))
+        }
         Text(
             text = title,
             color = fg,

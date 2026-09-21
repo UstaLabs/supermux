@@ -80,6 +80,7 @@ import dev.supermux.ui.platform.LocalPlatform
 import dev.supermux.ui.session.LocalContextMenuAvailable
 import dev.supermux.ui.session.RowContextMenu
 import dev.supermux.ui.session.RowContextMenuEntry
+import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.widgets.KeepAlivePanel
 import dev.supermux.ui.workspace.WorkspaceSession
@@ -131,6 +132,7 @@ class WorkspacePanesBind(
         tab: LauncherTab?,
     ) -> Unit,
     sessionNames: Map<String, String> = emptyMap(),
+    unreadSessions: Set<String> = emptySet(),
 ) {
     var current by mutableStateOf(current)
     var session by mutableStateOf(session)
@@ -142,6 +144,8 @@ class WorkspacePanesBind(
     var launcherPane by mutableStateOf(launcherPane)
     /** Session id → name, so a chat tab is titled after its chat in every window. */
     var sessionNames by mutableStateOf(sessionNames)
+    /** Unread chat session ids, so a chat tab can wear the unread dot in every window. */
+    var unreadSessions by mutableStateOf(unreadSessions)
 
     /**
      * How many compositions are drawing this workspace right now. The bind itself outlives them
@@ -180,6 +184,7 @@ fun WorkspacePanes(
     closeCandidate: ViewDto?,
     onCloseCandidate: (ViewDto?) -> Unit,
     sessionNames: Map<String, String>,
+    unreadSessions: Set<String>,
     modifier: Modifier,
     onTearOutTab: (String) -> Unit = {},
     stripChrome: PaneStripChrome = PaneStripChrome.None,
@@ -258,6 +263,7 @@ fun WorkspacePanes(
                             itemId = itemId,
                             title = v?.let { viewTitle(it, sessionNames::get) } ?: "view",
                             state = tabState,
+                            dot = if (v.tabUnread(tabState.selected, unreadSessions)) LocalSemantics.current.success else null,
                             labelFont = MonoFontFamily,
                             onClose = { _ -> onCloseCandidate(v) },
                         )
@@ -348,6 +354,7 @@ fun PhoneWorkspacePanes(
         tab: LauncherTab?,
     ) -> Unit,
     sessionNames: Map<String, String>,
+    unreadSessions: Set<String>,
     modifier: Modifier = Modifier,
 ) {
     // Minus whatever an extra window claimed: this phone layout, in split screen beside its own
@@ -421,6 +428,7 @@ fun PhoneWorkspacePanes(
                                 itemId = id,
                                 title = viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view",
                                 state = state,
+                                dot = if (viewsById[id].tabUnread(state.selected, unreadSessions)) LocalSemantics.current.success else null,
                                 labelFont = MonoFontFamily,
                                 onClose = { vid -> viewsById[vid]?.let { closeOrConfirm(it) } },
                             )
@@ -730,3 +738,10 @@ private fun TabLongPressMenu(
         }
     }
 }
+
+/**
+ * A chat tab wears the unread dot while its session has news and it isn't the tab on show — the
+ * selected tab is being read, the sidebar row's rule for the open chat.
+ */
+internal fun ViewDto?.tabUnread(selected: Boolean, unreadSessions: Set<String>): Boolean =
+    !selected && this?.chatSessionId()?.let { it in unreadSessions } == true

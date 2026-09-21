@@ -8,6 +8,8 @@ import dev.supermux.proto.WorkspaceDto
 import dev.supermux.workspace.LayoutNode
 import dev.supermux.workspace.NewViewKind
 import dev.supermux.workspace.collectViewIds
+import dev.supermux.workspace.groupIdOf
+import dev.supermux.workspace.setActiveViewInGroup
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -85,3 +87,11 @@ fun addViewState(kind: NewViewKind, nowMillis: Long = 0L): JsonObject = when (ki
     NewViewKind.DISPLAY -> buildJsonObject { put("displayId", JsonPrimitive("")) }
     NewViewKind.CHAT -> buildJsonObject { }
 }
+
+/**
+ * [viewId] becomes the front tab of whichever group holds it; any other layout (or a view in no
+ * group) comes back unchanged.
+ */
+fun frontTab(layout: LayoutNode, viewId: String): LayoutNode =
+    groupIdOf(layout, viewId)?.let { g -> setActiveViewInGroup(layout, g, viewId) }
+        ?: layout
