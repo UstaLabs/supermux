@@ -506,6 +506,22 @@ jobs:
           # not SHA-1 — opposite of raw codesign against a non-default keychain.
           security list-keychains -d user -s "$KEYCHAIN"
           echo "MACOS_COMPOSE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+      - name: Sign host helper binaries
+        # jpackage copies these into Contents/app/resources as plain files, and Compose's signing
+        # pass does not reach them — Apple then rejects the DMG (unsigned, no hardened runtime, no
+        # secure timestamp). Sign them where they are staged, before packaging; the app signature
+        # that follows seals them. Same recipe the retired SwiftUI Mac lane shipped with.
+        if: steps.signing.outputs.have == '1'
+        working-directory: .
+        run: |
+          # Raw codesign against a non-default keychain needs the SHA-1, not the label.
+          IDENTITY=$(security find-identity -v -p codesigning "$MACOS_COMPOSE_KEYCHAIN" | awk -v label="$DEVELOPER_ID_APPLICATION" 'index($0, label) { print $2; exit }')
+          for helper in supermux-broker frpc tmux; do
+            codesign --force --options runtime --timestamp \
+              --keychain "$MACOS_COMPOSE_KEYCHAIN" \
+              --sign "$IDENTITY" "apps/desktop/resources/macos-arm64/$helper"
+            codesign --verify --strict --verbose=2 "apps/desktop/resources/macos-arm64/$helper"
+          done
       - name: Build signed Compose DMG
         if: steps.signing.outputs.have == '1'
         run: >
