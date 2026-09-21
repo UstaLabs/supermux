@@ -542,11 +542,24 @@ jobs:
             "$COMPOSE_MACOS_DMG"
           NOTARY_KEY="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY"
+          # `submit --wait` exits 0 even when Apple answers "Invalid", and the reason lives only
+          # in the submission's log — so read the verdict and print that log before failing.
           xcrun notarytool submit "$COMPOSE_MACOS_DMG" \
             --key "$NOTARY_KEY" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
             --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --wait
+            --output-format json \
+            --wait | tee "$RUNNER_TEMP/notary.json"
+          NOTARY_ID=$(plutil -extract id raw "$RUNNER_TEMP/notary.json")
+          NOTARY_STATUS=$(plutil -extract status raw "$RUNNER_TEMP/notary.json")
+          if [ "$NOTARY_STATUS" != "Accepted" ]; then
+            echo "::error::notarization $NOTARY_ID ended as $NOTARY_STATUS"
+            xcrun notarytool log "$NOTARY_ID" \
+              --key "$NOTARY_KEY" \
+              --key-id "$APPLE_NOTARY_KEY_ID" \
+              --issuer "$APPLE_NOTARY_ISSUER_ID" || true
+            exit 1
+          fi
           xcrun stapler staple "$COMPOSE_MACOS_DMG"
           xcrun stapler validate "$COMPOSE_MACOS_DMG"
           spctl --assess --type open --context context:primary-signature --verbose=2 "$COMPOSE_MACOS_DMG"
