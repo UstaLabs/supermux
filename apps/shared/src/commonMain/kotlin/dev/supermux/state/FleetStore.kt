@@ -1017,6 +1017,10 @@ class FleetStore(
     suspend fun clearProjectImage(hostId: String, projectId: String): ProjectDto? =
         appForRecord(hostId)?.clearProjectImage(projectId)
 
+    /** POST /paths/validate on the project's OWN host (a path means nothing on another broker). */
+    suspend fun validatePathOn(hostId: String, path: String): PathValidation? =
+        appForRecord(hostId)?.validatePath(path)
+
     fun projectImageUrl(project: HostProject): String? =
         appForRecord(project.hostId)?.projectImageUrl(project.project)
 

@@ -132,7 +132,10 @@ import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
+import dev.supermux.ui.session.NewProjectDialog
 import dev.supermux.ui.session.ProjectImageCache
+import dev.supermux.ui.session.ProjectSettingsActions
+import dev.supermux.ui.session.ProjectSettingsSheet
 import dev.supermux.ui.session.SessionLauncherScreen
 import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.session.SessionListMode
@@ -475,6 +478,46 @@ fun SupermuxApp(
         inferHomeDir(sessions.firstOrNull()?.workdir) ?: homeFallback
     }
 
+    // ── Persistent project settings (the header ⋮ → Settings) and "New project" (the list ⋮) ──
+    /** (hostId, projectId) of the open settings sheet. */
+    var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var newProjectOpen by remember { mutableStateOf(false) }
+    val projectSettingsActions = remember(fleet) {
+        ProjectSettingsActions(
+            rename = { h, p, n -> fleet.renameProject(h, p, n) },
+            setImage = { h, p, bytes, mime -> fleet.setProjectImage(h, p, bytes, mime) },
+            clearImage = { h, p -> fleet.clearProjectImage(h, p) },
+            addLocation = { h, p, path -> fleet.addProjectLocation(h, p, path) },
+            moveLocation = { h, loc, p -> fleet.moveProjectLocation(h, loc, p) },
+            validatePath = { h, path -> fleet.validatePathOn(h, path) },
+        )
+    }
+    projectSettingsTarget?.let { (hostId, projectId) ->
+        ProjectSettingsSheet(
+            hostId = hostId,
+            projectId = projectId,
+            projects = projectRefs,
+            home = home,
+            actions = projectSettingsActions,
+            onDismiss = { projectSettingsTarget = null },
+            loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
+        )
+    }
+    if (newProjectOpen) {
+        // The filtered host, else the only host; with several and no filter the dialog asks.
+        val singleHost = hostViews.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
+        NewProjectDialog(
+            hosts = hostViews,
+            initialHost = hostFilter ?: singleHost,
+            onCreate = { h, name -> fleet.createProject(h, name) },
+            onCreated = { h, id ->
+                newProjectOpen = false
+                projectSettingsTarget = h to id
+            },
+            onDismiss = { newProjectOpen = false },
+        )
+    }
+
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
     //    chat view has no session yet. Extracted so both render exactly the same thing.
     val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) })
@@ -712,6 +755,8 @@ fun SupermuxApp(
                                 },
                                 // Target the project's OWN host (the launcher's host pill follows),
                                 // then open the launcher preselecting it.
+                                onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
+                                onNewProject = { newProjectOpen = true },
                                 onNewWorkspaceInProject = { ref ->
                                     fleet.setActiveHost(ref.hostId)
                                     ui.openLauncherInProject(ref.hostId, ref.project.id)

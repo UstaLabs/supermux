@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DarkMode
@@ -224,6 +225,8 @@ fun SessionListScreen(
     /** Persist a host's new full project order (`PATCH /project-catalog/reorder`). */
     onReorderProjects: (hostId: String, orderedIds: List<String>) -> Unit = { _, _ -> },
     onProjectSettings: (ProjectRef) -> Unit = {},
+    /** "New project" in the ⋮ list menu; null hides the entry. */
+    onNewProject: (() -> Unit)? = null,
     onNewWorkspaceInProject: (ProjectRef) -> Unit = {},
     // ── Prefs (cluster F1: read synchronously by the host before the first frame) ──
     initialCollapsedPaths: Set<String> = emptySet(),
@@ -1173,6 +1176,7 @@ fun SessionListScreen(
                         onExpandedChange = { menuExpanded = it },
                         onNavigate = nav,
                         onAddHost = onAddHost,
+                        onNewProject = onNewProject,
                     )
                 }
             },
@@ -1470,6 +1474,7 @@ private fun OverflowNav(
     onExpandedChange: (Boolean) -> Unit,
     onNavigate: (String) -> Unit,
     onAddHost: () -> Unit,
+    onNewProject: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
@@ -1488,6 +1493,11 @@ private fun OverflowNav(
             // Always-reachable add-host entry (the filter row's `+` chip is hidden until a 2nd
             // host exists, so the very first extra host is added from here — spec §5).
             NavItem("Add host", Icons.Filled.Add, "nav_add_host") { onExpandedChange(false); onAddHost() }
+            onNewProject?.let { newProject ->
+                NavItem("New project", Icons.Filled.CreateNewFolder, "nav_new_project") {
+                    onExpandedChange(false); newProject()
+                }
+            }
             NavItem("Archived", Icons.Filled.Archive, "nav_archived") {
                 onExpandedChange(false); onNavigate("archived")
             }
