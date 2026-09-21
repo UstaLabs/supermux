@@ -658,6 +658,10 @@ jobs:
             -configuration Release \
             -destination "generic/platform=iOS" \
             -derivedDataPath build/dd-ios \
+            # SwiftTerm ships a build-tool plugin; headless xcodebuild refuses an unvalidated one
+            # ("Validate plug-in … failed"). Same flags as the ci.yml iOS lane.
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             CODE_SIGNING_ALLOWED=NO \
             build
@@ -697,6 +701,10 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath build/Supermux.xcarchive \
             -derivedDataPath build/dd-ios \
+            # SwiftTerm ships a build-tool plugin; headless xcodebuild refuses an unvalidated one
+            # ("Validate plug-in … failed"). Same flags as the ci.yml iOS lane.
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain $IOS_RELEASE_KEYCHAIN" \
             archive
