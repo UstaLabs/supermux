@@ -26,7 +26,11 @@
 # content-hashed bundle + PWA shell into src/channels/web/static. It needs a
 # JDK 17+; Gradle fetches the Kotlin/Wasm toolchain and its yarn workspace
 # itself (so this stage needs network, and is the slow one — cache it).
-FROM eclipse-temurin:17-jdk AS webbuild
+#
+# --platform=$BUILDPLATFORM: the bundle is wasm/js/html — identical for every target arch — so
+# build it ONCE, natively. Without this the multi-arch release build runs Gradle a second time
+# under QEMU arm64 emulation, which takes hours instead of minutes.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:17-jdk AS webbuild
 WORKDIR /src
 # libatomic1: the Kotlin Gradle plugin downloads its own Node (v25) to run the
 # yarn install behind `:kotlinWasmNpmInstall`, and that binary is linked against
