@@ -8,7 +8,8 @@ export { connectKeeper } from "./keeper/index.js"
 export type {
   AgentDriver, AgentRuntime, DriverContext, AgentUpdate, AuthContext, AuthProfile,
   AuthMethod, ActivityNotice, ActivityPhase, Capabilities, ContentBlock, CoreEvent, CoreLimits, CoreOptions, CreateOptions,
-  ResumeOptions, AdoptOptions, Completion, InterruptResult, Observer, PermissionHandler, Receipt, SendOptions,
+  ResumeOptions, AdoptOptions, Completion, InterruptResult, Observer, PermissionHandler, PermissionRequest, PermissionResponse,
+  PermissionOptionKind, RequestAnswer, PendingRequest, Receipt, SendOptions,
   SessionRecord, SessionState, ForkOptions, ForkSource,
   SessionConfiguration, HistoryOptions, HistoryPage,
   CloseMode, CloseOptions, CoreCloseOptions,

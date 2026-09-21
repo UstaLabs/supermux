@@ -105,9 +105,21 @@ export type NormalizedBody =
   | {
       kind: "permission-request"
       requestId: string
-      toolCall?: unknown
-      options: { optionId: string; kind?: string; label?: string }[]
+      toolCall: {
+        callId: string
+        tool: string
+        title: string
+        input?: unknown
+        category?: ToolCategory
+      }
+      options: {
+        id: string
+        kind: "allow_once" | "allow_always" | "reject_once" | "reject_always"
+        label: string
+      }[]
+      detail?: { command?: string; cwd?: string; blockedPath?: string }
     }
+  | { kind: "request-resolved"; requestId: string; outcome: "answered" | "expired" | "cancelled" }
   | { kind: "commands-update"; commands: { name: string; description?: string }[] }
   | { kind: "mode-update"; modeId?: string; model?: string }
   | { kind: "session-info"; title?: string | null; cwd?: string; model?: string }

@@ -4,6 +4,17 @@ import type {
 } from "@agentclientprotocol/sdk"
 import type { EventEnvelope, NormalizedBody } from "./events/normalized.js"
 
+export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
+
+export type RequestAnswer = { optionId: string; message?: string }
+
+export type PendingRequest = {
+  requestId: string
+  kind: "permission"
+  createdAt: string
+  body: Extract<NormalizedBody, { kind: "permission-request" }>
+}
+
 export type { AuthMethod, ContentBlock }
 
 export type SessionState = "idle" | "running" | "interrupting" | "closing" | "closed" | "failed"
@@ -83,10 +94,19 @@ export type CoreEvent =
   | { type: "message.completed"; sessionId: string; messageId: string; result: Completion }
 
 export type Observer = (event: CoreEvent) => void | Promise<void>
+
+/** Driver-facing permission callback. Hosts answer via Session.requests, not this type. */
+export type PermissionRequest = RequestPermissionRequest & {
+  coreSessionId: string
+  detail?: { command?: string; cwd?: string; blockedPath?: string }
+}
+
+export type PermissionResponse = RequestPermissionResponse & { message?: string }
+
 export type PermissionHandler = (
-  request: RequestPermissionRequest & { coreSessionId: string },
+  request: PermissionRequest,
   signal: AbortSignal,
-) => Promise<RequestPermissionResponse>
+) => Promise<PermissionResponse>
 
 /** Driver-minted opaque turn/work identity. Core does not parse native payloads. */
 export type ActivityPhase = "started" | "completed"
@@ -172,7 +192,6 @@ export type CoreOptions = {
   stateDirectory: string
   agents: AgentDriver[]
   profiles?: Record<string, AuthProfile>
-  onPermission?: PermissionHandler
   onObserverError?: (error: Error) => void
   limits: CoreLimits
 }

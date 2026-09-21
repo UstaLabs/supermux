@@ -121,7 +121,7 @@ describe("codex normalizer", () => {
 
   test("permission and user-question server requests", () => {
     const n = createCodexNormalizer()
-    expect(n(native("item/commandExecution/requestApproval", { itemId: "c", command: "ls" }, { id: 7 }))[0]).toMatchObject({ kind: "permission-request", requestId: "7" })
+    expect(n(native("item/commandExecution/requestApproval", { itemId: "c", command: "ls" }, { id: 7 }))).toEqual([])
     expect(n(native("item/tool/requestUserInput", { itemId: "q", isBlocking: true, questions: [{ id: "1", header: "h", question: "Q?", isOther: false, isSecret: false, options: null }] }, { id: "req" }))[0]).toMatchObject({ kind: "user-question", requestId: "req", blocking: true })
   })
 

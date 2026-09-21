@@ -37,7 +37,7 @@ Do **not** turn on blanket `skipLibCheck` to hide that. With TypeScript 6.x (glo
 | Core | Scheduling, in-memory queues/receipts, session metadata, events |
 | Driver | Native/ACP I/O, capability truth, native conversation identity |
 
-`createCore({ stateDirectory, agents, limits, profiles?, onPermission?, ... })` has **no defaults**. `limits` is required: `{ interruptTimeoutMs, maxPending, outstandingActivity }` — each a **positive safe integer**. Missing `limits` or an invalid field is a `TypeError` that names the field.
+`createCore({ stateDirectory, agents, limits, profiles?, ... })` has **no defaults**. `limits` is required: `{ interruptTimeoutMs, maxPending, outstandingActivity }` — each a **positive safe integer**. Missing `limits` or an invalid field is a `TypeError` that names the field. Permission answers go through `session.requests`, not a host callback.
 
 ## Configuration (create / adopt / resume)
 
@@ -97,11 +97,21 @@ Records store the **profile name**, never env or tokens. Reopening a core requir
 
 `copiedCredentials` + `withAuth` copies a credential file into a per-session home. Copied homes **cannot fork** (`fork: false`). `withAuth` forwards configure/history. Native token expiry is **agent-owned**: the library copies/promotes nonempty JSON objects and propagates driver errors; it does not inspect TTL or open a login UI. Real-agent examples in this package do **not** copy credentials.
 
-## Permissions
+## Requests
 
-Default host handler is **cancelled** (`outcome: "cancelled"`) — a **deny**, not a deadlock and not always-approve.
+Permission prompts are first-class events. There is no `onPermission` host callback.
 
-Claude/Codex ask the host only when `permissionPrompts: "host"`. Otherwise they deny. Duplicate JSON-RPC/`request_id` values are answered **once per matching turn+fingerprint**; later/stale reuse is **deny**, not a second grant. Selected allow-once mapping only; no bypass-permissions default. Codex `item/permissions/requestApproval` is answered with an empty grant, not a host-invented profile.
+When an agent needs approval, Session mints a `requestId`, stores a pending request, and emits `session.event` with `kind: "permission-request"` (`toolCall`, `options` with `allow_once` / `allow_always` / `reject_once` / `reject_always`, optional `detail`). Answer with:
+
+```ts
+await session.requests.respond(requestId, { optionId: "allow_once", message?: string })
+```
+
+`session.requests.list()` returns pending items. Unknown id → `request_not_found`. Bad `optionId` → `invalid_input`. Interrupt, close, or the driver's AbortSignal resolves the driver as cancelled and emits `request-resolved` with `outcome: "cancelled"`. Pending request count is capped by `limits.maxPending` (overflow is cancelled immediately plus a warning event). `snapshot().pendingRequests` is that count.
+
+A request parked by the keeper while detached is redelivered on re-attach, flows through `requestPermission` again, and appears in `list()` as a new event.
+
+Claude/Codex ask only when `permissionPrompts: "host"`. Otherwise they deny. Duplicate JSON-RPC/`request_id` values are answered **once per matching turn+fingerprint**; later/stale reuse is **deny**, not a second grant. Codex `item/permissions/requestApproval` is answered with an empty grant, not a host-invented profile. `allow_always` maps to Codex `acceptWithExecpolicyAmendment` (when offered) and Claude `updatedPermissions` from `permission_suggestions`. ACP option kinds pass through 1:1; `message` is ignored on ACP.
 
 Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unattended Grok must pass `noLeader: false` and `alwaysApprove: true` **explicitly**.
 

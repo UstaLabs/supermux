@@ -374,16 +374,8 @@ export function createCodexNormalizer(): CodexNormalizer {
       return [{ kind: "compaction", compactionId: str(params.turnId) ?? str(params.threadId) ?? "compact", status: "completed" }]
     }
     if (method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval" || method === "item/permissions/requestApproval" || method === "applyPatchApproval" || method === "execCommandApproval") {
-      const requestId = frame.id != null ? String(frame.id) : str(params.itemId) ?? "approval"
-      return [{
-        kind: "permission-request",
-        requestId,
-        toolCall: params,
-        options: [
-          { optionId: "allow_once", kind: "allow_once", label: "Allow once" },
-          { optionId: "reject_once", kind: "reject_once", label: "Reject once" },
-        ],
-      }]
+      // Drivers answer these via context.requestPermission; Session emits the event.
+      return []
     }
     if (method === "item/tool/requestUserInput") {
       const requestId = frame.id != null ? String(frame.id) : str(params.itemId) ?? "question"

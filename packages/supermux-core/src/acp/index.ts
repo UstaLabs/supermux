@@ -300,8 +300,11 @@ export function acp(options: AcpOptions): AgentDriver {
         const cancellation = new Promise<RequestPermissionResponse>(resolve => { cancel = () => resolve(cancelled); signal.addEventListener('abort', cancel, { once: true }) })
         try {
           if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'session/request_permission', params: request } })
+          // ACP option kinds map 1:1 (allow_once / allow_always / reject_once / reject_always).
+          // RequestAnswer.message is ignored: the SDK permission result has no message field.
           const result = await Promise.race([Promise.resolve().then(() => session.requestPermission({ ...request, coreSessionId: session.sessionId }, signal)), cancellation])
           if (signal.aborted) return cancelled
+          if (result?.outcome?.outcome === 'selected') return { outcome: { outcome: 'selected', optionId: result.outcome.optionId } }
           return result
         } finally { signal.removeEventListener('abort', cancel) }
       },

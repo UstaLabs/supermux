@@ -286,14 +286,38 @@ export function codex(options: CodexOptions): AgentDriver {
     function writeDecision(id: unknown, decision: 'accept' | 'decline') {
       writeResult(id, { decision })
     }
+    function hasAlwaysDecision(decisions: unknown) {
+      if (!Array.isArray(decisions)) return false
+      return decisions.some(entry => entry === 'acceptWithExecpolicyAmendment'
+        || (entry && typeof entry === 'object' && 'acceptWithExecpolicyAmendment' in entry))
+    }
+    function execpolicyAmendment(params: any) {
+      const decisions = params?.availableDecisions
+      if (Array.isArray(decisions)) {
+        for (const entry of decisions) {
+          if (entry && typeof entry === 'object' && entry.acceptWithExecpolicyAmendment) return entry.acceptWithExecpolicyAmendment
+        }
+      }
+      if (Array.isArray(params?.proposedExecpolicyAmendment)) {
+        return { execpolicy_amendment: params.proposedExecpolicyAmendment }
+      }
+      return undefined
+    }
+    function hostOptions(params: any) {
+      const options: { optionId: string; name: string; kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always' }[] = [...permissionOptions]
+      if (hasAlwaysDecision(params?.availableDecisions)) {
+        options.splice(1, 0, { optionId: 'allow_always', name: 'Allow always', kind: 'allow_always' as const })
+      }
+      return options
+    }
     function deniedPermissionsResult() {
       return { permissions: {}, scope: 'turn' }
     }
-    function hostAllowed(response: RequestPermissionResponse | null | undefined) {
+    function selectedOption(response: RequestPermissionResponse | null | undefined) {
       try {
-        return response?.outcome?.outcome === 'selected' && response.outcome.optionId === 'allow_once'
+        return response?.outcome?.outcome === 'selected' ? response.outcome.optionId : undefined
       } catch {
-        return false
+        return undefined
       }
     }
     async function askHost(params: any, signal: AbortSignal) {
@@ -315,13 +339,17 @@ export function codex(options: CodexOptions): AgentDriver {
           Promise.resolve().then(() => ask({
             sessionId: agentSessionId!,
             coreSessionId: context.sessionId,
-            toolCall: { toolCallId, title, rawInput: params },
-            options: permissionOptions,
+            toolCall: { toolCallId, title, kind: typeof params?.command === 'string' ? 'execute' : 'edit', rawInput: params },
+            options: hostOptions(params),
+            detail: {
+              ...(typeof params?.command === 'string' ? { command: params.command } : {}),
+              ...(typeof params?.cwd === 'string' ? { cwd: params.cwd } : {}),
+            },
           }, signal)).catch(() => cancelledPermission),
           cancellation,
         ])
-        if (signal.aborted) return false
-        return hostAllowed(response)
+        if (signal.aborted) return { optionId: undefined as string | undefined }
+        return { optionId: selectedOption(response) }
       } finally { signal.removeEventListener('abort', cancel) }
     }
     function handleServerRequest(message: any) {
@@ -370,21 +398,27 @@ export function codex(options: CodexOptions): AgentDriver {
       const capturedGeneration = requestSlot.generation
       const capturedTurnId = requestSlot.id
       pendingPermissions.set(key, { controller, turnId: capturedTurnId, generation: capturedGeneration, threadId: requestThreadId! })
-      const settle = (allow: boolean) => {
+      const settle = (optionId: string | undefined) => {
         try {
           const pending = pendingPermissions.get(key)
           if (pending?.controller !== controller) return
           pendingPermissions.delete(key)
           const current = live.get(capturedTurnId)
-          const granted = allow === true
-            && !controller.signal.aborted
+          const liveOk = !controller.signal.aborted
             && !closed && !fatal
             && current
             && !current.finished
             && current.generation === capturedGeneration
             && current.id === capturedTurnId
             && agentSessionId === requestThreadId
-          const result = granted ? { decision: 'accept' as const } : denyResult
+          let result: Record<string, unknown> = denyResult
+          if (liveOk && optionId === 'allow_once') result = { decision: 'accept' as const }
+          else if (liveOk && optionId === 'allow_always') {
+            const amendment = execpolicyAmendment(params)
+            result = amendment
+              ? { decision: { acceptWithExecpolicyAmendment: amendment } }
+              : denyResult
+          }
           rememberAnswer(key, { threadId: requestThreadId!, turnId: capturedTurnId, fingerprint, result })
           writeResult(message.id, result)
         } catch {
@@ -394,10 +428,10 @@ export function codex(options: CodexOptions): AgentDriver {
           } catch { /* never reject the host-callback promise */ }
         }
       }
-      void askHost(params, controller.signal).then(allow => {
-        settle(allow === true)
+      void askHost(params, controller.signal).then(answer => {
+        settle(answer.optionId)
       }, () => {
-        settle(false)
+        settle(undefined)
       })
     }
     function dispatchNotify(message: any) {

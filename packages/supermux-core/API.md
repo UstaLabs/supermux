@@ -28,7 +28,7 @@ Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `A
 createCore(options: CoreOptions): Core
 ```
 
-`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), **`limits` (required, no defaults)**: `{ interruptTimeoutMs, maxPending, outstandingActivity }` each a **positive safe integer**. Missing `limits` or an invalid field → `TypeError` naming it. `profiles?`, `onPermission?`, `onObserverError?`.
+`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), **`limits` (required, no defaults)**: `{ interruptTimeoutMs, maxPending, outstandingActivity }` each a **positive safe integer**. Missing `limits` or an invalid field → `TypeError` naming it. `profiles?`, `onObserverError?`. Permission answers are `session.requests.respond`, not a Core callback.
 
 ### Configuration
 
@@ -72,7 +72,7 @@ Events are live microtask notifications, not a durable log. ACP history load upd
 
 `session.event` is emitted beside each `session.update` (the raw update is unchanged). Envelope: `{ sessionId, agent, seq, ts, turnId?, replay, origin: "live"|"replay", native: { protocol, method?, payload } }`. `seq` is per-session monotonic, minted by Session. `origin` follows the update `replay` flag. Turn boundaries are Session state (`running` → `turn-start`, `idle` → flush then `turn-complete`); vendor `turn_completed` is ignored.
 
-Body kinds (Codex + ACP in this slice): `turn-start`, `turn-complete`, `assistant-delta` / `assistant-message`, `reasoning-delta` / `reasoning` (`redacted: true` when the agent provided no text), `tool-call`, `command-output`, `file-diff`, `web-search`, `mcp-tool`, `plan`, `task`, `user-question`, `permission-request`, `commands-update`, `mode-update`, `session-info`, `usage`, `compaction`, `warning`, `error`. Unknown native frames produce no `session.event`. Permission/question kinds are events only; answering is a later slice.
+Body kinds: `turn-start`, `turn-complete`, `assistant-delta` / `assistant-message`, `reasoning-delta` / `reasoning` (`redacted: true` when the agent provided no text), `tool-call`, `command-output`, `file-diff`, `web-search`, `mcp-tool`, `plan`, `task`, `user-question`, `permission-request`, `request-resolved`, `commands-update`, `mode-update`, `session-info`, `usage`, `compaction`, `warning`, `error`. Unknown native frames produce no `session.event`. Permission requests are answerable via `session.requests`; user-question remains event-only until a later slice.
 
 Mappers are pure (`createCodexNormalizer`, `createAcpNormalizer({ vendor?: "grok" })`) with their own buffers; `AgentRuntime.normalize` / `flush` are optional. ACP `agent_message_chunk` / `agent_thought_chunk` flush to final messages on turn-complete.
 
@@ -81,6 +81,10 @@ Mappers are pure (`createCodexNormalizer`, `createAcpNormalizer({ vendor?: "grok
 `close({ agents: "shutdown" | "detach" })` is required (`agents` has no default). Aborts the core lifetime, waits operations, closes runtimes with that mode, then releases the store/lock. `{ agents: "detach" }` must not kill keeper-backed agents. Failed runtime shutdown: retry `close({ agents })`. Stale `.core.lock` is **manual** recovery.
 
 ## Session
+
+## Requests
+
+`session.requests.list(): PendingRequest[]`. `session.requests.respond(requestId, { optionId, message? })`. Pending items are `kind: "permission"` with the emitted `permission-request` body. `respond` resolves the driver promise `{ outcome: { outcome: "selected", optionId }, message? }` and emits `request-resolved` `answered`. Unknown/already-resolved id → `request_not_found`. `optionId` not in the request → `invalid_input`. Driver AbortSignal / interrupt / close → cancelled + `request-resolved` `cancelled`. Cap is `limits.maxPending`; overflow is cancelled immediately plus a warning. `snapshot().pendingRequests` is the pending count.
 
 - `id`, `snapshot()`, `capabilities()` (`detach` is true only for keeper-backed runtimes).
 - `send({ content, whenBusy, idempotencyKey? })` → `Receipt`. Failures settle `completed` as `{ status: "failed", error }` rather than rejecting the receipt (invalid send still throws).
@@ -100,11 +104,11 @@ Steer without an active owned prompt → `session_not_running`. Close/fail/inter
 
 `ActivityNotice`: `{ id: string; phase: "started" | "completed" }` (`ActivityPhase`). Core clones via `copyActivityNotice`. Empty id / bad phase silently dropped. Duplicate `started` same id: no-op. Unknown `completed`: no-op. Max **256** distinct outstanding ids (open buffer and live map). Overflow → session `fail` with `activity_overflow`. Native activity is independent of owned receipts and does **not** emit `message.started`. Not a `CoreEvent`; hosts observe busy via `snapshot().state` / interrupt / send rejection.
 
-Default `onPermission` returns cancelled. Host must implement allow/deny; selected-once options are driver-specific (`allow_once` / `reject_once` on Claude/Codex). No library always-approve default.
+Drivers still receive `DriverContext.requestPermission` (Session implements it). Hosts must not pass `onPermission` on `createCore`; they subscribe to `permission-request` events and call `session.requests.respond`. No library always-approve default.
 
 ## Errors
 
-`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`.
+`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`.
 
 `UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes.
 

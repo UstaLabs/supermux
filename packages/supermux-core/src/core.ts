@@ -273,6 +273,8 @@ export class Core {
     let persistenceAttempted = false
     let discarded = false
     const outstandingActivity = new Map<string, ActivityNotice>()
+    let attachSession!: (value: Session | null) => void
+    const sessionAttached = new Promise<Session | null>(resolve => { attachSession = resolve })
     const deliverActivity = (notice: ActivityNotice) => {
       try {
         if (discarded) return
@@ -303,7 +305,19 @@ export class Core {
           else this.events.emit({ type: "session.update", sessionId: input.id, update })
         },
         onExit: error => { if (session) session.fail(error); else failed = error },
-        requestPermission: this.options.onPermission ?? (async () => ({ outcome: { outcome: "cancelled" } })),
+        requestPermission: async (request, signal) => {
+          if (discarded || signal.aborted) return { outcome: { outcome: "cancelled" } }
+          const attached = session ?? await Promise.race([
+            sessionAttached,
+            new Promise<null>(resolve => {
+              const done = () => resolve(null)
+              if (signal.aborted) done()
+              else signal.addEventListener("abort", done, { once: true })
+            }),
+          ])
+          if (!attached || discarded || signal.aborted) return { outcome: { outcome: "cancelled" } }
+          return attached.requestPermission(request, signal)
+        },
         onActivity: deliverActivity,
       })
       this.assertOpen()
@@ -338,6 +352,7 @@ export class Core {
         }, undefined, { agentSessionId: record.agentSessionId, ...(options.at ? { at: options.at } : {}) }))
       }), recordToSave => this.store.put(recordToSave))
       this.live.set(record.id, session)
+      attachSession(session)
       for (const notice of outstandingActivity.values()) session.reportActivity(notice)
       outstandingActivity.clear()
       if (failed) throw failed
@@ -345,6 +360,7 @@ export class Core {
       return session
     } catch (error) {
       discarded = true
+      attachSession(null)
       outstandingActivity.clear()
       let cleanupFailure: Error | undefined
       if (runtime) {

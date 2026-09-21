@@ -120,6 +120,13 @@ if (process.env.MODE === 'setup-hang') {
           if (behavior !== 'allow') fail(4, 'expected allow')
           const updated = m.response?.response?.updatedInput
           if (!updated || updated.command !== 'pwd') fail(5, 'updatedInput mismatch')
+        } else if (process.env.EXPECT_PERM === 'always') {
+          if (behavior !== 'allow') fail(4, 'expected allow always')
+          const perms = m.response?.response?.updatedPermissions
+          if (!Array.isArray(perms) || !perms.some(p => p?.type === 'addRules')) fail(5, 'updatedPermissions mismatch')
+        } else if (process.env.EXPECT_PERM === 'deny-message') {
+          if (behavior !== 'deny') fail(4, 'expected deny')
+          if (m.response?.response?.message !== (process.env.EXPECT_DENY_MESSAGE || 'Denied by user')) fail(5, 'deny message mismatch')
         } else if (behavior !== 'deny') fail(4, 'expected deny')
         if (replayDuplicate) {
           replayDuplicate = false
@@ -155,10 +162,14 @@ if (process.env.MODE === 'setup-hang') {
       }, 1200)
       return
     }
-    if (text === 'permission' || text === 'permission-tool-use-id' || text === 'permission-duplicate' || text === 'permission-native-cancel' || text === 'permission-late' || text === 'permission-cross-turn' || text === 'permission-changed-input' || text === 'permission-cancel-after-allow') {
+    if (text === 'permission' || text === 'permission-tool-use-id' || text === 'permission-duplicate' || text === 'permission-native-cancel' || text === 'permission-late' || text === 'permission-cross-turn' || text === 'permission-changed-input' || text === 'permission-cancel-after-allow' || text === 'permission-always') {
       hanging = {session, uuid}
       const request = {subtype: 'can_use_tool', tool_name: 'Bash', input: {command: 'pwd'}}
       if (text === 'permission-tool-use-id') request.tool_use_id = 'tool-99'
+      if (text === 'permission-always') {
+        request.permission_suggestions = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'pwd' }], behavior: 'allow', destination: 'session' }]
+        request.blocked_path = '/tmp/x'
+      }
       send({type: 'control_request', request_id: 'perm-1', request})
       if (text === 'permission-duplicate') replayDuplicate = true
       if (text === 'permission-changed-input') changedInputReplay = true

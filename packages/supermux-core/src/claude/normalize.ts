@@ -293,17 +293,8 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
       return out
     }
     if (type === "control_request") {
-      const request = rec(frame.request)
-      if (request?.subtype !== "can_use_tool") return []
-      return [{
-        kind: "permission-request",
-        requestId: str(frame.request_id) ?? "permission",
-        toolCall: request,
-        options: [
-          { optionId: "allow", kind: "allow_once", label: "Allow" },
-          { optionId: "deny", kind: "reject_once", label: "Deny" },
-        ],
-      }]
+      // can_use_tool is answered via context.requestPermission; Session emits the event.
+      return []
     }
     return []
   }

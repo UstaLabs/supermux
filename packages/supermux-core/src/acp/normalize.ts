@@ -244,21 +244,8 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
       return mapAcp(update)
     }
     if (method === "session/request_permission") {
-      const row = rec(params) ?? {}
-      const optionsList = Array.isArray(row.options) ? row.options : []
-      return [{
-        kind: "permission-request",
-        requestId: str(row.requestId) ?? str(row.toolCallId) ?? "permission",
-        toolCall: row.toolCall,
-        options: optionsList.map(opt => {
-          const o = rec(opt) ?? {}
-          return {
-            optionId: str(o.optionId) ?? "",
-            ...(typeof o.kind === "string" ? { kind: o.kind } : {}),
-            ...(typeof o.name === "string" ? { label: o.name } : typeof o.label === "string" ? { label: o.label } : {}),
-          }
-        }),
-      }]
+      // Drivers answer these via context.requestPermission; Session emits the event.
+      return []
     }
     return []
   }

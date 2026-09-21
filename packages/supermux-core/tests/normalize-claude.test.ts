@@ -151,7 +151,7 @@ describe("claude normalizer", () => {
       type: "control_request",
       request_id: "r1",
       request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "pwd" } },
-    }))[0]).toMatchObject({ kind: "permission-request", requestId: "r1" })
+    }))).toEqual([])
   })
 
   test("AskUserQuestion", () => {

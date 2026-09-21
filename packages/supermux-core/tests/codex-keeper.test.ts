@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createCore } from '../src/index.js'
+import { TEST_LIMITS } from "./helpers.js"
 import { codex } from '../src/codex/index.js'
 import { transport } from '../src/codex/transport.js'
 import type { DriverContext } from '../src/types.js'
-import { TEST_LIMITS, nextId } from "./helpers.js"
 
 setDefaultTimeout(25_000)
 const fixture = fileURLToPath(new URL('./fixtures/codex-agent.mjs', import.meta.url))
@@ -169,6 +169,61 @@ test('parked approval is delivered to the reattached host', async () => {
     expect(await readFile(trace, 'utf8')).toContain('"decision":"accept"')
   } finally {
     await r.close({ mode: "shutdown" })
+  }
+})
+
+test('parked approval is listed on reattached Session and respond allow reaches the fixture', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ck-park-session-'))
+  dirs.push(stateDirectory)
+  const coreDir = await mkdtemp(join(tmpdir(), 'ck-park-core-'))
+  dirs.push(coreDir)
+  const trace = join(stateDirectory, 'trace')
+  const info = await runAttach({
+    KEEPER_STATE_DIR: stateDirectory,
+    KEEPER_SESSION_ID: 'k1',
+    KEEPER_PROMPT: 'ask-hang',
+    CODEX_FIXTURE: fixture,
+    TRACE: trace,
+    PERMISSION_PROMPTS: 'host',
+    EXPECT_DECISION: 'accept',
+  })
+  expect(alive(info.keeperPid)).toBe(true)
+  const core = createCore({
+    stateDirectory: coreDir,
+    agents: [codex(libraryCodex({
+      command: process.execPath,
+      args: [fixture],
+      env: { TRACE: trace, EXPECT_DECISION: 'accept' },
+      setupTimeoutMs: 5000,
+      requestTimeoutMs: 8000,
+      shutdownTimeoutMs: 500,
+      permissionPrompts: 'host',
+      keeper: { stateDirectory, limits: keeperLimits() },
+    }))],
+    limits: TEST_LIMITS,
+  })
+  try {
+    await core.sessions.adopt({
+      id: 'k1',
+      agent: 'codex',
+      agentSessionId: info.threadId,
+      cwd: process.cwd(),
+    })
+    const session = await core.sessions.resume('k1')
+    const start = Date.now()
+    while (session.requests.list().length === 0 && Date.now() - start < 5000) await new Promise(x => setTimeout(x, 30))
+    const pending = session.requests.list()
+    expect(pending.length).toBeGreaterThan(0)
+    await session.requests.respond(pending[0]!.requestId, { optionId: 'allow_once' })
+    const wait = Date.now()
+    while (Date.now() - wait < 5000) {
+      if ((await readFile(trace, 'utf8')).includes('"decision":"accept"')) break
+      await new Promise(x => setTimeout(x, 30))
+    }
+    expect(await readFile(trace, 'utf8')).toContain('"decision":"accept"')
+    await session.close({ mode: "shutdown" })
+  } finally {
+    await core.close({ agents: "shutdown" }).catch(() => {})
   }
 })
 

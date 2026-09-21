@@ -36,6 +36,13 @@ const permissionOptions = [
   { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' as const },
   { optionId: 'reject_once', name: 'Reject once', kind: 'reject_once' as const },
 ]
+function hostOptions(request: any) {
+  const options: { optionId: string; name: string; kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always' }[] = [...permissionOptions]
+  if (Array.isArray(request?.permission_suggestions) && request.permission_suggestions.length) {
+    options.splice(1, 0, { optionId: 'allow_always', name: 'Allow always', kind: 'allow_always' as const })
+  }
+  return options
+}
 const cancelledPermission: RequestPermissionResponse = { outcome: { outcome: 'cancelled' } }
 
 function input(content: ContentBlock[]) {
@@ -116,7 +123,7 @@ export function claude(options: ClaudeOptions): AgentDriver {
     let fromMetaOwned = false
     const hostPermissions = options.permissionPrompts === 'host'
     type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
-    type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string }
+    type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string; suggestions: unknown }
     type AnsweredPermission = { allow: boolean; input: unknown; turnUuid: string; fingerprint: string }
     let active: Active | undefined
     const failure = deferred<never>()
@@ -158,10 +165,14 @@ export function claude(options: ClaudeOptions): AgentDriver {
       active?.completion.reject(error)
       if (ready && !closed) context.onExit(error)
     }
-    function writePermission(requestId: string, allow: boolean, input: unknown) {
+    function writePermission(requestId: string, allow: boolean, input: unknown, extra?: { updatedPermissions?: unknown; message?: string }) {
       const response = allow
-        ? { behavior: 'allow', updatedInput: input }
-        : { behavior: 'deny', message: 'Permission denied' }
+        ? {
+            behavior: 'allow',
+            updatedInput: input,
+            ...(extra?.updatedPermissions !== undefined ? { updatedPermissions: extra.updatedPermissions } : {}),
+          }
+        : { behavior: 'deny', message: extra?.message ?? 'Permission denied' }
       try { rpc.write({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } }) }
       catch (error) { if (!fatal) fail(error instanceof Error ? error : new Error(String(error))) }
     }
@@ -169,15 +180,21 @@ export function claude(options: ClaudeOptions): AgentDriver {
       rememberAnswer(requestId, false, undefined, turnUuid, fingerprint)
       writePermission(requestId, false, undefined)
     }
-    function settlePermission(requestId: string, pending: PendingPermission, allow: boolean) {
+    function settlePermission(requestId: string, pending: PendingPermission, optionId: string | undefined, message?: string) {
       if (pendingPermissions.get(requestId) !== pending) return
       pendingPermissions.delete(requestId)
-      const granted = allow === true
-        && !pending.controller.signal.aborted
+      const liveOk = !pending.controller.signal.aborted
         && !closed && !fatal
         && active?.uuid === pending.turnUuid
+      const always = optionId === 'allow_always' && Array.isArray(pending.suggestions) && pending.suggestions.length > 0
+      const granted = liveOk && (optionId === 'allow_once' || always)
       rememberAnswer(requestId, granted, granted ? pending.input : undefined, pending.turnUuid, pending.fingerprint)
-      writePermission(requestId, granted, pending.input)
+      if (granted) {
+        writePermission(requestId, true, pending.input, always ? { updatedPermissions: pending.suggestions } : undefined)
+      } else {
+        const hostReject = optionId === 'reject_once' || optionId === 'reject_always' || optionId === 'allow_always'
+        writePermission(requestId, false, undefined, { message: hostReject ? (message ?? 'Denied by user') : 'Permission denied' })
+      }
     }
     async function askHost(requestId: string, request: any, signal: AbortSignal) {
       const toolCallId = typeof request?.tool_use_id === 'string' && request.tool_use_id ? request.tool_use_id : requestId
@@ -196,15 +213,21 @@ export function claude(options: ClaudeOptions): AgentDriver {
             sessionId: agentSessionId,
             coreSessionId: context.sessionId,
             toolCall: { toolCallId, title, rawInput },
-            options: permissionOptions,
+            options: hostOptions(request),
+            detail: {
+              ...(typeof request?.input?.command === 'string' ? { command: request.input.command } : {}),
+              ...(typeof request?.blocked_path === 'string' ? { blockedPath: request.blocked_path } : {}),
+            },
           }, signal)).catch(() => cancelledPermission),
           cancellation,
         ])
-        if (signal.aborted) return false
+        if (signal.aborted) return { optionId: undefined as string | undefined }
         try {
-          return response?.outcome?.outcome === 'selected' && response.outcome.optionId === 'allow_once'
+          const optionId = response?.outcome?.outcome === 'selected' ? response.outcome.optionId : undefined
+          const message = typeof (response as { message?: unknown })?.message === 'string' ? (response as { message: string }).message : undefined
+          return { optionId, message }
         } catch {
-          return false
+          return { optionId: undefined as string | undefined }
         }
       } finally { signal.removeEventListener('abort', cancel) }
     }
@@ -223,12 +246,18 @@ export function claude(options: ClaudeOptions): AgentDriver {
       if (pendingPermissions.has(requestId)) return
       if (pendingPermissions.size >= MAX_PENDING_PERMISSIONS) { denyTool(requestId, fingerprint, active.uuid); return }
       const controller = new AbortController()
-      const pending: PendingPermission = { controller, turnUuid: active.uuid, input: message.request?.input, fingerprint }
+      const pending: PendingPermission = {
+        controller,
+        turnUuid: active.uuid,
+        input: message.request?.input,
+        fingerprint,
+        suggestions: message.request?.permission_suggestions,
+      }
       pendingPermissions.set(requestId, pending)
-      void askHost(requestId, message.request, controller.signal).then(allow => {
-        settlePermission(requestId, pending, allow === true)
+      void askHost(requestId, message.request, controller.signal).then(answer => {
+        settlePermission(requestId, pending, answer.optionId, answer.message)
       }, () => {
-        settlePermission(requestId, pending, false)
+        settlePermission(requestId, pending, undefined)
       })
     }
     function complete(a: Active, frame: any) {

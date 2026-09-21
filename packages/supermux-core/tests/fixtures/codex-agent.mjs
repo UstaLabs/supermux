@@ -96,6 +96,7 @@ createInterface({input:process.stdin}).on('line',line=>{
     const ask=(approvalId,method,params)=>{pendingApprovals.add(approvalId);send({id:approvalId,method,params:{threadId:thread,turnId:id,itemId:'item-1',...params}})}
     if(text==='permission'){ask('approval','item/commandExecution/requestApproval',{command:'ls'});return}
     if(text==='ask-command'||text==='ask-hang'){ask('approval','item/commandExecution/requestApproval',{command:'npm test',approvalId:'cb-1'});return}
+    if(text==='ask-always'){ask('approval','item/commandExecution/requestApproval',{command:'ls',approvalId:'al-1',proposedExecpolicyAmendment:['ls'],availableDecisions:['accept',{acceptWithExecpolicyAmendment:{execpolicy_amendment:['ls']}},'cancel']});return}
     if(text==='ask-file'){ask('approval','item/fileChange/requestApproval',{grantRoot:'/tmp'});return}
     if(text==='ask-stale'){pendingApprovals.add('stale');send({id:'stale',method:'item/commandExecution/requestApproval',params:{threadId:'other-thread',turnId:id,itemId:'item-1',command:'ls'}});return}
     if(text==='ask-unknown'){pendingApprovals.add('unknown');send({id:'unknown',method:'item/tool/requestUserInput',params:{threadId:thread,turnId:id}});return}
@@ -124,7 +125,10 @@ createInterface({input:process.stdin}).on('line',line=>{
     if(m.result.scope!=='turn' || Object.keys(m.result.permissions||{}).length!==0) process.exit(4)
   } else {
     const expected=process.env.EXPECT_DECISION
-    if(expected){if(m.result?.decision!==expected)process.exit(4)}
+    if(process.env.EXPECT_AMENDMENT){
+      const amendment=m.result?.decision?.acceptWithExecpolicyAmendment?.execpolicy_amendment
+      if(!Array.isArray(amendment))process.exit(4)
+    } else if(expected){if(m.result?.decision!==expected)process.exit(4)}
     else if(m.result?.decision!=='decline')process.exit(4)
   }
   if(process.env.MODE==='dup-after' && m.id==='dup'){

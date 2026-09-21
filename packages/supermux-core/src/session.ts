@@ -7,8 +7,9 @@ import type {
   ActivityNotice, AgentRuntime, AgentUpdate, Capabilities, Completion, CoreEvent, InterruptResult,
   Receipt, SendOptions, SessionRecord, SessionState, ForkOptions,
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
+  PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
 } from "./types.js"
-import type { EventEnvelope, NormalizedBody, TurnCompleteReason } from "./events/normalized.js"
+import type { EventEnvelope, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
 
 type ActivitySlot = {
   done: Promise<void>
@@ -39,6 +40,12 @@ export class Session {
   private turnSeq = 0
   private currentTurnId?: string
   private completeReason: TurnCompleteReason = "ok"
+  private readonly pendingRequests = new Map<string, {
+    request: PendingRequest
+    resolve: (response: PermissionResponse) => void
+    signal: AbortSignal
+    onAbort: () => void
+  }>()
 
   constructor(
     private readonly record: SessionRecord,
@@ -52,8 +59,14 @@ export class Session {
     private readonly persistRecord: (record: SessionRecord) => Promise<void>,
   ) { this.id = record.id }
 
-  snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean } {
-    return { ...structuredClone(this.record), state: this.state, pending: this.queue.length, paused: this.paused }
+  snapshot(): SessionRecord & { state: SessionState; pending: number; paused: boolean; pendingRequests: number } {
+    return {
+      ...structuredClone(this.record),
+      state: this.state,
+      pending: this.queue.length,
+      paused: this.paused,
+      pendingRequests: this.pendingRequests.size,
+    }
   }
 
   capabilities(): Capabilities { return { ...this.runtime.capabilities } }
@@ -107,6 +120,55 @@ export class Session {
     },
   }
 
+  readonly requests = {
+    list: (): PendingRequest[] => [...this.pendingRequests.values()].map(slot => structuredClone(slot.request)),
+    respond: (requestId: string, answer: RequestAnswer): Promise<void> => {
+      try {
+        if (typeof requestId !== "string" || !requestId) throw new CoreError("request_not_found", "Unknown permission request")
+        const slot = this.pendingRequests.get(requestId)
+        if (!slot) throw new CoreError("request_not_found", "Unknown permission request")
+        if (!answer || typeof answer.optionId !== "string") throw new CoreError("invalid_input", "optionId is required")
+        const allowed = slot.request.body.options.some(option => option.id === answer.optionId)
+        if (!allowed) throw new CoreError("invalid_input", "optionId is not among the request options")
+        this.finishRequest(requestId, {
+          outcome: { outcome: "selected", optionId: answer.optionId },
+          ...(answer.message !== undefined ? { message: answer.message } : {}),
+        }, "answered")
+        return Promise.resolve()
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    },
+  }
+
+  requestPermission(request: PermissionRequest, signal: AbortSignal): Promise<PermissionResponse> {
+    if (this.state === "closed" || this.state === "closing" || this.state === "failed" || signal.aborted) {
+      return Promise.resolve({ outcome: { outcome: "cancelled" } })
+    }
+    if (this.pendingRequests.size >= this.maxPending) {
+      this.emitNormalized({ kind: "warning", message: "Pending permission request cap reached", source: "requests" }, undefined, false)
+      return Promise.resolve({ outcome: { outcome: "cancelled" } })
+    }
+    const requestId = randomUUID()
+    const body = permissionBody(requestId, request)
+    if (!body.options.length) {
+      // The agent offered nothing we can classify: never invent choices, never guess "allow".
+      this.emitNormalized({ kind: "warning", message: "Permission request had no usable options; cancelled", source: "requests" }, undefined, false)
+      return Promise.resolve({ outcome: { outcome: "cancelled" } })
+    }
+    const pending: PendingRequest = { requestId, kind: "permission", createdAt: new Date().toISOString(), body }
+    return new Promise<PermissionResponse>(resolve => {
+      const onAbort = () => this.finishRequest(requestId, { outcome: { outcome: "cancelled" } }, "cancelled")
+      this.pendingRequests.set(requestId, { request: pending, resolve, signal, onAbort })
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener("abort", onAbort, { once: true })
+      this.emitNormalized(body, undefined, false)
+    })
+  }
+
   interrupt(options: { pending: "keep" | "discard" }): Promise<InterruptResult> {
     if (!options || (options.pending !== "keep" && options.pending !== "discard")) {
       return Promise.reject(new TypeError("pending is required and must be keep or discard"))
@@ -120,6 +182,10 @@ export class Session {
     if (!owned && !gates.length) return Promise.resolve({ status: "already_idle" })
     this.completeReason = "interrupt"
     this.changeState("interrupting")
+    // An interrupted turn cannot keep asking: resolve its pending requests as cancelled before
+    // telling the agent to stop, so a prompt blocked on a permission can unwind and the
+    // interrupt can be confirmed (request-resolved 'cancelled' reaches the UI).
+    this.cancelPendingRequests()
     const operation = this.interruptActive(owned, gates)
     this.interrupting = operation
     void operation.catch(() => {})
@@ -166,6 +232,7 @@ export class Session {
     this.paused = true
     this.changeState("closing")
     this.pending.clear()
+    this.cancelPendingRequests()
     this.abort?.abort()
     this.active?.finish({ status: "cancelled" })
     this.closing = Promise.resolve().then(async () => {
@@ -279,6 +346,7 @@ export class Session {
     this.changeState("failed")
     this.active?.finish({ status: "failed", error })
     for (const entry of this.queue.splice(0)) entry.finish({ status: "failed", error })
+    this.cancelPendingRequests()
     this.abort?.abort()
     this.endActivityWaiters(new CoreError("session_failed", "Session runtime failed; close and resume it", { cause: error }))
     this.emit({ type: "session.failed", sessionId: this.id, error })
@@ -426,11 +494,80 @@ export class Session {
     this.emit({ type: "session.event", sessionId: this.id, event: envelope })
   }
 
+  private finishRequest(requestId: string, response: PermissionResponse, outcome: "answered" | "expired" | "cancelled"): void {
+    const slot = this.pendingRequests.get(requestId)
+    if (!slot) return
+    this.pendingRequests.delete(requestId)
+    slot.signal.removeEventListener("abort", slot.onAbort)
+    slot.resolve(response)
+    this.emitNormalized({ kind: "request-resolved", requestId, outcome }, undefined, false)
+  }
+
+  private cancelPendingRequests(): void {
+    for (const id of [...this.pendingRequests.keys()]) {
+      this.finishRequest(id, { outcome: { outcome: "cancelled" } }, "cancelled")
+    }
+  }
+
   private trimSeen(): void {
     for (const [key, value] of this.seen) {
       if (this.seen.size <= 200) break
       if (value.entry.settled) this.seen.delete(key)
     }
+  }
+}
+
+const OPTION_KINDS = new Set<PermissionOptionKind>(["allow_once", "allow_always", "reject_once", "reject_always"])
+const TOOL_CATEGORIES = new Set<ToolCategory>([
+  "read", "edit", "delete", "move", "search", "execute", "fetch", "mcp", "web-search", "think", "other",
+])
+
+function permissionBody(requestId: string, request: PermissionRequest): Extract<NormalizedBody, { kind: "permission-request" }> {
+  const rawCall = request.toolCall as { toolCallId?: string; title?: string; kind?: string; rawInput?: unknown } | undefined
+  const callId = typeof rawCall?.toolCallId === "string" && rawCall.toolCallId ? rawCall.toolCallId : requestId
+  const title = typeof rawCall?.title === "string" && rawCall.title ? rawCall.title : callId
+  const tool = typeof rawCall?.kind === "string" && rawCall.kind ? rawCall.kind : title
+  const category = typeof rawCall?.kind === "string" && TOOL_CATEGORIES.has(rawCall.kind as ToolCategory)
+    ? rawCall.kind as ToolCategory
+    : undefined
+  const options = Array.isArray(request.options) && request.options.length
+    ? request.options.map((option, index) => {
+        const row = option as { optionId?: string; id?: string; kind?: string; name?: string; label?: string }
+        const id = typeof row.optionId === "string" && row.optionId
+          ? row.optionId
+          : typeof row.id === "string" && row.id ? row.id : `option:${index}`
+        // Never guess "allow": an option whose kind we cannot classify is dropped below.
+        const hint = `${id} ${typeof row.name === "string" ? row.name : ""}`.toLowerCase()
+        const kind: PermissionOptionKind | undefined = OPTION_KINDS.has(row.kind as PermissionOptionKind)
+          ? row.kind as PermissionOptionKind
+          : OPTION_KINDS.has(id as PermissionOptionKind) ? id as PermissionOptionKind
+          : /\b(reject|deny|decline|cancel|no)\b/.test(hint) ? "reject_once"
+          : undefined
+        const label = typeof row.label === "string" && row.label
+          ? row.label
+          : typeof row.name === "string" && row.name ? row.name : id
+        return kind ? { id, kind, label } : undefined
+      }).filter((option): option is { id: string; kind: PermissionOptionKind; label: string } => option !== undefined)
+    : []
+  const rawInput = rawCall?.rawInput && typeof rawCall.rawInput === "object" ? rawCall.rawInput as Record<string, unknown> : undefined
+  const inputCommand = typeof rawInput?.command === "string" ? rawInput.command : undefined
+  const detail = (request.detail && typeof request.detail === "object") || inputCommand ? {
+    ...(typeof request.detail?.command === "string" ? { command: request.detail.command } : inputCommand ? { command: inputCommand } : {}),
+    ...(typeof request.detail?.cwd === "string" ? { cwd: request.detail.cwd } : {}),
+    ...(typeof request.detail?.blockedPath === "string" ? { blockedPath: request.detail.blockedPath } : {}),
+  } : undefined
+  return {
+    kind: "permission-request",
+    requestId,
+    toolCall: {
+      callId,
+      tool,
+      title,
+      ...(rawCall?.rawInput !== undefined ? { input: rawCall.rawInput } : {}),
+      ...(category ? { category } : {}),
+    },
+    options,
+    ...(detail && Object.keys(detail).length ? { detail } : {}),
   }
 }
 

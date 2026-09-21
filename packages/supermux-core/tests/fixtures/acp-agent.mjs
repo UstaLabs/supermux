@@ -75,6 +75,22 @@ new AgentSideConnection(client => ({
     return new Promise(resolve => { finish = (value) => { promptActive = false; resolve(value); }; });
   }
   if(text === 'permission') { promptActive = true; const response = await client.requestPermission({ sessionId:params.sessionId,toolCall:{toolCallId:'call-1',title:'Read'},options:[{optionId:'allow',name:'Allow',kind:'allow_once'}] }); record(response); promptActive = false; return {stopReason:response.outcome.outcome === 'cancelled' ? 'cancelled':'end_turn'}; }
+  if(text === 'permission-kinds') {
+    promptActive = true
+    const response = await client.requestPermission({
+      sessionId: params.sessionId,
+      toolCall: { toolCallId: 'call-k', title: 'Read' },
+      options: [
+        { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'allow_always', name: 'Always', kind: 'allow_always' },
+        { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+        { optionId: 'reject_always', name: 'Never', kind: 'reject_always' },
+      ],
+    })
+    record(response)
+    promptActive = false
+    return { stopReason: 'end_turn' }
+  }
   if(text === 'auto-perm-late') {
     queueMicrotask(async () => {
       await emitNativeTurn(client, params.sessionId, { id: 'auto-B', complete: false })

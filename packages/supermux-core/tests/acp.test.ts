@@ -418,6 +418,25 @@ test('native activity end cancels pending permission even if host later allows',
   } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true }) }
 })
 
+test('ACP permission options pass through 1:1 including allow_always', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'acp-'))
+  const trace = join(dir, 'trace')
+  const r = await driver({ TRACE: trace }).open(context({
+    requestPermission: async req => {
+      expect(req.options.map(o => o.optionId)).toEqual(['allow_once', 'allow_always', 'reject_once', 'reject_always'])
+      expect(req.options.map(o => o.kind)).toEqual(['allow_once', 'allow_always', 'reject_once', 'reject_always'])
+      return { outcome: { outcome: 'selected', optionId: 'allow_always' }, message: 'ignored' }
+    },
+  }))
+  try {
+    expect(await r.prompt([{ type: 'text', text: 'permission-kinds' }], new AbortController().signal)).toEqual({ stopReason: 'end_turn' })
+    const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(x => JSON.parse(x))
+    const perm = lines.find(x => x.outcome?.outcome === 'selected')
+    expect(perm?.outcome?.optionId).toBe('allow_always')
+    expect(perm?.message).toBeUndefined()
+  } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true }) }
+})
+
 test('autonomous native begin drives core running, queue, reject, and configure busy', async () => {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'acp-core-'))
   const core = createCore({

@@ -539,6 +539,17 @@ test('native-only matching approval allow and late host after complete declines'
  }finally{await allow.close({ mode: "shutdown" })}
 })
 
+test('host allow_always writes acceptWithExecpolicyAmendment',async()=>{
+ const r=await driver({EXPECT_AMENDMENT:'1'},{permissionPrompts:'host'}).open(ctx({
+  requestPermission:async req=>{
+   expect(req.options.map(o=>o.optionId)).toContain('allow_always')
+   return {outcome:{outcome:'selected',optionId:'allow_always'}}
+  },
+ }))
+ try{expect(await r.prompt(input('ask-always'),signal())).toEqual({stopReason:'end_turn'})}
+ finally{await r.close({ mode: "shutdown" })}
+})
+
 test('onRuntimeRequest exposes skills/list and refuses turn/thread methods after close',async()=>{
  let hooked:{sessionId:string,agentSessionId:string,request:(method:string,params:unknown)=>Promise<unknown>}|undefined
  const r=await driver({}, {onRuntimeRequest:(info,request)=>{hooked={...info,request}}}).open(ctx())

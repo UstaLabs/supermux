@@ -76,7 +76,7 @@ describe("acp normalizer", () => {
   test("session/request_permission native frame", () => {
     const n = createAcpNormalizer()
     const out = n({ protocol: "native", value: { method: "session/request_permission", params: { toolCall: { toolCallId: "t" }, options: [{ optionId: "allow_once", kind: "allow_once", name: "Allow" }] } } })
-    expect(out[0]).toMatchObject({ kind: "permission-request", options: [{ optionId: "allow_once", kind: "allow_once", label: "Allow" }] })
+    expect(out).toEqual([])
   })
 
   test("grok vendor wrapper unwraps inner update; turn_completed still ignored", () => {

@@ -328,6 +328,26 @@ test('native control_cancel_request aborts the host callback and denies', async 
   } finally { await r.close({ mode: "shutdown" }) }
 })
 
+test('host allow_always writes updatedPermissions when suggestions exist', async () => {
+  const r = await hostDriver({EXPECT_PERM: 'always'}).open(ctx({
+    requestPermission: async req => {
+      expect(req.options.map(o => o.optionId)).toContain('allow_always')
+      expect(req.detail?.blockedPath).toBe('/tmp/x')
+      return {outcome: {outcome: 'selected', optionId: 'allow_always'}}
+    },
+  }))
+  try { expect(await r.prompt(input('permission-always'), signal())).toEqual({stopReason: 'end_turn'}) }
+  finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('host reject_once deny message is forwarded', async () => {
+  const r = await hostDriver({EXPECT_PERM: 'deny-message', EXPECT_DENY_MESSAGE: 'nope'}).open(ctx({
+    requestPermission: async () => ({outcome: {outcome: 'selected', optionId: 'reject_once'}, message: 'nope'}),
+  }))
+  try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
+  finally { await r.close({ mode: "shutdown" }) }
+})
+
 test('claude() TypeError names each missing required field', () => {
   const keeper = { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } }
   const full: any = { id: 'claude', command: 'claude', args: [], inheritEnv: true, tools: [], permissionPrompts: 'none', partialMessages: false, setupTimeoutMs: 1, requestTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, keeper }
