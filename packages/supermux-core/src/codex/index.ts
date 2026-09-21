@@ -1,4 +1,5 @@
-import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration } from '../types.js'
+import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, SessionConfiguration, CloseOptions } from '../types.js'
+import { requireCloseMode } from '../types.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 
@@ -24,24 +25,28 @@ const permissionOptions = [
 const cancelledPermission: RequestPermissionResponse = { outcome: { outcome: 'cancelled' } }
 
 export type CodexOptions = {
-  id?: string
-  command?: string
-  args?: string[]
+  id: string
+  command: string
+  args: string[]
   env?: Record<string, string>
-  inheritEnv?: boolean
+  inheritEnv: boolean
   model?: string
   reasoningEffort?: CodexReasoningEffort
-  sandbox?: CodexSandbox
-  approvalPolicy?: CodexApprovalPolicy
-  permissionPrompts?: CodexPermissionPrompts
-  setupTimeoutMs?: number
-  requestTimeoutMs?: number
-  shutdownTimeoutMs?: number
-  maxFrameBytes?: number
+  sandbox: CodexSandbox
+  approvalPolicy: CodexApprovalPolicy
+  permissionPrompts: CodexPermissionPrompts
+  setupTimeoutMs: number
+  requestTimeoutMs: number
+  shutdownTimeoutMs: number
+  maxFrameBytes: number
   /** Called once the native thread id is known. `request` is read-only: it
    *  rejects `turn/` and `thread/` methods so turn ownership stays with Core,
    *  and rejects after close. */
   onRuntimeRequest?: (info: { sessionId: string; agentSessionId: string }, request: (method: string, params: unknown) => Promise<unknown>) => void
+  keeper: {
+    stateDirectory: string
+    limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
+  }
 }
 
 function input(content: ContentBlock[]) {
@@ -76,22 +81,43 @@ function sessionOverrides(value: SessionConfiguration | undefined): SessionConfi
   return next
 }
 
-export function codex(options: CodexOptions = {}): AgentDriver {
-  const setupTimeoutMs = options.setupTimeoutMs ?? 30_000
-  const requestTimeoutMs = options.requestTimeoutMs ?? 30_000
-  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 2_000
-  const maxFrameBytes = options.maxFrameBytes ?? 16 * 1024 * 1024
+function requireKeeper(keeper: CodexOptions['keeper']): CodexOptions['keeper'] {
+  if (!keeper || typeof keeper !== 'object' || Array.isArray(keeper)) throw new TypeError('Codex keeper is required')
+  if (typeof keeper.stateDirectory !== 'string' || !keeper.stateDirectory) throw new TypeError('Codex keeper.stateDirectory must be a nonempty string')
+  const limits = keeper.limits
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits)) throw new TypeError('Codex keeper.limits is required')
+  for (const key of ['parkedDeadlineMs', 'journalMaxBytes', 'connectTimeoutMs'] as const) {
+    const v = limits[key]
+    if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) throw new TypeError(`Codex keeper.limits.${key} must be a positive safe integer`)
+  }
+  return keeper
+}
+
+export function codex(options: CodexOptions): AgentDriver {
+  if (!options || typeof options !== 'object') throw new TypeError('Codex options are required')
+  for (const field of ['id', 'command', 'args', 'sandbox', 'approvalPolicy', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'keeper', 'inheritEnv'] as const) {
+    if (options[field] === undefined) throw new TypeError(`Codex ${field} is required`)
+  }
+  if (typeof options.id !== 'string' || !options.id) throw new TypeError('Codex id is required')
+  if (typeof options.command !== 'string' || !options.command) throw new TypeError('Codex command is required')
+  if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Codex args is required')
+  if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Codex inheritEnv is required')
+  const setupTimeoutMs = options.setupTimeoutMs
+  const requestTimeoutMs = options.requestTimeoutMs
+  const shutdownTimeoutMs = options.shutdownTimeoutMs
+  const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Codex limits must be positive safe integers')
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Codex model must be a nonempty string')
   if (options.reasoningEffort !== undefined) requireEffort(options.reasoningEffort)
-  if (options.sandbox !== undefined && !SANDBOXES.has(options.sandbox)) throw new TypeError('Codex sandbox must be read-only, workspace-write, or danger-full-access')
-  if (options.approvalPolicy !== undefined && !APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, or untrusted')
-  if (options.permissionPrompts !== undefined && !PERMISSION_PROMPTS.has(options.permissionPrompts)) throw new TypeError('Codex permissionPrompts must be none or host')
+  if (!SANDBOXES.has(options.sandbox)) throw new TypeError('Codex sandbox must be read-only, workspace-write, or danger-full-access')
+  if (!APPROVAL_POLICIES.has(options.approvalPolicy)) throw new TypeError('Codex approvalPolicy must be never, on-request, or untrusted')
+  if (!PERMISSION_PROMPTS.has(options.permissionPrompts)) throw new TypeError('Codex permissionPrompts must be none or host')
   if (options.onRuntimeRequest !== undefined && typeof options.onRuntimeRequest !== 'function') throw new TypeError('Codex onRuntimeRequest must be a function')
-  const sandbox = options.sandbox ?? 'read-only'
-  const approvalPolicy = options.approvalPolicy ?? 'never'
+  const keeper = requireKeeper(options.keeper)
+  const sandbox = options.sandbox
+  const approvalPolicy = options.approvalPolicy
   const hostPermissions = options.permissionPrompts === 'host'
-  return { id: options.id ?? 'codex', async open(context) {
+  return { id: options.id, async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId, ready = false, closed = false
     let fatal: Error | undefined
@@ -182,10 +208,18 @@ export function codex(options: CodexOptions = {}): AgentDriver {
       for (const slot of live.values()) slot.started.reject(error)
       if (ready && !closed) context.onExit(error)
     }
+    // Live-turn snapshot in keeper meta: a re-attaching process has fresh memory, and the
+    // frames that opened the running turns may already be acked by the process that died.
+    // Record the set synchronously on every bind/complete, before the frame is acked, so a
+    // re-attach can seed its slots from meta and match the replayed/live frames that follow.
+    function snapshotLiveTurns() {
+      try { rpc.setMeta({ liveTurns: [...live.keys()] }) } catch { /* transport closing */ }
+    }
     function completeSlot(slot: TurnSlot, params: any) {
       if (slot.finished) return
       slot.finished = true
       live.delete(slot.id)
+      snapshotLiveTurns()
       rememberTombstone(slot.id)
       cancelPendingPermissions(slot.id)
       slot.started.resolve(slot.id)
@@ -220,6 +254,7 @@ export function codex(options: CodexOptions = {}): AgentDriver {
       }
       live.set(id, slot)
       slot.activityStarted = true
+      snapshotLiveTurns()
       emitActivity(id, 'started')
       return slot
     }
@@ -378,6 +413,8 @@ export function codex(options: CodexOptions = {}): AgentDriver {
         return
       }
       if (message.id != null) {
+        const requestTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
+        if (requestTurnId && !live.has(requestTurnId) && !tombstones.has(requestTurnId)) bindLive(requestTurnId, 'native')
         handleServerRequest(message)
         return
       }
@@ -416,12 +453,47 @@ export function codex(options: CodexOptions = {}): AgentDriver {
       context.onUpdate({ protocol: 'native', value: { method, params } })
       if (method === 'turn/completed' && params.turn?.id === slot.id) completeSlot(slot, params)
     }
-    const rpc = transport({ command: options.command ?? 'codex', args: options.args ?? ['app-server'], env: { ...(options.inheritEnv === false ? {} : process.env), ...options.env, ...context.profile?.env }, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes }, dispatchNotify, fail)
-    const close = async () => { if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Codex runtime closed')) } await rpc.close() }
-    const setupAbort = () => { fail(new Error('Codex setup aborted')); void close() }
+    const rpc = await transport({ command: options.command, args: options.args, env: { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env }, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
+    const close = async (closeOptions: CloseOptions) => {
+      const mode = requireCloseMode(closeOptions)
+      if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Codex runtime closed')) }
+      await rpc.close({ mode })
+    }
+    const setupAbort = () => { fail(new Error('Codex setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
-    const timer = setTimeout(() => { fail(new Error('Codex setup timed out')); void close() }, setupTimeoutMs)
+    const timer = setTimeout(() => { fail(new Error('Codex setup timed out')); void close({ mode: 'shutdown' }) /* setup timeout: stop the native process */ }, setupTimeoutMs)
+    const hookRuntimeRequest = (threadId: string) => {
+      if (!options.onRuntimeRequest) return
+      const request = async (method: string, params: unknown) => {
+        if (closed || fatal) throw fatal ?? new Error('Codex runtime closed')
+        if (typeof method !== 'string' || !method) throw new Error('Codex runtime request method required')
+        if (method.startsWith('turn/') || method.startsWith('thread/')) {
+          throw new Error(`Codex runtime request refuses ${method}`)
+        }
+        return rpc.request(method, params)
+      }
+      options.onRuntimeRequest({ sessionId: context.sessionId, agentSessionId: threadId }, request)
+    }
     try {
+      const reattach = rpc.welcome.agentRunning === true && typeof rpc.welcome.meta.agentSessionId === 'string'
+      if (reattach) {
+        const threadId = rpc.welcome.meta.agentSessionId as string
+        if (context.resumeId && context.resumeId !== threadId) throw new Error('Codex thread identity mismatch')
+        agentSessionId = threadId
+        hookRuntimeRequest(threadId)
+        const liveTurns = rpc.welcome.meta.liveTurns
+        if (Array.isArray(liveTurns)) {
+          for (const id of liveTurns) {
+            if (typeof id !== 'string' || !id) continue
+            const slot = bindLive(id, 'native')
+            slot?.started.resolve(id)
+          }
+        }
+        const buffered = pendingSetup.splice(0)
+        for (const notice of buffered) dispatchNotify(notice)
+        if (fatal) throw fatal
+        ready = true
+      } else {
       await Promise.race([rpc.request('initialize', { clientInfo: { name: 'supermux-core', version: '0.0.0' }, capabilities: { experimentalApi: true } }), failure.promise])
       rpc.write({ method: 'initialized', params: {} })
       const model = resolvedModel()
@@ -429,22 +501,14 @@ export function codex(options: CodexOptions = {}): AgentDriver {
       if (typeof result?.thread?.id !== 'string' || !result.thread.id || (context.resumeId && result.thread.id !== context.resumeId)) throw new Error('Codex thread identity mismatch')
       captureNativeInitial(result)
       agentSessionId = result.thread.id
-      if (options.onRuntimeRequest) {
-        const request = async (method: string, params: unknown) => {
-          if (closed || fatal) throw fatal ?? new Error('Codex runtime closed')
-          if (typeof method !== 'string' || !method) throw new Error('Codex runtime request method required')
-          if (method.startsWith('turn/') || method.startsWith('thread/')) {
-            throw new Error(`Codex runtime request refuses ${method}`)
-          }
-          return rpc.request(method, params)
-        }
-        options.onRuntimeRequest({ sessionId: context.sessionId, agentSessionId: result.thread.id }, request)
-      }
+      rpc.setMeta({ agentSessionId: result.thread.id })
+      hookRuntimeRequest(result.thread.id)
       const buffered = pendingSetup.splice(0)
       for (const notice of buffered) dispatchNotify(notice)
       if (fatal) throw fatal
       ready = true
-    } catch (error) { await close(); throw error } finally { clearTimeout(timer); context.signal.removeEventListener('abort', setupAbort) }
+      }
+    } catch (error) { await close({ mode: 'shutdown' }); throw error } finally { clearTimeout(timer); context.signal.removeEventListener('abort', setupAbort) }
     async function interrupt() {
       const waitingOwned = owned && !owned.id ? owned : undefined
       const snapshot = liveUnfinished()
@@ -462,7 +526,7 @@ export function codex(options: CodexOptions = {}): AgentDriver {
       }
     }
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: false, configure: true, history: true }, close, interrupt,
+      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true }, close, interrupt,
       configuration() { return { ...overrides } },
       async configure(configuration) {
         if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')

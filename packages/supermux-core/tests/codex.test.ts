@@ -1,4 +1,4 @@
-import {test,expect,setDefaultTimeout} from 'bun:test'
+import {test,expect,setDefaultTimeout,afterEach} from 'bun:test'
 import {fileURLToPath} from 'node:url'
 import {mkdtemp,readFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -9,20 +9,30 @@ setDefaultTimeout(20_000)
 const fixture=fileURLToPath(new URL('./fixtures/codex-agent.mjs',import.meta.url))
 const signal=()=>new AbortController().signal
 const ctx=(extra:Partial<DriverContext>={}):DriverContext=>({sessionId:'core',cwd:process.cwd(),signal:signal(),onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),...extra})
-const driver=(env={},extra={})=>codex({command:process.execPath,args:[fixture],env,setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:30,...extra})
+const keeperDirs:string[]=[]
+const driver=(env={},extra:any={})=>{
+ const stateDirectory=require('node:fs').mkdtempSync(join(tmpdir(),'codex-keeper-'))
+ keeperDirs.push(stateDirectory)
+ return codex({id:'codex',command:process.execPath,args:[fixture],env,inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:16*1024*1024,keeper:{stateDirectory,limits:{parkedDeadlineMs:5000,journalMaxBytes:1_000_000,connectTimeoutMs:4000}},...extra})
+}
+afterEach(async()=>{
+ for(const dir of keeperDirs.splice(0)){
+  try{await rm(dir,{recursive:true,force:true})}catch{/* */}
+ }
+})
 const input=(text:string)=>[{type:'text' as const,text}]
 test('native lifecycle, early completion, filtered updates, and failure',async()=>{
  const updates:any[]=[];const r=await driver().open(ctx({onUpdate:u=>updates.push(u)}))
- try{expect(r.agentSessionId).toBe('native-1');expect(r.capabilities).toEqual({resume:true,steer:true,fork:true,detach:false,configure:true,history:true})
+ try{expect(r.agentSessionId).toBe('native-1');expect(r.capabilities).toEqual({resume:true,steer:true,fork:true,detach:true,configure:true,history:true})
  for(const text of ['hello','early','permission'])expect(await r.prompt(input(text),signal())).toEqual({stopReason:'end_turn'})
  expect(updates.some(x=>x.protocol==='native'&&x.value.params.delta==='héllo')).toBe(true)
  expect(updates.some(x=>x.value.params.threadId==='other-thread'||x.value.params.turn?.id==='other-turn')).toBe(false)
  await expect(r.prompt(input('fail'),signal())).rejects.toThrow('turn failed')
  await expect(r.prompt([{type:'resource_link',uri:'file:///x',name:'x'}],signal())).rejects.toThrow('Unsupported')
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 test('resume preserves identity; failure never creates replacement',async()=>{
- const r=await driver().open(ctx({resumeId:'old'}));expect(r.agentSessionId).toBe('old');await r.close()
+ const r=await driver().open(ctx({resumeId:'old'}));expect(r.agentSessionId).toBe('old');await r.close({ mode: "shutdown" })
  await expect(driver().open(ctx({resumeId:'missing'}))).rejects.toThrow('missing thread')
  await expect(driver({MODE:'wrong-resume'}).open(ctx({resumeId:'old'}))).rejects.toThrow('identity')
 })
@@ -30,17 +40,17 @@ test('interrupt during start acknowledgement and steer use exact turn',async()=>
  const r=await driver().open(ctx());try{
  let pending=r.prompt(input('hang'),signal());await r.interrupt();expect(await pending).toEqual({stopReason:'cancelled'})
  pending=r.prompt(input('hang'),signal());await r.steer!(input('change'));expect(await pending).toEqual({stopReason:'end_turn'})
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 test('missing executable, setup timeout, and stream failures reject',async()=>{
  await expect(driver({}, {command:'/not-a-codex-executable'}).open(ctx())).rejects.toThrow()
  await expect(driver({MODE:'setup-hang'},{setupTimeoutMs:30}).open(ctx())).rejects.toThrow()
- for(const text of ['disconnect','eof','malformed','oversize']){const r=await driver({}, {maxFrameBytes:4096}).open(ctx());try{await expect(r.prompt(input(text),signal())).rejects.toThrow()}finally{await r.close()}}
+ for(const text of ['disconnect','eof','malformed','oversize']){const r=await driver({}, {maxFrameBytes:4096}).open(ctx());try{await expect(r.prompt(input(text),signal())).rejects.toThrow()}finally{await r.close({ mode: "shutdown" })}}
 })
 test('profile env forwarded and close reaps stubborn child and settles turn',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'native-'));const pidFile=join(dir,'pid');const trace=join(dir,'trace')
  const r=await driver({MODE:'stubborn'}).open(ctx({profile:{agent:'codex',env:{PID_FILE:pidFile,TRACE:trace}}}))
- const pending=r.prompt(input('hang'),signal()).catch(e=>e);await new Promise(r=>setTimeout(r,30));await r.close()
+ const pending=r.prompt(input('hang'),signal()).catch(e=>e);await new Promise(r=>setTimeout(r,30));await r.close({ mode: "shutdown" })
  expect(await pending).toBeInstanceOf(Error);expect(()=>process.kill(Number(require('node:fs').readFileSync(pidFile,'utf8')),0)).toThrow()
  expect((await readFile(trace,'utf8')).includes('initialized')).toBe(true);await rm(dir,{recursive:true})
 })
@@ -48,7 +58,7 @@ test('profile env forwarded and close reaps stubborn child and settles turn',asy
 test('fork uses native parent and checkpoint and returns independent identity', async()=>{
  const r=await driver().open(ctx({forkFrom:{agentSessionId:'native-parent',at:{nativeTurnId:'checkpoint'}}}))
  try {expect(r.agentSessionId).toBe('native-fork');expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})}
- finally {await r.close()}
+ finally {await r.close({ mode: "shutdown" })}
 })
 
 test('interrupt racing early completion does not fail or affect the next turn',async()=>{
@@ -57,7 +67,7 @@ test('interrupt racing early completion does not fail or affect the next turn',a
   const pending=r.prompt(input('early'),signal())
   await r.interrupt()
   expect(await pending).toEqual({stopReason:'end_turn'})
- } finally {await r.close()}
+ } finally {await r.close({ mode: "shutdown" })}
 })
 
 async function traced(env={},extra={},context={}){
@@ -91,7 +101,7 @@ test('turn/start sends model and effort overrides; clearing restores factory def
   expect(starts[0].params).toMatchObject({model:'factory-model',effort:'low'})
   expect(starts[1].params).toMatchObject({model:'session-model',effort:'high'})
   expect(starts[2].params).toMatchObject({model:'factory-model',effort:'low'})
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('context.configuration restores model and effort on reopen and fork',async()=>{
@@ -100,13 +110,13 @@ test('context.configuration restores model and effort on reopen and fork',async(
   expect(r.configuration()).toEqual({model:'reopen-model',reasoningEffort:'medium'})
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
   expect(turnStarts(await lines())[0].params).toMatchObject({model:'reopen-model',effort:'medium'})
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
  const fork=await traced({},{}, {forkFrom:{agentSessionId:'native-parent',at:{nativeTurnId:'checkpoint'}},configuration:{model:'fork-model',reasoningEffort:'minimal'}})
  try{
   expect(fork.r.agentSessionId).toBe('native-fork')
   expect(await fork.r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
   expect(turnStarts(await fork.lines())[0].params).toMatchObject({model:'fork-model',effort:'minimal'})
- }finally{await fork.r.close();await rm(fork.dir,{recursive:true})}
+ }finally{await fork.r.close({ mode: "shutdown" });await rm(fork.dir,{recursive:true})}
 })
 
 test('malformed reasoning effort is rejected atomically',async()=>{
@@ -118,7 +128,7 @@ test('malformed reasoning effort is rejected atomically',async()=>{
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
   expect(turnStarts(await lines())[0].params).toMatchObject({model:'keep-model',effort:'low'})
   expect(turnStarts(await lines())[0].params.model).not.toBe('changed')
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('without factory defaults, configure clear restores native start values when present',async()=>{
@@ -136,7 +146,7 @@ test('without factory defaults, configure clear restores native start values whe
   expect(starts[1].params).toMatchObject({model:'native-model',effort:'low'})
   expect(starts[1].params.model).toBe('native-model')
   expect(starts[1].params.effort).toBe('low')
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('without factory or native defaults, clearing effort is rejected atomically',async()=>{
@@ -153,7 +163,7 @@ test('without factory or native defaults, clearing effort is rejected atomically
   expect(starts[0].params).toMatchObject({model:'session-model',effort:'high'})
   expect(starts[1].params).toMatchObject({model:'session-model',effort:'high'})
   expect(starts[1].params.effort).not.toBeUndefined()
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('null native effort is not guessed; clearing is rejected before mutating requested config',async()=>{
@@ -163,7 +173,7 @@ test('null native effort is not guessed; clearing is rejected before mutating re
   expect(r.configuration()).toEqual({model:'session-model',reasoningEffort:'high'})
   await expect(r.configure({})).rejects.toThrow('reasoning effort')
   expect(r.configuration()).toEqual({model:'session-model',reasoningEffort:'high'})
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('history reads the exact thread with includeTurns and pages locally',async()=>{
@@ -186,16 +196,16 @@ test('history reads the exact thread with includeTurns and pages locally',async(
   for(const read of reads){
    expect(read.params).toEqual({threadId:'native-1',includeTurns:true})
   }
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('history rejects identity mismatch and missing turns instead of empty history',async()=>{
  const badId=await traced({MODE:'history-bad-id'})
  try{await expect(badId.r.history()).rejects.toThrow('identity')}
- finally{await badId.r.close();await rm(badId.dir,{recursive:true})}
+ finally{await badId.r.close({ mode: "shutdown" });await rm(badId.dir,{recursive:true})}
  const missing=await traced({MODE:'history-no-turns'})
  try{await expect(missing.r.history()).rejects.toThrow('turns')}
- finally{await missing.r.close();await rm(missing.dir,{recursive:true})}
+ finally{await missing.r.close({ mode: "shutdown" });await rm(missing.dir,{recursive:true})}
 })
 
 test('contaminated resume model is not a native baseline; clear rejects atomically without factory',async()=>{
@@ -210,7 +220,7 @@ test('contaminated resume model is not a native baseline; clear rejects atomical
   expect(starts).toHaveLength(2)
   expect(starts[0].params.model).toBe('reopen-model')
   expect(starts[1].params.model).toBe('reopen-model')
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('explicit factory remains restorable after reopen with saved override',async()=>{
@@ -221,19 +231,20 @@ test('explicit factory remains restorable after reopen with saved override',asyn
   expect(r.configuration()).toEqual({})
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
   expect(turnStarts(await lines())[0].params.model).toBe('factory-model')
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('sandbox and approvalPolicy are validated before spawn and forwarded on start',async()=>{
- expect(()=>codex({sandbox:'nope'})).toThrow('sandbox')
- expect(()=>codex({approvalPolicy:'always'})).toThrow('approvalPolicy')
- expect(()=>codex({permissionPrompts:'maybe'})).toThrow('permissionPrompts')
+ const required={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,setupTimeoutMs:5000,requestTimeoutMs:3000,shutdownTimeoutMs:500,maxFrameBytes:4096,keeper:{stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}}
+ expect(()=>codex({...required,sandbox:'nope',approvalPolicy:'never',permissionPrompts:'none'})).toThrow('sandbox')
+ expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'always',permissionPrompts:'none'})).toThrow('approvalPolicy')
+ expect(()=>codex({...required,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'maybe'})).toThrow('permissionPrompts')
  const {r,dir,lines}=await traced({EXPECT_SANDBOX:'workspace-write',EXPECT_POLICY:'on-request'},{sandbox:'workspace-write',approvalPolicy:'on-request'})
  try{
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
   const start=(await lines()).find(x=>x.method==='thread/start')
   expect(start.params).toMatchObject({sandbox:'workspace-write',approvalPolicy:'on-request'})
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('default permissionPrompts none declines without asking host',async()=>{
@@ -242,7 +253,7 @@ test('default permissionPrompts none declines without asking host',async()=>{
  try{
   expect(await r.prompt(input('permission'),signal())).toEqual({stopReason:'end_turn'})
   expect(asked).toBe(0)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('host permission allow/deny/throw map to accept or decline',async()=>{
@@ -250,17 +261,17 @@ test('host permission allow/deny/throw map to accept or decline',async()=>{
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{expect(await r.prompt(input('ask-command'),signal())).toEqual({stopReason:'end_turn'})}
- finally{await r.close()}
+ finally{await r.close({ mode: "shutdown" })}
  const deny=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'reject_once'}}),
  }))
  try{expect(await deny.prompt(input('ask-file'),signal())).toEqual({stopReason:'end_turn'})}
- finally{await deny.close()}
+ finally{await deny.close({ mode: "shutdown" })}
  const thrown=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
   requestPermission:async()=>{throw new Error('host exploded')},
  }))
  try{expect(await thrown.prompt(input('ask-command'),signal())).toEqual({stopReason:'end_turn'})}
- finally{await thrown.close()}
+ finally{await thrown.close({ mode: "shutdown" })}
 })
 
 test('malformed host permission outcome declines without failing the runtime',async()=>{
@@ -273,7 +284,7 @@ test('malformed host permission outcome declines without failing the runtime',as
    expect(await r.prompt(input('ask-command'),signal())).toEqual({stopReason:'end_turn'})
    expect(asked).toBe(1)
    expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
-  }finally{await r.close()}
+  }finally{await r.close({ mode: "shutdown" })}
  }
 })
 
@@ -285,7 +296,7 @@ test('duplicate same-turn approval id replays without a second host ask',async()
  try{
   expect(await r.prompt(input('ask-dup'),signal())).toEqual({stopReason:'end_turn'})
   expect(asked).toBe(1)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('native completion while host is pending declines without unhandled rejection',async()=>{
@@ -303,7 +314,7 @@ test('native completion while host is pending declines without unhandled rejecti
   expect(unhandled).toEqual([])
  }finally{
   process.off('unhandledRejection',onUnhandled)
-  await r.close()
+  await r.close({ mode: "shutdown" })
  }
 })
 
@@ -317,7 +328,7 @@ test('close while a host permission is pending does not throw unhandled active.i
  try{
   const pending=r.prompt(input('ask-hang'),signal()).then(v=>v,e=>e)
   await new Promise(x=>setTimeout(x,80))
-  await r.close()
+  await r.close({ mode: "shutdown" })
   await pending
   await new Promise(x=>setTimeout(x,40))
   expect(unhandled).toEqual([])
@@ -342,7 +353,7 @@ test('late host allow after the next turn starts is denied and cached under orig
   resolveFirst({outcome:{outcome:'selected',optionId:'allow_once'}})
   await new Promise(x=>setTimeout(x,40))
   expect(asked).toBe(1)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('numeric and string JSON-RPC ids do not share a permission cache key',async()=>{
@@ -353,7 +364,7 @@ test('numeric and string JSON-RPC ids do not share a permission cache key',async
  try{
   expect(await r.prompt(input('ask-id-num'),signal())).toEqual({stopReason:'end_turn'})
   expect(asked).toBe(2)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('host permission cancel, stale, and unknown requests decline without hanging',async()=>{
@@ -367,22 +378,22 @@ test('host permission cancel, stale, and unknown requests decline without hangin
   await new Promise(x=>setTimeout(x,80))
   await r.interrupt()
   expect(await pending).toEqual({stopReason:'cancelled'})
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
  const stale=await driver({EXPECT_DECISION:'decline'},{permissionPrompts:'host'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{expect(await stale.prompt(input('ask-stale'),signal())).toEqual({stopReason:'end_turn'})}
- finally{await stale.close()}
+ finally{await stale.close({ mode: "shutdown" })}
  const unknown=await driver({},{permissionPrompts:'host'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{await expect(unknown.prompt(input('ask-unknown'),signal())).rejects.toThrow()}
- finally{await unknown.close()}
+ finally{await unknown.close({ mode: "shutdown" })}
  const permissions=await driver({},{permissionPrompts:'host'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{expect(await permissions.prompt(input('ask-permissions'),signal())).toEqual({stopReason:'end_turn'})}
- finally{await permissions.close()}
+ finally{await permissions.close({ mode: "shutdown" })}
 })
 
 test('interrupt and native completion still answer pending host approvals with decline',async()=>{
@@ -399,7 +410,7 @@ test('interrupt and native completion still answer pending host approvals with d
   const answers=await answeredApproval(hang.lines)
   expect(answers).toHaveLength(1)
   expect(answers[0].result).toEqual({decision:'decline'})
- }finally{await hang.r.close();await rm(hang.dir,{recursive:true})}
+ }finally{await hang.r.close({ mode: "shutdown" });await rm(hang.dir,{recursive:true})}
  const late=await traced({EXPECT_DECISION:'decline'},{permissionPrompts:'host'},{
   requestPermission:()=>new Promise(()=>{}),
  })
@@ -408,7 +419,7 @@ test('interrupt and native completion still answer pending host approvals with d
   const answers=await answeredApproval(late.lines)
   expect(answers).toHaveLength(1)
   expect(answers[0].result).toEqual({decision:'decline'})
- }finally{await late.r.close();await rm(late.dir,{recursive:true})}
+ }finally{await late.r.close({ mode: "shutdown" });await rm(late.dir,{recursive:true})}
 })
 
 test('autonomous turn on open reports activity and native updates without a prompt',async()=>{
@@ -427,7 +438,7 @@ test('autonomous turn on open reports activity and native updates without a prom
   await new Promise(x=>setTimeout(x,40))
   expect(activity).toEqual([{id:'auto-1',phase:'started'},{id:'auto-1',phase:'completed'}])
   expect(await r.prompt(input('hello'),signal())).toEqual({stopReason:'end_turn'})
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('setup notices wait for thread identity then drop foreign and threadless chat',async()=>{
@@ -441,7 +452,7 @@ test('setup notices wait for thread identity then drop foreign and threadless ch
   expect(updates.some(x=>x.value?.params?.delta==='ok')).toBe(true)
   expect(updates.some(x=>x.value?.params?.delta==='no-thread')).toBe(false)
   expect(updates.some(x=>x.value?.params?.threadId==='other-thread')).toBe(false)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('setup overflow fails open honestly',async()=>{
@@ -455,7 +466,7 @@ test('idle rate-limits update is process-scoped and does not create activity',as
   await new Promise(x=>setTimeout(x,40))
   expect(updates.some(x=>x.value?.method==='account/rateLimits/updated')).toBe(true)
   expect(activity).toEqual([])
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('native-only steer uses the exact autonomous turn',async()=>{
@@ -466,7 +477,7 @@ test('native-only steer uses the exact autonomous turn',async()=>{
   const steers=(await lines()).filter(x=>x.method==='turn/steer')
   expect(steers).toHaveLength(1)
   expect(steers[0].params.expectedTurnId).toBe('auto-1')
- }finally{await r.close();await rm(dir,{recursive:true})}
+ }finally{await r.close({ mode: "shutdown" });await rm(dir,{recursive:true})}
 })
 
 test('overlap turns reject steer and prompt; stale complete leaves the newer turn',async()=>{
@@ -482,7 +493,7 @@ test('overlap turns reject steer and prompt; stale complete leaves the newer tur
   expect(activity.some(x=>x.id==='auto-1'&&x.phase==='completed')).toBe(true)
   expect(activity.some(x=>x.id==='auto-2'&&x.phase==='completed')).toBe(false)
   expect(updates.some(x=>x.value?.params?.turnId==='auto-2'||x.value?.params?.turn?.id==='auto-2')).toBe(true)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('owned prompt reports the same native id once and overlap native survives owned finally',async()=>{
@@ -498,7 +509,7 @@ test('owned prompt reports the same native id once and overlap native survives o
   // auto-2's turn/completed notification may land after the owned promise settles; wait for it.
   for(let i=0;i<100&&!activity.some(x=>x.id==='auto-2'&&x.phase==='completed');i++)await new Promise(x=>setTimeout(x,10))
   expect(activity.some(x=>x.id==='auto-2'&&x.phase==='completed')).toBe(true)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
 })
 
 test('native-only matching approval allow and late host after complete declines',async()=>{
@@ -519,13 +530,13 @@ test('native-only matching approval allow and late host after complete declines'
   resolveHost({outcome:{outcome:'selected',optionId:'allow_once'}})
   await new Promise(x=>setTimeout(x,40))
   expect((await hang.lines()).filter(x=>x.id==='native-approval'&&('result' in x||'error' in x))).toHaveLength(1)
- }finally{await hang.r.close();await rm(hang.dir,{recursive:true})}
+ }finally{await hang.r.close({ mode: "shutdown" });await rm(hang.dir,{recursive:true})}
  const allow=await driver({MODE:'native-ask',EXPECT_DECISION:'accept'},{permissionPrompts:'host'}).open(ctx({
   requestPermission:async()=>({outcome:{outcome:'selected',optionId:'allow_once'}}),
  }))
  try{
   await new Promise(x=>setTimeout(x,80))
- }finally{await allow.close()}
+ }finally{await allow.close({ mode: "shutdown" })}
 })
 
 test('onRuntimeRequest exposes skills/list and refuses turn/thread methods after close',async()=>{
@@ -537,6 +548,16 @@ test('onRuntimeRequest exposes skills/list and refuses turn/thread methods after
   expect(await hooked!.request('skills/list',{})).toEqual({data:[{skills:[{name:'demo',description:'stub',enabled:true}]}]})
   await expect(hooked!.request('turn/start',{})).rejects.toThrow(/refuses turn\/start/)
   await expect(hooked!.request('thread/resume',{})).rejects.toThrow(/refuses thread\/resume/)
- }finally{await r.close()}
+ }finally{await r.close({ mode: "shutdown" })}
  await expect(hooked!.request('skills/list',{})).rejects.toThrow(/closed/)
+})
+
+test('codex() TypeError names each missing required field',()=>{
+ const keeper={stateDirectory:'/tmp',limits:{parkedDeadlineMs:1,journalMaxBytes:1,connectTimeoutMs:1}}
+ const full:any={id:'codex',command:'codex',args:['app-server'],inheritEnv:true,sandbox:'read-only',approvalPolicy:'never',permissionPrompts:'none',setupTimeoutMs:1,requestTimeoutMs:1,shutdownTimeoutMs:1,maxFrameBytes:1,keeper}
+ for(const field of ['id','command','args','sandbox','approvalPolicy','setupTimeoutMs','requestTimeoutMs','shutdownTimeoutMs','maxFrameBytes','permissionPrompts','keeper','inheritEnv']){
+  const opts={...full};delete opts[field]
+  expect(()=>codex(opts)).toThrow(TypeError)
+  expect(()=>codex(opts)).toThrow(new RegExp(`Codex ${field} is required`))
+ }
 })

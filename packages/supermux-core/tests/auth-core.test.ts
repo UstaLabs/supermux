@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../src/types.js"
+import { TEST_LIMITS, nextId } from "./helpers.js"
 
 function idleRuntime(): AgentRuntime {
   return {
@@ -20,12 +21,12 @@ const cores: ReturnType<typeof createCore>[] = []
 async function setup(driver: AgentDriver, options: Record<string, unknown> = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-core-auth-"))
   dirs.push(stateDirectory)
-  const core = createCore({ stateDirectory, agents: [driver], interruptTimeoutMs: 30, ...options })
+  const core = createCore({ stateDirectory, agents: [driver], limits: TEST_LIMITS, ...options })
   cores.push(core)
   return { core, stateDirectory }
 }
 afterEach(async () => {
-  await Promise.all(cores.splice(0).map(core => core.close().catch(() => {})))
+  await Promise.all(cores.splice(0).map(core => core.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
@@ -49,7 +50,7 @@ test("wrong-agent profile is rejected before driver.open", async () => {
   const { core } = await setup(driver, {
     profiles: { work: { agent: "other", env: { TOKEN: "private" } } },
   })
-  await expect(core.sessions.create({ agent: "test", cwd: tmpdir(), authProfile: "work" })).rejects.toMatchObject({
+  await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir(), authProfile: "work" })).rejects.toMatchObject({
     code: "invalid_auth_profile",
   })
   await expect(core.auth.methods({ agent: "test", profile: "work" })).rejects.toMatchObject({
@@ -91,7 +92,7 @@ test("Core does not rewrite opaque native auth failures from driver.open", async
     open: async (_context: DriverContext) => { throw native },
   }
   const { core } = await setup(driver)
-  const error = await core.sessions.create({ agent: "test", cwd: tmpdir() }).catch(e => e)
+  const error = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() }).catch(e => e)
   expect(error).toBe(native)
   expect(error.code).toBe("native_auth_expired")
   expect(error.code).not.toBe("auth_missing")

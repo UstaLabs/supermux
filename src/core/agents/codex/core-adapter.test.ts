@@ -99,14 +99,18 @@ async function harness(driver: AgentDriver = fakeAgentDriver().driver) {
   const workdir = await mkdtemp(join(tmpdir(), "codex-wd-"))
   const stateDirectory = await mkdtemp(join(tmpdir(), "codex-core-"))
   dirs.push(workdir, stateDirectory)
-  const core = createCore({ stateDirectory, agents: [driver], interruptTimeoutMs: 40 })
+  const core = createCore({
+    stateDirectory,
+    agents: [driver],
+    limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
+  })
   cores.push(core)
   return { core, workdir, stateDirectory }
 }
 
 afterEach(async () => {
   await Promise.all(adapters.splice(0).map((a) => a.stop().catch(() => {})))
-  await Promise.all(cores.splice(0).map((c) => c.close().catch(() => {})))
+  await Promise.all(cores.splice(0).map((c) => c.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })))
 })
 

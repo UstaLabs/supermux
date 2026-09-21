@@ -1,25 +1,30 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentDriver, ContentBlock, PermissionHandler } from '../types.js'
+import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler } from '../types.js'
+import { requireCloseMode } from '../types.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
 
 export type ClaudeOptions = {
-  id?: string
-  command?: string
-  args?: string[]
+  id: string
+  command: string
+  args: string[]
   env?: Record<string, string>
-  inheritEnv?: boolean
+  inheritEnv: boolean
   model?: string
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-  tools?: string[] | 'default'
+  tools: string[] | 'default'
   allowedTools?: string[]
   disallowedTools?: string[]
   permissionMode?: 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
-  permissionPrompts?: 'host' | 'none'
-  setupTimeoutMs?: number
-  requestTimeoutMs?: number
-  shutdownTimeoutMs?: number
-  maxFrameBytes?: number
+  permissionPrompts: 'host' | 'none'
+  setupTimeoutMs: number
+  requestTimeoutMs: number
+  shutdownTimeoutMs: number
+  maxFrameBytes: number
+  keeper: {
+    stateDirectory: string
+    limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
+  }
 }
 
 const plumbing = new Set(['control_request', 'control_response', 'control_cancel_request', 'keep_alive'])
@@ -57,26 +62,51 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   if (options.tools === 'default') {}
   else if (Array.isArray(options.tools)) flags.push('--tools', options.tools.join(','))
   else flags.push('--tools', '')
-  flags.push('--permission-prompts', options.permissionPrompts ?? 'none')
+  flags.push('--permission-prompts', options.permissionPrompts)
   if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
   if (options.allowedTools?.length) flags.push('--allowedTools', options.allowedTools.join(','))
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
   if (options.model) flags.push('--model', options.model)
   if (options.effort) flags.push('--effort', options.effort)
   flags.push(resume ? `--resume=${sessionId}` : `--session-id=${sessionId}`)
-  return [...(options.args ?? []), ...flags]
+  return [...options.args, ...flags]
 }
 
-export function claude(options: ClaudeOptions = {}): AgentDriver {
-  const setupTimeoutMs = options.setupTimeoutMs ?? 30_000
-  const requestTimeoutMs = options.requestTimeoutMs ?? 30_000
-  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 2_000
-  const maxFrameBytes = options.maxFrameBytes ?? 16 * 1024 * 1024
+function requireKeeper(keeper: ClaudeOptions['keeper']): ClaudeOptions['keeper'] {
+  if (!keeper || typeof keeper !== 'object' || Array.isArray(keeper)) throw new TypeError('Claude keeper is required')
+  if (typeof keeper.stateDirectory !== 'string' || !keeper.stateDirectory) throw new TypeError('Claude keeper.stateDirectory must be a nonempty string')
+  const limits = keeper.limits
+  if (!limits || typeof limits !== 'object' || Array.isArray(limits)) throw new TypeError('Claude keeper.limits is required')
+  for (const key of ['parkedDeadlineMs', 'journalMaxBytes', 'connectTimeoutMs'] as const) {
+    const v = limits[key]
+    if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) throw new TypeError(`Claude keeper.limits.${key} must be a positive safe integer`)
+  }
+  return keeper
+}
+
+export function claude(options: ClaudeOptions): AgentDriver {
+  if (!options || typeof options !== 'object') throw new TypeError('Claude options are required')
+  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv'] as const) {
+    if (options[field] === undefined) throw new TypeError(`Claude ${field} is required`)
+  }
+  if (typeof options.id !== 'string' || !options.id) throw new TypeError('Claude id is required')
+  if (typeof options.command !== 'string' || !options.command) throw new TypeError('Claude command is required')
+  if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Claude args is required')
+  if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Claude inheritEnv is required')
+  if (options.permissionPrompts !== 'host' && options.permissionPrompts !== 'none') throw new TypeError('Claude permissionPrompts is required')
+  if (options.tools !== 'default' && !Array.isArray(options.tools)) throw new TypeError('Claude tools is required')
+  const setupTimeoutMs = options.setupTimeoutMs
+  const requestTimeoutMs = options.requestTimeoutMs
+  const shutdownTimeoutMs = options.shutdownTimeoutMs
+  const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Claude limits must be positive safe integers')
-  return { id: options.id ?? 'claude', async open(context) {
+  const keeper = requireKeeper(options.keeper)
+  return { id: options.id, async open(context) {
     context.signal.throwIfAborted()
     let agentSessionId = context.resumeId ?? randomUUID(), ready = false, closed = false
     let fatal: Error | undefined
+    let identityConfirmed = false
+    let fromMetaOwned = false
     const hostPermissions = options.permissionPrompts === 'host'
     type Active = { uuid: string; completion: ReturnType<typeof deferred<{stopReason: string}>>; interrupted: boolean }
     type PendingPermission = { controller: AbortController; turnUuid: string; input: unknown; fingerprint: string }
@@ -202,10 +232,12 @@ export function claude(options: ClaudeOptions = {}): AgentDriver {
         a.completion.reject(new Error(message ?? frame.result ?? 'Claude turn failed'))
       } else a.completion.resolve({ stopReason: typeof frame.stop_reason === 'string' && frame.stop_reason ? frame.stop_reason : 'end_turn' })
     }
-    const rpc = transport({
-      command: options.command ?? 'claude', args: argv(options, agentSessionId, !!context.resumeId),
-      env: { ...(options.inheritEnv === false ? {} : process.env), ...options.env, ...context.profile?.env },
+    const rpc = await transport({
+      command: options.command, args: argv(options, agentSessionId, !!context.resumeId),
+      env: { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env },
       cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes,
+      sessionId: context.sessionId,
+      keeper,
     }, message => {
       if (message?.type === 'control_request' && message.request?.subtype === 'can_use_tool' && typeof message.request_id === 'string') {
         handleCanUseTool(message)
@@ -221,30 +253,64 @@ export function claude(options: ClaudeOptions = {}): AgentDriver {
       if (message?.type === 'system' && message.subtype === 'init') {
         if (typeof message.session_id !== 'string' || !message.session_id) { fail(new Error('Claude session identity missing')); return }
         if (message.session_id !== agentSessionId) { fail(new Error('Claude session identity mismatch')); return }
+        try { rpc.setMeta({ agentSessionId: message.session_id }) } catch { /* */ }
       }
       if (typeof sessionId === 'string' && agentSessionId && sessionId !== agentSessionId) return
+      if (typeof sessionId === 'string' && !identityConfirmed && message?.type === 'result') {
+        try { rpc.setMeta({ agentSessionId: sessionId }) } catch { /* */ }
+        identityConfirmed = true
+      }
+      if (message?.type === 'system' && message.subtype === 'init') identityConfirmed = true
       if (agentSessionId) context.onUpdate({ protocol: 'native', value: message })
       if (!ready && message?.type === 'result' && message.is_error) {
         fail(new Error(Array.isArray(message.errors) ? message.errors.join('; ') : 'Claude startup failed')); return
       }
       if (message?.type === 'result' && active) {
         const promptUuid = message.user_message_uuid
-        if (typeof promptUuid === 'string' && promptUuid !== active.uuid) return
-        complete(active, message)
+        if (typeof promptUuid === 'string' && promptUuid !== active.uuid && !fromMetaOwned) return
+        const finishing = active
+        complete(finishing, message)
+        try { context.onActivity?.({ id: finishing.uuid, phase: 'completed' }) } catch { /* */ }
+        try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
+        fromMetaOwned = false
+        if (active === finishing) active = undefined
       }
     }, fail)
-    const close = async () => { if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Claude runtime closed')) } await rpc.close() }
-    const setupAbort = () => { fail(new Error('Claude setup aborted')); void close() }
+    const close = async (closeOptions: CloseOptions) => {
+      const mode = requireCloseMode(closeOptions)
+      if (!closed) { closed = true; cancelPendingPermissions(); fail(new Error('Claude runtime closed')) }
+      await rpc.close({ mode })
+    }
+    const setupAbort = () => { fail(new Error('Claude setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
-    const timer = setTimeout(() => { fail(new Error('Claude setup timed out')); void close() }, setupTimeoutMs)
+    const timer = setTimeout(() => { fail(new Error('Claude setup timed out')); void close({ mode: 'shutdown' }) /* setup timeout: stop the native process */ }, setupTimeoutMs)
     try {
-      await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
-      // Native system/init is not part of open(): CLI 2.1.261 acks initialize
-      // without a session id, and emits system/init only on the first user prompt.
-      // A created but never-prompted session may have no durable history.
-      if (fatal) throw fatal
-      ready = true
-    } catch (error) { await close(); throw error } finally { clearTimeout(timer); context.signal.removeEventListener('abort', setupAbort) }
+      const reattach = rpc.welcome.agentRunning === true && typeof rpc.welcome.meta.agentSessionId === 'string'
+      if (reattach) {
+        const sid = rpc.welcome.meta.agentSessionId as string
+        if (context.resumeId && context.resumeId !== sid) throw new Error('Claude session identity mismatch')
+        agentSessionId = sid
+        identityConfirmed = true
+        const owned = rpc.welcome.meta.ownedTurn
+        if (owned && typeof owned === 'object' && !Array.isArray(owned) && typeof (owned as { uuid?: unknown }).uuid === 'string') {
+          const uuid = (owned as { uuid: string }).uuid
+          fromMetaOwned = true
+          const a: Active = { uuid, completion: deferred<{stopReason: string}>(), interrupted: false }
+          active = a
+          try { context.onActivity?.({ id: uuid, phase: 'started' }) } catch { /* */ }
+        }
+        if (fatal) throw fatal
+        ready = true
+      } else {
+        await Promise.race([rpc.request({ subtype: 'initialize' }), failure.promise])
+        // Native system/init is not part of open(): CLI 2.1.261 acks initialize
+        // without a session id, and emits system/init only on the first user prompt.
+        // A created but never-prompted session may have no durable history.
+        rpc.setMeta({ agentSessionId })
+        if (fatal) throw fatal
+        ready = true
+      }
+    } catch (error) { await close({ mode: 'shutdown' }); throw error } finally { clearTimeout(timer); context.signal.removeEventListener('abort', setupAbort) }
     async function interrupt() {
       const a = active
       if (!a) return
@@ -253,7 +319,7 @@ export function claude(options: ClaudeOptions = {}): AgentDriver {
       if (active === a && !fatal) a.interrupted = true
     }
     return {
-      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: false }, close, interrupt,
+      agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true }, close, interrupt,
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
         signal.throwIfAborted()
@@ -264,6 +330,7 @@ export function claude(options: ClaudeOptions = {}): AgentDriver {
         const abort = () => { void interrupt().catch(error => { a.completion.reject(error) }) }
         signal.addEventListener('abort', abort, { once: true })
         try {
+          rpc.setMeta({ ownedTurn: { uuid: a.uuid } })
           rpc.write({ type: 'user', uuid: a.uuid, session_id: agentSessionId, message: { role: 'user', content: converted } })
           return await a.completion.promise
         } catch (error) { a.completion.reject(error instanceof Error ? error : new Error(String(error))); throw error }
@@ -271,6 +338,7 @@ export function claude(options: ClaudeOptions = {}): AgentDriver {
           signal.removeEventListener('abort', abort)
           cancelPendingPermissions(a.uuid)
           if (active === a) active = undefined
+          try { rpc.setMeta({ ownedTurn: null }) } catch { /* */ }
         }
       },
     }

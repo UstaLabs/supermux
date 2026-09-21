@@ -38,7 +38,7 @@ function fakeChildFactory(options: {
   let liveConfig: SessionConfiguration = {}
 
   const factory = (gopts: CodexOptions, overrides: SessionConfiguration): AgentDriver => {
-    codexCalls.push({ options: { ...gopts, env: { ...gopts.env }, args: gopts.args ? [...gopts.args] : undefined }, overrides: { ...overrides } })
+    codexCalls.push({ options: { ...gopts, env: { ...gopts.env }, args: [...gopts.args] }, overrides: { ...overrides } })
     return {
       id: "codex",
       async open(ctx) {
@@ -290,7 +290,7 @@ describe("codex core spawn/resume dialect", () => {
 
     const first = resumeCodexSession({ codexHost: host }, session)
     void first.catch(() => {})
-    const waitUntil = Date.now() + 2000
+    const waitUntil = Date.now() + 10_000 // auth copy + home preparation before open take ~2.5 s on a loaded host
     while (child.openAttempts < 1 && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 10))
     expect(child.openAttempts).toBe(1)
     writeFileSync(join(home, "SENTINEL"), "SENTINEL", "utf8")

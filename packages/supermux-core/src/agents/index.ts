@@ -2,23 +2,22 @@ import { isAbsolute } from 'node:path'
 import { acp, type AcpActivityHint, type AcpOptions } from '../acp/index.js'
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
-import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, DriverContext, SessionConfiguration } from '../types.js'
+import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration } from '../types.js'
+import { requireCloseMode } from '../types.js'
 
 const EFFORTS = new Set(['low', 'medium', 'high'])
 
 export type GrokOptions = Omit<AcpOptions, 'id' | 'command' | 'args'> & {
-  id?: string
+  id: string
   /** Exact executable. Suffix is not inspected; use commandArgs to prefix a script. */
-  command?: string
+  command: string
   /** Prefix argv before Grok CLI args (e.g. `[fixture]` with `command: process.execPath`). */
-  commandArgs?: string[]
+  commandArgs: string[]
   model?: string
   reasoningEffort?: 'low' | 'medium' | 'high'
   authPath?: string
-  /** Default false. Broker must pass true explicitly; never default auto-approval. */
-  alwaysApprove?: boolean
-  /** Default true, matching the Grok CLI library. Broker must pass false explicitly. */
-  noLeader?: boolean
+  alwaysApprove: boolean
+  noLeader: boolean
 }
 
 function requireEffort(value: string): 'low' | 'medium' | 'high' {
@@ -45,8 +44,8 @@ function grokArgs(options: GrokOptions, overrides: SessionConfiguration): string
   const model = overrides.model ?? options.model
   const effort = overrides.reasoningEffort ?? options.reasoningEffort
   const args = ['agent']
-  if (options.noLeader !== false) args.push('--no-leader')
-  if (options.alwaysApprove === true) args.push('--always-approve')
+  if (options.noLeader) args.push('--no-leader')
+  if (options.alwaysApprove) args.push('--always-approve')
   if (model) args.push('--model', model)
   if (effort) args.push('--reasoning-effort', effort)
   args.push('stdio')
@@ -54,12 +53,7 @@ function grokArgs(options: GrokOptions, overrides: SessionConfiguration): string
 }
 
 function grokCommand(options: GrokOptions): { command: string; prefix: string[] } {
-  const command = options.command ?? 'grok'
-  const prefix = options.commandArgs
-  if (prefix !== undefined && (!Array.isArray(prefix) || prefix.some(value => typeof value !== 'string'))) {
-    throw new TypeError('Grok commandArgs must be a string array')
-  }
-  return { command, prefix: prefix ? [...prefix] : [] }
+  return { command: options.command, prefix: [...options.commandArgs] }
 }
 
 function grokUpdateKind(value: unknown): { kind: string; id?: string } | undefined {
@@ -138,7 +132,7 @@ function createGrokClassifyActivity(): (update: AgentUpdate) => AcpActivityHint 
 function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
   const launched = grokCommand(options)
   return acp({
-    id: options.id ?? 'grok',
+    id: options.id,
     command: launched.command,
     args: [...launched.prefix, ...grokArgs(options, overrides)],
     env: { ...options.env, ...(options.authPath ? { GROK_AUTH_PATH: options.authPath } : {}) },
@@ -146,6 +140,9 @@ function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
     mcpServers: options.mcpServers,
     setupTimeoutMs: options.setupTimeoutMs,
     shutdownTimeoutMs: options.shutdownTimeoutMs,
+    maxFrameBytes: options.maxFrameBytes,
+    maxOutstandingActivity: options.maxOutstandingActivity,
+    keeper: options.keeper,
     cancelRetryIntervalMs: options.cancelRetryIntervalMs,
     cancelRetryTimeoutMs: options.cancelRetryTimeoutMs,
     classifyActivity: createGrokClassifyActivity(),
@@ -157,16 +154,23 @@ type GrokChildFactory = (options: GrokOptions, overrides: SessionConfiguration) 
 /** Grok's native automation transport is ACP; credential refresh stays at the
  * explicit canonical auth path, rather than following a replaceable symlink.
  */
-export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory = grokAcp): AgentDriver {
+export function grok(options: GrokOptions, childFactory: GrokChildFactory = grokAcp): AgentDriver {
+  if (!options || typeof options !== 'object') throw new TypeError('Grok options are required')
+  for (const field of ['id', 'command', 'commandArgs', 'alwaysApprove', 'noLeader', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
+    if (options[field] === undefined) throw new TypeError(`Grok ${field} is required`)
+  }
+  if (typeof options.id !== 'string' || !options.id) throw new TypeError('Grok id is required')
+  if (typeof options.command !== 'string' || !options.command) throw new TypeError('Grok command is required')
+  if (!Array.isArray(options.commandArgs) || options.commandArgs.some(value => typeof value !== 'string')) throw new TypeError('Grok commandArgs is required')
+  if (typeof options.alwaysApprove !== 'boolean') throw new TypeError('Grok alwaysApprove is required')
+  if (typeof options.noLeader !== 'boolean') throw new TypeError('Grok noLeader is required')
+  if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Grok inheritEnv is required')
+  if (!Array.isArray(options.mcpServers)) throw new TypeError('Grok mcpServers is required')
+  if (!Number.isSafeInteger(options.maxOutstandingActivity) || options.maxOutstandingActivity <= 0) throw new TypeError('Grok maxOutstandingActivity is required')
   if (options.authPath && !isAbsolute(options.authPath)) throw new TypeError('authPath must be absolute')
   if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('Grok model must be a nonempty string')
   if (options.reasoningEffort !== undefined) requireEffort(options.reasoningEffort)
-  if (options.alwaysApprove !== undefined && typeof options.alwaysApprove !== 'boolean') throw new TypeError('alwaysApprove must be a boolean')
-  if (options.noLeader !== undefined && typeof options.noLeader !== 'boolean') throw new TypeError('noLeader must be a boolean')
-  if (options.commandArgs !== undefined && (!Array.isArray(options.commandArgs) || options.commandArgs.some(value => typeof value !== 'string'))) {
-    throw new TypeError('Grok commandArgs must be a string array')
-  }
-  const id = options.id ?? 'grok'
+  const id = options.id
   const authDriver = childFactory(options, {})
   return {
     id,
@@ -189,15 +193,15 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
       const childSignal = () => AbortSignal.any([context.signal, lifetime.signal])
       const nativeBusy = () => nativeOutstanding.size > 0
       const applyNotice = (notice: ActivityNotice) => {
-        if (applyBufferedActivity(nativeOutstanding, notice) === 'overflow') {
+        if (applyBufferedActivity(nativeOutstanding, notice, options.maxOutstandingActivity) === 'overflow') {
           context.onExit(new CoreError(ACTIVITY_OVERFLOW.code, ACTIVITY_OVERFLOW.message))
           return
         }
         context.onActivity?.(notice)
       }
 
-      async function closeOwned(runtime: AgentRuntime) {
-        await runtime.close()
+      async function closeOwned(runtime: AgentRuntime, mode: CloseOptions['mode']) {
+        await runtime.close({ mode })
         if (pending === runtime) pending = undefined
         if (inner === runtime) inner = undefined
       }
@@ -205,7 +209,7 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
       async function spawn(resumeId?: string) {
         context.signal.throwIfAborted()
         if (lifetime.signal.aborted) throw new CoreError('aborted', 'Grok operation aborted')
-        if (pending) await closeOwned(pending)
+        if (pending) await closeOwned(pending, 'shutdown')
         const gen = ++generation
         let published = false
         let setupFailure: Error | undefined
@@ -221,7 +225,7 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
             const copied = copyActivityNotice(notice)
             if (!copied) return
             if (!published) {
-              if (applyBufferedActivity(buffered, copied) === 'overflow') {
+              if (applyBufferedActivity(buffered, copied, options.maxOutstandingActivity) === 'overflow') {
                 setupFailure = new CoreError(ACTIVITY_OVERFLOW.code, ACTIVITY_OVERFLOW.message)
               }
               return
@@ -243,7 +247,7 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
           generation++
           buffered.clear()
           try {
-            await closeOwned(runtime)
+            await closeOwned(runtime, 'shutdown')
           } catch (cleanup) {
             const cleanupError = cleanup instanceof Error ? cleanup : new Error(String(cleanup))
             const combined = new AggregateError([error, cleanupError], 'Session opening and runtime cleanup failed')
@@ -260,7 +264,7 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
         inner = runtime
         pending = undefined
         acceptedSessionId = runtime.agentSessionId
-        liveCapabilities = { resume: runtime.capabilities.resume, steer: false, fork: false, detach: false, configure: true, history: false }
+        liveCapabilities = { resume: runtime.capabilities.resume, steer: false, fork: false, detach: runtime.capabilities.detach === true, configure: true, history: false }
         published = true
         for (const notice of buffered.values()) {
           if (gen !== generation || closed) break
@@ -295,13 +299,13 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
           const next = sessionOverrides(configuration)
           const sessionId = inner?.agentSessionId ?? acceptedSessionId
           const run = (async () => {
-            if (pending) await closeOwned(pending)
+            if (pending) await closeOwned(pending, 'shutdown')
             overrides = next
             const previous = inner
             generation++
             nativeOutstanding.clear()
             if (previous) {
-              await closeOwned(previous)
+              await closeOwned(previous, 'shutdown')
             }
             await spawn(sessionId)
           })()
@@ -309,7 +313,8 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
           try { await run }
           finally { if (configuring === run) configuring = undefined }
         },
-        async close() {
+        async close(closeOptions: CloseOptions) {
+          const mode = requireCloseMode(closeOptions)
           closed = true
           lifetime.abort()
           generation++
@@ -317,7 +322,7 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
           if (inFlight) await inFlight.catch(() => {})
           const child = pending ?? inner
           if (!child) return
-          await closeOwned(child)
+          await closeOwned(child, mode)
         },
       }
 
@@ -336,8 +341,14 @@ export function grok(options: GrokOptions = {}, childFactory: GrokChildFactory =
   }
 }
 
-export type OpenCodeOptions = Omit<AcpOptions, 'id' | 'command' | 'args'> & { id?: string; command?: string }
+export type OpenCodeOptions = Omit<AcpOptions, 'args'> & { id: string; command: string }
 /** Uses OpenCode's ACP entrypoint. No library HTTP listener or broker globals. */
-export function opencode(options: OpenCodeOptions = {}): AgentDriver {
-  return acp({...options,id:options.id ?? 'opencode',command:options.command ?? 'opencode',args:['acp']})
+export function opencode(options: OpenCodeOptions): AgentDriver {
+  if (!options || typeof options !== 'object') throw new TypeError('OpenCode options are required')
+  for (const field of ['id', 'command', 'inheritEnv', 'mcpServers', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'maxOutstandingActivity', 'keeper', 'cancelRetryIntervalMs', 'cancelRetryTimeoutMs'] as const) {
+    if (options[field] === undefined) throw new TypeError(`OpenCode ${field} is required`)
+  }
+  if (typeof options.id !== 'string' || !options.id) throw new TypeError('OpenCode id is required')
+  if (typeof options.command !== 'string' || !options.command) throw new TypeError('OpenCode command is required')
+  return acp({ ...options, args: ['acp'] })
 }

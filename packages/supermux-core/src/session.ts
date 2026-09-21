@@ -1,11 +1,12 @@
+import { requireCloseMode } from "./types.js"
 import { randomUUID } from "node:crypto"
-import { ACTIVITY_OVERFLOW, MAX_OUTSTANDING_ACTIVITY, copyActivityNotice } from "./activity.js"
+import { ACTIVITY_OVERFLOW, copyActivityNotice } from "./activity.js"
 import { mergeConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
 import type {
   ActivityNotice, AgentRuntime, AgentUpdate, Capabilities, Completion, CoreEvent, InterruptResult,
   Receipt, SendOptions, SessionRecord, SessionState, ForkOptions,
-  HistoryOptions, HistoryPage, SessionConfiguration,
+  HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
 } from "./types.js"
 
 type ActivitySlot = {
@@ -40,6 +41,7 @@ export class Session {
     private readonly emit: (event: CoreEvent) => void,
     private readonly interruptTimeoutMs: number,
     private readonly maxPending: number,
+    private readonly outstandingActivity: number,
     private readonly onClosed: () => void,
     private readonly createFork: (options: ForkOptions) => Promise<Session>,
     private readonly persistRecord: (record: SessionRecord) => Promise<void>,
@@ -49,7 +51,7 @@ export class Session {
     return { ...structuredClone(this.record), state: this.state, pending: this.queue.length, paused: this.paused }
   }
 
-  capabilities(): Capabilities { return { ...this.runtime.capabilities, detach: false } }
+  capabilities(): Capabilities { return { ...this.runtime.capabilities } }
 
   async send(options: SendOptions): Promise<Receipt> {
     this.assertReady()
@@ -100,9 +102,11 @@ export class Session {
     },
   }
 
-  interrupt(options: { pending: "keep" | "discard" } = { pending: "discard" }): Promise<InterruptResult> {
+  interrupt(options: { pending: "keep" | "discard" }): Promise<InterruptResult> {
+    if (!options || (options.pending !== "keep" && options.pending !== "discard")) {
+      return Promise.reject(new TypeError("pending is required and must be keep or discard"))
+    }
     try { this.assertReady() } catch (error) { return Promise.reject(error) }
-    if (options.pending !== "keep" && options.pending !== "discard") return Promise.reject(new CoreError("invalid_input", "pending must be keep or discard"))
     this.paused = true
     if (options.pending === "discard") this.pending.clear()
     if (this.interrupting) return this.interrupting
@@ -147,7 +151,11 @@ export class Session {
     return { status: "stopped" }
   }
 
-  close(): Promise<void> {
+  close(options: CloseOptions): Promise<void> {
+    const mode = requireCloseMode(options)
+    if (mode === "detach" && !this.runtime.capabilities.detach) {
+      throw new UnsupportedOperation("detach", this.record.agent)
+    }
     if (this.closing) return this.closing
     this.paused = true
     this.changeState("closing")
@@ -156,7 +164,7 @@ export class Session {
     this.active?.finish({ status: "cancelled" })
     this.closing = Promise.resolve().then(async () => {
       if (this.configuring) await this.configuring.catch(() => {})
-      await this.runtime.close()
+      await this.runtime.close({ mode })
     }).then(() => {
       this.seen.clear()
       this.endActivityWaiters(new CoreError("session_closed", "Session is closed"))
@@ -208,9 +216,10 @@ export class Session {
     return this.runtime.history({ ...options })
   }
 
-  fork(options: ForkOptions = {}): Promise<Session> {
+  fork(options: ForkOptions): Promise<Session> {
     try {
       this.assertReady()
+      if (!options || typeof options.id !== "string") throw new TypeError("id is required")
       if (!this.runtime.capabilities.fork) throw new UnsupportedOperation("fork", this.record.agent)
       if (this.active || this.queue.length || this.activity.size || this.state !== "idle") throw new CoreError("session_busy", "Fork requires an idle session with no pending input")
       if (options.at && (typeof options.at.nativeTurnId !== "string" || !options.at.nativeTurnId)) throw new CoreError("invalid_input", "Fork point must identify a native turn")
@@ -235,7 +244,7 @@ export class Session {
     if (!copied) return
     if (copied.phase === "started") {
       if (this.activity.has(copied.id)) return
-      if (this.activity.size >= MAX_OUTSTANDING_ACTIVITY) {
+      if (this.activity.size >= this.outstandingActivity) {
         this.fail(new CoreError(ACTIVITY_OVERFLOW.code, ACTIVITY_OVERFLOW.message))
         return
       }

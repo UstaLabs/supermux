@@ -1,15 +1,15 @@
-import { randomUUID } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { isAbsolute } from "node:path"
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from "./activity.js"
 import { assertConfiguration, mergeConfiguration, nonemptyConfiguration, normalizeRequestedConfiguration } from "./configuration.js"
 import { CoreError, UnsupportedOperation, asError } from "./errors.js"
 import { Events } from "./events.js"
+import { requireCloseMode, requireAgentsCloseMode } from "./types.js"
 import { Session } from "./session.js"
 import { SessionStore } from "./store.js"
 import type {
   ActivityNotice, AgentDriver, AgentRuntime, AuthProfile, CoreOptions, CreateOptions, ResumeOptions, AdoptOptions, Observer, SessionRecord, ForkSource,
-  SessionConfiguration,
+  SessionConfiguration, CloseMode, CloseOptions, CoreCloseOptions,
 } from "./types.js"
 
 export function createCore(options: CoreOptions): Core { return new Core(options) }
@@ -41,6 +41,7 @@ export class Core {
   private shuttingDown = false
   private readonly interruptTimeoutMs: number
   private readonly maxPending: number
+  private readonly outstandingActivity: number
 
   constructor(private readonly options: CoreOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -48,11 +49,11 @@ export class Core {
       if (!driver.id || this.drivers.has(driver.id)) throw new CoreError("invalid_options", "Agent IDs must be nonempty and unique")
       this.drivers.set(driver.id, driver)
     }
-    this.interruptTimeoutMs = options.interruptTimeoutMs ?? 10_000
-    this.maxPending = options.maxPending ?? 128
-    if (!Number.isFinite(this.interruptTimeoutMs) || this.interruptTimeoutMs <= 0 || !Number.isInteger(this.maxPending) || this.maxPending <= 0) {
-      throw new CoreError("invalid_options", "Timeout and queue limit must be positive")
-    }
+    const limits = options.limits
+    if (!limits || typeof limits !== "object") throw new TypeError("limits is required")
+    this.interruptTimeoutMs = requirePositiveSafeInteger(limits.interruptTimeoutMs, "interruptTimeoutMs")
+    this.maxPending = requirePositiveSafeInteger(limits.maxPending, "maxPending")
+    this.outstandingActivity = requirePositiveSafeInteger(limits.outstandingActivity, "outstandingActivity")
     this.profiles = structuredClone(options.profiles ?? {})
     this.store = new SessionStore(options.stateDirectory)
     this.events = new Events(options.onObserverError)
@@ -66,7 +67,8 @@ export class Core {
       input.configuration = normalizeRequestedConfiguration(input.configuration)
       this.driver(input.agent)
       this.profile(input.agent, input.authProfile)
-      const id = input.id ?? randomUUID()
+      if (typeof input.id !== "string") throw new TypeError("id is required")
+      const id = input.id
       assertSessionId(id)
       return this.withReservation(id, async () => {
         await assertWorkdir(input.cwd)
@@ -139,7 +141,10 @@ export class Core {
         await this.ready()
         const current = this.live.get(id)
         if (current && current.snapshot().state !== "closed") {
-          if (current.snapshot().state === "closing" || current.snapshot().state === "failed") await current.close()
+          if (current.snapshot().state === "closing" || current.snapshot().state === "failed") {
+            // Failed/closing handle must be shut down before resume can reopen the native agent.
+            await current.close({ mode: "shutdown" })
+          }
           else {
             if (explicit) await current.configure(requestedPatch)
             return current
@@ -180,17 +185,19 @@ export class Core {
      * Joins an in-flight same-id close. Waits any already-started create/adopt/resume
      * (ignoring that setup rejection), then closes a live Session or failed-open leftover.
      * Does not abort a pending custom-driver `open`; waiting that startup then closing
-     * the owned runtime is the per-id contract. `core.close()` still aborts the core lifetime.
+     * the owned runtime is the per-id contract. `core.close({ agents })` still aborts the core lifetime.
      * Unknown ids are idempotent. Failed close retains leftover ownership until a later
-     * `sessions.close(id)` or `core.close()` confirms cleanup.
+     * `sessions.close(id, { mode })` or `core.close({ agents })` confirms cleanup.
      */
-    close: (id: string): Promise<void> => {
+    close: (id: string, options: CloseOptions): Promise<void> => {
       try {
+        requireCloseMode(options)
         assertSessionId(id)
         const existing = this.closingById.get(id)
         if (existing) return existing
         this.assertOpen()
       } catch (error) { return Promise.reject(asError(error)) }
+      const mode = options.mode
       this.closePending.add(id)
       const operation = this.operation(() => Promise.resolve().then(async () => {
         try {
@@ -199,8 +206,8 @@ export class Core {
           const restoring = this.restoring.get(id)
           if (restoring) await restoring.catch(() => {})
           const live = this.live.get(id)
-          if (live && live.snapshot().state !== "closed") await live.close()
-          await this.closeOwnedRuntime(id)
+          if (live && live.snapshot().state !== "closed") await live.close({ mode })
+          await this.closeOwnedRuntime(id, mode)
         } finally {
           this.closePending.delete(id)
         }
@@ -227,20 +234,21 @@ export class Core {
     }),
   }
 
-  close(): Promise<void> {
+  close(options: CoreCloseOptions): Promise<void> {
+    const agents = requireAgentsCloseMode(options)
     if (this.closing) return this.closing
     this.shuttingDown = true
-    this.closing = Promise.resolve().then(() => this.shutdown()).catch(error => { this.closing = undefined; throw error })
+    this.closing = Promise.resolve().then(() => this.shutdown(agents)).catch(error => { this.closing = undefined; throw error })
     this.lifetime.abort(new CoreError("core_closed", "Core is closing"))
     return this.closing
   }
 
-  private async shutdown(): Promise<void> {
+  private async shutdown(agents: CloseMode): Promise<void> {
     // No new operations can enter after shuttingDown becomes true.
-    const initialCloses = [...this.live.values()].map(session => session.close())
+    const initialCloses = [...this.live.values()].map(session => session.close({ mode: agents }))
     const first = Promise.allSettled(initialCloses)
     await Promise.allSettled([...this.operations])
-    const remaining = await Promise.allSettled([...this.cleanup.keys()].map(id => this.closeOwnedRuntime(id)))
+    const remaining = await Promise.allSettled([...this.cleanup.keys()].map(id => this.closeOwnedRuntime(id, agents)))
     const results = [...await first, ...remaining]
     const errors = results.filter((r): r is PromiseRejectedResult => r.status === "rejected").map(r => r.reason)
     if (errors.length) throw new AggregateError(errors, "One or more agent runtimes failed to close")
@@ -274,7 +282,7 @@ export class Core {
           session.reportActivity(copied)
           return
         }
-        if (applyBufferedActivity(outstandingActivity, copied) === "overflow") {
+        if (applyBufferedActivity(outstandingActivity, copied, this.outstandingActivity) === "overflow") {
           failed = new CoreError(ACTIVITY_OVERFLOW.code, ACTIVITY_OVERFLOW.message)
           discarded = true
           outstandingActivity.clear()
@@ -316,16 +324,18 @@ export class Core {
       await this.store.put(record)
       this.assertOpen()
       if (failed) throw failed
-      session = new Session(record, runtime, event => this.events.emit(event), this.interruptTimeoutMs, this.maxPending, () => {
+      session = new Session(record, runtime, event => this.events.emit(event), this.interruptTimeoutMs, this.maxPending, this.outstandingActivity, () => {
         if (this.live.get(record.id) === session) this.live.delete(record.id)
       }, options => this.operation(() => {
-        const id = randomUUID()
+        if (typeof options.id !== "string") throw new TypeError("id is required")
+        const id = options.id
+        assertSessionId(id)
         return this.withReservation(id, () => this.openSession({
           agent: record.agent, cwd: record.cwd, authProfile: record.authProfile,
           id, createdAt: new Date().toISOString(),
           lineage: { parentSessionId: record.id, ...(options.at ? {nativeTurnId: options.at.nativeTurnId} : {}) },
           ...(record.configuration ? { configuration: structuredClone(record.configuration) } : {}),
-        }, undefined, { agentSessionId: record.agentSessionId, ...options }))
+        }, undefined, { agentSessionId: record.agentSessionId, ...(options.at ? { at: options.at } : {}) }))
       }), recordToSave => this.store.put(recordToSave))
       this.live.set(record.id, session)
       for (const notice of outstandingActivity.values()) session.reportActivity(notice)
@@ -341,11 +351,13 @@ export class Core {
         const owned = runtime
         const existing = this.cleanup.get(input.id)
         if (existing && existing !== owned) {
-          try { await owned.close() } catch (cleanupError) { cleanupFailure = asError(cleanupError) }
+          // Failed-open duplicate leftover: shut the extra runtime down; it never became a session.
+          try { await owned.close({ mode: "shutdown" }) } catch (cleanupError) { cleanupFailure = asError(cleanupError) }
         } else {
           this.cleanup.set(input.id, owned)
           try {
-            await this.closeOwnedRuntime(input.id)
+            // Failed open: stop the native process so the identity can be retried.
+            await this.closeOwnedRuntime(input.id, "shutdown")
           } catch (cleanupError) {
             cleanupFailure = asError(cleanupError)
           }
@@ -435,12 +447,12 @@ export class Core {
     return work
   }
 
-  private closeOwnedRuntime(id: string): Promise<void> {
+  private closeOwnedRuntime(id: string, mode: CloseMode): Promise<void> {
     const inflight = this.leftoverClosing.get(id)
     if (inflight) return inflight
     const owned = this.cleanup.get(id)
     if (!owned) return Promise.resolve()
-    const work = Promise.resolve().then(() => owned.close()).then(() => {
+    const work = Promise.resolve().then(() => owned.close({ mode })).then(() => {
       if (this.cleanup.get(id) === owned) this.cleanup.delete(id)
     }).finally(() => {
       if (this.leftoverClosing.get(id) === work) this.leftoverClosing.delete(id)
@@ -463,4 +475,11 @@ const SESSION_ID = /^[a-zA-Z0-9_-]{1,128}$/
 
 function assertSessionId(id: string): void {
   if (typeof id !== "string" || !SESSION_ID.test(id)) throw new CoreError("invalid_session_id", "Invalid session ID")
+}
+
+function requirePositiveSafeInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new TypeError(`${field} must be a positive safe integer`)
+  }
+  return value as number
 }

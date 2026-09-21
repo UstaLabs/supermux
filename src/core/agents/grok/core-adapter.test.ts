@@ -111,14 +111,18 @@ async function harness(driver: AgentDriver = fakeAgentDriver().driver) {
   const workdir = await mkdtemp(join(tmpdir(), "grok-wd-"))
   const stateDirectory = await mkdtemp(join(tmpdir(), "grok-core-"))
   dirs.push(workdir, stateDirectory)
-  const core = createCore({ stateDirectory, agents: [driver], interruptTimeoutMs: 40 })
+  const core = createCore({
+    stateDirectory,
+    agents: [driver],
+    limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
+  })
   cores.push(core)
   return { core, workdir, stateDirectory }
 }
 
 afterEach(async () => {
   await Promise.all(adapters.splice(0).map((a) => a.stop().catch(() => {})))
-  await Promise.all(cores.splice(0).map((c) => c.close().catch(() => {})))
+  await Promise.all(cores.splice(0).map((c) => c.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })))
 })
 
@@ -706,10 +710,10 @@ test("active-turn delayed close emits turn-complete only after native close", as
   fake.driver.open = async (ctx) => {
     const runtime = await origOpen(ctx)
     const innerClose = runtime.close.bind(runtime)
-    runtime.close = async () => {
+    runtime.close = async (opts) => {
       closeEntered.resolve()
       await closeRelease.promise
-      await innerClose()
+      await innerClose(opts)
     }
     return runtime
   }
@@ -751,10 +755,10 @@ test("active-turn failed close keeps pending buffer and does not fake idle", asy
   fake.driver.open = async (ctx) => {
     const runtime = await origOpen(ctx)
     const innerClose = runtime.close.bind(runtime)
-    runtime.close = async () => {
+    runtime.close = async (opts) => {
       closeAttempts++
       if (closeAttempts === 1) throw new Error("native close failed")
-      await innerClose()
+      await innerClose(opts)
     }
     return runtime
   }

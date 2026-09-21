@@ -23,6 +23,7 @@ type Registered = {
 /** Process-level owner of one supermux-core instance shared by every Grok session. */
 export class GrokCoreHost {
   private readonly core: Core
+  private readonly stateDirectory: string
   private readonly driverFactory?: GrokDriverFactory
   private readonly registered = new Map<string, Registered>()
   private closing = false
@@ -31,10 +32,12 @@ export class GrokCoreHost {
 
   constructor(options: GrokCoreHostOptions) {
     if (!options.stateDirectory) throw new Error("stateDirectory is required")
+    this.stateDirectory = options.stateDirectory
     this.driverFactory = options.driverFactory
     this.core = createCore({
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],
+      limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     })
   }
 
@@ -81,7 +84,7 @@ export class GrokCoreHost {
     // session and leftover runtime confirmed close (a failed close rejects with an
     // AggregateError and leaves this registry intact for a retry), so clearing the
     // registrations below never drops ownership of a still-running child.
-    await this.core.close()
+    await this.core.close({ agents: "shutdown" })
     this.registered.clear()
     await Promise.allSettled(entries.map((entry) => entry.adapter.stop()))
   }
@@ -100,9 +103,27 @@ export class GrokCoreHost {
     }
     const env = { ...entry.env }
     const factory = this.driverFactory
-    const driver = factory
-      ? grok({ env, noLeader: false, alwaysApprove: true }, factory)
-      : grok({ env, noLeader: false, alwaysApprove: true })
+    const grokOpts: GrokOptions = {
+      id: "grok",
+      command: "grok",
+      commandArgs: [],
+      env,
+      inheritEnv: true,
+      mcpServers: [],
+      noLeader: false,
+      alwaysApprove: true,
+      setupTimeoutMs: 30_000,
+      shutdownTimeoutMs: 2_000,
+      maxFrameBytes: 16 * 1024 * 1024,
+      maxOutstandingActivity: 256,
+      cancelRetryIntervalMs: 250,
+      cancelRetryTimeoutMs: 10_000,
+      keeper: {
+        stateDirectory: this.stateDirectory,
+        limits: { parkedDeadlineMs: 120_000, journalMaxBytes: 64 * 1024 * 1024, connectTimeoutMs: 10_000 },
+      },
+    }
+    const driver = factory ? grok(grokOpts, factory) : grok(grokOpts)
     return driver.open(ctx)
   }
 

@@ -1,8 +1,9 @@
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { CoreError } from '../errors.js'
-import type { AgentDriver, AgentRuntime, DriverContext } from '../types.js'
+import { CoreError, UnsupportedOperation } from '../errors.js'
+import type { AgentDriver, AgentRuntime, CloseOptions, DriverContext } from '../types.js'
+import { requireCloseMode } from '../types.js'
 
 export type AuthLease = { env: Record<string, string>; release(): Promise<void> }
 export type AuthProvider = { prepare(context: DriverContext): Promise<AuthLease>; close(): Promise<void> }
@@ -133,9 +134,11 @@ export function withAuth(driver: AgentDriver, provider: AuthProvider): AgentDriv
         ...(runtime.configure ? {configure: (configuration: Parameters<NonNullable<AgentRuntime['configure']>>[0]) => runtime.configure!(configuration)} : {}),
         ...(runtime.configuration ? {configuration: () => runtime.configuration!()} : {}),
         ...(runtime.history ? {history: (options: Parameters<NonNullable<AgentRuntime['history']>>[0]) => runtime.history!(options)} : {}),
-        close() {
+        close(closeOptions: CloseOptions) {
+          const mode = requireCloseMode(closeOptions)
+          if (mode === 'detach' && !runtime.capabilities.detach) throw new UnsupportedOperation('detach', driver.id)
           return closing ??= Promise.resolve().then(async () => {
-            if (!stopped) { await runtime.close(); stopped = true }
+            if (!stopped) { await runtime.close({ mode }); stopped = true }
             await lease.release()
           }).catch(error => { closing = undefined; throw error })
         },

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { ActivityNotice, AgentDriver, AgentRuntime, CoreEvent, DriverContext } from "../src/types.js"
+import { TEST_LIMITS, nextId } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -69,12 +70,12 @@ const cores: ReturnType<typeof createCore>[] = []
 async function setup(driver: AgentDriver, options = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-core-activity-"))
   dirs.push(stateDirectory)
-  const core = createCore({ stateDirectory, agents: [driver], interruptTimeoutMs: 30, ...options })
+  const core = createCore({ stateDirectory, agents: [driver], limits: TEST_LIMITS, ...options })
   cores.push(core)
   return { core, stateDirectory }
 }
 afterEach(async () => {
-  await Promise.all(cores.splice(0).map(core => core.close().catch(() => {})))
+  await Promise.all(cores.splice(0).map(core => core.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 const input = (text: string) => ({ content: [{ type: "text" as const, text }], whenBusy: "queue" as const })
@@ -87,11 +88,11 @@ describe("native activity contract", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("turn-1", "started"))
     expect(s.snapshot().state).toBe("running")
     expect(events.filter(e => e.type === "message.accepted")).toEqual([])
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     await tick()
     expect(d.interrupts).toBe(1)
     expect(s.snapshot().state).toBe("interrupting")
@@ -104,9 +105,9 @@ describe("native activity contract", () => {
   test("unconfirmed native interrupt stays busy", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("turn-1", "started"))
-    expect(await s.interrupt()).toEqual({ status: "unconfirmed" })
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "unconfirmed" })
     expect(s.snapshot().state).toBe("interrupting")
     await expect(s.send({ ...input("next"), whenBusy: "reject" })).rejects.toMatchObject({ code: "session_busy" })
     expect(() => s.pending.continue()).toThrow()
@@ -115,11 +116,11 @@ describe("native activity contract", () => {
   test("queue, reject, configure, and fork honor native busy", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("turn-1", "started"))
     await expect(s.send({ ...input("nope"), whenBusy: "reject" })).rejects.toMatchObject({ code: "session_busy" })
     await expect(s.configure({ model: "x" })).rejects.toMatchObject({ code: "session_busy" })
-    await expect(s.fork()).rejects.toMatchObject({ code: "session_busy" })
+    await expect(s.fork({ id: nextId() })).rejects.toMatchObject({ code: "session_busy" })
     const queued = await s.send(input("later"))
     await tick()
     expect(d.prompts).toEqual([])
@@ -133,7 +134,7 @@ describe("native activity contract", () => {
   test("duplicate start and stale completion cannot end newer work", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const ctx = d.opens[0]!
     ctx.onActivity!(activity("a", "started"))
     ctx.onActivity!(activity("a", "started"))
@@ -151,7 +152,7 @@ describe("native activity contract", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const receipt = await s.send(input("hello"))
     d.opens[0]!.onActivity!(activity("same-turn", "started"))
     expect(events.filter(e => e.type === "message.accepted")).toHaveLength(1)
@@ -172,7 +173,7 @@ describe("native activity contract", () => {
   test("native start after owned prompt before the receipt settles is not lost", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const receipt = await s.send(input("hello"))
     expect(s.snapshot().state).toBe("running")
     d.opens[0]!.onActivity!(activity("handoff", "started"))
@@ -201,7 +202,7 @@ describe("native activity contract", () => {
       },
     }
     const { core } = await setup(driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     expect(s.snapshot().state).toBe("running")
     const ctx = await opened.promise
     ctx.onActivity!(activity("boot", "completed"))
@@ -213,11 +214,11 @@ describe("native activity contract", () => {
   test("close failure and late callbacks cannot confirm native idle or revive", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const ctx = d.opens[0]!
     ctx.onActivity!(activity("bg", "started"))
     d.failClose(new Error("still running"))
-    await expect(s.close()).rejects.toThrow("still running")
+    await expect(s.close({ mode: "shutdown" })).rejects.toThrow("still running")
     expect(s.snapshot().state).toBe("failed")
     ctx.onActivity!(activity("bg", "completed"))
     ctx.onActivity!(activity("newer", "started"))
@@ -228,41 +229,41 @@ describe("native activity contract", () => {
   test("idle interrupt without native work does not call runtime.interrupt", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
-    expect(await s.interrupt()).toEqual({ status: "already_idle" })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "already_idle" })
     expect(d.interrupts).toBe(0)
   })
 
   test("drivers that never report activity keep owned-prompt behavior", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const receipt = await s.send(input("only"))
     d.complete()
     expect((await receipt.completed).status).toBe("completed")
     expect(s.snapshot().state).toBe("idle")
-    expect(await s.interrupt()).toEqual({ status: "already_idle" })
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "already_idle" })
   })
 
   test("resume does not invent activity for prior native turns", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("live", "started"))
     d.opens[0]!.onActivity!(activity("live", "completed"))
-    await s.close()
+    await s.close({ mode: "shutdown" })
     const resumed = await core.sessions.resume(s.id)
     expect(resumed.snapshot().state).toBe("idle")
-    expect(await resumed.interrupt()).toEqual({ status: "already_idle" })
+    expect(await resumed.interrupt({ pending: "discard" })).toEqual({ status: "already_idle" })
   })
 
   test("new activity after interrupt snapshot is not cleared by the old completion", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const ctx = d.opens[0]!
     ctx.onActivity!(activity("old", "started"))
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     await tick()
     ctx.onActivity!(activity("new", "started"))
     ctx.onActivity!(activity("old", "completed"))
@@ -275,12 +276,12 @@ describe("native activity contract", () => {
   test("delayed close rejects a pending native interrupt as session_closed, not stopped", async () => {
     const d = activityDriver()
     const gate = d.delayClose()
-    const { core } = await setup(d.driver, { interruptTimeoutMs: 200 })
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const { core } = await setup(d.driver, { limits: { ...TEST_LIMITS, interruptTimeoutMs: 200 } })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("bg", "started"))
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     await tick()
-    const closing = s.close()
+    const closing = s.close({ mode: "shutdown" })
     await tick()
     expect(s.snapshot().state).toBe("closing")
     gate.resolve()
@@ -292,12 +293,12 @@ describe("native activity contract", () => {
   test("failing close rejects a pending native interrupt as session_failed, not stopped", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("bg", "started"))
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     await tick()
     d.failClose(new Error("native still running"))
-    await expect(s.close()).rejects.toThrow("native still running")
+    await expect(s.close({ mode: "shutdown" })).rejects.toThrow("native still running")
     await expect(stopping).rejects.toMatchObject({ code: "session_failed" })
     expect(s.snapshot().state).toBe("failed")
   })
@@ -305,9 +306,9 @@ describe("native activity contract", () => {
   test("onExit during pending interrupt rejects native and owned paths as session_failed", async () => {
     const nativeDriver = activityDriver()
     const { core: nativeCore } = await setup(nativeDriver.driver)
-    const nativeSession = await nativeCore.sessions.create({ agent: "test", cwd: tmpdir() })
+    const nativeSession = await nativeCore.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     nativeDriver.opens[0]!.onActivity!(activity("bg", "started"))
-    const nativeStopping = nativeSession.interrupt()
+    const nativeStopping = nativeSession.interrupt({ pending: "discard" })
     await tick()
     nativeDriver.opens[0]!.onExit(new Error("transport failed, cleanup pending"))
     await expect(nativeStopping).rejects.toMatchObject({ code: "session_failed" })
@@ -315,9 +316,9 @@ describe("native activity contract", () => {
 
     const ownedDriver = activityDriver()
     const { core: ownedCore } = await setup(ownedDriver.driver)
-    const ownedSession = await ownedCore.sessions.create({ agent: "test", cwd: tmpdir() })
+    const ownedSession = await ownedCore.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const receipt = await ownedSession.send(input("owned"))
-    const ownedStopping = ownedSession.interrupt()
+    const ownedStopping = ownedSession.interrupt({ pending: "discard" })
     await tick()
     ownedDriver.opens[0]!.onExit(new Error("transport failed, cleanup pending"))
     await expect(ownedStopping).rejects.toMatchObject({ code: "session_failed" })
@@ -328,12 +329,12 @@ describe("native activity contract", () => {
   test("close-cancelled owned receipt is not native confirmation for interrupt", async () => {
     const d = activityDriver()
     const gate = d.delayClose()
-    const { core } = await setup(d.driver, { interruptTimeoutMs: 200 })
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const { core } = await setup(d.driver, { limits: { ...TEST_LIMITS, interruptTimeoutMs: 200 } })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const receipt = await s.send(input("owned"))
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     await tick()
-    const closing = s.close()
+    const closing = s.close({ mode: "shutdown" })
     await tick()
     expect((await receipt.completed).status).toBe("cancelled")
     expect(s.snapshot().state).toBe("closing")
@@ -345,17 +346,17 @@ describe("native activity contract", () => {
   test("uncooperative runtime.interrupt still times out as unconfirmed", async () => {
     const d = activityDriver()
     d.stallInterrupt()
-    const { core } = await setup(d.driver, { interruptTimeoutMs: 20 })
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const { core } = await setup(d.driver, { limits: { ...TEST_LIMITS, interruptTimeoutMs: 20 } })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("bg", "started"))
-    expect(await s.interrupt()).toEqual({ status: "unconfirmed" })
+    expect(await s.interrupt({ pending: "discard" })).toEqual({ status: "unconfirmed" })
     expect(s.snapshot().state).toBe("interrupting")
   })
 
   test("more than 256 start/complete cycles keep the final outstanding truth", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const ctx = d.opens[0]!
     for (let i = 0; i < 300; i++) {
       ctx.onActivity!(activity(`cycle-${i}`, "started"))
@@ -371,7 +372,7 @@ describe("native activity contract", () => {
   test("live outstanding-id overflow fails the session instead of dropping work", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const ctx = d.opens[0]!
     for (let i = 0; i < 256; i++) ctx.onActivity!(activity(`id-${i}`, "started"))
     expect(s.snapshot().state).toBe("running")
@@ -399,7 +400,7 @@ describe("native activity contract", () => {
       },
     }
     const { core } = await setup(driver)
-    await expect(core.sessions.create({ agent: "test", cwd: tmpdir() })).rejects.toMatchObject({ code: "activity_overflow" })
+    await expect(core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })).rejects.toMatchObject({ code: "activity_overflow" })
     expect(closes).toBe(1)
   })
 
@@ -424,7 +425,7 @@ describe("native activity contract", () => {
       },
     }
     const { core } = await setup(driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     expect(s.snapshot().state).toBe("running")
     opened.onActivity!(activity("final", "completed"))
     expect(s.snapshot().state).toBe("idle")
@@ -450,7 +451,7 @@ describe("native activity contract", () => {
       },
     }
     const { core } = await setup(driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     expect(s.snapshot().state).toBe("running")
     opened.onActivity!({ id: "boot", phase: "completed" })
     expect(s.snapshot().state).toBe("idle")
@@ -468,7 +469,7 @@ describe("native activity contract", () => {
   test("malformed notices and unknown completions are no-ops", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const ctx = d.opens[0]!
     ctx.onActivity!(activity("live", "started"))
     ctx.onActivity!({ id: "", phase: "completed" })
@@ -485,7 +486,7 @@ describe("native activity contract", () => {
     const { core } = await setup(d.driver)
     const events: CoreEvent[] = []
     core.subscribe(e => { events.push(e) })
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("turn-1", "started"))
     await s.steer({ content: [{ type: "text", text: "nudge" }] })
     expect(d.steers).toEqual(["nudge"])
@@ -495,12 +496,12 @@ describe("native activity contract", () => {
   test("two outstanding native ids reject steer as session_busy", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("a", "started"))
     d.opens[0]!.onActivity!(activity("b", "started"))
     await expect(s.steer({ content: [{ type: "text", text: "x" }] })).rejects.toMatchObject({ code: "session_busy" })
     expect(d.steers).toEqual([])
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     d.opens[0]!.onActivity!(activity("a", "completed"))
     d.opens[0]!.onActivity!(activity("b", "completed"))
     expect(await stopping).toEqual({ status: "stopped" })
@@ -509,14 +510,14 @@ describe("native activity contract", () => {
   test("idle steer is session_not_running", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     await expect(s.steer({ content: [{ type: "text", text: "x" }] })).rejects.toMatchObject({ code: "session_not_running" })
   })
 
   test("owned prompt plus one native id can steer", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     const receipt = await s.send(input("hello"))
     d.opens[0]!.onActivity!(activity("same-turn", "started"))
     await s.steer({ content: [{ type: "text", text: "nudge" }] })
@@ -529,7 +530,7 @@ describe("native activity contract", () => {
   test("owned prompt plus two native ids reject steer as session_busy", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     await s.send(input("hello"))
     d.opens[0]!.onActivity!(activity("a", "started"))
     d.opens[0]!.onActivity!(activity("b", "started"))
@@ -540,9 +541,9 @@ describe("native activity contract", () => {
   test("interrupting rejects steer as session_busy before running check", async () => {
     const d = activityDriver()
     const { core } = await setup(d.driver)
-    const s = await core.sessions.create({ agent: "test", cwd: tmpdir() })
+    const s = await core.sessions.create({ id: nextId(), agent: "test", cwd: tmpdir() })
     d.opens[0]!.onActivity!(activity("turn-1", "started"))
-    const stopping = s.interrupt()
+    const stopping = s.interrupt({ pending: "discard" })
     await tick()
     await expect(s.steer({ content: [{ type: "text", text: "x" }] })).rejects.toMatchObject({ code: "session_busy" })
     d.opens[0]!.onActivity!(activity("turn-1", "completed"))

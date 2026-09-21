@@ -3,24 +3,25 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { UnsupportedOperation } from '../errors.js'
-import type { AgentDriver, ContentBlock, DriverContext } from '../types.js'
+import type { AgentDriver, CloseOptions, ContentBlock, DriverContext } from '../types.js'
+import { requireCloseMode } from '../types.js'
 import { launchCursor } from './transport.js'
 
 export type CursorOptions = {
-  id?: string
-  command?: string
-  args?: string[]
+  id: string
+  command: string
+  args: string[]
   env?: Record<string, string>
-  inheritEnv?: boolean
+  inheritEnv: boolean
   model?: string
   mode?: 'ask' | 'plan'
-  sandbox?: 'enabled' | 'disabled'
-  trust?: boolean
-  force?: boolean
-  approveMcps?: boolean
-  setupTimeoutMs?: number
-  shutdownTimeoutMs?: number
-  maxFrameBytes?: number
+  sandbox: 'enabled' | 'disabled'
+  trust: boolean
+  force: boolean
+  approveMcps: boolean
+  setupTimeoutMs: number
+  shutdownTimeoutMs: number
+  maxFrameBytes: number
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -44,7 +45,7 @@ export function cursorHistoryStorePath(env: NodeJS.ProcessEnv, cwd: string, chat
 }
 
 function environment(options: CursorOptions, context: DriverContext): NodeJS.ProcessEnv {
-  return { ...(options.inheritEnv === false ? {} : process.env), ...options.env, ...context.profile?.env }
+  return { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env }
 }
 
 function textOnly(content: ContentBlock[]): string {
@@ -57,30 +58,43 @@ function textOnly(content: ContentBlock[]): string {
 }
 
 function promptArgv(options: CursorOptions, text: string, sessionId: string, cwd: string): string[] {
-  const mode = options.mode ?? 'ask'
-  if (mode !== 'ask' && mode !== 'plan') throw new TypeError('Cursor mode must be ask or plan')
   const flags = ['-p', text, '--output-format', 'stream-json', '--stream-partial-output', '--workspace', cwd, '--resume', sessionId]
-  flags.push('--mode', mode)
-  flags.push('--sandbox', options.sandbox ?? 'enabled')
-  if (options.trust !== false) flags.push('--trust')
-  if (options.force === true) flags.push('--force')
-  if (options.approveMcps === true) flags.push('--approve-mcps')
+  if (options.mode !== undefined) {
+    if (options.mode !== 'ask' && options.mode !== 'plan') throw new TypeError('Cursor mode must be ask or plan')
+    flags.push('--mode', options.mode)
+  }
+  flags.push('--sandbox', options.sandbox)
+  if (options.trust) flags.push('--trust')
+  if (options.force) flags.push('--force')
+  if (options.approveMcps) flags.push('--approve-mcps')
   if (options.model) flags.push('--model', options.model)
-  return [...(options.args ?? []), ...flags]
+  return [...options.args, ...flags]
 }
 
-export function cursor(options: CursorOptions = {}): AgentDriver {
-  const setupTimeoutMs = options.setupTimeoutMs ?? 30_000
-  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 2_000
-  const maxFrameBytes = options.maxFrameBytes ?? 16 * 1024 * 1024
+export function cursor(options: CursorOptions): AgentDriver {
+  if (!options || typeof options !== 'object') throw new TypeError('Cursor options are required')
+  for (const field of ['id', 'command', 'args', 'inheritEnv', 'sandbox', 'trust', 'force', 'approveMcps', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes'] as const) {
+    if (options[field] === undefined) throw new TypeError(`Cursor ${field} is required`)
+  }
+  if (typeof options.id !== 'string' || !options.id) throw new TypeError('Cursor id is required')
+  if (typeof options.command !== 'string' || !options.command) throw new TypeError('Cursor command is required')
+  if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Cursor args is required')
+  if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Cursor inheritEnv is required')
+  if (options.sandbox !== 'enabled' && options.sandbox !== 'disabled') throw new TypeError('Cursor sandbox is required')
+  if (typeof options.trust !== 'boolean') throw new TypeError('Cursor trust is required')
+  if (typeof options.force !== 'boolean') throw new TypeError('Cursor force is required')
+  if (typeof options.approveMcps !== 'boolean') throw new TypeError('Cursor approveMcps is required')
+  const setupTimeoutMs = options.setupTimeoutMs
+  const shutdownTimeoutMs = options.shutdownTimeoutMs
+  const maxFrameBytes = options.maxFrameBytes
   for (const value of [setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes]) {
     if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Cursor limits must be positive safe integers')
   }
-  return { id: options.id ?? 'cursor', async open(context) {
+  return { id: options.id, async open(context) {
     context.signal.throwIfAborted()
-    if (context.forkFrom) throw new UnsupportedOperation('fork', 'cursor')
+    if (context.forkFrom) throw new UnsupportedOperation('fork', options.id)
     const env = environment(options, context)
-    const command = options.command ?? 'cursor-agent'
+    const command = options.command
     let agentSessionId = context.resumeId
     let ready = false, closed = false
     let fatal: Error | undefined
@@ -106,7 +120,9 @@ export function cursor(options: CursorOptions = {}): AgentDriver {
       }
       if (ready && !closed) context.onExit(error)
     }
-    const close = async () => {
+    const close = async (closeOptions: CloseOptions) => {
+      const mode = requireCloseMode(closeOptions)
+      if (mode === 'detach') throw new UnsupportedOperation('detach', options.id)
       if (!closed) {
         closed = true
         fail(new Error('Cursor runtime closed'))
@@ -115,9 +131,9 @@ export function cursor(options: CursorOptions = {}): AgentDriver {
       setupChild = undefined
       if (active) await active.child.close()
     }
-    const setupAbort = () => { fail(new Error('Cursor setup aborted')); void close() }
+    const setupAbort = () => { fail(new Error('Cursor setup aborted')); void close({ mode: 'shutdown' }) /* abort: stop the native process */ }
     context.signal.addEventListener('abort', setupAbort, { once: true })
-    const timer = setTimeout(() => { fail(new Error('Cursor setup timed out')); void close() }, setupTimeoutMs)
+    const timer = setTimeout(() => { fail(new Error('Cursor setup timed out')); void close({ mode: 'shutdown' }) /* setup timeout: stop the native process */ }, setupTimeoutMs)
     try {
       if (context.resumeId) {
         if (!UUID.test(context.resumeId)) throw new Error('Cursor resume id is invalid')
@@ -126,7 +142,7 @@ export function cursor(options: CursorOptions = {}): AgentDriver {
         agentSessionId = context.resumeId
       } else {
         const child = launchCursor({
-          command, args: [...(options.args ?? []), 'create-chat'], env, cwd: context.cwd,
+          command, args: [...options.args, 'create-chat'], env, cwd: context.cwd,
           shutdownTimeoutMs, maxFrameBytes, json: false,
         }, () => {}, error => { fail(error) })
         setupChild = child
@@ -141,7 +157,7 @@ export function cursor(options: CursorOptions = {}): AgentDriver {
       if (fatal) throw fatal
       ready = true
     } catch (error) {
-      await close()
+      await close({ mode: 'shutdown' })
       throw error
     } finally {
       clearTimeout(timer)

@@ -27,10 +27,11 @@ export function copyActivityNotice(notice: ActivityNotice | null | undefined): A
 export function applyBufferedActivity(
   outstanding: Map<string, ActivityNotice>,
   notice: ActivityNotice,
+  cap: number,
 ): "ok" | "overflow" {
   if (notice.phase === "started") {
     if (outstanding.has(notice.id)) return "ok"
-    if (outstanding.size >= MAX_OUTSTANDING_ACTIVITY) return "overflow"
+    if (outstanding.size >= cap) return "overflow"
     outstanding.set(notice.id, { id: notice.id, phase: "started" })
     return "ok"
   }

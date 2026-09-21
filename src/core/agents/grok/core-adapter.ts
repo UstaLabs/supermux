@@ -200,7 +200,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       }
     }
     try {
-      await this.core.sessions.close(this.id)
+      await this.core.sessions.close(this.id, { mode: "shutdown" })
     } catch (err) {
       throw startError != null ? withCleanupError(startError, err) : asError(err)
     }
@@ -351,7 +351,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       return
     }
     try {
-      await session.close()
+      await session.close({ mode: "shutdown" })
     } catch (err) {
       this.session = session
       throw asError(err)

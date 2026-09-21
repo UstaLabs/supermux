@@ -28,7 +28,7 @@ Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `A
 createCore(options: CoreOptions): Core
 ```
 
-`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), `profiles?`, `onPermission?`, `onObserverError?`, `interruptTimeoutMs?` (default 10_000, any positive finite number), `maxPending?` (default 128, **positive integer**).
+`CoreOptions`: `stateDirectory` (required), `agents` (unique nonempty **ids**; the array may be empty), **`limits` (required, no defaults)**: `{ interruptTimeoutMs, maxPending, outstandingActivity }` each a **positive safe integer**. Missing `limits` or an invalid field → `TypeError` naming it. `profiles?`, `onPermission?`, `onObserverError?`.
 
 ### Configuration
 
@@ -49,12 +49,12 @@ Nonempty create/resume-open config requires the opened runtime to advertise `con
 
 ### `core.sessions`
 
-- `create({ agent, cwd, authProfile?, id?, configuration? })` → `Session`. `cwd` must be an existing absolute directory. Session id `^[a-zA-Z0-9_-]{1,128}$`.
+- `create({ agent, cwd, id, authProfile?, configuration? })` → `Session`. `id` is required (`TypeError` if missing). `cwd` must be an existing absolute directory. Session id `^[a-zA-Z0-9_-]{1,128}$`.
 - `adopt({ id, agent, agentSessionId, cwd, createdAt?, authProfile?, configuration? })` → `SessionRecord`. No spawn. Resume later must keep that native id.
 - `get(id)`, `list({ agent? })`.
 - `resume(id, { configuration? }?)` — exact native id. See table.
 - `forget(id)` — metadata only; session must already be closed. Leftover ownership is `session_busy` until confirmed close.
-- `close(id)` — no spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close()` starts). A **new** close after shutdown → `core_closed`; `core.close()` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id)` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id)` or `core.close()`. Different ids are independent.
+- `close(id, { mode: "shutdown" | "detach" })` — `mode` is required (no default). No spawn/resume. Validates id (`invalid_session_id`). Joins in-flight same-id close **before** the shutdown gate (joining an already-running close still works after `core.close({ agents })` starts). A **new** close after shutdown → `core_closed`; `core.close({ agents })` finishes remaining leftovers. Waits already-started create/adopt/**fork**/resume (`opening` / restore; ignores setup rejection), then live `Session.close({ mode })` or leftover cleanup. Does **not** abort a pending custom-driver `open`. Do not `await sessions.close(id, { mode })` from inside that same id’s `driver.open`. Fire-and-forget from `open` is fine. Unknown valid id is idempotent. Failed close keeps leftover; retry `sessions.close(id, { mode })` or `core.close({ agents })`. Different ids are independent. `detach` is supported only by keeper-backed runtimes (Codex today); other drivers reject `unsupported_operation` (`detach`) before any side effect. A detached session’s record stays on disk with its native id so a later resume re-attaches.
 
 Duplicate saved id → `session_exists`. Core closing → `core_closed` on **new** operations. Failed-open leftover blocks create/adopt/resume/forget of the same id until confirmed close.
 
@@ -70,15 +70,15 @@ Events are live microtask notifications, not a durable log. ACP history load upd
 
 `message.started` `{ sessionId, messageId }` fires once when an owned queued send becomes the active drain entry, **synchronously before** `runtime.prompt`, **after** `session.stateChanged` to `running`. Drain is blocked while outstanding native activity (`activity.size`); sequence is then `accepted` → wait activity complete → `started` → `completed`. Not emitted for cancelled queued work, autonomous `onActivity`, or an idempotent resend of the same key. Observer delivery is `queueMicrotask`; prompt may already be running.
 
-`close` aborts the core lifetime, waits operations, closes runtimes and the store. Failed runtime shutdown: retry `close()`. Stale `.core.lock` is **manual** recovery.
+`close({ agents: "shutdown" | "detach" })` is required (`agents` has no default). Aborts the core lifetime, waits operations, closes runtimes with that mode, then releases the store/lock. `{ agents: "detach" }` must not kill keeper-backed agents. Failed runtime shutdown: retry `close({ agents })`. Stale `.core.lock` is **manual** recovery.
 
 ## Session
 
-- `id`, `snapshot()`, `capabilities()` (`detach` forced false).
+- `id`, `snapshot()`, `capabilities()` (`detach` is true only for keeper-backed runtimes).
 - `send({ content, whenBusy, idempotencyKey? })` → `Receipt`. Failures settle `completed` as `{ status: "failed", error }` rather than rejecting the receipt (invalid send still throws).
 - `pending.list|cancel|clear|continue`. `continue` after `interrupt({ pending: "keep" })`.
-- `interrupt({ pending }?)` → `stopped` | `already_idle` | `unconfirmed`. Default `{ pending: "discard" }`.
-- `close()`, `steer`, `configure`, `configuration()`, `history`, `fork`, `detach` (always unsupported).
+- `interrupt({ pending })` → `stopped` | `already_idle` | `unconfirmed`. `pending: "discard" | "keep"` is required (`TypeError` if missing). No defaults.
+- `close({ mode: "shutdown" | "detach" })` — `mode` is required. `shutdown` stops the native process (today’s previous close). `detach` drops this process’s connection and keeps the agent running (Codex/keeper only). Missing `mode` is a `TypeError`. `steer`, `configure`, `configuration()`, `history`, `fork({ id, at? })` (`id` required). Session.`detach()` remains unsupported as a separate method; use `close({ mode: "detach" })`.
 
 Configure/fork require idle + empty queue + no outstanding activity. Configure merge: nonempty string `model` / `reasoningEffort` only; `undefined` values clear that key. Empty requested config means defaults.
 
@@ -104,17 +104,17 @@ Auth-helper-only codes (`auth_home_locked`, `auth_source_locked`, `auth_missing`
 
 ## Drivers
 
-**ACP** `acp({ id, command, args?, env?, inheritEnv?, mcpServers?, timeouts… })`. Client capabilities `{}` (no FS/terminal claims). Steer/fork/detach/configure/history unsupported at this wrapper. Cancel retries are best-effort; core may still return `unconfirmed`.
+**ACP** `acp({ id, command, args, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env?, classifyActivity? })`. **There are no defaults** for required fields; `acp()` throws `TypeError` naming a missing field. Optional: `env`, `classifyActivity` (absence means the field is not used). `keeper` is `{ stateDirectory, limits: { parkedDeadlineMs, journalMaxBytes, connectTimeoutMs } }`. The driver talks to the agent only through that keeper (same process-death / re-attach model as Codex). Client capabilities `{}` (no FS/terminal claims). Steer/fork/configure/history unsupported at this wrapper; `detach: true`. Cancel retries are best-effort; core may still return `unconfirmed`.
 
-**Grok** `grok({ command?, commandArgs?, model?, reasoningEffort?, authPath?, alwaysApprove?, noLeader?, inheritEnv?, … })`. Defaults: `noLeader: true`, `alwaysApprove: false`. Configure: close child, reopen with **exact** `agentSessionId`. Steer/history/fork/detach unsupported.
+**Grok** `grok({ id, command, commandArgs, alwaysApprove, noLeader, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env?, model?, reasoningEffort?, authPath? })`. Required fields have **no defaults**; `grok()` throws `TypeError` naming a missing field. Optional (absent = flag/field not sent): `model`, `reasoningEffort`, `authPath`, `env`. Configure: `close({ mode: 'shutdown' })` then reopen with **exact** `agentSessionId`. Steer/history/fork unsupported; detach is passed through to the child.
 
-**OpenCode** `opencode({ command? })` → `opencode acp`. Steer/fork/configure/history unsupported at this wrapper.
+**OpenCode** `opencode({ id, command, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env? })` → `opencode acp`. Required fields have no defaults. Optional: `env`. Steer/fork/configure/history unsupported at this wrapper; detach follows ACP.
 
-**Claude** `claude({ command?, inheritEnv?, env?, model?, effort?, tools?, allowedTools?, disallowedTools?, permissionMode?, permissionPrompts? })`. Default `tools` is **empty** (no tools). `permissionPrompts` default `none`. Host path is explicit `'host'`. Do not default `bypassPermissions`. Steer/fork/configure/history unsupported.
+**Claude** `claude({ id, command, args, keeper, inheritEnv, tools, permissionPrompts, setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, effort?, allowedTools?, disallowedTools?, permissionMode? })`. **There are no defaults** for those required fields; `claude()` throws `TypeError` naming a missing field. Optional (absent = do not pass the CLI flag): `permissionMode`, `model`, `effort`, `allowedTools`, `disallowedTools`, `env`. `keeper` is `{ stateDirectory, limits: { parkedDeadlineMs, journalMaxBytes, connectTimeoutMs } }`. The driver talks to the Claude CLI only through that keeper (same process-death / re-attach model as Codex). Frames are `claude-control` (`control_request` / `control_response`), not JSON-RPC. Pass `tools: []` for no tools (`'default'` leaves the CLI tool list alone). `permissionPrompts` is `'none'` or `'host'`. Do not default `bypassPermissions`. Steer/fork/configure/history unsupported; `detach: true`.
 
-**Codex** `codex({ sandbox? = "read-only", approvalPolicy? = "never", permissionPrompts? = not host, model?, reasoningEffort?, onRuntimeRequest? })`. Supports resume, steer, fork, configure, history. Unknown native reset can reject. `onRuntimeRequest` is invoked once the thread id is known with a `request(method, params)` that refuses `turn/` and `thread/` methods and rejects after close so hosts can run read-only RPC such as `skills/list` without owning turns.
+**Codex** `codex({ id, command, args, keeper, sandbox, approvalPolicy, permissionPrompts, inheritEnv, setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, reasoningEffort?, onRuntimeRequest? })`. **There are no defaults** for those required fields; `codex()` throws `TypeError` naming a missing field. Optional (absent = not sent): `model`, `reasoningEffort`, `env`, `onRuntimeRequest`. `keeper` is `{ stateDirectory, limits: { parkedDeadlineMs, journalMaxBytes, connectTimeoutMs } }`. The driver talks to `codex app-server` only through that keeper: a process that dies can re-open the same session id, replay from `ackedSeq`, and skip a second handshake. Supports resume, steer, fork, configure, history, and `close({ mode: "detach" })`. Unknown native reset can reject. `onRuntimeRequest` is invoked once the thread id is known with a `request(method, params)` that refuses `turn/` and `thread/` methods and rejects after close so hosts can run read-only RPC such as `skills/list` without owning turns.
 
-**Cursor** `cursor({ command?, inheritEnv?, env?, model?, mode?, sandbox?, trust?, force?, approveMcps? })`. Resume is intended to use a cwd-hashed `store.db`. Steer/fork/configure/history unsupported. **Durable native resume has not been verified** on a live `create-chat` path; do not assume it works.
+**Cursor** `cursor({ id, command, args, inheritEnv, sandbox, trust, force, approveMcps, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, mode? })`. Required fields have **no defaults**; `cursor()` throws `TypeError` naming a missing field. Optional (absent = not sent): `mode`, `model`, `env`. Resume is intended to use a cwd-hashed `store.db`. Steer/fork/configure/history unsupported. **Durable native resume has not been verified** on a live `create-chat` path; do not assume it works.
 
 Env precedence: inherit process (unless `inheritEnv: false`) → factory `env` → `profile.env`.
 

@@ -37,7 +37,7 @@ Do **not** turn on blanket `skipLibCheck` to hide that. With TypeScript 6.x (glo
 | Core | Scheduling, in-memory queues/receipts, session metadata, events |
 | Driver | Native/ACP I/O, capability truth, native conversation identity |
 
-`createCore({ stateDirectory, agents, profiles?, onPermission?, ... })` requires an explicit state directory and unique **nonempty agent ids** (the `agents` array itself may be empty). `interruptTimeoutMs` is any positive finite number (default 10_000). `maxPending` must be a **positive integer** (default 128).
+`createCore({ stateDirectory, agents, limits, profiles?, onPermission?, ... })` has **no defaults**. `limits` is required: `{ interruptTimeoutMs, maxPending, outstandingActivity }` — each a **positive safe integer**. Missing `limits` or an invalid field is a `TypeError` that names the field.
 
 ## Configuration (create / adopt / resume)
 
@@ -62,20 +62,20 @@ Live resume with a patch therefore requires `capabilities.configure`. Claude/ACP
 
 ## Lifecycle (actual)
 
-- **create** — optional `configuration` is cloned/validated, then `driver.open` (config on context only if nonempty). Persists `SessionRecord`. Optional `CreateOptions.id`; otherwise `randomUUID()`.
+- **create** — optional `configuration` is cloned/validated, then `driver.open` (config on context only if nonempty). Persists `SessionRecord`. **Required** `CreateOptions.id` (same `^[a-zA-Z0-9_-]{1,128}$` validation). Missing id is a `TypeError`. Receipts still mint `messageId`.
 - **adopt** — metadata-only. Validates and `store.put`s an existing native id. Does **not** spawn. Native identity is checked later by **resume** with **no new-conversation fallback**.
 - **get/list** — metadata only.
 - **resume** — see table. Live handle if open (idle patch via `configure`); else restore **exact** saved `agentSessionId`.
 - **send** — `{ messageId, completed }`. `whenBusy: "queue" | "reject"`. Optional `idempotencyKey`.
-- **interrupt** — `{ pending: "discard" | "keep" }` (default `"discard"`). Timeout → `{ status: "unconfirmed" }`. Queues are **not** durable across process crash.
-- **close** (session) — stops runtime, cancels local work, **keeps** metadata.
-- **sessions.close(id)** — no spawn. Joins an in-flight **same-id** close (that join happens **before** the shutdown gate, so an already-running close can still be awaited after `core.close()` starts). New close after shutdown → `core_closed`; leftover teardown then belongs to `core.close()`. Waits already-started create/adopt/**fork**/resume (`opening` / restore), ignoring setup rejection, then live `Session.close` or leftover cleanup. Does **not** abort a pending `driver.open`. Do not `await sessions.close(id)` from inside that same id’s `open`. Unknown **valid** id is idempotent. Invalid id → `invalid_session_id`. Failed cleanup stays owned; create/adopt/resume/forget of that id are `session_busy` until confirmed close.
+- **interrupt** — `{ pending: "discard" | "keep" }` is required (no default). Missing `pending` is a `TypeError`. Timeout → `{ status: "unconfirmed" }`. Queues are **not** durable across process crash.
+- **close** (session) — `session.close({ mode: "shutdown" | "detach" })` is required. `shutdown` stops the native process; `detach` (Codex/keeper only) drops this connection and keeps the agent. Cancels local work, **keeps** metadata.
+- **sessions.close(id, { mode })** — `mode` required. No spawn. Joins an in-flight **same-id** close (that join happens **before** the shutdown gate, so an already-running close can still be awaited after `core.close({ agents })` starts). New close after shutdown → `core_closed`; leftover teardown then belongs to `core.close({ agents })`. Waits already-started create/adopt/**fork**/resume (`opening` / restore), ignoring setup rejection, then live `Session.close({ mode })` or leftover cleanup. Does **not** abort a pending `driver.open`. Do not `await sessions.close(id, { mode })` from inside that same id’s `open`. Unknown **valid** id is idempotent. Invalid id → `invalid_session_id`. Failed cleanup stays owned; create/adopt/resume/forget of that id are `session_busy` until confirmed close.
 - **forget** — deletes core metadata of a **closed** session. Not native erase. Leftover ownership is `session_busy`.
-- **fork** — if `capabilities.fork`; idle, empty queue, no outstanding native activity. Copied-home auth **disables fork**.
-- **detach** — always `UnsupportedOperation` at the session layer (`capabilities()` forces `detach: false`).
+- **fork** — if `capabilities.fork`; idle, empty queue, no outstanding native activity. Required `{ id }` (no minted fork id). Copied-home auth **disables fork**.
+- **detach** — `close({ mode: "detach" })` on keeper-backed runtimes (Codex). Other drivers throw `unsupported_operation` before side effects. The old `Session.detach()` method remains unsupported.
 - **configure / history** — only if advertised. Configure/fork require idle + empty queue + no outstanding activity.
 
-`core.close()` waits in-flight operations (including adopt writes), then remaining leftovers.
+`core.close({ agents: "shutdown" | "detach" })` waits in-flight operations (including adopt writes), then remaining leftovers with that mode, then releases the store/lock. `{ agents: "detach" }` does not kill keeper-backed agents.
 
 ## Events
 
@@ -103,7 +103,7 @@ Default host handler is **cancelled** (`outcome: "cancelled"`) — a **deny**, n
 
 Claude/Codex ask the host only when `permissionPrompts: "host"`. Otherwise they deny. Duplicate JSON-RPC/`request_id` values are answered **once per matching turn+fingerprint**; later/stale reuse is **deny**, not a second grant. Selected allow-once mapping only; no bypass-permissions default. Codex `item/permissions/requestApproval` is answered with an empty grant, not a host-invented profile.
 
-Grok: `noLeader` defaults **true**; `alwaysApprove` defaults **false**. A broker that wants unattended Grok must pass `noLeader: false` and `alwaysApprove: true` **explicitly**.
+Grok: `noLeader` and `alwaysApprove` are **required**. A broker that wants unattended Grok must pass `noLeader: false` and `alwaysApprove: true` **explicitly**.
 
 ## Capabilities (current drivers)
 
@@ -112,8 +112,8 @@ Grok: `noLeader` defaults **true**; `alwaysApprove` defaults **false**. A broker
 | ACP generic | if agent supports resume/load | no | no | no | no | no synthetic transcript fork |
 | Grok | via ACP | no | no | yes (restart same id) | no | opaque `_x.ai/*` native updates |
 | OpenCode | via ACP | no | no | no | no | `opencode acp` |
-| Claude | yes | no | no | no | no | tools default **empty** unless you pass `tools` |
-| Codex | yes | yes | yes | yes | yes | sandbox default `read-only`; approval `never` |
+| Claude | yes | no | no | no | no | `tools` required (`[]` or `'default'`) |
+| Codex | yes | yes | yes | yes | yes | `sandbox` / `approvalPolicy` required |
 | Cursor | cwd-hashed `store.db` | no | no | no | no | durable native resume is **unverified** on a live `create-chat` |
 
 Detach is always unsupported at the session layer. Steer/fork/configure/history fail `unsupported_operation` unless the opened runtime advertises them.

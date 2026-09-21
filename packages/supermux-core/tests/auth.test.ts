@@ -55,9 +55,9 @@ test('withAuth forwards environment and releases only after runtime closes',asyn
   home=context.profile!.env!.CODEX_HOME!
   return {agentSessionId:'n',capabilities:{resume:true,steer:false,fork:false,detach:false},prompt:async()=>({stopReason:'end_turn'}),interrupt:async()=>{},close:async()=>{if(++attempts===1) throw new Error('alive')}}
  }},provider)
- const runtime=await wrapped.open(ctx); await expect(runtime.close()).rejects.toThrow('alive')
+ const runtime=await wrapped.open(ctx); await expect(runtime.close({ mode: "shutdown" })).rejects.toThrow('alive')
  await expect(provider.prepare(ctx)).rejects.toMatchObject({code:'auth_home_locked'})
- await writeFile(join(home,'auth.json'),JSON.stringify({token:'fresh'})); await runtime.close()
+ await writeFile(join(home,'auth.json'),JSON.stringify({token:'fresh'})); await runtime.close({ mode: "shutdown" })
  const next=await provider.prepare(ctx); await next.release()
 })
 test('withAuth releases on failed open',async()=>{
@@ -112,7 +112,7 @@ test('withAuth forwards configure, configuration, and history without cloning or
  expect(inner.configureArg).toBe(configurationArg)
  expect(inner.historyArg).toBe(historyArg)
  expect(inner.seen).toBe(true)
- await runtime.close()
+ await runtime.close({ mode: "shutdown" })
 })
 test('withAuth omits optional methods the inner runtime does not implement',async()=>{
  const {ctx}=await setup()
@@ -128,7 +128,7 @@ test('withAuth omits optional methods the inner runtime does not implement',asyn
  expect(runtime.configure).toBeUndefined()
  expect(runtime.configuration).toBeUndefined()
  expect(runtime.history).toBeUndefined()
- await runtime.close()
+ await runtime.close({ mode: "shutdown" })
 })
 test('withAuth rejects fork before opening the inner runtime',async()=>{
  const {ctx}=await setup(); let opened=false
@@ -147,7 +147,7 @@ test('overlapping source promotion fails with auth_source_locked and close retri
  await expect(provider.prepare(ctx)).rejects.toMatchObject({code:'auth_home_locked'})
  await second.release()
  await rm(`${source}.supermux-lock`)
- await provider.close()
+ await provider.close({ mode: "shutdown" })
  expect(JSON.parse(await readFile(source,'utf8')).token).toBe('first')
  const again=await provider.prepare(ctx); await again.release()
 })
@@ -175,7 +175,7 @@ test('failed inner open plus failed lease release keeps both errors and a retrya
  expect(error.errors[1]).toMatchObject({code:'auth_invalid'})
  await expect(provider.prepare(ctx)).rejects.toMatchObject({code:'auth_home_locked'})
  await writeFile(join(ctx.cwd,'homes','session-1','auth.json'),JSON.stringify({token:'fixed'}))
- await provider.close()
+ await provider.close({ mode: "shutdown" })
  const next=await provider.prepare(ctx); await next.release()
 })
 test('withAuth propagates opaque native auth failures without remapping to missing or invalid credentials',async()=>{
@@ -202,6 +202,6 @@ test('withAuth configure failures do not release the auth lease',async()=>{
  const runtime=await wrapped.open(ctx)
  await expect(runtime.configure!({})).rejects.toThrow('configure failed')
  await expect(provider.prepare(ctx)).rejects.toMatchObject({code:'auth_home_locked'})
- await runtime.close()
+ await runtime.close({ mode: "shutdown" })
  const next=await provider.prepare(ctx); await next.release()
 })

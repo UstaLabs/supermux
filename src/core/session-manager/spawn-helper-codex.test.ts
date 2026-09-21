@@ -14,7 +14,7 @@ function fakeChildFactory(nativeId = "codex-sess-1") {
   const opens: DriverContext[] = []
   const codexCalls: { options: CodexOptions }[] = []
   const factory = (gopts: CodexOptions, _overrides: SessionConfiguration): AgentDriver => {
-    codexCalls.push({ options: { ...gopts, env: { ...gopts.env }, args: gopts.args ? [...gopts.args] : undefined } })
+    codexCalls.push({ options: { ...gopts, env: { ...gopts.env }, args: [...gopts.args] } })
     return {
       id: "codex",
       async open(ctx) {

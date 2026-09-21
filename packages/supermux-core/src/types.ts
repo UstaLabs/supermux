@@ -38,7 +38,7 @@ export type AuthProfile = {
   methodId?: string
 }
 
-export type ForkOptions = { at?: { nativeTurnId: string } }
+export type ForkOptions = { id: string; at?: { nativeTurnId: string } }
 export type ForkSource = { agentSessionId: string; at?: { nativeTurnId: string } }
 
 export type SessionRecord = {
@@ -109,13 +109,31 @@ export type DriverContext = {
   onActivity?(notice: ActivityNotice): void
 }
 
+export type CloseMode = "shutdown" | "detach"
+export type CloseOptions = { mode: CloseMode }
+export type CoreCloseOptions = { agents: CloseMode }
+
+export function requireCloseMode(options: { mode?: unknown } | undefined): CloseMode {
+  if (!options || (options.mode !== "shutdown" && options.mode !== "detach")) {
+    throw new TypeError("close mode is required")
+  }
+  return options.mode
+}
+
+export function requireAgentsCloseMode(options: { agents?: unknown } | undefined): CloseMode {
+  if (!options || (options.agents !== "shutdown" && options.agents !== "detach")) {
+    throw new TypeError("core close agents mode is required")
+  }
+  return options.agents
+}
+
 /** Runtime methods own their I/O. close must settle any in-flight prompt. */
 export type AgentRuntime = {
   readonly agentSessionId: string
   readonly capabilities: Capabilities
   prompt(content: ContentBlock[], signal: AbortSignal): Promise<{ stopReason: string }>
   interrupt(): Promise<void>
-  close(): Promise<void>
+  close(options: CloseOptions): Promise<void>
   steer?(content: ContentBlock[]): Promise<void>
   /** Full requested state (missing keys are driver/factory defaults). Core clones before invoke; do not mutate the persisted request via this argument. */
   configure?(configuration: SessionConfiguration): Promise<void>
@@ -138,17 +156,22 @@ export type AgentDriver = {
   }
 }
 
+export type CoreLimits = {
+  interruptTimeoutMs: number
+  maxPending: number
+  outstandingActivity: number
+}
+
 export type CoreOptions = {
   stateDirectory: string
   agents: AgentDriver[]
   profiles?: Record<string, AuthProfile>
   onPermission?: PermissionHandler
   onObserverError?: (error: Error) => void
-  interruptTimeoutMs?: number
-  maxPending?: number
+  limits: CoreLimits
 }
 
-export type CreateOptions = { agent: string; cwd: string; authProfile?: string; id?: string; configuration?: SessionConfiguration }
+export type CreateOptions = { agent: string; cwd: string; id: string; authProfile?: string; configuration?: SessionConfiguration }
 
 /** Optional resume overrides. `configuration: undefined` is omitted (no-options resume). `{}` is an explicit no-op patch. */
 export type ResumeOptions = { configuration?: SessionConfiguration }

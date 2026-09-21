@@ -20,47 +20,99 @@ if (!selected || !allowed.has(selected)) {
 }
 
 function driverFor(name) {
+  const keeper = {
+    stateDirectory: join(tmpdir(), `supermux-core-real-${name}-keeper`),
+    limits: { parkedDeadlineMs: 600_000, journalMaxBytes: 64_000_000, connectTimeoutMs: 4_000 },
+  }
+  const acpShared = {
+    inheritEnv: true,
+    mcpServers: [],
+    setupTimeoutMs: 30_000,
+    shutdownTimeoutMs: 2_000,
+    maxFrameBytes: 16 * 1024 * 1024,
+    maxOutstandingActivity: 256,
+    cancelRetryIntervalMs: 250,
+    cancelRetryTimeoutMs: 10_000,
+    keeper,
+  }
   if (name === "claude") {
     return claude({
+      id: "claude",
+      command: "claude",
+      args: [],
       inheritEnv: true,
       tools: [],
       permissionPrompts: "none",
+      setupTimeoutMs: 30_000,
+      requestTimeoutMs: 30_000,
+      shutdownTimeoutMs: 2_000,
+      maxFrameBytes: 16 * 1024 * 1024,
+      keeper,
     })
   }
   if (name === "codex") {
     return codex({
+      id: "codex",
+      command: "codex",
+      args: ["app-server"],
       inheritEnv: true,
       sandbox: "read-only",
       approvalPolicy: "never",
+      permissionPrompts: "none",
+      setupTimeoutMs: 30_000,
+      requestTimeoutMs: 30_000,
+      shutdownTimeoutMs: 2_000,
+      maxFrameBytes: 16 * 1024 * 1024,
+      keeper,
     })
   }
   if (name === "grok") {
     return grok({
-      inheritEnv: true,
+      id: "grok",
+      command: "grok",
+      commandArgs: [],
       alwaysApprove: false,
       noLeader: true,
+      ...acpShared,
     })
   }
   if (name === "opencode") {
-    return opencode({ inheritEnv: true })
+    return opencode({
+      id: "opencode",
+      command: "opencode",
+      ...acpShared,
+    })
   }
-  return cursor({ inheritEnv: true, sandbox: "enabled" })
+  return cursor({
+    id: "cursor",
+    command: "cursor-agent",
+    args: [],
+    inheritEnv: true,
+    sandbox: "enabled",
+    trust: true,
+    force: false,
+    approveMcps: false,
+    setupTimeoutMs: 30_000,
+    shutdownTimeoutMs: 2_000,
+    maxFrameBytes: 16 * 1024 * 1024,
+  })
 }
 
 const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-core-real-"))
 const core = createCore({
   stateDirectory,
   agents: [driverFor(selected)],
+  limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
 })
 try {
-  const session = await core.sessions.create({ agent: selected, cwd: process.cwd() })
+  const session = await core.sessions.create({ id: "real-session", agent: selected, cwd: process.cwd() })
   const receipt = await session.send({
     content: [{ type: "text", text: "Reply with the single word pong. Do not use tools." }],
     whenBusy: "queue",
   })
   console.log(JSON.stringify({ agent: selected, completion: await receipt.completed, record: session.snapshot() }))
-  await session.close()
+  await session.close({ mode: "shutdown" })
 } finally {
-  await core.close()
+  await core.close({ agents: "shutdown" })
   await rm(stateDirectory, { recursive: true, force: true })
 }

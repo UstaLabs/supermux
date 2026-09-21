@@ -60,6 +60,13 @@ new AgentSideConnection(client => ({
   if(text === 'disconnect') { process.exit(19); return new Promise(()=>{}); }
   if(text === 'error') throw new Error('prompt rejected');
   if(text === 'hang') { promptActive = true; return new Promise(resolve => finish=resolve); }
+  if(text === 'live-hang') {
+    promptActive = true
+    await emitNativeTurn(client, params.sessionId, { id: process.env.TURN_ID || 'live-turn', complete: false })
+    const delay = Number(process.env.FINISH_AFTER_MS || 0)
+    if (delay > 0) setTimeout(() => { promptActive = false; finish?.({ stopReason: 'end_turn' }) }, delay)
+    return new Promise(resolve => { finish = (value) => { promptActive = false; nativeTurn = false; resolve(value) } })
+  }
   if(text === 'slow-start' || text === 'very-slow-start') {
     record({prompt:text,state:'queued'});
     await new Promise(resolve => setTimeout(resolve, text === 'very-slow-start' ? 750 : 80));

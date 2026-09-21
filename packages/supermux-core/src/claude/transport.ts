@@ -1,69 +1,107 @@
-import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { TextDecoder } from 'node:util'
+import { connectKeeper, type KeeperConnection } from '../keeper/client.js'
+import type { KeeperWelcome } from '../keeper/protocol.js'
 
 type Pending = { resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 
-export function transport(options: {
-  command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string
-  requestTimeoutMs: number; shutdownTimeoutMs: number; maxFrameBytes: number
-}, onMessage: (message: any) => void, onFailure: (error: Error) => void) {
-  const child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, stdio: ['pipe', 'pipe', 'pipe'], shell: false })
+export type ClaudeTransportOptions = {
+  command: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  cwd: string
+  requestTimeoutMs: number
+  shutdownTimeoutMs: number
+  maxFrameBytes: number
+  sessionId: string
+  keeper: {
+    stateDirectory: string
+    limits: { parkedDeadlineMs: number; journalMaxBytes: number; connectTimeoutMs: number }
+  }
+}
+
+export type TransportCloseMode = 'shutdown' | 'detach'
+
+export async function transport(
+  options: ClaudeTransportOptions,
+  onMessage: (message: any) => void,
+  onFailure: (error: Error) => void,
+) {
   const pending = new Map<string, Pending>()
-  let closed = false, exited = false
+  let closed = false
   let failure: Error | undefined, closing: Promise<void> | undefined
-  let buffer = Buffer.alloc(0)
   const decoder = new TextDecoder('utf-8', { fatal: true })
-  let resolveExit!: () => void
-  const exit = new Promise<void>(resolve => { resolveExit = resolve })
-  function fail(error: Error) {
+  let conn!: KeeperConnection
+  let welcome!: KeeperWelcome
+
+  function fail(error: Error, keepAgent = false) {
     if (failure) return
     failure = error
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(error) }
     pending.clear()
     onFailure(error)
-    void close()
+    void close({ mode: keepAgent ? 'detach' : 'shutdown' }).catch(() => { /* failure already reported */ })
   }
-  child.on('error', fail)
-  child.on('close', () => { exited = true; resolveExit(); if (!closed) fail(new Error('Claude process exited')) })
-  child.stdout.on('error', fail)
-  child.stderr.on('error', fail)
-  child.stdin.on('error', fail)
-  child.stderr.resume()
-  child.stdout.on('end', () => { if (!closed) fail(new Error('Claude output closed')) })
-  child.stdout.on('data', (chunk: Buffer) => {
+
+  function dispatchLine(line: string, seq: number, stale?: true) {
     if (closed || failure) return
-    let offset = 0
-    while (offset < chunk.length) {
-      const newline = chunk.indexOf(10, offset)
-      const end = newline < 0 ? chunk.length : newline
-      if (buffer.length + end - offset > options.maxFrameBytes) { fail(new Error('Claude frame exceeds size limit')); return }
-      buffer = Buffer.concat([buffer, chunk.subarray(offset, end)])
-      offset = end + 1
-      if (newline < 0) break
-      try {
-        const line = decoder.decode(buffer).trim(); buffer = Buffer.alloc(0)
-        if (!line) continue
-        const message = JSON.parse(line)
-        if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Invalid Claude message')
-        if (message.type === 'control_response' && message.response && typeof message.response.request_id === 'string') {
-          const p = pending.get(message.response.request_id)
-          if (p) {
-            pending.delete(message.response.request_id); clearTimeout(p.timer)
-            if (message.response.subtype === 'error') p.reject(new Error(message.response.error ?? 'Claude control request failed'))
-            else p.resolve(message.response)
-            continue
-          }
+    try {
+      const decoded = decoder.decode(Buffer.from(line, 'utf8')).trim()
+      if (!decoded) { conn.ack(seq); return }
+      const message = JSON.parse(decoded)
+      if (!message || typeof message !== 'object' || Array.isArray(message)) throw new Error('Invalid Claude message')
+      if (message.type === 'control_response' && message.response && typeof message.response.request_id === 'string') {
+        const p = pending.get(message.response.request_id)
+        if (p) {
+          pending.delete(message.response.request_id); clearTimeout(p.timer)
+          if (message.response.subtype === 'error') p.reject(new Error(message.response.error ?? 'Claude control request failed'))
+          else p.resolve(message.response)
         }
-        onMessage(message)
-      } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); return }
-    }
+        conn.ack(seq)
+        return
+      }
+      if (stale === true) { conn.ack(seq); return }
+      onMessage(message)
+      conn.ack(seq)
+    } catch (error) { fail(error instanceof Error ? error : new Error(String(error))) }
+  }
+
+  conn = await connectKeeper({
+    stateDirectory: options.keeper.stateDirectory,
+    sessionId: options.sessionId,
+    spec: { command: options.command, args: options.args, cwd: options.cwd, env: options.env, frameShape: 'claude-control' },
+    limits: {
+      maxFrameBytes: options.maxFrameBytes,
+      shutdownTimeoutMs: options.shutdownTimeoutMs,
+      parkedDeadlineMs: options.keeper.limits.parkedDeadlineMs,
+      journalMaxBytes: options.keeper.limits.journalMaxBytes,
+      connectTimeoutMs: options.keeper.limits.connectTimeoutMs,
+    },
+    cursor: 'acked',
   })
+  welcome = conn.welcome
+
+  queueMicrotask(() => {
+    void (async () => {
+      try {
+        for await (const ev of conn.frames) {
+          if (ev.type === 'frame' || ev.type === 'parked') dispatchLine(ev.line, ev.seq, ev.stale)
+        }
+        if (!closed) fail(new Error('Claude process exited'), true)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        if (closed) return
+        if (msg === 'replaced') fail(new Error('replaced'), true)
+        else fail(error instanceof Error ? error : new Error(String(error)), true)
+      }
+    })()
+  })
+
   function write(message: unknown) {
     if (failure || closed) throw failure ?? new Error('Claude runtime closed')
     const line = JSON.stringify(message) + '\n'
-    if (Buffer.byteLength(line) > options.maxFrameBytes || child.stdin.writableLength + Buffer.byteLength(line) > options.maxFrameBytes * 2) throw new Error('Claude outgoing frame exceeds size limit')
-    child.stdin.write(line, error => { if (error) fail(error) })
+    if (Buffer.byteLength(line) > options.maxFrameBytes) throw new Error('Claude outgoing frame exceeds size limit')
+    conn.write(line)
   }
   function request(body: Record<string, unknown>): Promise<any> {
     if (pending.size >= 128) return Promise.reject(new Error('Too many pending Claude requests'))
@@ -75,19 +113,23 @@ export function transport(options: {
       try { write({ type: 'control_request', request_id, request: body }) } catch (error) { clearTimeout(timer); pending.delete(request_id); reject(error) }
     })
   }
-  function close(): Promise<void> {
+  function close(opts: { mode: TransportCloseMode }): Promise<void> {
+    if (!opts || (opts.mode !== 'shutdown' && opts.mode !== 'detach')) throw new TypeError('close mode is required')
     if (closing) return closing
     closed = true
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('Claude runtime closed')) }
     pending.clear()
     closing = (async () => {
-      if (exited) return
-      child.stdin.end()
-      child.kill('SIGTERM')
-      const timer = setTimeout(() => { child.kill('SIGKILL') }, options.shutdownTimeoutMs)
-      try { await exit } finally { clearTimeout(timer); child.stdout.destroy(); child.stderr.destroy(); child.stdin.destroy() }
+      if (opts.mode === 'shutdown') await conn.shutdown()
+      else await conn.detach()
     })()
     return closing
   }
-  return { request, write, close }
+  return {
+    request,
+    write,
+    close,
+    welcome,
+    setMeta(value: Record<string, unknown>) { conn.setMeta(value) },
+  }
 }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../src/types.js"
+import { TEST_LIMITS, nextId } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -37,12 +38,12 @@ const cores: ReturnType<typeof createCore>[] = []
 async function setup(driver: AgentDriver, options = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-adopt-"))
   dirs.push(stateDirectory)
-  const core = createCore({ stateDirectory, agents: [driver], interruptTimeoutMs: 30, ...options })
+  const core = createCore({ stateDirectory, agents: [driver], limits: TEST_LIMITS, ...options })
   cores.push(core)
   return { core, stateDirectory }
 }
 afterEach(async () => {
-  await Promise.all(cores.splice(0).map(core => core.close().catch(() => {})))
+  await Promise.all(cores.splice(0).map(core => core.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
@@ -57,8 +58,9 @@ describe("session adopt", () => {
     expect(record).toMatchObject({ id: "migrated-1", agentSessionId: "native-from-broker", createdAt, agent: "test" })
     expect(d.opens).toHaveLength(0)
     expect((await core.sessions.get("migrated-1"))?.agentSessionId).toBe("native-from-broker")
-    await core.close()
-    const next = createCore({ stateDirectory, agents: [d.driver] })
+    await core.close({ agents: "shutdown" })
+    const next = createCore({
+    limits: TEST_LIMITS, stateDirectory, agents: [d.driver] })
     cores.push(next)
     const resumed = await next.sessions.resume("migrated-1")
     expect(d.opens).toHaveLength(1)
@@ -71,11 +73,12 @@ describe("session adopt", () => {
     const d = trackingDriver()
     const { core, stateDirectory } = await setup(d.driver)
     await core.sessions.adopt({ id: "keep-me", agent: "test", agentSessionId: "native-keep", cwd: tmpdir() })
-    await core.close()
+    await core.close({ agents: "shutdown" })
     const requests: DriverContext[] = []
     const next = createCore({
       stateDirectory,
       agents: [{ id: "test", async open(ctx) { requests.push(ctx); throw new Error("history gone") } }],
+      limits: TEST_LIMITS,
     })
     cores.push(next)
     await expect(next.sessions.resume("keep-me")).rejects.toThrow("history gone")
@@ -118,7 +121,7 @@ describe("session adopt", () => {
     expect(session.id).toBe("shared-id")
     await expect(core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: tmpdir() }))
       .rejects.toMatchObject({ code: "session_busy" })
-    await session.close()
+    await session.close({ mode: "shutdown" })
     await expect(core.sessions.adopt({ id: "shared-id", agent: "test", agentSessionId: "other-native", cwd: tmpdir() }))
       .rejects.toMatchObject({ code: "session_exists" })
     await expect(core.sessions.create({ id: "shared-id", agent: "test", cwd: tmpdir() }))
@@ -179,7 +182,7 @@ describe("session adopt", () => {
     const d = trackingDriver()
     const { core, stateDirectory } = await setup(d.driver)
     const adopting = core.sessions.adopt({ id: "during-close", agent: "test", agentSessionId: "native-close", cwd: tmpdir() })
-    const closing = core.close()
+    const closing = core.close({ agents: "shutdown" })
     await closing
     const adopted = await adopting.catch(e => e)
     if (adopted && typeof adopted === "object" && "id" in adopted) {
@@ -189,7 +192,8 @@ describe("session adopt", () => {
     }
     await expect(core.sessions.adopt({ id: "after-close", agent: "test", agentSessionId: "n", cwd: tmpdir() }))
       .rejects.toMatchObject({ code: "core_closed" })
-    const next = createCore({ stateDirectory, agents: [d.driver] })
+    const next = createCore({
+    limits: TEST_LIMITS, stateDirectory, agents: [d.driver] })
     cores.push(next)
     const listed = await next.sessions.list()
     if (listed.length) {

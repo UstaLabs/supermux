@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext } from "../src/types.js"
+import { TEST_LIMITS, nextId } from "./helpers.js"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -18,12 +19,12 @@ async function setup(driver: AgentDriver | AgentDriver[], options = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-close-id-"))
   dirs.push(stateDirectory)
   const agents = Array.isArray(driver) ? driver : [driver]
-  const core = createCore({ stateDirectory, agents, interruptTimeoutMs: 30, ...options })
+  const core = createCore({ stateDirectory, agents, limits: TEST_LIMITS, ...options })
   cores.push(core)
   return { core, stateDirectory }
 }
 afterEach(async () => {
-  await Promise.all(cores.splice(0).map(core => core.close().catch(() => {})))
+  await Promise.all(cores.splice(0).map(core => core.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
@@ -66,11 +67,11 @@ describe("sessions.close(id)", () => {
     await expect(core.sessions.resume("same-id")).rejects.toMatchObject({ code: "session_busy" })
     await expect(core.sessions.forget("same-id")).rejects.toMatchObject({ code: "session_busy" })
     expect(opens).toBe(1)
-    await expect(core.sessions.close("same-id")).rejects.toThrow("still alive")
+    await expect(core.sessions.close("same-id", { mode: "shutdown" })).rejects.toThrow("still alive")
     expect(opens).toBe(1)
     await expect(core.sessions.create({ id: "same-id", agent: "test", cwd: stateDirectory })).rejects.toMatchObject({ code: "session_busy" })
     allowClose = true
-    await core.sessions.close("same-id")
+    await core.sessions.close("same-id", { mode: "shutdown" })
     const session = await core.sessions.create({ id: "same-id", agent: "test", cwd: stateDirectory })
     expect(session.snapshot().agentSessionId).toBe("native-2")
     expect(opens).toBe(2)
@@ -92,7 +93,7 @@ describe("sessions.close(id)", () => {
       },
     })
     const creating = core.sessions.create({ id: "held", agent: "test", cwd: stateDirectory })
-    const closing = core.sessions.close("held")
+    const closing = core.sessions.close("held", { mode: "shutdown" })
     await entered.promise
     expect(opens).toBe(1)
     release.resolve()
@@ -121,7 +122,7 @@ describe("sessions.close(id)", () => {
       },
     })
     const creating = core.sessions.create({ id: "early", agent: "test", cwd: stateDirectory })
-    const closing = core.sessions.close("early")
+    const closing = core.sessions.close("early", { mode: "shutdown" })
     await Promise.resolve()
     gate.resolve()
     await closing
@@ -150,7 +151,7 @@ describe("sessions.close(id)", () => {
     })
     const creating = core.sessions.create({ id: "join-create", agent: "test", cwd: stateDirectory })
     await entered.promise
-    const closing = core.sessions.close("join-create")
+    const closing = core.sessions.close("join-create", { mode: "shutdown" })
     expect(opens).toBe(1)
     release.resolve()
     await closing
@@ -167,13 +168,14 @@ describe("sessions.close(id)", () => {
       },
     })
     const session = await core.sessions.create({ id: "resume-me", agent: "test", cwd: stateDirectory })
-    await session.close()
-    await core.close()
+    await session.close({ mode: "shutdown" })
+    await core.close({ agents: "shutdown" })
     const entered = deferred<void>()
     const release = deferred<void>()
     let opens = 0
     let closes = 0
     const next = createCore({
+    limits: TEST_LIMITS,
       stateDirectory,
       agents: [{
         id: "test",
@@ -188,7 +190,7 @@ describe("sessions.close(id)", () => {
     cores.push(next)
     const resuming = next.sessions.resume("resume-me")
     await entered.promise
-    const closing = next.sessions.close("resume-me")
+    const closing = next.sessions.close("resume-me", { mode: "shutdown" })
     expect(opens).toBe(1)
     release.resolve()
     await closing
@@ -213,12 +215,12 @@ describe("sessions.close(id)", () => {
     await expect(core.sessions.create({ id: "one", agent: "test", cwd: stateDirectory })).rejects.toBeInstanceOf(AggregateError)
     const firstAttempt = closeCalls
     expect(firstAttempt).toBe(1)
-    const [a, b] = await Promise.allSettled([core.sessions.close("one"), core.sessions.close("one")])
+    const [a, b] = await Promise.allSettled([core.sessions.close("one", { mode: "shutdown" }), core.sessions.close("one", { mode: "shutdown" })])
     expect(a.status).toBe("rejected")
     expect(b.status).toBe("rejected")
     expect(closeCalls).toBe(firstAttempt + 1)
     allow = true
-    await Promise.all([core.sessions.close("one"), core.sessions.close("one")])
+    await Promise.all([core.sessions.close("one", { mode: "shutdown" }), core.sessions.close("one", { mode: "shutdown" })])
     expect(closeCalls).toBe(firstAttempt + 2)
   })
 
@@ -236,8 +238,8 @@ describe("sessions.close(id)", () => {
     })
     const creating = core.sessions.create({ id: "race", agent: "test", cwd: stateDirectory })
     await entered.promise
-    const perId = core.sessions.close("race")
-    const global = core.close()
+    const perId = core.sessions.close("race", { mode: "shutdown" })
+    const global = core.close({ agents: "shutdown" })
     release.resolve()
     await perId
     await global
@@ -261,7 +263,7 @@ describe("sessions.close(id)", () => {
     const b = await core.sessions.create({ id: "B", agent: "test", cwd: stateDirectory })
     expect(b.snapshot().state).toBe("idle")
     expect(closes).toEqual(["A"])
-    await expect(core.sessions.close("A")).rejects.toThrow("A still alive")
+    await expect(core.sessions.close("A", { mode: "shutdown" })).rejects.toThrow("A still alive")
     expect(b.snapshot().state).toBe("idle")
     expect(closes).toEqual(["A", "A"])
   })
@@ -277,7 +279,7 @@ describe("sessions.close(id)", () => {
       id: "test",
       async open(ctx: DriverContext) {
         if (ctx.forkFrom) {
-          closing = coreRef!.sessions.close(ctx.sessionId)
+          closing = coreRef!.sessions.close(ctx.sessionId, { mode: "shutdown" })
           void closing.then(() => { closeDone = true })
           entered.resolve()
           await hold.promise
@@ -301,7 +303,7 @@ describe("sessions.close(id)", () => {
     })
     coreRef = core
     const parent = await core.sessions.create({ id: "parent", agent: "test", cwd: stateDirectory })
-    const forking = parent.fork()
+    const forking = parent.fork({ id: nextId() })
     await entered.promise
     expect(closeDone).toBe(false)
     hold.resolve()
@@ -336,12 +338,12 @@ describe("sessions.close(id)", () => {
         },
       })
       await core.sessions.create({ id: "s", agent: "t", cwd: stateDirectory })
-      const firstClose = core.sessions.close("s")
+      const firstClose = core.sessions.close("s", { mode: "shutdown" })
       while (!oldClosing) await Promise.resolve()
       oldHold.resolve()
       for (let i = 0; i < ticks; i++) await Promise.resolve()
       const opening = core.sessions.resume("s").catch(e => e)
-      const secondClose = core.sessions.close("s").then(() => { secondClosed = true })
+      const secondClose = core.sessions.close("s", { mode: "shutdown" }).then(() => { secondClosed = true })
       await new Promise(r => setTimeout(r, 15))
       if (opens === 2 && secondClosed) bad.push({ ticks, opens, secondClosed })
       newHold.resolve()
@@ -359,10 +361,10 @@ describe("sessions.close(id)", () => {
         return runtime("n", async () => {})
       },
     })
-    await core.sessions.close("nobody")
-    await core.sessions.close("nobody")
+    await core.sessions.close("nobody", { mode: "shutdown" })
+    await core.sessions.close("nobody", { mode: "shutdown" })
     expect(opens).toBe(0)
-    await expect(core.sessions.close("bad id")).rejects.toMatchObject({ code: "invalid_session_id" })
+    await expect(core.sessions.close("bad id", { mode: "shutdown" })).rejects.toMatchObject({ code: "invalid_session_id" })
     expect(opens).toBe(0)
   })
 
@@ -379,8 +381,8 @@ describe("sessions.close(id)", () => {
       },
     })
     await expect(core.sessions.create({ id: "retry", agent: "test", cwd: stateDirectory })).rejects.toBeInstanceOf(AggregateError)
-    await expect(core.sessions.close("retry")).rejects.toThrow("still alive")
-    await core.close()
+    await expect(core.sessions.close("retry", { mode: "shutdown" })).rejects.toThrow("still alive")
+    await core.close({ agents: "shutdown" })
     expect(closes).toBe(3)
   })
 })

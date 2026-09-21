@@ -24,10 +24,15 @@ type Registered = {
   fenceTerminal: () => void
 }
 
-const BROKER_CODEX_OPTIONS: Pick<CodexOptions, "approvalPolicy" | "sandbox" | "permissionPrompts"> = {
+const BROKER_CODEX_OPTIONS: Pick<CodexOptions, "approvalPolicy" | "sandbox" | "permissionPrompts" | "inheritEnv" | "setupTimeoutMs" | "requestTimeoutMs" | "shutdownTimeoutMs" | "maxFrameBytes"> = {
   approvalPolicy: "never",
   sandbox: "danger-full-access",
   permissionPrompts: "none",
+  inheritEnv: true,
+  setupTimeoutMs: 30_000,
+  requestTimeoutMs: 30_000,
+  shutdownTimeoutMs: 2_000,
+  maxFrameBytes: 16 * 1024 * 1024,
 }
 
 /** Process-level owner of one supermux-core instance shared by every Codex session. */
@@ -39,12 +44,13 @@ export class CodexCoreHost {
   private closed = false
   private closeTail?: Promise<void>
 
-  constructor(options: CodexCoreHostOptions) {
+  constructor(private readonly options: CodexCoreHostOptions) {
     if (!options.stateDirectory) throw new Error("stateDirectory is required")
     this.driverFactory = options.driverFactory
     this.core = createCore({
       stateDirectory: options.stateDirectory,
       agents: [this.createHostDriver()],
+      limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
     })
   }
 
@@ -94,7 +100,7 @@ export class CodexCoreHost {
     // session and leftover runtime confirmed close (a failed close rejects with an
     // AggregateError and leaves this registry intact for a retry), so clearing the
     // registrations below never drops ownership of a still-running child.
-    await this.core.close()
+    await this.core.close({ agents: "shutdown" })
     this.registered.clear()
     await Promise.allSettled(entries.map((entry) => entry.adapter.stop()))
   }
@@ -115,9 +121,14 @@ export class CodexCoreHost {
     const factory = this.driverFactory
     const options: CodexOptions = {
       ...BROKER_CODEX_OPTIONS,
+      id: "codex",
+      command: entry.command ?? "codex",
+      args: entry.args ? [...entry.args] : ["app-server"],
       env,
-      ...(entry.command !== undefined ? { command: entry.command } : {}),
-      ...(entry.args !== undefined ? { args: [...entry.args] } : {}),
+      keeper: {
+        stateDirectory: this.options.stateDirectory,
+        limits: { parkedDeadlineMs: 600_000, journalMaxBytes: 64_000_000, connectTimeoutMs: 4_000 },
+      },
       onRuntimeRequest: (info, request) => {
         if (info.sessionId === ctx.sessionId) entry.adapter.attachRuntimeRequest(request)
       },

@@ -148,6 +148,13 @@ if (process.env.MODE === 'setup-hang') {
     if (text === 'malformed') { process.stdout.write('{bad}\n'); return }
     if (text === 'oversize') { process.stdout.write('x'.repeat(5000)); return }
     if (text === 'hang') { hanging = {session, uuid}; return }
+    if (text === 'hang-then-result') {
+      hanging = {session, uuid}
+      setTimeout(() => {
+        if (hanging) { finish(hanging, 'end_turn'); hanging = undefined }
+      }, 1200)
+      return
+    }
     if (text === 'permission' || text === 'permission-tool-use-id' || text === 'permission-duplicate' || text === 'permission-native-cancel' || text === 'permission-late' || text === 'permission-cross-turn' || text === 'permission-changed-input' || text === 'permission-cancel-after-allow') {
       hanging = {session, uuid}
       const request = {subtype: 'can_use_tool', tool_name: 'Bash', input: {command: 'pwd'}}

@@ -1,7 +1,7 @@
-import {test, expect, setDefaultTimeout} from 'bun:test'
+import {afterEach, test, expect, setDefaultTimeout} from 'bun:test'
 import {fileURLToPath} from 'node:url'
 import {mkdtemp, readFile, rm} from 'node:fs/promises'
-import {readFileSync} from 'node:fs'
+import {mkdtempSync, readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {claude} from '../src/claude/index.js'
@@ -10,12 +10,28 @@ import type {DriverContext} from '../src/types.js'
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
 const signal = () => new AbortController().signal
+const keeperDirs: string[] = []
+function keeperLimits() {
+  return { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 }
+}
+function keeperOf() {
+  const stateDirectory = mkdtempSync(join(tmpdir(), 'claude-test-'))
+  keeperDirs.push(stateDirectory)
+  return { stateDirectory, limits: keeperLimits() }
+}
+afterEach(async () => {
+  for (const dir of keeperDirs.splice(0)) {
+    try { await rm(dir, { recursive: true, force: true }) } catch { /* */ }
+  }
+})
 const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
   sessionId: 'core', cwd: process.cwd(), signal: signal(), onUpdate() {}, onExit() {},
   requestPermission: async () => ({outcome: {outcome: 'cancelled'}}), ...extra,
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => claude({
-  command: process.execPath, args: [fixture], env, setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, ...extra,
+  id: 'claude', command: process.execPath, args: [fixture], env, inheritEnv: true, tools: [], permissionPrompts: 'none',
+  setupTimeoutMs: 5000, requestTimeoutMs: 3000, shutdownTimeoutMs: 30, maxFrameBytes: 16 * 1024 * 1024,
+  keeper: keeperOf(), ...extra,
 })
 const input = (text: string) => [{type: 'text' as const, text}]
 
@@ -28,7 +44,7 @@ test('native create, streaming result, filtered updates, permission deny, and fa
   }))
   try {
     expect(r.agentSessionId).toMatch(/^[a-f0-9-]{36}$/)
-    expect(r.capabilities).toEqual({resume: true, steer: false, fork: false, detach: false})
+    expect(r.capabilities).toEqual({resume: true, steer: false, fork: false, detach: true})
     expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
     expect(updates.some(x => x.protocol === 'native' && x.value.message?.content?.[0]?.text === 'héllo')).toBe(true)
     expect(updates.some(x => x.value.session_id === 'other-session')).toBe(false)
@@ -36,13 +52,13 @@ test('native create, streaming result, filtered updates, permission deny, and fa
     expect(hostCalls).toBe(0)
     await expect(r.prompt(input('fail'), signal())).rejects.toThrow('turn failed')
     await expect(r.prompt([{type: 'resource_link', uri: 'file:///x', name: 'x'}], signal())).rejects.toThrow('Unsupported')
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('resume preserves identity; missing resume never creates a replacement', async () => {
   const r = await driver().open(ctx({resumeId: 'old'}))
   expect(r.agentSessionId).toBe('old')
-  await r.close()
+  await r.close({ mode: "shutdown" })
   await expect(driver().open(ctx({resumeId: 'missing'}))).rejects.toThrow('missing session')
   await expect(driver({MODE: 'wrong-resume-early'}).open(ctx({resumeId: 'old'}))).rejects.toThrow('identity')
   const exits: Error[] = []
@@ -52,7 +68,7 @@ test('resume preserves identity; missing resume never creates a replacement', as
     await expect(late.prompt(input('hello'), signal())).rejects.toThrow('identity')
     expect(exits.some(e => /identity/.test(e.message))).toBe(true)
     expect(late.agentSessionId).toBe('old')
-  } finally { await late.close() }
+  } finally { await late.close({ mode: "shutdown" }) }
 })
 
 test('interrupt cancels the in-flight turn via control_request', async () => {
@@ -61,7 +77,7 @@ test('interrupt cancels the in-flight turn via control_request', async () => {
     const pending = r.prompt(input('hang'), signal())
     await r.interrupt()
     expect(await pending).toEqual({stopReason: 'cancelled'})
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('failed interrupt does not fabricate a cancelled completion', async () => {
@@ -70,7 +86,7 @@ test('failed interrupt does not fabricate a cancelled completion', async () => {
     const pending = r.prompt(input('hang'), signal())
     await expect(r.interrupt()).rejects.toThrow('interrupt failed')
     expect(await pending).toEqual({stopReason: 'end_turn'})
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('missing executable, setup timeout, request timeout, and stream failures reject', async () => {
@@ -80,7 +96,7 @@ test('missing executable, setup timeout, request timeout, and stream failures re
   for (const text of ['disconnect', 'eof', 'malformed', 'oversize']) {
     const r = await driver({}, {maxFrameBytes: 4096}).open(ctx())
     try { await expect(r.prompt(input(text), signal())).rejects.toThrow() }
-    finally { await r.close() }
+    finally { await r.close({ mode: "shutdown" }) }
   }
 })
 
@@ -98,14 +114,14 @@ test('model, effort, extra argv, and profile env are forwarded; close reaps stub
   expect(argv).not.toContain('--bare')
   expect(argv.some(a => a.startsWith('--session-id='))).toBe(true)
   expect(argv).not.toContain('--resume')
-  await created.close()
+  await created.close({ mode: "shutdown" })
 
   const resumedTrace = join(dir, 'resume-trace')
   const resumed = await driver({TRACE: resumedTrace}).open(ctx({resumeId: 'old'}))
   const resumeArgv = JSON.parse((await readFile(resumedTrace, 'utf8')).trim().split('\n')[0]!).argv as string[]
   expect(resumeArgv.some(a => a === '--resume=old' || a === 'old')).toBe(true)
   expect(resumeArgv.includes('--session-id') || resumeArgv.some(a => a.startsWith('--session-id='))).toBe(false)
-  await resumed.close()
+  await resumed.close({ mode: "shutdown" })
 
   const configured = await driver(
     {EXPECT_DEFAULT_DENY: '0', EXPECT_MODEL: 'opus', EXPECT_EFFORT: 'high', TRACE: join(dir, 'cfg')},
@@ -116,12 +132,12 @@ test('model, effort, extra argv, and profile env are forwarded; close reaps stub
   expect(cfgArgv.slice(cfgArgv.indexOf('--effort'), cfgArgv.indexOf('--effort') + 2)).toEqual(['--effort', 'high'])
   expect(cfgArgv.slice(cfgArgv.indexOf('--tools'), cfgArgv.indexOf('--tools') + 2)).toEqual(['--tools', 'Read'])
   expect(cfgArgv.slice(cfgArgv.indexOf('--add-dir'), cfgArgv.indexOf('--add-dir') + 2)).toEqual(['--add-dir', dir])
-  await configured.close()
+  await configured.close({ mode: "shutdown" })
 
   const r = await driver({MODE: 'stubborn'}).open(ctx({profile: {agent: 'claude', env: {PID_FILE: pidFile, TRACE: join(dir, 'close-trace')}}}))
   const pending = r.prompt(input('hang'), signal()).catch(e => e)
   await new Promise(resolve => setTimeout(resolve, 30))
-  await r.close()
+  await r.close({ mode: "shutdown" })
   expect(await pending).toBeInstanceOf(Error)
   expect(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0)).toThrow()
   expect((await readFile(join(dir, 'close-trace'), 'utf8')).includes('"subtype":"initialize"')).toBe(true)
@@ -149,7 +165,7 @@ test('host permission allow_once uses original input and native session identity
     },
   }))
   try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
-  finally { await r.close() }
+  finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('host permission tool_use_id is preferred for toolCallId; reject_once and unrecognized deny', async () => {
@@ -161,13 +177,13 @@ test('host permission tool_use_id is preferred for toolCallId; reject_once and u
   }))
   try {
     expect(await r.prompt(input('permission-tool-use-id'), signal())).toEqual({stopReason: 'end_turn'})
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 
   const r2 = await hostDriver().open(ctx({
     requestPermission: async () => ({outcome: {outcome: 'selected', optionId: 'allow_always'}}),
   }))
   try { expect(await r2.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
-  finally { await r2.close() }
+  finally { await r2.close({ mode: "shutdown" }) }
 })
 
 test('host permission callback failure denies the tool', async () => {
@@ -175,7 +191,7 @@ test('host permission callback failure denies the tool', async () => {
     requestPermission: async () => { throw new Error('host exploded') },
   }))
   try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
-  finally { await r.close() }
+  finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('duplicate can_use_tool request_id does not call the host twice', async () => {
@@ -189,7 +205,7 @@ test('duplicate can_use_tool request_id does not call the host twice', async () 
   try {
     expect(await r.prompt(input('permission-duplicate'), signal())).toEqual({stopReason: 'end_turn'})
     expect(calls).toBe(1)
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('cross-turn reused can_use_tool request_id denies without a stale allow or second host ask', async () => {
@@ -204,7 +220,7 @@ test('cross-turn reused can_use_tool request_id denies without a stale allow or 
     expect(await r.prompt(input('permission-cross-turn'), signal())).toEqual({stopReason: 'end_turn'})
     expect(await r.prompt(input('permission-cross-turn'), signal())).toEqual({stopReason: 'end_turn'})
     expect(calls).toBe(1)
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('same-turn reused request_id with different input denies without a second host ask', async () => {
@@ -218,7 +234,7 @@ test('same-turn reused request_id with different input denies without a second h
   try {
     expect(await r.prompt(input('permission-changed-input'), signal())).toEqual({stopReason: 'end_turn'})
     expect(calls).toBe(1)
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('native cancel after answered allow revokes cached allow for that request', async () => {
@@ -232,7 +248,7 @@ test('native cancel after answered allow revokes cached allow for that request',
   try {
     expect(await r.prompt(input('permission-cancel-after-allow'), signal())).toEqual({stopReason: 'end_turn'})
     expect(calls).toBe(1)
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('never-resolving host permission is cancelled by interrupt and by close', async () => {
@@ -252,7 +268,7 @@ test('never-resolving host permission is cancelled by interrupt and by close', a
     await r.interrupt()
     expect(await pending).toEqual({stopReason: 'cancelled'})
     expect(permissionSignal!.aborted).toBe(true)
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 
   let requested2!: () => void
   const seen2 = new Promise<void>(resolve => { requested2 = resolve })
@@ -265,7 +281,7 @@ test('never-resolving host permission is cancelled by interrupt and by close', a
   }))
   const pending2 = r2.prompt(input('permission'), signal()).catch(e => e)
   await seen2
-  await r2.close()
+  await r2.close({ mode: "shutdown" })
   expect(await pending2).toBeInstanceOf(Error)
   expect(permissionSignal!.aborted).toBe(true)
 })
@@ -275,7 +291,7 @@ test('malformed host permission response denies without failing the turn', async
     requestPermission: async () => ({outcome: null} as any),
   }))
   try { expect(await r.prompt(input('permission'), signal())).toEqual({stopReason: 'end_turn'}) }
-  finally { await r.close() }
+  finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('late host allow after turn completion does not grant the prior request', async () => {
@@ -295,7 +311,7 @@ test('late host allow after turn completion does not grant the prior request', a
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(calls).toBe(1)
     expect(await r.prompt(input('hello'), signal())).toEqual({stopReason: 'end_turn'})
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('native control_cancel_request aborts the host callback and denies', async () => {
@@ -309,5 +325,15 @@ test('native control_cancel_request aborts the host callback and denies', async 
   try {
     expect(await r.prompt(input('permission-native-cancel'), signal())).toEqual({stopReason: 'end_turn'})
     expect(permissionSignal!.aborted).toBe(true)
-  } finally { await r.close() }
+  } finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('claude() TypeError names each missing required field', () => {
+  const keeper = { stateDirectory: '/tmp', limits: { parkedDeadlineMs: 1, journalMaxBytes: 1, connectTimeoutMs: 1 } }
+  const full: any = { id: 'claude', command: 'claude', args: [], inheritEnv: true, tools: [], permissionPrompts: 'none', setupTimeoutMs: 1, requestTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1, keeper }
+  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv']) {
+    const opts = { ...full }; delete opts[field]
+    expect(() => claude(opts)).toThrow(TypeError)
+    expect(() => claude(opts)).toThrow(new RegExp(`Claude ${field} is required`))
+  }
 })

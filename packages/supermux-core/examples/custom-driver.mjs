@@ -66,7 +66,11 @@ function stickyOpenDriver() {
 
 const stateDirectory = await mkdtemp(join(tmpdir(), "supermux-core-custom-"))
 const echo = echoDriver()
-const core = createCore({ stateDirectory, agents: [echo, stickyOpenDriver()] })
+const core = createCore({
+  stateDirectory,
+  agents: [echo, stickyOpenDriver()],
+  limits: { interruptTimeoutMs: 10_000, maxPending: 128, outstandingActivity: 256 },
+})
 const chain = []
 core.subscribe(event => {
   if (event.type === "message.accepted" || event.type === "message.started" || event.type === "message.completed") {
@@ -76,6 +80,7 @@ core.subscribe(event => {
 
 try {
   const session = await core.sessions.create({
+    id: "echo-session",
     agent: "echo",
     cwd: process.cwd(),
     configuration: { model: "echo-1", reasoningEffort: "low" },
@@ -84,6 +89,7 @@ try {
   assert.deepEqual(echo.applied(session.id), { model: "echo-1", reasoningEffort: "low" })
 
   const empty = await core.sessions.create({
+    id: "echo-empty",
     agent: "echo",
     cwd: process.cwd(),
     configuration: {},
@@ -106,8 +112,8 @@ try {
   assert.equal(result.status, "completed")
   assert.deepEqual(chain, ["message.accepted", "message.started", "message.completed"])
 
-  await session.close()
-  await empty.close()
+  await session.close({ mode: "shutdown" })
+  await empty.close({ mode: "shutdown" })
 
   const stickyId = "sticky-demo-1"
   let first
@@ -130,11 +136,11 @@ try {
     core.sessions.create({ id: stickyId, agent: "echo", cwd: process.cwd() }),
     error => error.code === "session_busy",
   )
-  await core.sessions.close(stickyId)
+  await core.sessions.close(stickyId, { mode: "shutdown" })
   const recovered = await core.sessions.create({ id: stickyId, agent: "echo", cwd: process.cwd() })
   assert.equal(recovered.id, stickyId)
-  await recovered.close()
+  await recovered.close({ mode: "shutdown" })
 } finally {
-  await core.close()
+  await core.close({ agents: "shutdown" })
   await rm(stateDirectory, { recursive: true, force: true })
 }
