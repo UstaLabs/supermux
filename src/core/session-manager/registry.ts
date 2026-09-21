@@ -65,7 +65,7 @@ export class Registry {
    * a Registry and then registers sessions would otherwise heal nothing, and a
    * heal writes rows, which a constructor should not do.
    */
-  healWorkspaces(ensureProject?: (w: { workdir: string; repo_root?: string }) => void): string[] {
+  healWorkspaces(ensureProject?: (w: { workdir: string; repo_root?: string; internal: boolean }) => void): string[] {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 

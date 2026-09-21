@@ -232,6 +232,42 @@ test("setImage stores a file, replaces the old one, and clearImage removes it", 
   expect(() => svc.setImage("nope", new Uint8Array([1]), "image/png")).toThrow(ProjectNotFoundError)
 })
 
+test("a legacy literal '~' workdir registers and resolves consistently with an expanded path", () => {
+  const { svc } = make()
+  const { projectId } = svc.ensureLocation({ workdir: "~/projects/claudemux" })!
+  expect(svc.resolve({ workdir: "~/projects/claudemux" })).toBe(projectId)
+  // Agrees with the already-expanded spelling too.
+  expect(svc.resolve({ workdir: "/h/projects/claudemux" })).toBe(projectId)
+})
+
+test("a bare legacy '~' workdir resolves to the home project", () => {
+  const { svc } = make()
+  const { projectId } = svc.ensureLocation({ workdir: "~" })!
+  expect(svc.resolve({ workdir: "~" })).toBe(projectId)
+  expect(svc.resolve({ workdir: "/h" })).toBe(projectId)
+  expect(svc.get(projectId)!.name).toBe("~")
+})
+
+test("reconcile skips internal sessions' workspaces and internal legacy sessions", () => {
+  const { db, svc } = make()
+  const ws = new WorkspaceStore(db)
+  db.run(
+    `INSERT INTO sessions (id, name, status, agent, workdir, created_at, internal)
+     VALUES ('rpc1', 'rpc-worker', 'active', 'claude', '/h/.mux/state/rpc-workers', '2026-01-01T00:00:00.000Z', 1)`,
+  )
+  ws.create({ name: "rpc-worker", workdir: "/h/.mux/state/rpc-workers", primary_session_id: "rpc1" })
+  ws.create({ name: "real", workdir: "/h/real" })
+  db.run(
+    `INSERT INTO sessions (id, name, status, agent, workdir, created_at, internal)
+     VALUES ('legacy-internal', 'old-rpc', 'archived', 'claude', '/h/.mux/state/legacy-rpc', '2026-01-01T00:00:00.000Z', 1)`,
+  )
+
+  const created = svc.reconcile(db)
+
+  expect(svc.list().map((p) => p.name)).toEqual(["~/real"])
+  expect(created).toHaveLength(1)
+})
+
 test("membership maps workspace ids to project ids and omits unresolved rows", () => {
   const { svc } = make()
   const { projectId } = svc.ensureLocation({ workdir: "/h/app" })!

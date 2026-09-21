@@ -266,6 +266,11 @@ const projectService = new ProjectService(registry.projects, {
   images: new ProjectImages(join(STATE_DIR, "project-images")),
 })
 registry.healWorkspaces((w) => {
+  // An internal session (e.g. an rpc-worker) still gets its workspace healed —
+  // that's a normal, hidden shape — but must never gain a project: its
+  // workspace is filtered out of every user-facing listing (listWorkspaces
+  // below), so a project for it would be an invisible/empty group.
+  if (w.internal) return
   try { projectService.ensureLocation(w) }
   catch (err) { log.error("project_register_failed", { workdir: w.workdir, err: String(err) }) }
 })
@@ -1146,7 +1151,10 @@ const workspaceService = new WorkspaceService(
       await displayManager.stop(id)
     },
     // Inside createForSession's transaction: a throw aborts the workspace insert.
+    // Internal sessions (rpc-workers) never register a project — see the
+    // matching comment on healWorkspaces above.
     ensureProject: (w) => {
+      if (w.internal) return
       if (projectService.ensureLocation(w)?.created) projectCatalogDirty = true
     },
   },
@@ -1193,6 +1201,17 @@ function archiveWorkspaceIfEmpty(workspaceId: string): void {
   registry.workspaces.archive(workspaceId)
   webChannel?.broadcastToAll({ type: "workspace_removed", id: workspaceId })
 }
+
+/** Ids of every session marked internal (e.g. an rpc-worker). Workspaces and
+ * projects owned by one of these are hidden from every user-facing listing. */
+const internalSessionIds = (): Set<string> =>
+  new Set(
+    (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
+      .map((r) => r.id),
+  )
+/** A workspace is user-visible unless its primary session is internal. */
+const isVisibleWorkspace = (w: { primary_session_id?: string | null }, internal: Set<string>) =>
+  !w.primary_session_id || !internal.has(w.primary_session_id)
 
 const toWsDto = (w: WorkspaceRecord) =>
   workspaceDto(w, registry.workspaces.listViews(w.id), projectService.resolve(w))
@@ -1598,6 +1617,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             base_branch: entry.base_branch || undefined,
             branch: entry.session_branch || undefined,
             sort_order: entry.sort_order,
+            internal: entry.internal,
           })
           // Catalog first, so the client knows the project the workspace points at.
           if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
@@ -1849,13 +1869,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
       // the rpc-worker sessions — invisible in the session sidebar since forever —
       // reappear as workspace rows, which is what the user hit.
-      const internal = new Set(
-        (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
-          .map((r) => r.id),
-      )
+      const internal = internalSessionIds()
       return registry.workspaces
         .list()
-        .filter((w) => !w.primary_session_id || !internal.has(w.primary_session_id))
+        .filter((w) => isVisibleWorkspace(w, internal))
         .map(toWsDto)
     },
     getWorkspace: (id) => wsDto(id),
@@ -1887,20 +1904,25 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return dto
     },
     listArchivedWorkspaces: () => {
-      const internal = new Set(
-        (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
-          .map((r) => r.id),
-      )
+      const internal = internalSessionIds()
       return registry.workspaces
         .list({ includeArchived: true })
         .filter((w) => w.status === "archived")
-        .filter((w) => !w.primary_session_id || !internal.has(w.primary_session_id))
+        .filter((w) => isVisibleWorkspace(w, internal))
         .map(toWsDto)
     },
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
     // Project catalog. The routes broadcast projects_changed after each mutation.
     listProjectCatalog: () => projectService.list(),
-    getProjectMembership: () => projectService.membership(registry.workspaces.list({ includeArchived: true })),
+    // Membership input excludes internal workspaces for consistency — they're
+    // not sent to clients anyway (see listWorkspaces/listArchivedWorkspaces
+    // above), and a resolved membership entry for one would be dead data.
+    getProjectMembership: () => {
+      const internal = internalSessionIds()
+      return projectService.membership(
+        registry.workspaces.list({ includeArchived: true }).filter((w) => isVisibleWorkspace(w, internal)),
+      )
+    },
     createProject: (name) => projectService.create(name),
     renameProject: (id, name) => projectService.rename(id, name),
     reorderProjects: (ids) => projectService.reorder(ids),

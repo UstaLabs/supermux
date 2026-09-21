@@ -22,6 +22,18 @@ test("effectiveLocation treats a root '/' managed worktrees root as covering eve
   expect(effectiveLocation({ workdir: "/" }, "/")).toBeUndefined()
   expect(effectiveLocation({ workdir: "/a/b", repo_root: "/r" }, "/")).toBe("/r")
 })
+test("effectiveLocation expands a legacy literal '~' / '~/' against home before normalizing", () => {
+  expect(effectiveLocation({ workdir: "~/projects/claudemux" }, undefined, "/home/u")).toBe("/home/u/projects/claudemux")
+  expect(effectiveLocation({ workdir: "~" }, undefined, "/home/u")).toBe("/home/u")
+  // repo_root takes the same treatment.
+  expect(effectiveLocation({ workdir: "/ignored", repo_root: "~/app" }, undefined, "/home/u")).toBe("/home/u/app")
+})
+test("effectiveLocation leaves other odd spellings of '~' alone", () => {
+  expect(effectiveLocation({ workdir: "/home/u/~/x" }, undefined, "/home/u")).toBe("/home/u/~/x")
+})
+test("effectiveLocation without home leaves a literal '~' untouched (still rejected as non-absolute)", () => {
+  expect(effectiveLocation({ workdir: "~/app" })).toBeUndefined()
+})
 test("pathLabel matches the Kotlin formatWorkdir convention", () => {
   expect(pathLabel("/home/u", "/home/u")).toBe("~")
   expect(pathLabel("/home/u/app", "/home/u")).toBe("~/app")

@@ -39,7 +39,7 @@ export class ProjectService {
 
   /** Read-only. Never writes, never stats. */
   resolve(w: Located): string | undefined {
-    const path = effectiveLocation(w, this.worktreesRoot)
+    const path = effectiveLocation(w, this.worktreesRoot, this.opts.home)
     return path ? this.store.findLocationByPath(path)?.project_id : undefined
   }
 
@@ -51,7 +51,7 @@ export class ProjectService {
    * a failure rolls the new project back with it — no orphans.
    */
   ensureLocation(w: Located): { projectId: string; created: boolean } | undefined {
-    const path = effectiveLocation(w, this.worktreesRoot)
+    const path = effectiveLocation(w, this.worktreesRoot, this.opts.home)
     if (!path) return undefined
     return this.store.db.transaction(() => {
       const found = this.store.findLocationByPath(path)
@@ -70,13 +70,23 @@ export class ProjectService {
    * never reads the filesystem. Returns the created project ids.
    */
   reconcile(db: Db): string[] {
+    // Exclude workspaces owned by an internal session (e.g. an rpc-worker) and
+    // legacy sessions marked internal directly — their workspaces are hidden
+    // from the sidebar (see listWorkspaces in src/main.ts), so a project for
+    // them would be an invisible/empty group.
     const rows = [
-      ...(db.query("SELECT workdir, repo_root FROM workspaces").all() as Located[]),
-      ...(db.query("SELECT workdir, repo_root FROM sessions WHERE workspace_id IS NULL").all() as Located[]),
+      ...(db.query(`
+        SELECT w.workdir, w.repo_root FROM workspaces w
+         WHERE w.primary_session_id IS NULL
+            OR NOT EXISTS (
+                 SELECT 1 FROM sessions s WHERE s.id = w.primary_session_id AND s.internal = 1
+               )
+      `).all() as Located[]),
+      ...(db.query("SELECT workdir, repo_root FROM sessions WHERE workspace_id IS NULL AND internal = 0").all() as Located[]),
     ]
     const paths = new Set<string>()
     for (const r of rows) {
-      const p = effectiveLocation(r, this.worktreesRoot)
+      const p = effectiveLocation(r, this.worktreesRoot, this.opts.home)
       if (p) paths.add(p)
     }
     return this.store.db.transaction(() => {

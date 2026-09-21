@@ -23,8 +23,11 @@ export type WorkspaceDeps = {
    * Registers the workspace's effective location with the project catalog. Runs
    * inside createForSession's transaction, before the workspace insert: a throw
    * aborts the insert, so a failed registration never leaves an orphan workspace.
+   * `internal` mirrors the session's registry.internal flag — the caller must
+   * no-op for an internal session (its workspace is created regardless, but it
+   * must never gain a project; see src/main.ts).
    */
-  ensureProject?: (w: { workdir: string; repo_root?: string }) => void
+  ensureProject?: (w: { workdir: string; repo_root?: string; internal: boolean }) => void
 }
 
 export type CreateForSessionInput = {
@@ -35,6 +38,8 @@ export type CreateForSessionInput = {
   base_branch?: string
   branch?: string
   sort_order?: number
+  /** Broker-internal session (e.g. an rpc-worker). Forwarded to ensureProject. */
+  internal?: boolean
 }
 
 export class WorkspaceService {
@@ -47,7 +52,7 @@ export class WorkspaceService {
   /** Spec §9.1 steps 3–5. Called from the session spawn path. */
   createForSession(input: CreateForSessionInput): WorkspaceRecord {
     const run = () => {
-      this.deps.ensureProject?.({ workdir: input.workdir, repo_root: input.repo_root })
+      this.deps.ensureProject?.({ workdir: input.workdir, repo_root: input.repo_root, internal: !!input.internal })
       const ws = this.store.create({
         name: input.name,
         workdir: input.workdir,
