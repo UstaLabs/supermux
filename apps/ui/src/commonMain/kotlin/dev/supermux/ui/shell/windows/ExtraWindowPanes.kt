@@ -28,9 +28,10 @@ fun extraWindowTitle(
     workspaceName: String,
     hosted: LayoutNode?,
     viewsById: Map<String, ViewDto>,
+    sessionNames: Map<String, String> = emptyMap(),
 ): String {
     val activeId = hosted?.let { collectActiveViewIds(it).firstOrNull() }
-    val viewPart = activeId?.let { viewsById[it] }?.let { viewTitle(it) }
+    val viewPart = activeId?.let { viewsById[it] }?.let { viewTitle(it, sessionNames::get) }
     return if (viewPart.isNullOrBlank()) workspaceName else "$workspaceName — $viewPart"
 }
 
@@ -59,8 +60,6 @@ fun ExtraWindowPanes(
     val hosted = ui.windows.layoutFor(hostId, ws.layoutSync.tree)
     val tabDragState = remember(hostId) { PaneDragController() }
     var closeCandidate by remember(hostId) { mutableStateOf<ViewDto?>(null) }
-    val sessionNames = remember(current) { emptyMap<String, String>() }
-
     WorkspacePanes(
         hostId = hostId,
         layout = hosted,
@@ -76,7 +75,7 @@ fun ExtraWindowPanes(
         tabDragState = tabDragState,
         closeCandidate = closeCandidate,
         onCloseCandidate = { closeCandidate = it },
-        sessionNames = sessionNames,
+        sessionNames = bind.sessionNames,
         modifier = modifier,
         onTearOutTab = onTearOutTab,
         stripChrome = stripChrome,

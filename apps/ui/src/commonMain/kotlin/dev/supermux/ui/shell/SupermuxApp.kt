@@ -1383,7 +1383,7 @@ private fun WorkspacePanel(
     val localLayout = layoutSync.tree
 
     val panesBind = ui.panesBindFor(current.id) ?: WorkspacePanesBind(
-        current, workspaceSession, ws, wsApp, appFor, drafts, overlayScope, launcherPane,
+        current, workspaceSession, ws, wsApp, appFor, drafts, overlayScope, launcherPane, sessionNames,
     )
     panesBind.current = current
     panesBind.session = workspaceSession
@@ -1393,6 +1393,7 @@ private fun WorkspacePanel(
     panesBind.drafts = drafts
     panesBind.overlayScope = overlayScope
     panesBind.launcherPane = launcherPane
+    panesBind.sessionNames = sessionNames
     ui.panesBinds[current.id] = panesBind
     androidx.compose.runtime.DisposableEffect(panesBind) {
         panesBind.holders++

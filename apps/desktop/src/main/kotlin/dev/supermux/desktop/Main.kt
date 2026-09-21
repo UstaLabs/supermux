@@ -1783,6 +1783,7 @@ fun main() {
                             it.current.name,
                             ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
                             it.ws.viewsById,
+                            it.sessionNames,
                         )
                     } ?: "supermux",
                     state = extraState,

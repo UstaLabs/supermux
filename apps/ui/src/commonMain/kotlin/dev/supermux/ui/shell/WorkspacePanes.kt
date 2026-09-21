@@ -130,6 +130,7 @@ class WorkspacePanesBind(
         /** The pending "+ → Chat" tab hosting the launcher (null outside a workspace tab). */
         tab: LauncherTab?,
     ) -> Unit,
+    sessionNames: Map<String, String> = emptyMap(),
 ) {
     var current by mutableStateOf(current)
     var session by mutableStateOf(session)
@@ -139,6 +140,8 @@ class WorkspacePanesBind(
     var drafts by mutableStateOf(drafts)
     var overlayScope by mutableStateOf(overlayScope)
     var launcherPane by mutableStateOf(launcherPane)
+    /** Session id → name, so a chat tab is titled after its chat in every window. */
+    var sessionNames by mutableStateOf(sessionNames)
 
     /**
      * How many compositions are drawing this workspace right now. The bind itself outlives them
@@ -191,7 +194,7 @@ fun WorkspacePanes(
 
     PaneHost(
         layout = layout,
-        titleFor = { vid -> viewsById[vid]?.let { viewTitle(it) } ?: "view" },
+        titleFor = { vid -> viewsById[vid]?.let { viewTitle(it, sessionNames::get) } ?: "view" },
         onCloseView = { onCloseCandidate(viewsById[it]) },
         onEdit = { edit -> layoutSync.edit(edit) },
         addSlot = { groupId ->
@@ -253,7 +256,7 @@ fun WorkspacePanes(
                         Box(Modifier.testTag("tab-move-to-window-$itemId")) {
                         DefaultTabChip(
                             itemId = itemId,
-                            title = v?.let { viewTitle(it) } ?: "view",
+                            title = v?.let { viewTitle(it, sessionNames::get) } ?: "view",
                             state = tabState,
                             labelFont = MonoFontFamily,
                             onClose = { _ -> onCloseCandidate(v) },
@@ -403,7 +406,7 @@ fun PhoneWorkspacePanes(
                 PaneTabStrip(
                     viewIds = tabs.viewIds,
                     activeViewId = tabs.selectedId ?: "",
-                    titleFor = { id -> viewsById[id]?.let { viewTitle(it) } ?: "view" },
+                    titleFor = { id -> viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view" },
                     onSelect = { id -> app.setActiveView(current.id, id) },
                     onClose = { id -> viewsById[id]?.let { closeOrConfirm(it) } },
                     modifier = Modifier.weight(1f),
@@ -416,7 +419,7 @@ fun PhoneWorkspacePanes(
                         ) {
                             DefaultTabChip(
                                 itemId = id,
-                                title = viewsById[id]?.let { viewTitle(it) } ?: "view",
+                                title = viewsById[id]?.let { viewTitle(it, sessionNames::get) } ?: "view",
                                 state = state,
                                 labelFont = MonoFontFamily,
                                 onClose = { vid -> viewsById[vid]?.let { closeOrConfirm(it) } },

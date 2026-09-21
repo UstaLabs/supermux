@@ -94,7 +94,11 @@ class WorkspaceScreenModelTest {
     }
 
     @Test fun closeConfirmTextChatFallsBackToViewTitle() {
-        val view = ViewDto(id = "c", workspaceId = "w", kind = "chat")
+        // A bound chat whose session name is not known here.
+        val view = ViewDto(
+            id = "c", workspaceId = "w", kind = "chat",
+            state = kotlinx.serialization.json.JsonObject(mapOf("sessionId" to JsonPrimitive("s1"))),
+        )
         assertEquals(
             "Close this chat? This archives the session Chat.",
             closeConfirmText(view, null),

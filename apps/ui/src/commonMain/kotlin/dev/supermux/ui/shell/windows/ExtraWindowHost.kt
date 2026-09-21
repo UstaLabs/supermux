@@ -146,7 +146,7 @@ fun ExtraWindowHost(
         }
         windows.onWorkspaceTree(current.id, tree)
     }
-    val title = extraWindowTitle(current.name, mainUi.windows.layoutFor(host.id, tree), ws.viewsById)
+    val title = extraWindowTitle(current.name, mainUi.windows.layoutFor(host.id, tree), ws.viewsById, bind.sessionNames)
     SideEffect { onTitle(title) }
     ExtraWindowPanes(
         hostId = host.id,

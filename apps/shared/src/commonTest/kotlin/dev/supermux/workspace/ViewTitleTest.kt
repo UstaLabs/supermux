@@ -19,4 +19,15 @@ class ViewTitleTest {
         assertEquals("Files", viewTitle(view("editor", emptyMap())))
         assertEquals("Changes", viewTitle(view("editor", mapOf("mode" to "diff"))))
     }
+
+    @Test
+    fun aChatTabIsNamedAfterItsSession() {
+        val bound = view("chat", mapOf("sessionId" to "s1"))
+        assertEquals("Fix the launcher", viewTitle(bound, sessionName = { if (it == "s1") "Fix the launcher" else null }))
+        // Names not loaded yet (or blank) → the kind's own word.
+        assertEquals("Chat", viewTitle(bound, sessionName = { null }))
+        assertEquals("Chat", viewTitle(bound))
+        // A pending "+ → Chat" tab has no session yet.
+        assertEquals("New Chat", viewTitle(view("chat", emptyMap()), sessionName = { "unused" }))
+    }
 }
