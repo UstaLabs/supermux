@@ -61,6 +61,7 @@ class ContractTest {
                 is ServerFrame.UsageUpdated -> {}
                 is ServerFrame.FinishJobFrame -> {}
                 is ServerFrame.SessionGit -> {}
+                is ServerFrame.ProjectsChanged -> {}
                 is ServerFrame.WalkthroughUpdated -> {}
                 is ServerFrame.ReviewCommentFrame -> {}
             }

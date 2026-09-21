@@ -46,6 +46,7 @@ import dev.supermux.net.OpenCodeOAuthStart
 import dev.supermux.net.OpenCodeProvider
 import dev.supermux.net.PADto
 import dev.supermux.net.PathValidation
+import dev.supermux.net.ProjectLocationConflict
 import dev.supermux.net.ProxyDto
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RemoteRepo
@@ -81,6 +82,7 @@ import kotlinx.serialization.json.put
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SendArgs
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
@@ -302,6 +304,14 @@ class HostStore(
     // demand by [listDisplays]) — mirrors AppViewModel:158-161.
     val displays: StateFlow<List<DisplayStream>> =
         _state.map { it.displays }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
+
+    /** The broker's persistent project catalog (snapshot + `projects_changed`). */
+    val projects: StateFlow<List<ProjectDto>> =
+        _state.map { it.projects }.stateIn(projectionScope, SharingStarted.Eagerly, emptyList())
+
+    /** False until a frame carried a project catalog — an old broker never sets it (path grouping only). */
+    val projectCatalogKnown: StateFlow<Boolean> =
+        _state.map { it.projectCatalogKnown }.stateIn(projectionScope, SharingStarted.Eagerly, false)
 
     private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
     val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions.asStateFlow()
@@ -738,6 +748,79 @@ class HostStore(
     /** DELETE /proxies/<domain>. False on failure. */
     suspend fun removeProxy(domain: String): Boolean =
         runApi("removeProxy") { api.removeProxy(domain); true } ?: false
+
+    // ── Persistent project catalog ─────────────────────────────────────────────────────────────
+    // Each mutation upserts the returned project at once; the broker's `projects_changed`
+    // broadcast (which also carries membership) then replaces the whole catalog.
+
+    /** GET /project-catalog — null on failure. Also refreshes [projects]. */
+    suspend fun listProjectCatalog(): List<ProjectDto>? =
+        runApi("listProjectCatalog") { api.listProjectCatalog() }?.also { list ->
+            _state.update { it.copy(projects = list, projectCatalogKnown = true) }
+        }
+
+    /** POST /project-catalog — null on failure. */
+    suspend fun createProject(name: String): ProjectDto? =
+        runApi("createProject") { api.createProject(name) }?.also(::upsertProject)
+
+    /** PATCH /project-catalog/{id} {name} — null on failure. */
+    suspend fun renameProject(id: String, name: String): ProjectDto? =
+        runApi("renameProject") { api.renameProject(id, name) }?.also(::upsertProject)
+
+    /** PATCH /project-catalog/reorder — optimistic sortOrder; false on failure. */
+    suspend fun reorderProjects(orderedIds: List<String>): Boolean {
+        val order = orderedIds.withIndex().associate { (i, id) -> id to i }
+        if (order.isEmpty()) return true
+        _state.update { cur ->
+            cur.copy(projects = cur.projects.map { p -> order[p.id]?.let { p.copy(sortOrder = it) } ?: p })
+        }
+        return runApi("reorderProjects") { api.reorderProjects(orderedIds); true } ?: false
+    }
+
+    /**
+     * POST /project-catalog/{id}/locations. A 409 comes back as [ProjectLocationResult.Conflict]
+     * naming the project that already owns the path, so the UI can offer to move it instead.
+     */
+    suspend fun addProjectLocation(id: String, path: String): ProjectLocationResult {
+        var conflict: String? = null
+        val project = runApi("addProjectLocation") {
+            try {
+                api.addProjectLocation(id, path)
+            } catch (c: ProjectLocationConflict) {
+                conflict = c.projectId
+                null
+            }
+        }
+        conflict?.let { return ProjectLocationResult.Conflict(it) }
+        return project?.let { upsertProject(it); ProjectLocationResult.Added(it) } ?: ProjectLocationResult.Failed
+    }
+
+    /** PATCH /project-catalog/locations/{locationId} {projectId} — the target project, null on failure. */
+    suspend fun moveProjectLocation(locationId: String, projectId: String): ProjectDto? =
+        runApi("moveProjectLocation") { api.moveProjectLocation(locationId, projectId) }?.also(::upsertProject)
+
+    /** PUT /project-catalog/{id}/image — null on failure (415 bad type, 413 over 5 MB, 404). */
+    suspend fun setProjectImage(id: String, bytes: ByteArray, mime: String): ProjectDto? =
+        runApi("setProjectImage") { api.setProjectImage(id, bytes, mime) }?.also(::upsertProject)
+
+    /** DELETE /project-catalog/{id}/image — null on failure. */
+    suspend fun clearProjectImage(id: String): ProjectDto? =
+        runApi("clearProjectImage") { api.clearProjectImage(id) }?.also(::upsertProject)
+
+    /** The cache-busted image URL for [project], or null when it has none. Authenticated. */
+    fun projectImageUrl(project: ProjectDto): String? =
+        project.imageId?.let { api.projectImageUrl(project.id, it) }
+
+    private fun upsertProject(p: ProjectDto) {
+        _state.update { cur ->
+            val next = if (cur.projects.any { it.id == p.id }) {
+                cur.projects.map { if (it.id == p.id) p else it }
+            } else {
+                cur.projects + p
+            }
+            cur.copy(projects = next)
+        }
+    }
 
     // ── Assistant identity + curator (desktop-parity Task 5) ───────────────────────────────────
     // Backs the Assistant section: PA name + soul.md + nightly curator. Mirrors AppViewModel

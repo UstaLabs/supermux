@@ -3,6 +3,7 @@ package dev.supermux.state
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.ViewDto
+import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.advanceLastRead
 
 fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (frame) {
@@ -16,10 +17,18 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             }
             next
         }
+        // An old broker sends neither field: leave the dtos' own projectId (null) alone.
+        val catalogKnown = frame.projects.isNotEmpty() || frame.projectMembership.isNotEmpty()
         state.copy(
             sessions = frame.sessions,
-            workspaces = frame.workspaces,
-            archivedWorkspaces = frame.archivedWorkspaces,
+            workspaces = if (catalogKnown) applyMembership(frame.workspaces, frame.projectMembership) else frame.workspaces,
+            archivedWorkspaces = if (catalogKnown) {
+                applyMembership(frame.archivedWorkspaces, frame.projectMembership)
+            } else {
+                frame.archivedWorkspaces
+            },
+            projects = frame.projects,
+            projectCatalogKnown = catalogKnown,
             messages = frame.logs,
             activity = frame.activity,
             bgTasks = frame.bgTasks,
@@ -32,6 +41,12 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 .toMap(),
         )
     }
+    is ServerFrame.ProjectsChanged -> state.copy(
+        projects = frame.projects,
+        projectCatalogKnown = true,
+        workspaces = applyMembership(state.workspaces, frame.projectMembership),
+        archivedWorkspaces = applyMembership(state.archivedWorkspaces, frame.projectMembership),
+    )
     is ServerFrame.SessionAdded -> {
         val incoming = frame.session
         val sessions = if (state.sessions.none { it.id == incoming.id }) {
@@ -199,6 +214,10 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
     }
     else -> state
 }
+
+/** Patch each workspace's projectId from a full membership map; absent ids become unresolved. */
+private fun applyMembership(ws: List<WorkspaceDto>, m: Map<String, String>): List<WorkspaceDto> =
+    ws.map { w -> val p = m[w.id]; if (w.projectId == p) w else w.copy(projectId = p) }
 
 private fun updateViews(state: HostState, workspaceId: String, edit: (List<ViewDto>) -> List<ViewDto>): HostState {
     if (state.workspaces.none { it.id == workspaceId }) return state

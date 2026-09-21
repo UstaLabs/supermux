@@ -20,6 +20,7 @@ import dev.supermux.net.PairClaimResult
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.ClientFrame
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.net.AddCommentBody
 import dev.supermux.net.AddDeviceResponse
@@ -157,6 +158,7 @@ class FleetStore(
     private val agentByHost = HashMap<String, Map<String, AgentStatus>>()
     private val lastReadByHost = HashMap<String, Map<String, String>>()
     private val archivedByHost = HashMap<String, List<ArchivedDto>>()
+    private val projectsByHost = HashMap<String, List<ProjectDto>>()
     private val usageByHost = HashMap<String, UsageResponse?>()
     private val onlineHosts = HashMap<String, Boolean>()
     private var lastViewingHost: String? = null
@@ -198,6 +200,7 @@ class FleetStore(
         var agent: Map<String, AgentStatus>? = null
         var lastRead: Map<String, String>? = null
         var archived: List<ArchivedDto>? = null
+        var projects: List<HostProject>? = null
         var hostViews: List<HostView>? = null
         var apps: List<HostStore>? = null
         /** Nullable value → a flag, so "publish null usage" is distinguishable from "not staged". */
@@ -216,6 +219,7 @@ class FleetStore(
         agent?.let { _agentState.value = it }
         lastRead?.let { _lastRead.value = it }
         archived?.let { _archivedSessions.value = it }
+        projects?.let { _projects.value = it }
         hostViews?.let { _hostViews.value = it }
         if (usageStaged) _usageSnapshot.value = usage
     }
@@ -301,6 +305,14 @@ class FleetStore(
 
     private val _archivedSessions = MutableStateFlow<List<ArchivedDto>>(emptyList())
     val archivedSessions: StateFlow<List<ArchivedDto>> = _archivedSessions.asStateFlow()
+
+    /**
+     * Every host's persistent project catalog, each tagged with the owning host's recordId (the
+     * same id [sessionHost] carries). Project ids are only unique per broker, so (hostId, id) is
+     * the identity — see `dev.supermux.workspace.projectGroupKey`.
+     */
+    private val _projects = MutableStateFlow<List<HostProject>>(emptyList())
+    val projects: StateFlow<List<HostProject>> = _projects.asStateFlow()
 
     val hostFilter: Flow<String?> = deps.settings.string(SettingsKeys.HOST_FILTER).map { it?.takeIf(String::isNotBlank) }
 
@@ -432,6 +444,7 @@ class FleetStore(
         conn.jobs += fleetScope.launch { app.lastRead.collect { onHostLastRead(recordId, it) } }
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
         conn.jobs += fleetScope.launch { app.archivedSessions.collect { onHostArchived(recordId, it) } }
+        conn.jobs += fleetScope.launch { app.projects.collect { onHostProjects(recordId, it) } }
         conn.jobs += fleetScope.launch { app.usageSnapshot.collect { onHostUsage(recordId, it) } }
         var lost = false
         publishing { pub ->
@@ -527,6 +540,7 @@ class FleetStore(
                     removed.forEach {
                         sessionsByHost.remove(it); messagesByHost.remove(it)
                         agentByHost.remove(it); lastReadByHost.remove(it); archivedByHost.remove(it); onlineHosts.remove(it)
+                        projectsByHost.remove(it)
                     }
                 }
             }
@@ -545,7 +559,7 @@ class FleetStore(
     /** Every projection at once. Callers hold [lock]. */
     private fun stageAll(pub: Publication) {
         stageSessions(pub); stageMessages(pub); stageAgent(pub); stageLastRead(pub)
-        stageArchived(pub); stageHostViews(pub)
+        stageArchived(pub); stageProjects(pub); stageHostViews(pub)
     }
 
     private fun stageSessions(pub: Publication) {
@@ -621,6 +635,20 @@ class FleetStore(
         store.list().forEach { h -> archivedByHost[h.recordId]?.let { out.addAll(it) } }
         archivedByHost.forEach { (rid, list) -> if (store.list().none { it.recordId == rid }) out.addAll(list) }
         pub.archived = out
+    }
+
+    private fun onHostProjects(recordId: String, projects: List<ProjectDto>) = publishing { pub ->
+        projectsByHost[recordId] = projects
+        stageProjects(pub)
+    }
+
+    /** Every host's catalog tagged with its recordId, in store order (then any stray host). */
+    private fun stageProjects(pub: Publication) {
+        val out = ArrayList<HostProject>()
+        val known = store.list().map { it.recordId }
+        known.forEach { rid -> projectsByHost[rid]?.forEach { out.add(HostProject(rid, it)) } }
+        projectsByHost.forEach { (rid, list) -> if (rid !in known) list.forEach { out.add(HostProject(rid, it)) } }
+        pub.projects = out
     }
 
     private fun stageHostViews(pub: Publication) {
@@ -840,6 +868,7 @@ class FleetStore(
             agentByHost.remove(recordId)
             lastReadByHost.remove(recordId)
             archivedByHost.remove(recordId)
+            projectsByHost.remove(recordId)
             usageByHost.remove(recordId)
             onlineHosts.remove(recordId)
             snapshots?.remove(recordId)
@@ -899,6 +928,41 @@ class FleetStore(
             c.app.workspaces.value.any { it.id == workspaceId } ||
                 c.app.archivedWorkspaces.value.any { it.id == workspaceId }
         }?.app ?: activeApp()
+
+    /** recordId of the host owning [workspaceId] (live or archived), or null when none does. */
+    fun hostIdForWorkspace(workspaceId: String): String? = synchronized(lock) {
+        conns.entries.firstOrNull { (_, c) ->
+            c.app.workspaces.value.any { it.id == workspaceId } ||
+                c.app.archivedWorkspaces.value.any { it.id == workspaceId }
+        }?.key
+    }
+
+    // ── Persistent projects — routed to the OWNING host by recordId (no active-host fallback:
+    //    a project id means nothing on another broker). Null / false / Failed when it is gone.
+
+    suspend fun createProject(hostId: String, name: String): ProjectDto? =
+        appForRecord(hostId)?.createProject(name)
+
+    suspend fun renameProject(hostId: String, projectId: String, name: String): ProjectDto? =
+        appForRecord(hostId)?.renameProject(projectId, name)
+
+    suspend fun reorderProjects(hostId: String, orderedIds: List<String>): Boolean =
+        appForRecord(hostId)?.reorderProjects(orderedIds) ?: false
+
+    suspend fun addProjectLocation(hostId: String, projectId: String, path: String): ProjectLocationResult =
+        appForRecord(hostId)?.addProjectLocation(projectId, path) ?: ProjectLocationResult.Failed
+
+    suspend fun moveProjectLocation(hostId: String, locationId: String, projectId: String): ProjectDto? =
+        appForRecord(hostId)?.moveProjectLocation(locationId, projectId)
+
+    suspend fun setProjectImage(hostId: String, projectId: String, bytes: ByteArray, mime: String): ProjectDto? =
+        appForRecord(hostId)?.setProjectImage(projectId, bytes, mime)
+
+    suspend fun clearProjectImage(hostId: String, projectId: String): ProjectDto? =
+        appForRecord(hostId)?.clearProjectImage(projectId)
+
+    fun projectImageUrl(project: HostProject): String? =
+        appForRecord(project.hostId)?.projectImageUrl(project.project)
 
     private fun requireHost(app: HostStore?): HostStore =
         app ?: error("No host connected")
@@ -1574,3 +1638,6 @@ class FleetStore(
         }
     }
 }
+
+/** A persistent project plus the recordId of the host whose broker owns it. */
+data class HostProject(val hostId: String, val project: ProjectDto)
