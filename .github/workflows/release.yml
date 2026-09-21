@@ -660,6 +660,13 @@ jobs:
           fi
           echo "have=$have" >> "$GITHUB_OUTPUT"
           echo "upload=$upload" >> "$GITHUB_OUTPUT"
+      - name: Give the Kotlin/Native release link enough heap
+        # The framework's release link runs inside the Gradle daemon, and apps/gradle.properties
+        # caps that at 2g (sized for the dev box) — it dies with "Java heap space" here. The
+        # user-home gradle.properties outranks the project's, so raise it for this runner only.
+        run: |
+          mkdir -p ~/.gradle
+          echo "org.gradle.jvmargs=-Xmx5g" >> ~/.gradle/gradle.properties
       - name: Validate compile (unsigned)
         # Dry runs and secret-less tag builds stop here: a device build with signing off
         # proves the archive compiles without needing any Apple credentials.
