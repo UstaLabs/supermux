@@ -19,6 +19,12 @@ export type WorkspaceDeps = {
   /** scope is "w:<workspaceId>" for a workspace terminal, or the session name/id for an agent one. */
   closeTerminal: (scope: string, terminalId: string) => Promise<void>
   stopDisplay: (displayId: string) => Promise<void>
+  /**
+   * Registers the workspace's effective location with the project catalog. Runs
+   * inside createForSession's transaction, before the workspace insert: a throw
+   * aborts the insert, so a failed registration never leaves an orphan workspace.
+   */
+  ensureProject?: (w: { workdir: string; repo_root?: string }) => void
 }
 
 export type CreateForSessionInput = {
@@ -40,18 +46,22 @@ export class WorkspaceService {
 
   /** Spec §9.1 steps 3–5. Called from the session spawn path. */
   createForSession(input: CreateForSessionInput): WorkspaceRecord {
-    const ws = this.store.create({
-      name: input.name,
-      workdir: input.workdir,
-      repo_root: input.repo_root,
-      base_branch: input.base_branch,
-      branch: input.branch,
-      primary_session_id: input.sessionId,
-      sort_order: input.sort_order,
-    })
-    this.store.addView(ws.id, { kind: "chat", state: { sessionId: input.sessionId } })
-    this.linkSession(input.sessionId, ws.id)
-    return this.store.getById(ws.id)!
+    const run = () => {
+      this.deps.ensureProject?.({ workdir: input.workdir, repo_root: input.repo_root })
+      const ws = this.store.create({
+        name: input.name,
+        workdir: input.workdir,
+        repo_root: input.repo_root,
+        base_branch: input.base_branch,
+        branch: input.branch,
+        primary_session_id: input.sessionId,
+        sort_order: input.sort_order,
+      })
+      this.store.addView(ws.id, { kind: "chat", state: { sessionId: input.sessionId } })
+      this.linkSession(input.sessionId, ws.id)
+      return this.store.getById(ws.id)!
+    }
+    return this.db ? this.db.transaction(run)() : run()
   }
 
   /**

@@ -25,8 +25,16 @@ type OrphanRow = {
  *
  * A heal is a DEFECT SIGNAL, not a normal path. It logs at warn on purpose.
  * Returns the session ids that were healed.
+ *
+ * `ensureProject`, when given, registers each healed row's location with the
+ * project catalog (startup reconciliation would pick it up anyway; this keeps a
+ * heal self-contained).
  */
-export function healSessionsWithoutWorkspace(db: Db, store: WorkspaceStore): string[] {
+export function healSessionsWithoutWorkspace(
+  db: Db,
+  store: WorkspaceStore,
+  ensureProject?: (w: { workdir: string; repo_root?: string }) => void,
+): string[] {
   const orphans = db.query(`
     SELECT s.id, s.name, s.workdir, s.repo_root, s.base_branch, s.session_branch, s.sort_order
       FROM sessions s
@@ -37,6 +45,7 @@ export function healSessionsWithoutWorkspace(db: Db, store: WorkspaceStore): str
 
   const healed: string[] = []
   for (const s of orphans) {
+    ensureProject?.({ workdir: s.workdir, repo_root: s.repo_root ?? undefined })
     const ws = store.create({
       name: s.name,
       workdir: s.workdir,
