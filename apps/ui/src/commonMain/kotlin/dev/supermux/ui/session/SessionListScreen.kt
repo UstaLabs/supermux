@@ -219,6 +219,8 @@ fun SessionListScreen(
     workspaceHost: (WorkspaceDto) -> String = { "" },
     /** Authenticated project image bytes; null when missing or on failure. */
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
+    /** The app's shared project image cache (null → a screen-local one). */
+    projectImageCache: ProjectImageCache? = null,
     /** Persist a host's new full project order (`PATCH /project-catalog/reorder`). */
     onReorderProjects: (hostId: String, orderedIds: List<String>) -> Unit = { _, _ -> },
     onProjectSettings: (ProjectRef) -> Unit = {},
@@ -306,7 +308,7 @@ fun SessionListScreen(
     val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost) {
         groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost)
     }
-    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage)
+    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
     val archivedByPath = remember(archivedGroups) { archivedGroups.associate { it.key to it.workspaces } }
 
     // ── Session/task fallback (Fleet mode with no workspaces) ─────────────────────────────────
@@ -757,12 +759,10 @@ fun SessionListScreen(
                         fullLabel = ref != null,
                         leading = ref?.takeIf { it.project.imageId != null }?.let { r ->
                             {
-                                ProjectImage(r, cachedProjectImage, size = 20.dp) {
-                                    GroupLetterTile(
-                                        r.project.name.firstOrNull()?.uppercaseChar()?.toString() ?: "·",
-                                        cs.secondary,
-                                        20.dp,
-                                    )
+                                // Same size as the fallback (the header's own hashed tile), so
+                                // nothing jumps or flashes while the image loads.
+                                ProjectImage(r, cachedProjectImage, size = 18.dp) {
+                                    PathGroupTile(g.label, fullLabel = true)
                                 }
                             }
                         },

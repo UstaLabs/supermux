@@ -281,6 +281,8 @@ fun SessionLauncherScreen(
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
     hosts: List<HostView> = emptyList(),
     selectedHost: String? = null,
+    /** The app's shared project image cache (null → a screen-local one). */
+    projectImageCache: ProjectImageCache? = null,
     standalone: Boolean = false,
     topBarShown: Boolean = false,
     /**
@@ -374,6 +376,7 @@ fun SessionLauncherScreen(
     )
     val loadCatalogImage = rememberCachedProjectImageLoader(
         remember(actions) { { ref: ProjectRef -> actions.projectImage(ref.project) } },
+        projectImageCache,
     )
 
     LaunchedEffect(selectedHost, launcherRestoring) {

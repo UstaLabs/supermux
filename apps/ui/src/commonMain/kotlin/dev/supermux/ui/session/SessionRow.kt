@@ -117,11 +117,7 @@ fun PathGroupHeader(
         targetValue = if (collapsed) -90f else 0f,
         label = "groupChevronRotation",
     )
-    val leaf = if (fullLabel) label else label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
-    val letter = leaf.firstOrNull()?.uppercaseChar()?.toString() ?: "·"
-    // Stable-ish pastel from label hash so adjacent groups don't all share the same tile.
-    val hue = ((leaf.hashCode() ushr 1) % 360).toFloat()
-    val tile = Color.hsl(hue, 0.45f, 0.42f)
+    val leaf = groupHeaderLeaf(label, fullLabel)
     val clickable = if (onToggle != null) {
         Modifier
             .pointerHoverIcon(PointerIcon.Hand)
@@ -149,7 +145,7 @@ fun PathGroupHeader(
         if (leading != null) {
             leading()
         } else {
-            GroupLetterTile(letter, tile, 18.dp)
+            PathGroupTile(label, fullLabel)
         }
         Text(
             leaf,
@@ -173,6 +169,19 @@ fun PathGroupHeader(
                 .rotate(rotation),
         )
     }
+}
+
+private fun groupHeaderLeaf(label: String, fullLabel: Boolean): String =
+    if (fullLabel) label else label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+
+/** [PathGroupHeader]'s default leading tile: the leaf's first letter on a label-hashed colour. */
+@Composable
+internal fun PathGroupTile(label: String, fullLabel: Boolean = false) {
+    val leaf = groupHeaderLeaf(label, fullLabel)
+    val letter = leaf.firstOrNull()?.uppercaseChar()?.toString() ?: "·"
+    // Stable-ish pastel from label hash so adjacent groups don't all share the same tile.
+    val hue = ((leaf.hashCode() ushr 1) % 360).toFloat()
+    GroupLetterTile(letter, Color.hsl(hue, 0.45f, 0.42f), 18.dp)
 }
 
 /** The colour-hashed letter tile a group header shows when it has no image. */

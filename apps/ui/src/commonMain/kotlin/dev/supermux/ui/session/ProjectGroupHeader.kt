@@ -22,11 +22,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -39,6 +41,11 @@ import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WorkspaceGroup
 import dev.supermux.workspace.projectGroupKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object ProjectTestIds {
     fun image(key: String) = "project_image_$key"
@@ -74,25 +81,44 @@ fun reorderedProjectIds(projects: List<ProjectRef>, target: ProjectRef, delta: I
 }
 
 /**
- * Wrap [load] with an in-memory cache keyed by (host, project, imageId): a lazy header scrolled out
- * and back in must not refetch. A new imageId is a new key, so a changed image still loads.
+ * The app-wide project image bytes cache: ONE per shell (hoisted in `SupermuxApp`), shared by the
+ * sidebar, the Archived screen and the launcher's picker. Holds only the LATEST imageId per
+ * (host, project) — a new image replaces, not accumulates — and shares an in-flight fetch, so
+ * several headers asking at once make one request. A failed/empty fetch is dropped so it retries.
+ */
+class ProjectImageCache(private val scope: CoroutineScope) {
+    private class Entry(val imageId: String, val bytes: Deferred<ByteArray?>)
+
+    private val mutex = Mutex()
+    private val entries = HashMap<String, Entry>()
+
+    suspend fun get(ref: ProjectRef, load: suspend (ProjectRef) -> ByteArray?): ByteArray? {
+        val imageId = ref.project.imageId ?: return null
+        val key = projectGroupKey(ref.hostId, ref.project.id)
+        val pending = mutex.withLock {
+            entries[key]?.takeIf { it.imageId == imageId }?.bytes
+                ?: scope.async { runCatching { load(ref) }.getOrNull() }
+                    .also { entries[key] = Entry(imageId, it) }
+        }
+        val bytes = pending.await()
+        if (bytes == null) mutex.withLock { if (entries[key]?.bytes === pending) entries.remove(key) }
+        return bytes
+    }
+}
+
+/**
+ * [load] through [shared] (the app's one [ProjectImageCache]), or through a screen-local cache when
+ * none is passed (previews, tests): a lazy header scrolled out and back in must not refetch.
  */
 @Composable
 internal fun rememberCachedProjectImageLoader(
     load: suspend (ProjectRef) -> ByteArray?,
+    shared: ProjectImageCache? = null,
 ): suspend (ProjectRef) -> ByteArray? {
-    val cache = remember { HashMap<String, ByteArray>() }
-    return remember(load) {
-        { ref ->
-            val imageId = ref.project.imageId
-            if (imageId == null) {
-                null
-            } else {
-                val key = projectGroupKey(ref.hostId, ref.project.id) + ":" + imageId
-                cache[key] ?: load(ref)?.also { cache[key] = it }
-            }
-        }
-    }
+    val scope = rememberCoroutineScope()
+    val local = remember(scope) { ProjectImageCache(scope) }
+    val cache = shared ?: local
+    return remember(cache, load) { { ref -> cache.get(ref, load) } }
 }
 
 /**
@@ -122,7 +148,11 @@ fun ProjectImage(
         fallback()
         return
     }
-    when (val decoded = rememberDecodedImage(data)) {
+    // Decode at the painted size, not the upload's (up to 5 MB → a ~48 MB bitmap for a 20dp
+    // icon), and keyed so a header re-entering composition gets Coil's memory-cached bitmap.
+    val px = with(LocalDensity.current) { size.roundToPx() }
+    val cacheKey = "project:${ref.hostId}:${ref.project.id}:$imageId"
+    when (val decoded = rememberDecodedImage(data, size = px, memoryCacheKey = cacheKey)) {
         is DecodedImage.Ready -> Image(
             painter = decoded.painter,
             contentDescription = ref.project.name,

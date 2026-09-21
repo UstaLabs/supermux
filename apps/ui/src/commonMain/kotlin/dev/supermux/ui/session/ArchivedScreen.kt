@@ -188,6 +188,8 @@ fun ArchivedScreen(
     projects: List<ProjectRef> = emptyList(),
     workspaceHost: (WorkspaceDto) -> String = { "" },
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
+    /** The app's shared project image cache (null → a screen-local one). */
+    projectImageCache: ProjectImageCache? = null,
 ) {
     val workspaces by actions.archivedWorkspaces.collectAsState()
     val live by actions.liveWorkspaces.collectAsState()
@@ -220,6 +222,7 @@ fun ArchivedScreen(
         projects = projects,
         workspaceHost = workspaceHost,
         loadProjectImage = loadProjectImage,
+        projectImageCache = projectImageCache,
     )
 }
 
@@ -270,6 +273,8 @@ fun ArchivedScreen(
     /** Host record id owning a workspace (same id space as [ProjectRef.hostId]). */
     workspaceHost: (WorkspaceDto) -> String = { "" },
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
+    /** The app's shared project image cache (null → a screen-local one). */
+    projectImageCache: ProjectImageCache? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -294,7 +299,7 @@ fun ArchivedScreen(
     val groups = remember(workspaces, home, projects, workspaceHost) {
         groupArchivedWorkspaces(workspaces, home, projects, workspaceHost)
     }
-    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage)
+    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
     // Clear the filter if the selected project no longer has anything archived under it.
     LaunchedEffect(sessionProjects, groups, useWorkspaces) {
         val keys = if (useWorkspaces) groups.map { it.key } else sessionProjects.map { it.key }

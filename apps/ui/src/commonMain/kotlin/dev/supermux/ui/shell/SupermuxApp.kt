@@ -132,6 +132,7 @@ import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
+import dev.supermux.ui.session.ProjectImageCache
 import dev.supermux.ui.session.SessionLauncherScreen
 import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.session.SessionListMode
@@ -346,6 +347,9 @@ fun SupermuxApp(
     val loadProjectImage: suspend (ProjectRef) -> ByteArray? = remember(fleet) {
         { ref -> fleet.projectImageBytes(HostProject(ref.hostId, ref.project)) }
     }
+    // ONE project image cache for the sidebar, Archived and the launcher's picker.
+    val projectImageScope = rememberCoroutineScope()
+    val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
@@ -553,6 +557,7 @@ fun SupermuxApp(
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
             hosts = hostViews,
             selectedHost = activeHostId,
+            projectImageCache = projectImageCache,
             // The shell owns this pane's chrome on a wide host (the sidebar / the tab strip), so
             // the screen paints no bar there. Under Compact the launcher is its OWN destination
             // and paints the title + Back at every width — cluster E's chrome rule.
@@ -700,6 +705,7 @@ fun SupermuxApp(
                                 projects = projectRefs,
                                 workspaceHost = workspaceHostOf,
                                 loadProjectImage = loadProjectImage,
+                                projectImageCache = projectImageCache,
                                 onReorderProjects = { hostId, ids ->
                                     overlayScope.launch { fleet.reorderProjects(hostId, ids) }
                                 },
@@ -904,6 +910,7 @@ fun SupermuxApp(
                                                 projects = projectRefs,
                                                 workspaceHost = workspaceHostOf,
                                                 loadProjectImage = loadProjectImage,
+                                                projectImageCache = projectImageCache,
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
                                                 // `Route.AppUpdate`, now applied to all of them):
