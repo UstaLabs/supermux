@@ -65,6 +65,9 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   else if (Array.isArray(options.tools)) flags.push('--tools', options.tools.join(','))
   else flags.push('--tools', '')
   flags.push('--permission-prompts', options.permissionPrompts)
+  // Real CLI (verified on 2.1.278): "host" alone makes Claude deny by itself (system/permission_denied)
+  // and never sends can_use_tool. The stdio prompt tool is what routes the request to this host.
+  if (options.permissionPrompts === 'host') flags.push('--permission-prompt-tool', 'stdio')
   if (options.permissionMode) flags.push('--permission-mode', options.permissionMode)
   if (options.allowedTools?.length) flags.push('--allowedTools', options.allowedTools.join(','))
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
