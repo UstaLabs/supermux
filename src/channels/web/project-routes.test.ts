@@ -238,6 +238,30 @@ test("PUT image: 415 on text/plain, 413 on oversize content-length, 404 on unkno
   expect(catalogFrames(frames)).toHaveLength(0)
 })
 
+test("PUT image: a chunked body with no content-length is still capped as it streams in → 413", async () => {
+  const { svc, token } = await boot()
+  const p = svc.create("A")
+
+  // No content-length header: the declared-size check can't catch this, and the
+  // producer never signals `done`, so this only resolves (instead of hanging
+  // forever, or buffering without bound) if the route caps the read as bytes
+  // arrive rather than waiting to read the whole body first.
+  const chunkSize = 1024 * 1024 // 1 MiB
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) { controller.enqueue(new Uint8Array(chunkSize)) },
+  })
+
+  const res = await fetch(`${base()}/project-catalog/${p.id}/image`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "image/png" },
+    body,
+    // @ts-expect-error Bun/undici requires duplex for a streaming request body.
+    duplex: "half",
+  })
+  expect(res.status).toBe(413)
+  expect(await res.json()).toEqual({ error: "image too large" })
+})
+
 test("PUT, GET and DELETE image round-trip", async () => {
   const { svc, call, frames } = await boot()
   const p = svc.create("A")

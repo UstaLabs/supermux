@@ -20,7 +20,8 @@ test("effectiveLocation leaves a bare managed worktree unresolved", () => {
 test("effectiveLocation treats a root '/' managed worktrees root as covering every path", () => {
   expect(effectiveLocation({ workdir: "/a/b" }, "/")).toBeUndefined()
   expect(effectiveLocation({ workdir: "/" }, "/")).toBeUndefined()
-  expect(effectiveLocation({ workdir: "/a/b", repo_root: "/r" }, "/")).toBe("/r")
+  // repo_root gets the same treatment: a root '/' managed root covers it too.
+  expect(effectiveLocation({ workdir: "/a/b", repo_root: "/r" }, "/")).toBeUndefined()
 })
 test("effectiveLocation expands a legacy literal '~' / '~/' against home before normalizing", () => {
   expect(effectiveLocation({ workdir: "~/projects/claudemux" }, undefined, "/home/u")).toBe("/home/u/projects/claudemux")
@@ -33,6 +34,29 @@ test("effectiveLocation leaves other odd spellings of '~' alone", () => {
 })
 test("effectiveLocation without home leaves a literal '~' untouched (still rejected as non-absolute)", () => {
   expect(effectiveLocation({ workdir: "~/app" })).toBeUndefined()
+})
+test("effectiveLocation excludes a repo_root that is itself under the managed worktrees root", () => {
+  // A session spawned inside a managed worktree can record that same worktree dir
+  // as repo_root (rather than the real repo checkout). The managed-root exclusion
+  // must apply to repo_root the same way it applies to a bare workdir.
+  expect(effectiveLocation(
+    { workdir: "/h/.mux/worktrees/x/y", repo_root: "/h/.mux/worktrees/x/y" },
+    "/h/.mux/worktrees",
+  )).toBeUndefined()
+  expect(effectiveLocation(
+    { workdir: "/irrelevant", repo_root: "/h/.mux/worktrees/x" },
+    "/h/.mux/worktrees",
+  )).toBeUndefined()
+  // The root itself, not just a child under it.
+  expect(effectiveLocation(
+    { workdir: "/irrelevant", repo_root: "/h/.mux/worktrees" },
+    "/h/.mux/worktrees",
+  )).toBeUndefined()
+  // A repo_root outside the managed root still resolves normally.
+  expect(effectiveLocation(
+    { workdir: "/h/.mux/worktrees/x/y", repo_root: "/h/projects/app" },
+    "/h/.mux/worktrees",
+  )).toBe("/h/projects/app")
 })
 test("pathLabel matches the Kotlin formatWorkdir convention", () => {
   expect(pathLabel("/home/u", "/home/u")).toBe("~")

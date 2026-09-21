@@ -54,6 +54,16 @@ test("ensureLocation leaves a bare managed worktree unresolved", () => {
   expect(counts(db)).toEqual({ p: 0, l: 0 })
 })
 
+test("ensureLocation leaves unresolved a workspace whose repo_root is itself a managed worktree dir", () => {
+  const { db, svc } = make()
+  // e.g. a session spawned inside a managed worktree that recorded that same
+  // worktree dir as repo_root — must not create a junk project named after it.
+  expect(svc.ensureLocation({
+    workdir: "/h/.mux/worktrees/a/b", repo_root: "/h/.mux/worktrees/a/b",
+  })).toBeUndefined()
+  expect(counts(db)).toEqual({ p: 0, l: 0 })
+})
+
 test("ensureLocation rolls back the created project when the location insert fails (no orphan)", () => {
   const { db, store, svc } = make()
   const original = store.addLocation.bind(store)
@@ -144,6 +154,18 @@ test("reconcile backfills distinct effective locations in label order, once", ()
   expect(counts(db)).toEqual({ p: 3, l: 3 })
 })
 
+test("reconcile does not create a project for a workspace whose repo_root is itself a managed worktree dir", () => {
+  const { db, svc } = make()
+  const ws = new WorkspaceStore(db)
+  ws.create({ name: "junk", workdir: "/h/.mux/worktrees/a/b", repo_root: "/h/.mux/worktrees/a/b" })
+  ws.create({ name: "real", workdir: "/h/real" })
+
+  const created = svc.reconcile(db)
+
+  expect(svc.list().map((p) => p.name)).toEqual(["~/real"])
+  expect(created).toHaveLength(1)
+})
+
 test("reconcile appends after existing projects and skips registered paths", () => {
   const { db, svc } = make()
   const existing = svc.create("Mine")
@@ -164,6 +186,16 @@ test("create and rename validate names and ids", () => {
   expect(() => svc.rename("nope", "X")).toThrow(ProjectNotFoundError)
   expect(() => svc.rename(p.id, " ")).toThrow("name required")
   expect(svc.rename(p.id, " New ").name).toBe("New")
+})
+
+test("create and rename reject a name longer than 200 chars, after trim", () => {
+  const { svc } = make()
+  const tooLong = "x".repeat(201)
+  const padded = ` ${"y".repeat(200)} ` // trims to exactly 200 — allowed
+  expect(() => svc.create(tooLong)).toThrow("name too long")
+  const p = svc.create(padded)
+  expect(p.name).toBe("y".repeat(200))
+  expect(() => svc.rename(p.id, tooLong)).toThrow("name too long")
 })
 
 test("create appends to the order; reorder rewrites it", () => {

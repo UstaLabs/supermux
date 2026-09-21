@@ -221,9 +221,12 @@ export class ProjectService {
   }
 }
 
+const PROJECT_NAME_MAX_LENGTH = 200
+
 function requireName(name: string): string {
   const n = name.trim()
   if (!n) throw new Error("name required")
+  if (n.length > PROJECT_NAME_MAX_LENGTH) throw new Error("name too long")
   return n
 }
 

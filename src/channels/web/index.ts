@@ -1289,8 +1289,17 @@ export class WebChannel implements Channel {
         if (!PROJECT_IMAGE_MIMES.has(mime)) return this.json({ error: "unsupported image type" }, 415)
         const declared = Number(req.headers.get("content-length") ?? 0)
         if (declared > PROJECT_IMAGE_MAX_BYTES) return this.json({ error: "image too large" }, 413)
-        const bytes = new Uint8Array(await req.arrayBuffer())
-        if (bytes.byteLength > PROJECT_IMAGE_MAX_BYTES) return this.json({ error: "image too large" }, 413)
+        if (!req.body) return this.json({ error: "empty image" }, 400)
+        // No (or an understated) content-length can't be trusted for a chunked
+        // body, so cap it as bytes stream in rather than buffering the whole
+        // request first — a lying/absent-length client can't force a large read.
+        let bytes: Uint8Array
+        try {
+          bytes = await readCappedBody(req.body, PROJECT_IMAGE_MAX_BYTES)
+        } catch (err) {
+          if (err instanceof PayloadTooLargeError) return this.json({ error: "image too large" }, 413)
+          throw err
+        }
         if (bytes.byteLength === 0) return this.json({ error: "empty image" }, 400)
         return mutate(() => o.setProjectImage!(id, bytes, mime))
       }
@@ -3328,6 +3337,38 @@ export class WebChannel implements Channel {
 
 /** Mirrors ProjectImages.isSupported, checked here so a bad type is rejected before the body is read. */
 const PROJECT_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
+
+/**
+ * Reads `source` chunk-by-chunk, tracking a running byte total so a chunked or
+ * absent/understated content-length body can't force an unbounded in-memory read
+ * (mirrors FileStore.putStream's streaming cap, in memory rather than to a file).
+ * Aborts and cancels the stream, throwing PayloadTooLargeError, the instant the
+ * running total exceeds maxBytes — before reading any further chunks.
+ */
+async function readCappedBody(source: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = source.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        try { await reader.cancel() } catch { /* ignore — best-effort */ }
+        throw new PayloadTooLargeError()
+      }
+      chunks.push(value)
+    }
+  } finally {
+    try { reader.releaseLock() } catch { /* ignore — best-effort (cancel may already have released) */ }
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) { out.set(c, offset); offset += c.byteLength }
+  return out
+}
 
 function projectErrorResponse(err: unknown): Response {
   const json = (body: unknown, status: number) =>
