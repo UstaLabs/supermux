@@ -395,6 +395,30 @@ class FleetStore(
             }
             .stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
 
+    /**
+     * Record ids of the connected hosts whose broker has sent a project catalog (an empty one
+     * counts) — [HostStore.projectCatalogKnown] per host. An old broker never does, so "New
+     * project" is offered only for hosts in this set. Keyed on the live [HostStore]s like
+     * [activeProjectCatalog]: a rebuilt connection starts unknown again.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Suppress("UNCHECKED_CAST")
+    val projectCatalogHosts: StateFlow<Set<String>> =
+        hostApps.flatMapLatest { apps ->
+            if (apps.isEmpty()) {
+                flowOf(emptySet())
+            } else {
+                val ids = synchronized(lock) {
+                    apps.map { app -> conns.entries.firstOrNull { it.value.app === app }?.key }
+                }
+                combine(apps.mapIndexed { i, app -> app.projectCatalogKnown.map { known -> ids[i].takeIf { known } } as Flow<Any?> }) { row ->
+                    (row.toList() as List<String?>).filterNotNull().toSet()
+                }
+            }
+        }
+            .distinctUntilChanged()
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptySet())
+
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.
     private val _agentReplies = MutableSharedFlow<AgentReplyEvent>(

@@ -65,18 +65,33 @@ fun WorkspaceGroup.projectRef(): ProjectRef? = project?.let { ProjectRef(hostId.
  * or null when it cannot move that way. Only that host's projects take part — ids are per-broker
  * and `PATCH /project-catalog/reorder` wants that broker's whole catalog. The starting order is the
  * one the sidebar paints (sortOrder, name, id).
+ *
+ * [visibleIds] are the project ids the caller actually renders (null → all). A move only steps
+ * over VISIBLE neighbours — a hidden (archived-only) project in between is skipped — and is a swap
+ * of the two visible positions, so every hidden project keeps its place in the full order. A
+ * hidden [target] never moves.
  */
-fun reorderedProjectIds(projects: List<ProjectRef>, target: ProjectRef, delta: Int): List<String>? {
+fun reorderedProjectIds(
+    projects: List<ProjectRef>,
+    target: ProjectRef,
+    delta: Int,
+    visibleIds: Set<String>? = null,
+): List<String>? {
     val ids = projects
         .filter { it.hostId == target.hostId }
         .distinctBy { it.project.id }
         .sortedWith(compareBy({ it.project.sortOrder }, { it.project.name }, { it.project.id }))
         .map { it.project.id }
         .toMutableList()
-    val from = ids.indexOf(target.project.id)
+    if (delta == 0) return null
+    val slots = ids.indices.filter { visibleIds == null || ids[it] in visibleIds }
+    val from = slots.indexOfFirst { ids[it] == target.project.id }
     val to = from + delta
-    if (from < 0 || delta == 0 || to !in ids.indices) return null
-    ids.add(to, ids.removeAt(from))
+    if (from < 0 || to !in slots.indices) return null
+    // Shift the visible subsequence (a plain swap for |delta| == 1); hidden slots are untouched.
+    val visible = slots.map { ids[it] }.toMutableList()
+    visible.add(to, visible.removeAt(from))
+    slots.forEachIndexed { i, slot -> ids[slot] = visible[i] }
     return ids
 }
 

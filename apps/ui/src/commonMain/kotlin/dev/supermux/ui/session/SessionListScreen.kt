@@ -309,6 +309,10 @@ fun SessionListScreen(
             sid != null && roles[sid] == "personal_assistant"
         }
     }
+    /** hostId → the project ids that have a rendered group (Move up/down neighbours). */
+    val renderedProjectIds = remember(groups) {
+        groups.mapNotNull { it.projectRef() }.groupBy({ it.hostId }, { it.project.id }).mapValues { it.value.toSet() }
+    }
     val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost) {
         groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost)
     }
@@ -772,8 +776,9 @@ fun SessionListScreen(
                         },
                         trailing = ref?.let { r ->
                             {
-                                val up = reorderedProjectIds(projects, r, -1)
-                                val down = reorderedProjectIds(projects, r, +1)
+                                // Only the rendered project groups count as neighbours.
+                                val up = reorderedProjectIds(projects, r, -1, renderedProjectIds[r.hostId])
+                                val down = reorderedProjectIds(projects, r, +1, renderedProjectIds[r.hostId])
                                 ProjectHeaderMenu(
                                     groupKey = g.key,
                                     label = g.label,
@@ -1112,7 +1117,25 @@ fun SessionListScreen(
             }
             if (archivedFoldOpen) {
                 archivedGroups.forEach { g ->
-                    item(key = "arch:hdr:${g.key}") { ArchivedGroupLabel(g.label) }
+                    item(key = "arch:hdr:${g.key}") {
+                        // A persistent project keeps its ⋮ → settings here too: an archived-only
+                        // project has no live header to reach them from.
+                        val ref = g.projectRef()
+                        ArchivedGroupLabel(
+                            g.label,
+                            trailing = ref?.let { r ->
+                                {
+                                    ProjectHeaderMenu(
+                                        groupKey = g.key,
+                                        label = g.label,
+                                        onSettings = { onProjectSettings(r) },
+                                        onMoveUp = null,
+                                        onMoveDown = null,
+                                    )
+                                }
+                            },
+                        )
+                    }
                     items(g.workspaces, key = { "arch:${it.id}" }) { w -> ArchivedEntry(w) }
                 }
             }
@@ -1285,14 +1308,20 @@ private fun GroupHeaderRow(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ArchivedGroupLabel(label: String) {
-    Text(
-        label,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontFamily = MonoFontFamily,
-        fontSize = 11.sp,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-    )
+private fun ArchivedGroupLabel(label: String, trailing: (@Composable () -> Unit)? = null) {
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+        )
+        trailing?.invoke()
+    }
 }
 
 /** Indented child session under a multi-agent workspace (desktop's sidebar). */

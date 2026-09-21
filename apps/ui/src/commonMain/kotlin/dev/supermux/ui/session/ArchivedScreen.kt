@@ -190,6 +190,11 @@ fun ArchivedScreen(
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
     /** The app's shared project image cache (null → a screen-local one). */
     projectImageCache: ProjectImageCache? = null,
+    /**
+     * "Project settings…" on a persistent project's group header — the only way to reach an
+     * archived-only project's settings, since the live sidebar hides it. Null hides the ⋮.
+     */
+    onProjectSettings: ((ProjectRef) -> Unit)? = null,
 ) {
     val workspaces by actions.archivedWorkspaces.collectAsState()
     val live by actions.liveWorkspaces.collectAsState()
@@ -223,6 +228,7 @@ fun ArchivedScreen(
         workspaceHost = workspaceHost,
         loadProjectImage = loadProjectImage,
         projectImageCache = projectImageCache,
+        onProjectSettings = onProjectSettings,
     )
 }
 
@@ -275,6 +281,11 @@ fun ArchivedScreen(
     loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
     /** The app's shared project image cache (null → a screen-local one). */
     projectImageCache: ProjectImageCache? = null,
+    /**
+     * "Project settings…" on a persistent project's group header — the only way to reach an
+     * archived-only project's settings, since the live sidebar hides it. Null hides the ⋮.
+     */
+    onProjectSettings: ((ProjectRef) -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val compact = LocalWindowWidthClass.current == WindowWidthClass.Compact
@@ -376,6 +387,7 @@ fun ArchivedScreen(
                 barOwned = barOwned,
                 onBack = onBack,
                 loadProjectImage = cachedProjectImage,
+                onProjectSettings = onProjectSettings,
             )
         }
     }
@@ -404,6 +416,7 @@ private fun ArchivedList(
     barOwned: Boolean,
     onBack: () -> Unit,
     loadProjectImage: suspend (ProjectRef) -> ByteArray?,
+    onProjectSettings: ((ProjectRef) -> Unit)?,
 ) {
     val cs = MaterialTheme.colorScheme
     val visible = remember(archived, selectedProject, query) {
@@ -543,6 +556,16 @@ private fun ArchivedList(
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 11.sp,
                                     )
+                                    if (ref != null && onProjectSettings != null) {
+                                        // Settings only: the archive has no order of its own to move in.
+                                        ProjectHeaderMenu(
+                                            groupKey = g.key,
+                                            label = g.label,
+                                            onSettings = { onProjectSettings(ref) },
+                                            onMoveUp = null,
+                                            onMoveDown = null,
+                                        )
+                                    }
                                 }
                             }
                             items(g.workspaces, key = { it.id }) { w ->

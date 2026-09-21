@@ -9,6 +9,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -72,6 +73,52 @@ class ProjectSettingsSheetTest {
         onNodeWithTag(ProjectSettingsTestIds.SAVE_NAME).assertIsEnabled().performClick()
         waitForIdle()
         assertEquals(Triple("h1", "a", "Supermux"), renamed)
+    }
+
+    @Test
+    fun newProjectIsOfferedOnlyOnHostsServingACatalog() {
+        val a = HostView(recordId = "h1", hostId = null, displayName = "A", online = true)
+        val b = HostView(recordId = "h2", hostId = null, displayName = "B", online = true)
+        // Old brokers everywhere → no entry.
+        assertEquals(emptyList(), newProjectHosts(listOf(a, b), emptySet(), null))
+        // Only the catalog-serving host is offered.
+        assertEquals(listOf(b), newProjectHosts(listOf(a, b), setOf("h2"), null))
+        // A host filter narrows to that host — and hides the entry if IT is an old broker.
+        assertEquals(listOf(a), newProjectHosts(listOf(a, b), setOf("h1", "h2"), "h1"))
+        assertEquals(emptyList(), newProjectHosts(listOf(a, b), setOf("h2"), "h1"))
+        // A stale filter on a single-host fleet is ignored.
+        assertEquals(listOf(a), newProjectHosts(listOf(a), setOf("h1"), "gone"))
+    }
+
+    @Test
+    fun anUneditedNameFollowsARenameFromAnotherClient() = runComposeUiTest {
+        var projects by mutableStateOf(catalog)
+        setContent {
+            CompositionLocalProvider(LocalPlatform provides FakePlatform()) {
+                ProjectSettingsSheet("h1", "a", projects, "/home/u", ProjectSettingsActions(), onDismiss = {})
+            }
+        }
+        onNodeWithTag(ProjectSettingsTestIds.NAME).assertTextContains("Alpha")
+        projects = listOf(alpha.copy(project = alpha.project.copy(name = "Renamed")), beta, elsewhere)
+        waitForIdle()
+        onNodeWithTag(ProjectSettingsTestIds.NAME).assertTextContains("Renamed")
+        onNodeWithTag(ProjectSettingsTestIds.SAVE_NAME).assertIsNotEnabled()
+    }
+
+    @Test
+    fun anEditedNameIsKeptAcrossARemoteRename() = runComposeUiTest {
+        var projects by mutableStateOf(catalog)
+        setContent {
+            CompositionLocalProvider(LocalPlatform provides FakePlatform()) {
+                ProjectSettingsSheet("h1", "a", projects, "/home/u", ProjectSettingsActions(), onDismiss = {})
+            }
+        }
+        onNodeWithTag(ProjectSettingsTestIds.NAME).performTextClearance()
+        onNodeWithTag(ProjectSettingsTestIds.NAME).performTextInput("Mine")
+        projects = listOf(alpha.copy(project = alpha.project.copy(name = "Theirs")), beta, elsewhere)
+        waitForIdle()
+        onNodeWithTag(ProjectSettingsTestIds.NAME).assertTextContains("Mine")
+        onNodeWithTag(ProjectSettingsTestIds.SAVE_NAME).assertIsEnabled()
     }
 
     @Test

@@ -133,6 +133,7 @@ import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
 import dev.supermux.ui.session.NewProjectDialog
+import dev.supermux.ui.session.newProjectHosts
 import dev.supermux.ui.session.ProjectImageCache
 import dev.supermux.ui.session.ProjectSettingsActions
 import dev.supermux.ui.session.ProjectSettingsSheet
@@ -482,6 +483,14 @@ fun SupermuxApp(
     /** (hostId, projectId) of the open settings sheet. */
     var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var newProjectOpen by remember { mutableStateOf(false) }
+    val catalogHosts by fleet.projectCatalogHosts.collectAsState()
+    /** Hosts "New project" may create on: those serving a catalog, narrowed by the host filter. */
+    val newProjectHosts = remember(hostViews, catalogHosts, hostFilter) {
+        newProjectHosts(hostViews, catalogHosts, hostFilter)
+    }
+    // No host views (a bare single-host mount): the active host alone decides.
+    val newProjectAvailable = newProjectHosts.isNotEmpty() ||
+        (hostViews.isEmpty() && activeHostId != null && activeHostId in catalogHosts)
     val projectSettingsActions = remember(fleet) {
         ProjectSettingsActions(
             rename = { h, p, n -> fleet.renameProject(h, p, n) },
@@ -505,10 +514,10 @@ fun SupermuxApp(
     }
     if (newProjectOpen) {
         // The filtered host, else the only host; with several and no filter the dialog asks.
-        val singleHost = hostViews.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
+        val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
         NewProjectDialog(
-            hosts = hostViews,
-            initialHost = hostFilter ?: singleHost,
+            hosts = newProjectHosts,
+            initialHost = singleHost,
             onCreate = { h, name -> fleet.createProject(h, name) },
             onCreated = { h, id ->
                 newProjectOpen = false
@@ -756,7 +765,11 @@ fun SupermuxApp(
                                 // Target the project's OWN host (the launcher's host pill follows),
                                 // then open the launcher preselecting it.
                                 onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
-                                onNewProject = { newProjectOpen = true },
+                                // Only when a relevant host's broker serves a project catalog (an
+                                // old broker would 404 the create).
+                                onNewProject = if (newProjectAvailable) {
+                                    { newProjectOpen = true }
+                                } else null,
                                 onNewWorkspaceInProject = { ref ->
                                     fleet.setActiveHost(ref.hostId)
                                     ui.openLauncherInProject(ref.hostId, ref.project.id)
@@ -957,6 +970,9 @@ fun SupermuxApp(
                                                 workspaceHost = workspaceHostOf,
                                                 loadProjectImage = loadProjectImage,
                                                 projectImageCache = projectImageCache,
+                                                // Archived-only projects are hidden from the live
+                                                // sidebar: their settings live on these headers.
+                                                onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
                                                 // `Route.AppUpdate`, now applied to all of them):

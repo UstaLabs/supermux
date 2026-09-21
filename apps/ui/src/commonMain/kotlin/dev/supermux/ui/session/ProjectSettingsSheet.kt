@@ -193,6 +193,10 @@ private fun ProjectSettingsBody(
     val latestRef by rememberUpdatedState(ref)
 
     var name by remember(hostId, project.id) { mutableStateOf(project.name) }
+    // True once the user typed a name that differs from the live one; until then the field
+    // follows the catalog, so a rename from another client never leaves a stale, saveable name.
+    var nameEdited by remember(hostId, project.id) { mutableStateOf(false) }
+    LaunchedEffect(project.name) { if (!nameEdited) name = project.name }
     var busy by remember(hostId, project.id) { mutableStateOf(false) }
     var message by remember(hostId, project.id) { mutableStateOf<String?>(null) }
     var newPath by remember(hostId, project.id) { mutableStateOf("") }
@@ -219,6 +223,7 @@ private fun ProjectSettingsBody(
         if (!canSaveName) return
         launchOp {
             if (actions.rename(hostId, project.id, trimmedName) == null) message = "Couldn't rename the project."
+            else nameEdited = false
         }
     }
 
@@ -302,7 +307,7 @@ private fun ProjectSettingsBody(
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = name,
-                onValueChange = { name = it },
+                onValueChange = { name = it; nameEdited = it != latestRef.project.name },
                 singleLine = true,
                 isError = trimmedName.isEmpty(),
                 modifier = Modifier.weight(1f).testTag(ProjectSettingsTestIds.NAME),
@@ -507,6 +512,16 @@ private fun AdaptiveProjectContainer(
             ) { content() }
         }
     }
+}
+
+/**
+ * The hosts "New project" may create on: those whose broker serves a project catalog
+ * ([catalogHosts], `FleetStore.projectCatalogHosts` — an old broker has none and would 404 the
+ * create), narrowed to [hostFilter] when it names one of several hosts. Empty → hide the entry.
+ */
+fun newProjectHosts(hosts: List<HostView>, catalogHosts: Set<String>, hostFilter: String?): List<HostView> {
+    val filter = hostFilter?.takeIf { f -> hosts.size >= 2 && hosts.any { it.recordId == f } }
+    return hosts.filter { it.recordId in catalogHosts && (filter == null || it.recordId == filter) }
 }
 
 /**

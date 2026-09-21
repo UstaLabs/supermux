@@ -210,4 +210,34 @@ class FleetStoreActionsTest {
         assertEquals(listOf("b2"), fleet.activeProjectCatalog.value.map { it.id })
         fleet.close()
     }
+    // ── projectCatalogHosts: which hosts' brokers serve a project catalog ("New project" gate) ──
+
+    @Test fun projectCatalogHostsTracksEachHostsKnownFlag() = runTest(UnconfinedTestDispatcher()) {
+        val s = store(
+            PairedHost(recordId = "h1", displayName = "A", token = "t", relayUrl = "https://h-a.relay.supermux.dev"),
+            PairedHost(recordId = "h2", displayName = "B", token = "t", relayUrl = "https://h-b.relay.supermux.dev"),
+        )
+        val fleet = FleetStore(
+            store = s, scope = this, deps = testDeps(),
+            appFactory = { url, token, onConn ->
+                HostStore(url, token, this, testDeps(), connectOnInit = false, onConnectionChange = onConn)
+            },
+        )
+        advanceUntilIdle()
+        // Neither broker has sent a catalog (an old broker never will).
+        assertEquals(emptySet(), fleet.projectCatalogHosts.value)
+
+        fleet.appForRecord("h2")!!.reduce(
+            dev.supermux.proto.ServerFrame.ProjectsChanged(projects = emptyList()),
+        )
+        advanceUntilIdle()
+        // An EMPTY catalog still counts: the broker speaks projects, it just has none yet.
+        assertEquals(setOf("h2"), fleet.projectCatalogHosts.value)
+
+        // A rebuild of h2 (URL change) starts from an unknown catalog again.
+        fleet.sync(s.list().map { if (it.recordId == "h2") it.copy(relayUrl = "https://h-b2.relay.supermux.dev") else it })
+        advanceUntilIdle()
+        assertEquals(emptySet(), fleet.projectCatalogHosts.value)
+        fleet.close()
+    }
 }

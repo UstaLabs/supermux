@@ -53,6 +53,52 @@ class ProjectGroupsTest {
     }
 
     @Test
+    fun hiddenProjectsAreSkippedAndKeepTheirPlace() {
+        // Beta is hidden (archived-only): Gamma moving up swaps with Alpha, Beta stays in the middle.
+        val visible = setOf("a", "c")
+        assertEquals(listOf("c", "b", "a"), reorderedProjectIds(all, c, -1, visible))
+        assertEquals(listOf("c", "b", "a"), reorderedProjectIds(all, a, +1, visible))
+        assertNull(reorderedProjectIds(all, a, -1, visible))
+        assertNull(reorderedProjectIds(all, c, +1, visible))
+        // A hidden project itself never moves.
+        assertNull(reorderedProjectIds(all, b, +1, visible))
+    }
+
+    @Test
+    fun hiddenNeighboursDoNotOfferAMove() {
+        // Alpha's only neighbour below is hidden → no Move down; the order around it is untouched.
+        val visible = setOf("a")
+        assertNull(reorderedProjectIds(all, a, +1, visible))
+        assertNull(reorderedProjectIds(all, a, -1, visible))
+    }
+
+    @Test
+    fun sidebarReordersAmongVisibleProjectsOnly() = runComposeUiTest {
+        var reordered: Pair<String, List<String>>? = null
+        setContent {
+            SessionListScreen(
+                workspaces = listOf(pws("w1", "Fix Renaming", "/home/u/projects/app", "a")),
+                // Beta only has an archived workspace → hidden from the live sidebar.
+                archivedWorkspaces = listOf(
+                    pws("w9", "Old", "/home/u/projects/beta", "b").copy(status = "archived"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                projects = listOf(a, b, c),
+                workspaceHost = { "h1" },
+                onReorderProjects = { host, ids -> reordered = host to ids },
+            )
+        }
+        onNodeWithText("Gamma").assertIsDisplayed()
+        val alphaKey = projectGroupKey("h1", "a")
+        onNodeWithTag(ProjectTestIds.menu(alphaKey)).performClick()
+        onNodeWithTag(ProjectTestIds.MOVE_UP).assertDoesNotExist()
+        onNodeWithTag(ProjectTestIds.MOVE_DOWN).performClick()
+        assertEquals("h1" to listOf("c", "b", "a"), reordered)
+    }
+
+    @Test
     fun sidebarGroupsByProjectAndShowsAnEmptyProject() = runComposeUiTest {
         var newIn: ProjectRef? = null
         var reordered: Pair<String, List<String>>? = null
@@ -83,5 +129,29 @@ class ProjectGroupsTest {
         onNodeWithTag(ProjectTestIds.menu(betaKey)).performClick()
         onNodeWithTag(ProjectTestIds.MOVE_UP).performClick()
         assertEquals("h1" to listOf("b", "a"), reordered)
+    }
+
+    @Test
+    fun sidebarArchivedFoldOffersProjectSettingsOnProjectHeaders() = runComposeUiTest {
+        var opened: ProjectRef? = null
+        setContent {
+            SessionListScreen(
+                mode = SessionListMode.Fleet,
+                archivedWorkspaces = listOf(
+                    pws("w9", "Old", "/home/u/projects/beta", "b").copy(status = "archived"),
+                ),
+                home = "/home/u",
+                activeId = null,
+                onOpen = {},
+                projects = listOf(a, b),
+                workspaceHost = { "h1" },
+                onProjectSettings = { opened = it },
+            )
+        }
+        onNodeWithTag(WorkspaceListTestIds.ARCHIVED_FOLD).performClick()
+        onNodeWithTag(ProjectTestIds.menu(projectGroupKey("h1", "b"))).performClick()
+        onNodeWithTag(ProjectTestIds.MOVE_UP).assertDoesNotExist()
+        onNodeWithTag(ProjectTestIds.SETTINGS).performClick()
+        assertEquals(b, opened)
     }
 }
