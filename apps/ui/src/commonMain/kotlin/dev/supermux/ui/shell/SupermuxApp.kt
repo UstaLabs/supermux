@@ -22,6 +22,8 @@
 package dev.supermux.ui.shell
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
@@ -569,7 +571,21 @@ fun SupermuxApp(
     var backProgress by remember { mutableFloatStateOf(0f) }
     val canPopLayer = compact && ui.currentRoute is Route.Home && ui.selectedId != null
     BackHandler(enabled = ui.overlayOpen) { ui.goBack() }
+    // iOS draws the swipe as UIKit's interactive pop instead (BackSwipe.kt). Its finish runs in
+    // this scope, not the handler's: clearing the selection disables the handler, which would
+    // cancel an animation still running inside it.
+    val iosSwipe = remember { IosBackSwipe() }
+    val swipeScope = rememberCoroutineScope()
     PredictiveBackHandler(enabled = canPopLayer) { events ->
+        if (iosStyleBackSwipe) {
+            try {
+                events.collect { e -> iosSwipe.track(e.progress) }
+                swipeScope.launch { iosSwipe.complete { ui.selectedId = null } }
+            } catch (_: Throwable) {
+                swipeScope.launch { iosSwipe.cancel() }
+            }
+            return@PredictiveBackHandler
+        }
         try {
             events.collect { e -> backProgress = e.progress }
             ui.selectedId = null
@@ -624,7 +640,12 @@ fun SupermuxApp(
                                 openWorkspaceByWorkspaceId = openByWorkspace,
                                 workspaces = workspaces,
                                 home = home,
-                                activeId = if (openByWorkspace) {
+                                // No open row on a phone: the list only shows with nothing open,
+                                // except under an iOS back swipe, where a highlighted row would
+                                // lose its highlight the moment the swipe lands.
+                                activeId = if (standalone) {
+                                    null
+                                } else if (openByWorkspace) {
                                     workspaces.firstOrNull { w -> w.chatSessionIds().contains(ui.selectedId) }?.id
                                 } else {
                                     ui.selectedId
@@ -749,6 +770,7 @@ fun SupermuxApp(
                                     onTearOutTab = onTearOutTab,
                                     chatFallback = chatFallback,
                                     backProgress = backProgress,
+                                    iosSwipe = iosSwipe,
                                 )
                             }
 
@@ -1046,6 +1068,7 @@ private fun ShellHome(
     onTearOutTab: (String) -> Unit,
     chatFallback: (@Composable (session: SessionInfo, visible: Boolean, onBack: () -> Unit) -> Unit)?,
     backProgress: Float,
+    iosSwipe: IosBackSwipe,
 ) {
     val cs = MaterialTheme.colorScheme
     val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
@@ -1201,12 +1224,23 @@ private fun ShellHome(
     }
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
+            // iOS: the list is already underneath while the chat is swiped off it.
+            if (iosSwipe.revealing && ui.selectedId != null) {
+                Box(Modifier.fillMaxSize().iosSwipeUnderLayer(iosSwipe)) {
+                    sidebarList(true, listState)
+                }
+            }
             Box(
-                Modifier.graphicsLayer {
-                    val scale = 1f - backProgress * 0.05f
-                    scaleX = scale
-                    scaleY = scale
-                    alpha = 1f - backProgress * 0.3f
+                if (iosStyleBackSwipe) {
+                    // Opaque, or the list underneath shows through a panel with no background.
+                    Modifier.fillMaxSize().iosSwipedLayer(iosSwipe).background(cs.background)
+                } else {
+                    Modifier.graphicsLayer {
+                        val scale = 1f - backProgress * 0.05f
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = 1f - backProgress * 0.3f
+                    }
                 },
             ) {
                 workspaceLayer(true)
@@ -1245,27 +1279,35 @@ private fun ShellHome(
             AnimatedContent(
                 targetState = ui.selectedId == null,
                 transitionSpec = {
-                    val showList = targetState
-                    val enter = slideInHorizontally(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow,
-                        ),
-                        initialOffsetX = { if (showList) -it / 3 else it },
-                    ) + fadeIn(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
-                    val exit = slideOutHorizontally(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow,
-                        ),
-                        targetOffsetX = { if (showList) it else -it / 3 },
-                    ) + fadeOut(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
-                    enter togetherWith exit
+                    // A finished iOS swipe already moved the list into place.
+                    if (iosSwipe.landed) {
+                        EnterTransition.None togetherWith ExitTransition.None
+                    } else {
+                        val showList = targetState
+                        val enter = slideInHorizontally(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            initialOffsetX = { if (showList) -it / 3 else it },
+                        ) + fadeIn(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
+                        val exit = slideOutHorizontally(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            targetOffsetX = { if (showList) it else -it / 3 },
+                        ) + fadeOut(spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))
+                        enter togetherWith exit
+                    }
                 },
                 label = "sessionListOverlay",
-                modifier = Modifier.zIndex(2f),
+                modifier = Modifier.fillMaxSize().zIndex(2f),
             ) { showList ->
-                if (showList) sidebarList(true, listState)
+                // Both states fill the screen. An empty state measured 0×0, so every open and close
+                // animated the container between that and full size: on a back the list grew out
+                // of the top-left corner, and on an open the leaving list drifted down the screen.
+                if (showList) sidebarList(true, listState) else Box(Modifier.fillMaxSize())
             }
         }
     }
