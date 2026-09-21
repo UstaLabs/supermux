@@ -1,6 +1,7 @@
 package dev.supermux.workspace
 
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.session.PA_GROUP_KEY
@@ -129,5 +130,98 @@ class WorkspaceGroupingTest {
         val groups = groupWorkspaces(listOf(proj), home = "/home/u")
         assertEquals(1, groups.size)
         assertEquals(false, groups.any { it.key == PA_GROUP_KEY })
+    }
+
+    // ── Persistent projects ──────────────────────────────────────────────────
+
+    private fun proj(id: String, name: String, sortOrder: Int = 0, hostId: String = "") =
+        ProjectRef(hostId, ProjectDto(id = id, name = name, sortOrder = sortOrder))
+
+    @Test
+    fun workspacesInDifferentReposWithTheSameProjectShareOneGroup() {
+        val a = ws("w1", "a", "/home/u/projects/app").copy(projectId = "p1")
+        val b = ws("w2", "b", "/home/u/work/app-fork", repoRoot = "/home/u/work/app-fork").copy(projectId = "p1")
+
+        val groups = groupWorkspaces(listOf(a, b), home = "/home/u", projects = listOf(proj("p1", "Supermux")))
+
+        val g = groups.single()
+        assertEquals("Supermux", g.label)
+        assertEquals(projectGroupKey("", "p1"), g.key)
+        assertEquals("p1", g.project?.id)
+        assertEquals("", g.hostId)
+        assertEquals(listOf("w1", "w2"), g.workspaces.map { it.id })
+    }
+
+    @Test
+    fun anEmptyProjectYieldsAnEmptyGroup() {
+        val groups = groupWorkspaces(emptyList(), home = "/home/u", projects = listOf(proj("p1", "Empty")))
+        assertEquals(listOf("Empty"), groups.map { it.label })
+        assertEquals(emptyList(), groups.single().workspaces)
+    }
+
+    @Test
+    fun projectOrderFollowsSortOrderNotName() {
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(proj("p1", "Alpha", sortOrder = 2), proj("p2", "Zeta", sortOrder = 0), proj("p3", "Mid", sortOrder = 1)),
+        )
+        assertEquals(listOf("Zeta", "Mid", "Alpha"), groups.map { it.label })
+    }
+
+    @Test
+    fun anUnknownProjectIdFallsBackToPathGroupingAfterProjects() {
+        val known = ws("w1", "a", "/home/u/projects/app").copy(projectId = "p1")
+        val orphan = ws("w2", "b", "/home/u/projects/other").copy(projectId = "gone")
+
+        val groups = groupWorkspaces(listOf(orphan, known), home = "/home/u", projects = listOf(proj("p1", "Zzz")))
+
+        assertEquals(listOf(projectGroupKey("", "p1"), "/home/u/projects/other"), groups.map { it.key })
+        assertEquals(listOf("w2"), groups[1].workspaces.map { it.id })
+        assertEquals(null, groups[1].project)
+    }
+
+    @Test
+    fun theSameProjectIdOnTwoHostsStaysTwoGroups() {
+        val a = ws("w1", "a", "/p/app").copy(projectId = "p")
+        val b = ws("w2", "b", "/p/app").copy(projectId = "p")
+        val host = mapOf("w1" to "h1", "w2" to "h2")
+
+        val groups = groupWorkspaces(
+            listOf(a, b), home = "/home/u",
+            projects = listOf(proj("p", "App", hostId = "h1"), proj("p", "App", hostId = "h2")),
+            hostOf = { host.getValue(it.id) },
+        )
+
+        assertEquals(listOf(projectGroupKey("h1", "p"), projectGroupKey("h2", "p")), groups.map { it.key })
+        assertEquals(listOf("w1"), groups[0].workspaces.map { it.id })
+        assertEquals(listOf("w2"), groups[1].workspaces.map { it.id })
+    }
+
+    @Test
+    fun personalAssistantsStayFirstEvenWithAProject() {
+        val pa = ws("w1", "pa", "/home/u").copy(projectId = "p1")
+        val groups = groupWorkspaces(
+            listOf(pa), home = "/home/u", isPersonalAssistant = { it.id == "w1" },
+            projects = listOf(proj("p1", "Home")),
+        )
+        assertEquals(listOf(PA_GROUP_KEY, projectGroupKey("", "p1")), groups.map { it.key })
+        assertEquals(listOf("w1"), groups[0].workspaces.map { it.id })
+        assertEquals(emptyList(), groups[1].workspaces)
+    }
+
+    @Test
+    fun archivedGroupingResolvesProjectsAndDropsEmptyOnes() {
+        val a = ws("w1", "a", "/home/u/projects/app").copy(status = "archived", archivedAt = "2026-01-01", projectId = "p1")
+        val b = ws("w2", "b", "/home/u/work/fork").copy(status = "archived", archivedAt = "2026-02-01", projectId = "p1")
+        val c = ws("w3", "c", "/home/u/projects/other").copy(status = "archived", archivedAt = "2026-01-01")
+
+        val groups = groupArchivedWorkspaces(
+            listOf(a, b, c), home = "/home/u",
+            projects = listOf(proj("p1", "App", sortOrder = 1), proj("p2", "Empty", sortOrder = 0)),
+        )
+
+        assertEquals(listOf(projectGroupKey("", "p1"), "/home/u/projects/other"), groups.map { it.key })
+        assertEquals("App", groups[0].label)
+        assertEquals(listOf("w2", "w1"), groups[0].workspaces.map { it.id })
     }
 }
