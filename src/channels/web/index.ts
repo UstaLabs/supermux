@@ -1204,6 +1204,12 @@ export class WebChannel implements Channel {
       }
     }
     const notConfigured = () => this.json({ error: "not configured" }, 503)
+    // decodeURIComponent throws URIError on malformed percent-encoding (e.g. "%E0");
+    // undefined here means the caller should answer 400 rather than let it escape as a 500.
+    const decodeId = (raw: string): string | undefined => {
+      try { return decodeURIComponent(raw) } catch { return undefined }
+    }
+    const badId = () => this.json({ error: "bad id" }, 400)
 
     if (path === "/project-catalog") {
       if (method === "GET") return this.json({ projects: o.listProjectCatalog?.() ?? [] })
@@ -1227,13 +1233,16 @@ export class WebChannel implements Channel {
     const loc = path.match(/^\/project-catalog\/locations\/([^/]+)$/)
     if (loc && method === "PATCH") {
       if (!o.moveProjectLocation) return notConfigured()
+      const locId = decodeId(loc[1]!)
+      if (locId === undefined) return badId()
       const projectId = (await body()).projectId
       if (typeof projectId !== "string" || !projectId) return this.json({ error: "projectId required" }, 400)
-      return mutate(() => o.moveProjectLocation!(decodeURIComponent(loc[1]!), projectId))
+      return mutate(() => o.moveProjectLocation!(locId, projectId))
     }
     const m = path.match(/^\/project-catalog\/([^/]+)(\/locations|\/image)?$/)
     if (!m) return undefined
-    const id = decodeURIComponent(m[1]!)
+    const id = decodeId(m[1]!)
+    if (id === undefined) return badId()
     const sub = m[2]
 
     if (!sub && method === "PATCH") {
@@ -1267,7 +1276,11 @@ export class WebChannel implements Channel {
         const file = f ? Bun.file(f.path) : undefined
         if (!f || !file || !(await file.exists())) return this.json({ error: "image not found" }, 404)
         return new Response(file, {
-          headers: { "content-type": f.mime, "cache-control": "private, max-age=300" },
+          headers: {
+            "content-type": f.mime,
+            "cache-control": "private, max-age=300",
+            "x-content-type-options": "nosniff",
+          },
         })
       }
       if (method === "PUT") {

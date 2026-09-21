@@ -98,6 +98,27 @@ test("unauthenticated requests are rejected", async () => {
   expect(res.status).toBe(401)
 })
 
+test("unauthenticated GET /project-catalog/:id/image is rejected", async () => {
+  await boot()
+  const res = await fetch(`${base()}/project-catalog/x/image`)
+  expect(res.status).toBe(401)
+})
+
+test("a malformed percent-encoded id → 400 bad id, not 500", async () => {
+  const { call } = await boot()
+  const rename = await call("PATCH", "/project-catalog/%E0", { name: "x" })
+  expect(rename.status).toBe(400)
+  expect(await rename.json()).toEqual({ error: "bad id" })
+
+  const image = await call("GET", "/project-catalog/%E0/image")
+  expect(image.status).toBe(400)
+  expect(await image.json()).toEqual({ error: "bad id" })
+
+  const move = await call("PATCH", "/project-catalog/locations/%E0", { projectId: "p" })
+  expect(move.status).toBe(400)
+  expect(await move.json()).toEqual({ error: "bad id" })
+})
+
 test("POST /project-catalog creates → 201 and broadcasts one projects_changed", async () => {
   const { call, frames } = await boot()
   const res = await call("POST", "/project-catalog", { name: "  Supermux " })
@@ -231,6 +252,7 @@ test("PUT, GET and DELETE image round-trip", async () => {
   expect(get.status).toBe(200)
   expect(get.headers.get("content-type")).toBe("image/png")
   expect(get.headers.get("cache-control")).toBe("private, max-age=300")
+  expect(get.headers.get("x-content-type-options")).toBe("nosniff")
   expect(new Uint8Array(await get.arrayBuffer())).toEqual(png)
 
   const del = await call("DELETE", `/project-catalog/${p.id}/image`)
