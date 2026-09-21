@@ -22,6 +22,8 @@
 // [rememberChatState], which keep desktop's ergonomics.
 package dev.supermux.ui.chat
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -79,6 +81,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -312,6 +316,12 @@ fun ChatPanel(
     nativeContent: (@Composable (onExit: () -> Unit) -> Unit)? = null,
     /** Opens the workspace's singleton Changes pane in walkthrough mode. */
     onOpenWalkthrough: (stepId: String?) -> Unit = {},
+    /**
+     * Reports scroll-to-hide on a narrow view (see [ChatChromeAutoHide]): true while the transcript
+     * has been scrolled down and the chrome is tucked away. A host that draws its OWN header above
+     * a header-less panel (the BAR shape) hides that header on it.
+     */
+    onChromeHiddenChange: (Boolean) -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val sem = LocalSemantics.current
@@ -445,11 +455,43 @@ fun ChatPanel(
 
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
+    val emptySession = timelineItems.isEmpty() && !working
+
+    // ── Scroll-to-hide chrome ──────────────────────────────────────────────────────────────────
+    // Only on a NARROW view (phone-width, whatever the device): scrolling down tucks the header and
+    // the composer away, scrolling up brings them back. Never on an empty session (the starters
+    // need the composer) or over the Native PTY, and never on a touch host while the composer has
+    // focus — the soft keyboard is up, you are typing. A pointer host keeps focus in the composer
+    // while you read, so there focus does not pin it; typing into it brings it back instead.
+    val chrome = remember(session.id, listState) {
+        val edgeZone = with(density) { 160.dp.toPx() }
+        ChatChromeAutoHide(with(density) { 24.dp.toPx() }, edge = { transcriptEdge(listState, edgeZone) })
+    }
+    var panelWidth by remember { mutableStateOf(0.dp) }
+    var composerFocused by remember(session.id) { mutableStateOf(false) }
+    val narrowView = panelWidth > 0.dp && panelWidth < CHAT_CHROME_AUTO_HIDE_MAX_WIDTH
+    val autoHideAllowed = narrowView && !emptySession && !(composerFocused && !pointer) && !showNative
+    LaunchedEffect(autoHideAllowed) { if (!autoHideAllowed) chrome.show() }
+    LaunchedEffect(draft) { chrome.show() }
+    val chromeCollapsed = autoHideAllowed && chrome.hidden
+    val chromeFraction by animateFloatAsState(
+        targetValue = if (chromeCollapsed) 0f else 1f,
+        animationSpec = tween(200),
+        label = "chatChrome",
+    )
+    LaunchedEffect(chromeCollapsed) { onChromeHiddenChange(chromeCollapsed) }
+    // Revealed at the end of the transcript: the composer growing back shrinks the viewport, which
+    // would push the last lines out of view. Keep the bottom pinned while it animates in.
+    LaunchedEffect(chromeCollapsed) {
+        if (chromeCollapsed || listState.canScrollForward) return@LaunchedEffect
+        snapshotFlow { chromeFraction }.collect { if (it < 1f) listState.scrollBy(100_000f) }
+    }
 
     Column(
         modifier
             .fillMaxSize()
             .background(cs.surfaceContainerLow)
+            .onSizeChanged { panelWidth = with(density) { it.width.toDp() } }
             .testTag(TestIds.CHAT_VIEW),
     ) {
         if (showHeader) {
@@ -460,7 +502,9 @@ fun ChatPanel(
             // Responsive: the same header at every width, shedding the least important parts as it
             // narrows — the project crumb first, then the status words (the dot stays), then the
             // Chat/Native labels.
-            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            androidx.compose.foundation.layout.BoxWithConstraints(
+                Modifier.fillMaxWidth().collapseVertically({ chromeFraction }, slideUp = true),
+            ) {
             val headerWidth = maxWidth
             val showProject = headerWidth >= 560.dp
             val showStatusText = headerWidth >= 460.dp
@@ -697,17 +741,18 @@ fun ChatPanel(
             }
         }
 
-        val emptySession = timelineItems.isEmpty() && !working
-
         // Body: transcript + composer, or the agent's raw PTY over the top of them. The two are a
         // keep-alive PAIR, not an if/else: Chat hides through `Modifier.keepAlivePanel` (draft and
         // scroll survive a flip) while Native is heavyweight and only a 0×0 layout can hide it.
         Box(Modifier.fillMaxWidth().weight(1f)) {
             run {
                 // Docked composer under the transcript on every host; a tap on the transcript drops focus.
-                Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body").pointerInput(Unit) { detectTapGestures(onTap = { focusManager.clearFocus() }) }) {
-                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
-                        if (emptySession) starters() else transcript(0.dp)
+                // A tap while the chrome is tucked away brings it back (the reading-app convention).
+                Column(Modifier.keepAlivePanel(visible = !showNative).testTag("chat_body").pointerInput(chrome) { detectTapGestures(onTap = { focusManager.clearFocus(); chrome.show() }) }) {
+                    Box(Modifier.fillMaxWidth().weight(1f).nestedScroll(chrome.connection), contentAlignment = Alignment.TopCenter) {
+                        // With the composer tucked away the last row would sit on the window's edge; give
+                        // it the breathing room the composer's own padding gave it.
+                        if (emptySession) starters() else transcript(Space.xl * (1f - chromeFraction))
                         // Fade, not a rule: a short scrim of the panel's own background so a
                         // message scrolling up dissolves into the header. Non-interactive.
                         EdgeFade(cs.surfaceContainerLow, Modifier.align(Alignment.TopCenter))
@@ -719,6 +764,9 @@ fun ChatPanel(
                     Box(
                         Modifier
                             .fillMaxWidth()
+                            .collapseVertically({ chromeFraction }, slideUp = false)
+                            .onFocusChanged { composerFocused = it.hasFocus }
+                            .testTag("chat_composer_dock")
                             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars)),
                         contentAlignment = Alignment.TopCenter,
                     ) {

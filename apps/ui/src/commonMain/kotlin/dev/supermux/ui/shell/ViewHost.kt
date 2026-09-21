@@ -14,6 +14,8 @@
 // The shared host takes desktop's [previewModeFor] lambda, which Android simply does not pass.
 package dev.supermux.ui.shell
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +52,7 @@ import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
 import dev.supermux.ui.adaptive.WindowWidthClass
 import dev.supermux.ui.chat.ChatActions
+import dev.supermux.ui.chat.collapseVertically
 import dev.supermux.ui.chat.ChatPanel
 import dev.supermux.ui.chat.ChatState
 import dev.supermux.ui.chat.ComposerExternalAttach
@@ -422,6 +425,8 @@ private fun ChatViewPane(
 
     // ── Touch branches: the panel draws no header of its own ──────────────────────────────────
     var nativeView by remember(sessionId) { mutableStateOf(false) }
+    // The panel's scroll-to-hide on a short view; the BAR shape tucks its own header away with it.
+    var chromeHidden by remember(sessionId) { mutableStateOf(false) }
     val body: @Composable (Modifier) -> Unit = { paneMod ->
         ChatPanel(
             session = session,
@@ -440,6 +445,7 @@ private fun ChatViewPane(
             pasteImageRequestNonce = pasteImageRequestNonce,
             onPasteImageRequestConsumed = onPasteImageRequestConsumed,
             onOpenFile = openTappedPath,
+            onChromeHiddenChange = { chromeHidden = it },
             modifier = paneMod.fillMaxSize().testTag(WorkspaceChatPaneTestIds.VIEW_CHAT),
         )
     }
@@ -453,8 +459,15 @@ private fun ChatViewPane(
     // about which proxies a session has.
     LaunchedEffect(sessionId, session.name, acts) { sessionLinks = acts.loadProxies() }
     val gitOp = rememberGitOpRunner(sessionId, actions)
+    // Native is not the transcript: the header comes back whenever it is showing.
+    val headerFraction by animateFloatAsState(
+        targetValue = if (chromeHidden && !nativeView) 0f else 1f,
+        animationSpec = tween(200),
+        label = "chatBarHeader",
+    )
     Column(modifier.fillMaxSize().testTag(WorkspaceChatPaneTestIds.CHAT_VIEW)) {
         ChatViewHeader(
+            modifier = Modifier.collapseVertically({ headerFraction }, slideUp = true),
             session = session,
             working = state.agent?.working == true,
             nativeView = nativeView,
