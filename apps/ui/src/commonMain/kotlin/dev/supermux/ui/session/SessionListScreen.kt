@@ -299,8 +299,9 @@ fun SessionListScreen(
     val visibleProjects = remember(projects, multiHost, hostFilter) {
         if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
     }
-    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost) {
-        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost) { w ->
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces) {
+        // Archived rows only decide whether an empty project is shown (archived-only → hidden).
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }

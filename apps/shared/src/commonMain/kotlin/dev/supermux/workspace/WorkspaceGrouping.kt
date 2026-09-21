@@ -53,7 +53,7 @@ fun workspaceActivity(w: WorkspaceDto, agentState: Map<String, AgentStatus>): Wo
  * Active workspaces, grouped by project.
  *
  * Order: the "Personal Assistants" group (if any), then every persistent project in [projects] —
- * empty ones included, since a persistent project shows without workspaces — ordered by
+ * empty ones included unless [showsEmptyProjectLive] hides them — ordered by
  * sortOrder, name, id; then the path-fallback groups ordered by label. Rows inside a group follow
  * sortOrder then id, so a new message never reshuffles the list. Only an explicit user drag
  * changes sortOrder — the same rule SessionGrouping documents.
@@ -65,12 +65,16 @@ fun workspaceActivity(w: WorkspaceDto, agentState: Map<String, AgentStatus>): Wo
  * A workspace joins a project group when `(hostOf(w), w.projectId)` matches a [ProjectRef];
  * an unresolved or unknown projectId falls back to path grouping. With [projects] empty (an old
  * broker) the output is exactly the path grouping.
+ *
+ * [archived] is the archived workspace list, used ONLY to decide whether a project with no live
+ * workspace still gets a group — see [showsEmptyProjectLive]. Omitted, every empty project shows.
  */
 fun groupWorkspaces(
     workspaces: List<WorkspaceDto>,
     home: String,
     projects: List<ProjectRef> = emptyList(),
     hostOf: (WorkspaceDto) -> String = { "" },
+    archived: List<WorkspaceDto> = emptyList(),
     // Kept LAST so existing `groupWorkspaces(ws, home) { isPa }` trailing-lambda callers still bind here.
     isPersonalAssistant: (WorkspaceDto) -> Boolean = { false },
 ): List<WorkspaceGroup> {
@@ -90,9 +94,29 @@ fun groupWorkspaces(
             ),
         )
     }
-    result.addAll(resolveGroups(rest, home, projects, hostOf, rowOrder, keepEmptyProjects = true))
+    val used = usedProjectKeys(archived + workspaces.filter { it.status == "archived" }, hostOf)
+    result.addAll(
+        resolveGroups(rest, home, projects, hostOf, rowOrder) { key -> showsEmptyProjectLive(key, used) },
+    )
     return result
 }
+
+/**
+ * The live-sidebar rule for a persistent project that has NO active workspace (a project with
+ * at least one active workspace always shows): it shows only while it has never been used —
+ * i.e. no archived workspace maps to it either — so a project the user just created stays
+ * visible, while one whose workspaces were all archived drops out of the live list (it still
+ * appears in the archive fold and in the launcher's project picker).
+ *
+ * [projectKey] is a [projectGroupKey]; [archivedProjectKeys] are the keys that archived
+ * workspaces resolve to. Change this function to change the rule.
+ */
+fun showsEmptyProjectLive(projectKey: String, archivedProjectKeys: Set<String>): Boolean =
+    projectKey !in archivedProjectKeys
+
+/** The [projectGroupKey]s the given workspaces resolve to (rows without a projectId are skipped). */
+private fun usedProjectKeys(rows: List<WorkspaceDto>, hostOf: (WorkspaceDto) -> String): Set<String> =
+    rows.mapNotNullTo(HashSet()) { w -> w.projectId?.let { projectGroupKey(hostOf(w), it) } }
 
 /**
  * Archived workspaces grouped by project, newest-archived first inside a group.
@@ -107,7 +131,7 @@ fun groupArchivedWorkspaces(
 ): List<WorkspaceGroup> {
     val dead = workspaces.filter { it.status == "archived" }
     val rowOrder = compareByDescending<WorkspaceDto> { it.archivedAt ?: "" }.thenBy { it.id }
-    return resolveGroups(dead, home, projects, hostOf, rowOrder, keepEmptyProjects = false)
+    return resolveGroups(dead, home, projects, hostOf, rowOrder) { false }
 }
 
 /**
@@ -123,7 +147,8 @@ private fun resolveGroups(
     projects: List<ProjectRef>,
     hostOf: (WorkspaceDto) -> String,
     rowOrder: Comparator<WorkspaceDto>,
-    keepEmptyProjects: Boolean,
+    /** Whether a project group with no rows is still emitted, by [projectGroupKey]. */
+    keepEmptyProject: (String) -> Boolean,
 ): List<WorkspaceGroup> {
     val hostRank = projects.map { it.hostId }.distinct().withIndex().associate { (i, h) -> h to i }
     val refs = projects
@@ -142,7 +167,7 @@ private fun resolveGroups(
     val projectGroups = refs.mapNotNull { r ->
         val key = projectGroupKey(r.hostId, r.project.id)
         val list = byProject.getValue(key)
-        if (list.isEmpty() && !keepEmptyProjects) null
+        if (list.isEmpty() && !keepEmptyProject(key)) null
         else WorkspaceGroup(
             key = key,
             label = r.project.name,

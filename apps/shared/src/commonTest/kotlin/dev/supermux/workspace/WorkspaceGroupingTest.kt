@@ -304,4 +304,70 @@ class WorkspaceGroupingTest {
         assertEquals("App", groups[0].label)
         assertEquals(listOf("w2", "w1"), groups[0].workspaces.map { it.id })
     }
+
+    // ── Live visibility of empty project groups ──────────────────────────────
+
+    private fun dead(id: String, projectId: String) =
+        ws(id, id, "/p/$id").copy(status = "archived", archivedAt = "2026-01-01", projectId = projectId)
+
+    @Test
+    fun aProjectWithAnActiveWorkspaceIsShownEvenIfItAlsoHasArchivedOnes() {
+        val live = ws("w1", "a", "/p/app").copy(projectId = "p1")
+        val groups = groupWorkspaces(
+            listOf(live), home = "/home/u",
+            projects = listOf(proj("p1", "App")),
+            archived = listOf(dead("w2", "p1")),
+        )
+        assertEquals(listOf(projectGroupKey("", "p1")), groups.map { it.key })
+        assertEquals(listOf("w1"), groups.single().workspaces.map { it.id })
+    }
+
+    @Test
+    fun aNeverUsedProjectIsShown() {
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(proj("p1", "Fresh")),
+            archived = listOf(dead("w9", "other")),
+        )
+        assertEquals(listOf("Fresh"), groups.map { it.label })
+    }
+
+    @Test
+    fun aProjectWhoseWorkspacesAreAllArchivedIsHiddenFromTheLiveList() {
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(proj("p1", "Old"), proj("p2", "Fresh")),
+            archived = listOf(dead("w1", "p1"), dead("w2", "p1")),
+        )
+        assertEquals(listOf("Fresh"), groups.map { it.label })
+    }
+
+    @Test
+    fun archivedRowsInTheLiveInputAlsoCountAsHistory() {
+        val groups = groupWorkspaces(
+            listOf(dead("w1", "p1")), home = "/home/u",
+            projects = listOf(proj("p1", "Old")),
+            archived = listOf(dead("w1", "p1")),
+        )
+        assertEquals(emptyList(), groups)
+    }
+
+    @Test
+    fun archivedHistoryIsHostQualified() {
+        // p on h1 was used and archived; the same id on h2 was never used — only h2's stays.
+        val host = mapOf("w1" to "h1")
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(proj("p", "App", hostId = "h1"), proj("p", "App", hostId = "h2")),
+            hostOf = { host[it.id] ?: "" },
+            archived = listOf(dead("w1", "p")),
+        )
+        assertEquals(listOf(projectGroupKey("h2", "p")), groups.map { it.key })
+    }
+
+    @Test
+    fun withoutArchivedInfoEmptyProjectsStayVisible() {
+        val groups = groupWorkspaces(emptyList(), home = "/home/u", projects = listOf(proj("p1", "Any")))
+        assertEquals(listOf("Any"), groups.map { it.label })
+    }
 }
