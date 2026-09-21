@@ -6,6 +6,7 @@ import { requireCloseMode } from '../types.js'
 import { ACTIVITY_OVERFLOW } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import { connectAcpProcess, type AcpKeeperLimits } from './process.js'
+import { createAcpNormalizer } from './normalize.js'
 import type { KeeperFrameEvent } from '../keeper/client.js'
 
 export type AcpActivityHint = { id?: string; phase: 'started' | 'completed' }
@@ -298,6 +299,7 @@ export function acp(options: AcpOptions): AgentDriver {
         let cancel!: () => void
         const cancellation = new Promise<RequestPermissionResponse>(resolve => { cancel = () => resolve(cancelled); signal.addEventListener('abort', cancel, { once: true }) })
         try {
+          if (session && !closed) session.onUpdate({ protocol: 'native', value: { method: 'session/request_permission', params: request } })
           const result = await Promise.race([Promise.resolve().then(() => session.requestPermission({ ...request, coreSessionId: session.sessionId }, signal)), cancellation])
           if (signal.aborted) return cancelled
           return result
@@ -432,9 +434,12 @@ export function acp(options: AcpOptions): AgentDriver {
       io.setMeta({ agentSessionId })
       finishSetup()
       runtimeReady = true
+      const normalizer = createAcpNormalizer()
       return { runtime: {
         agentSessionId,
         capabilities: { resume: canResume || canLoad, steer: false, fork: false, detach: true },
+        normalize: normalizer,
+        flush: () => normalizer.flush(),
         async prompt(content: Parameters<import('../types.js').AgentRuntime['prompt']>[0], signal: AbortSignal) {
           if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
           signal.throwIfAborted()
@@ -476,9 +481,12 @@ export function acp(options: AcpOptions): AgentDriver {
         await close({ mode: 'shutdown' })
         return { methods: [], authenticate: async () => {}, close, finishSetup }
       }
+      const fallbackNormalizer = createAcpNormalizer()
       return { runtime: {
         agentSessionId,
         capabilities: { resume: true, steer: false, fork: false, detach: true },
+        normalize: fallbackNormalizer,
+        flush: () => fallbackNormalizer.flush(),
         async prompt(content: Parameters<import('../types.js').AgentRuntime['prompt']>[0], signal: AbortSignal) {
           if (closed) throw new CoreError('runtime_closed', 'ACP runtime closed')
           signal.throwIfAborted()

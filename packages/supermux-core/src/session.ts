@@ -8,6 +8,7 @@ import type {
   Receipt, SendOptions, SessionRecord, SessionState, ForkOptions,
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
 } from "./types.js"
+import type { EventEnvelope, NormalizedBody, TurnCompleteReason } from "./events/normalized.js"
 
 type ActivitySlot = {
   done: Promise<void>
@@ -34,6 +35,10 @@ export class Session {
   private configuring?: Promise<void>
   private seen = new Map<string, { fingerprint: string; entry: Entry }>()
   private activity = new Map<string, ActivitySlot>()
+  private eventSeq = 0
+  private turnSeq = 0
+  private currentTurnId?: string
+  private completeReason: TurnCompleteReason = "ok"
 
   constructor(
     private readonly record: SessionRecord,
@@ -113,6 +118,7 @@ export class Session {
     const owned = this.active
     const gates = [...this.activity.values()].map(slot => slot.done)
     if (!owned && !gates.length) return Promise.resolve({ status: "already_idle" })
+    this.completeReason = "interrupt"
     this.changeState("interrupting")
     const operation = this.interruptActive(owned, gates)
     this.interrupting = operation
@@ -235,6 +241,8 @@ export class Session {
   update(update: AgentUpdate): void {
     if (this.state === "closed") return
     this.emit({ type: "session.update", sessionId: this.id, update })
+    const bodies = this.runtime.normalize?.(update) ?? []
+    for (const body of bodies) this.emitNormalized(body, update)
   }
 
   /** Native activity is independent of owned receipts. Duplicate start for an id is a no-op. */
@@ -267,6 +275,7 @@ export class Session {
   fail(error: Error): void {
     if (this.state === "closed" || this.state === "closing" || this.state === "failed") return
     this.paused = true
+    this.completeReason = "error"
     this.changeState("failed")
     this.active?.finish({ status: "failed", error })
     for (const entry of this.queue.splice(0)) entry.finish({ status: "failed", error })
@@ -371,8 +380,50 @@ export class Session {
 
   private changeState(state: SessionState): void {
     if (this.state === state) return
+    const previous = this.state
     this.state = state
     this.emit({ type: "session.stateChanged", sessionId: this.id, state })
+    if (state === "running" && previous === "idle") {
+      this.turnSeq += 1
+      this.currentTurnId = `turn:${this.turnSeq}`
+      this.completeReason = "ok"
+      this.emitNormalized({ kind: "turn-start" }, undefined, false)
+    }
+    if (state === "idle" && (previous === "running" || previous === "interrupting")) {
+      this.flushNormalized(previous === "interrupting" ? "interrupt" : this.completeReason)
+      this.currentTurnId = undefined
+    }
+  }
+
+  private flushNormalized(reason: TurnCompleteReason): void {
+    const flushed = this.runtime.flush?.() ?? []
+    for (const body of flushed) this.emitNormalized(body, undefined, false)
+    this.emitNormalized({ kind: "turn-complete", reason }, undefined, false)
+  }
+
+  private emitNormalized(body: NormalizedBody, update?: AgentUpdate, replayFlag?: boolean): void {
+    this.eventSeq += 1
+    const replay = replayFlag ?? update?.replay === true
+    const method = update ? (update.protocol === "acp" ? recSessionUpdate(update.value) : recMethod(update.value)) : undefined
+    const native = update
+      ? {
+          protocol: nativeProtocol(update),
+          ...(method ? { method } : {}),
+          payload: update.value,
+        }
+      : { protocol: "core" as const, payload: body }
+    const envelope: EventEnvelope & NormalizedBody = {
+      sessionId: this.id,
+      agent: this.record.agent,
+      seq: this.eventSeq,
+      ts: new Date().toISOString(),
+      replay,
+      origin: replay ? "replay" : "live",
+      native,
+      ...body,
+    }
+    if (this.currentTurnId) envelope.turnId = this.currentTurnId
+    this.emit({ type: "session.event", sessionId: this.id, event: envelope })
   }
 
   private trimSeen(): void {
@@ -381,6 +432,25 @@ export class Session {
       if (value.entry.settled) this.seen.delete(key)
     }
   }
+}
+
+function recMethod(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return
+  const method = (value as { method?: unknown }).method
+  return typeof method === "string" ? method : undefined
+}
+
+function recSessionUpdate(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return
+  const kind = (value as { sessionUpdate?: unknown }).sessionUpdate
+  return typeof kind === "string" ? kind : undefined
+}
+
+function nativeProtocol(update: AgentUpdate): "acp" | "codex-app-server" {
+  if (update.protocol === "acp") return "acp"
+  const method = recMethod(update.value)
+  if (method?.startsWith("_x.ai/") || method?.startsWith("session/")) return "acp"
+  return "codex-app-server"
 }
 
 

@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path'
 import { acp, type AcpActivityHint, type AcpOptions } from '../acp/index.js'
+import { createAcpNormalizer } from '../acp/normalize.js'
 import { ACTIVITY_OVERFLOW, applyBufferedActivity, copyActivityNotice } from '../activity.js'
 import { CoreError, UnsupportedOperation } from '../errors.js'
 import type { ActivityNotice, AgentDriver, AgentRuntime, AgentUpdate, CloseOptions, DriverContext, SessionConfiguration } from '../types.js'
@@ -275,9 +276,12 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
       }
 
       const closedError = () => new CoreError('runtime_closed', 'Grok child is not running')
+      const grokNormalizer = createAcpNormalizer({ vendor: 'grok' })
       const wrapper: AgentRuntime = {
         get agentSessionId() { return inner?.agentSessionId ?? acceptedSessionId ?? pending?.agentSessionId ?? '' },
         get capabilities() { return liveCapabilities },
+        normalize: grokNormalizer,
+        flush: () => grokNormalizer.flush(),
         async prompt(content, signal) {
           if (closed) throw new CoreError('runtime_closed', 'Grok runtime closed')
           if (turn || configuring || nativeBusy()) throw new CoreError('busy', 'Grok prompt is already running')

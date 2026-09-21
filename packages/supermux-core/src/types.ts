@@ -2,6 +2,7 @@ import type {
   AuthMethod, ContentBlock, RequestPermissionRequest, RequestPermissionResponse,
   SessionNotification,
 } from "@agentclientprotocol/sdk"
+import type { EventEnvelope, NormalizedBody } from "./events/normalized.js"
 
 export type { AuthMethod, ContentBlock }
 
@@ -75,6 +76,7 @@ export type CoreEvent =
   | { type: "session.resumed"; sessionId: string; record: SessionRecord }
   | { type: "session.stateChanged"; sessionId: string; state: SessionState }
   | { type: "session.update"; sessionId: string; update: AgentUpdate }
+  | { type: "session.event"; sessionId: string; event: EventEnvelope & NormalizedBody }
   | { type: "session.failed"; sessionId: string; error: Error }
   | { type: "message.accepted"; sessionId: string; messageId: string }
   | { type: "message.started"; sessionId: string; messageId: string }
@@ -140,6 +142,10 @@ export type AgentRuntime = {
   /** Live native view. Session.configuration() exposes requested persisted state instead; `{}` means defaults. */
   configuration?(): SessionConfiguration
   history?(options: HistoryOptions): Promise<HistoryPage>
+  /** Pure mapper: native/ACP update → normalized bodies. Unknown frames yield []. */
+  normalize?(update: AgentUpdate): NormalizedBody[]
+  /** Flush buffered assistant/reasoning deltas as final messages. */
+  flush?(): NormalizedBody[]
 }
 
 export type AuthContext = {

@@ -2,6 +2,7 @@ import type { AgentDriver, ContentBlock, HistoryOptions, PermissionHandler, Sess
 import { requireCloseMode } from '../types.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
+import { createCodexNormalizer } from './normalize.js'
 
 export type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -415,6 +416,9 @@ export function codex(options: CodexOptions): AgentDriver {
       if (message.id != null) {
         const requestTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
         if (requestTurnId && !live.has(requestTurnId) && !tombstones.has(requestTurnId)) bindLive(requestTurnId, 'native')
+        if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval' || method === 'item/permissions/requestApproval' || method === 'item/tool/requestUserInput' || method === 'applyPatchApproval' || method === 'execCommandApproval') {
+          context.onUpdate({ protocol: 'native', value: { method, params, id: message.id } })
+        }
         handleServerRequest(message)
         return
       }
@@ -525,8 +529,11 @@ export function codex(options: CodexOptions): AgentDriver {
         try { await rpc.request('turn/interrupt', { threadId: agentSessionId, turnId }) } catch (error) { if (!current.finished) throw error }
       }
     }
+    const normalizer = createCodexNormalizer()
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: true, fork: true, detach: true, configure: true, history: true }, close, interrupt,
+      normalize: normalizer,
+      flush: () => normalizer.flush(),
       configuration() { return { ...overrides } },
       async configure(configuration) {
         if (fatal || closed) throw fatal ?? new Error('Codex runtime closed')

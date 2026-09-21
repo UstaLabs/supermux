@@ -1,5 +1,8 @@
 export { createCore, Core } from "./core.js"
 export { Session } from "./session.js"
+export type {
+  NormalizedBody, EventEnvelope, NativeRef, EventOrigin, TurnCompleteReason,
+} from "./events/normalized.js"
 export { CoreError, UnsupportedOperation } from "./errors.js"
 export { connectKeeper } from "./keeper/index.js"
 export type {
