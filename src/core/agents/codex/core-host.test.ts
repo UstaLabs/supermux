@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import type { CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
+import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { createCodexCoreHost, type CodexCoreHost } from "./core-host"
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0))
@@ -61,6 +62,9 @@ function fakeChildFactory(options: { nativeId?: string; holdOpen?: boolean; hold
           async configure(configuration) { liveConfig = { ...configuration } },
           configuration: () => ({ ...liveConfig }),
         }
+        const normalizer = createCodexNormalizer()
+        runtime.normalize = (update) => normalizer(update)
+        runtime.flush = () => normalizer.flush()
         return runtime
       },
     }
@@ -432,6 +436,9 @@ test("failed start leftover is cleaned by stop; sibling stays alive; replacement
           if (same === 1 && !allowFirstClose) throw new Error("still alive")
         },
       }
+      const normalizer = createCodexNormalizer()
+      runtime.normalize = (update) => normalizer(update)
+      runtime.flush = () => normalizer.flush()
       return runtime
     },
   })

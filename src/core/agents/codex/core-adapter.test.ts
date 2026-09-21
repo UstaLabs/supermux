@@ -1,11 +1,19 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../../../../packages/supermux-core/src/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { CoreCodexAdapter } from "./core-adapter"
+
+function attachCodexNormalizer(runtime: AgentRuntime): AgentRuntime {
+  const normalizer = createCodexNormalizer()
+  runtime.normalize = (update) => normalizer(update)
+  runtime.flush = () => normalizer.flush()
+  return runtime
+}
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0))
 const flush = async () => { await tick(); await tick() }
@@ -69,7 +77,7 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string; stee
         },
         configuration: () => ({ ...liveConfig }),
       }
-      return runtime
+      return attachCodexNormalizer(runtime)
     },
   }
 
@@ -565,4 +573,42 @@ test("idle snapshot then native activity retries send once as steer", async () =
   expect(fake.steers).toHaveLength(1)
   expect((fake.steers[0]?.[0] as { text?: string }).text).toBe("after-race")
   fake.completeActivity("native-race")
+})
+
+test("replays real codex-turn.ndjson through Core normalizer into broker events", async () => {
+  const fake = fakeAgentDriver()
+  const { core, workdir } = await harness(fake.driver)
+  const usage: unknown[] = []
+  const adapter = new CoreCodexAdapter({
+    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+    onUsageUpdate: (data) => { usage.push(data) },
+  })
+  adapters.push(adapter)
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("Read notes.txt")
+  await waitUntil(() => fake.prompts.length === 1)
+  const raw = await readFile("packages/supermux-core/tests/fixtures/real/codex-turn.ndjson", "utf8")
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue
+    fake.emit({ protocol: "native", value: JSON.parse(line) })
+  }
+  fake.completePrompt()
+  await sent
+  await flush()
+  await flush()
+  const kinds = events.map((e) => e.kind)
+  expect(kinds[0]).toBe("turn-start")
+  expect(kinds.at(-1)).toBe("turn-complete")
+  const tools = events.filter((e) => e.kind === "tool-call")
+  expect(tools.some((e) => e.phase === "started" && e.detail?.type === "commandExecution")).toBe(true)
+  expect(tools.some((e) => e.phase === "completed" && e.detail?.type === "commandExecution")).toBe(true)
+  const texts = events.filter((e) => e.kind === "assistant-message").map((e) => e.text).join("\n")
+  expect(texts).toContain("42")
+  expect(usage.length).toBeGreaterThan(0)
+  const assistantAt = kinds.lastIndexOf("assistant-message")
+  const completeAt = kinds.lastIndexOf("turn-complete")
+  expect(assistantAt).toBeGreaterThan(-1)
+  expect(assistantAt).toBeLessThan(completeAt)
 })

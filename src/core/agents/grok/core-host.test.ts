@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import type { GrokOptions } from "../../../../packages/supermux-core/src/agents/index.js"
+import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { createGrokCoreHost, type GrokCoreHost } from "./core-host"
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0))
@@ -61,6 +62,9 @@ function fakeChildFactory(options: { nativeId?: string; holdOpen?: boolean; hold
           async configure(configuration) { liveConfig = { ...configuration } },
           configuration: () => ({ ...liveConfig }),
         }
+        const normalizer = createAcpNormalizer({ vendor: "grok" })
+        runtime.normalize = (update) => normalizer(update)
+        runtime.flush = () => normalizer.flush()
         return runtime
       },
     }
@@ -414,6 +418,9 @@ test("failed start leftover is cleaned by stop; sibling stays alive; replacement
           if (same === 1 && !allowFirstClose) throw new Error("still alive")
         },
       }
+      const normalizer = createAcpNormalizer({ vendor: "grok" })
+      runtime.normalize = (update) => normalizer(update)
+      runtime.flush = () => normalizer.flush()
       return runtime
     },
   })

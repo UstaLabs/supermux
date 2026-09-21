@@ -1,6 +1,6 @@
 import { EventEmitter } from "events"
 import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
-import { parseGrokUpdate } from "./stream-parser"
+import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
 import type {
   Completion,
   Core,
@@ -46,14 +46,6 @@ function once<T extends (...args: never[]) => void>(fn: T): T {
   }) as T
 }
 
-function nativeSessionUpdate(params: unknown): unknown {
-  if (!params || typeof params !== "object" || Array.isArray(params)) return params
-  const rec = params as { update?: unknown; sessionUpdate?: unknown }
-  if (rec.update && typeof rec.update === "object") return rec.update
-  if (typeof rec.sessionUpdate === "string") return rec
-  return rec.update
-}
-
 /** Broker-facing Grok adapter that talks to a host-owned supermux-core instance.
  * Does not spawn a native child, subclass GrokAdapter, or close the shared Core. */
 export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
@@ -83,11 +75,20 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
   private sendTail: Promise<void> = Promise.resolve()
   private continueAfterConfirmedInterrupt = false
   private turnActive = false
-  private pendingAssistantText = ""
-  private onTurnActivity?: () => void
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
   private lastNativeId?: string
+  private readonly bridge = createNormalizedBridge({
+    agent: "grok",
+    emit: (event) => {
+      if (event.kind === "error") this.surfaceFailure(event.error, { completeTurn: false })
+      else this.emit(event.kind, event)
+    },
+    onCommands: (commands) => {
+      this.availableCommands = commands
+      this.emit("commands-update", { kind: "commands-update" })
+    },
+  })
 
   constructor(opts: CoreGrokAdapterOpts) {
     super()
@@ -211,7 +212,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private completeStoppedTurn(): void {
-    this.flushAssistant()
+    this.bridge.flush()
     if (this.turnActive) {
       this.turnActive = false
       this.emit("turn-complete", { kind: "turn-complete" })
@@ -271,7 +272,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       throw error
     }
     this.continueAfterConfirmedInterrupt = true
-    this.flushAssistant()
+    this.bridge.flush()
   }
 
   private async openSession(epoch: number): Promise<void> {
@@ -411,7 +412,18 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       return
     }
     if (event.type === "session.update") {
-      this.handleUpdate(event.update)
+      if (event.update.protocol === "native") {
+        const frame = event.update.value as { method?: string; params?: unknown }
+        if (frame?.method === "initialize") this.ingestInitialize(frame.params)
+        else if (this.isTurnCompletedUpdate(frame)) this.bridge.flush()
+      } else if ((event.update.value as { sessionUpdate?: string } | undefined)?.sessionUpdate === "turn_completed") {
+        this.bridge.flush()
+      }
+      return
+    }
+    if (event.type === "session.event") {
+      if (this.stallTimer) this.armStall()
+      this.bridge.handle(event.event)
       return
     }
     if (event.type === "session.failed") {
@@ -433,56 +445,13 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
     else if (state === "closed") this.completeStoppedTurn()
   }
 
-  private handleUpdate(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }): void {
-    if (update.protocol === "native") {
-      this.handleNative(update.value, !!update.replay)
-      return
-    }
-    const params = { update: update.value as Record<string, unknown> }
-    const sessionUpdate = (update.value as { sessionUpdate?: string } | undefined)?.sessionUpdate
-    if (sessionUpdate === "available_commands_update") {
-      const cmds = (update.value as { availableCommands?: unknown }).availableCommands
-      if (Array.isArray(cmds)) {
-        this.availableCommands = cmds as CoreGrokAdapter["availableCommands"]
-        this.emit("commands-update", { kind: "commands-update" })
-      }
-      return
-    }
-    if (update.replay) return
-    this.onTurnActivity?.()
-    if (sessionUpdate === "user_message_chunk") {
-      return
-    }
-    if (sessionUpdate === "turn_completed") {
-      this.flushAssistant()
-      return
-    }
-    for (const ev of parseGrokUpdate(params)) {
-      if (ev.kind === "assistant-message") this.pendingAssistantText += ev.text
-      else if (ev.kind === "tool-call") {
-        if (ev.phase === "started") this.flushAssistant()
-        this.emit("tool-call", { kind: "tool-call", tool: ev.tool, phase: ev.phase, call_id: ev.call_id, detail: ev.detail })
-      }
-    }
-  }
-
-  private handleNative(value: unknown, replay: boolean): void {
-    const frame = value as { method?: string; params?: unknown }
-    if (frame?.method === "initialize") {
-      this.ingestInitialize(frame.params)
-      return
-    }
-    if (frame?.method === "_x.ai/session_notification" || frame?.method === "_x.ai/session/update") {
-      const upd = nativeSessionUpdate(frame.params) as { sessionUpdate?: string; availableCommands?: unknown } | undefined
-      if (replay) {
-        if (upd?.sessionUpdate === "available_commands_update" && Array.isArray(upd.availableCommands)) {
-          this.availableCommands = upd.availableCommands as CoreGrokAdapter["availableCommands"]
-          this.emit("commands-update", { kind: "commands-update" })
-        }
-        return
-      }
-      this.handleUpdate({ protocol: "acp", value: upd, replay: false })
-    }
+  private isTurnCompletedUpdate(frame: { method?: string; params?: unknown }): boolean {
+    if (frame?.method !== "_x.ai/session_notification" && frame?.method !== "_x.ai/session/update") return false
+    const params = frame.params
+    if (!params || typeof params !== "object") return false
+    const rec = params as { update?: { sessionUpdate?: string }; sessionUpdate?: string }
+    const kind = rec.update?.sessionUpdate ?? rec.sessionUpdate
+    return kind === "turn_completed"
   }
 
   private ingestInitialize(params: unknown): void {
@@ -510,7 +479,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
 
   private closeTurn(): void {
     this.disarmStall()
-    this.flushAssistant()
+    this.bridge.flush()
     if (this.turnActive) {
       this.turnActive = false
       this.emit("turn-complete", { kind: "turn-complete" })
@@ -529,7 +498,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       this.emit("error", { kind: "error", error })
     }
     this.disarmStall()
-    this.flushAssistant()
+    this.bridge.flush()
     if (opts.completeTurn === false) return
     if (this.turnActive) {
       this.turnActive = false
@@ -537,18 +506,10 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 
-  private flushAssistant(): void {
-    const text = this.pendingAssistantText.trim()
-    this.pendingAssistantText = ""
-    if (text) this.emit("assistant-message", { kind: "assistant-message", text })
-  }
-
   private armStall(): void {
     this.disarmStall()
-    this.onTurnActivity = () => this.disarmStall()
     this.stallTimer = setTimeout(() => {
       this.stallTimer = undefined
-      this.onTurnActivity = undefined
       const error = new Error(
         `grok produced no response within ${Math.round(this.stallTimeoutMs / 1000)}s — the request appears stalled; please try again`,
       )
@@ -562,6 +523,5 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
       clearTimeout(this.stallTimer)
       this.stallTimer = undefined
     }
-    this.onTurnActivity = undefined
   }
 }

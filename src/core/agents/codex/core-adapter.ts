@@ -4,11 +4,7 @@ import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
 import { makeLogger } from "../../../shared/log"
 import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
-import {
-  createCodexNativeItemState,
-  handleCodexItemCompleted,
-  handleCodexItemStarted,
-} from "./native-items"
+import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
 import type {
   Completion,
   ContentBlock,
@@ -107,8 +103,18 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   private turnActive = false
   private failureEmitted = false
   private lastNativeId?: string
-  private nativeItems = createCodexNativeItemState()
   private runtimeRequest?: (method: string, params: unknown) => Promise<unknown>
+  private readonly bridge = createNormalizedBridge({
+    agent: "codex",
+    emit: (event) => {
+      if (event.kind === "error") this.surfaceFailure(event.error, { completeTurn: false })
+      else this.emit(event.kind, event)
+    },
+    onUsage: (rateLimits) => {
+      const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
+      if (data) this.onUsageUpdate?.(data)
+    },
+  })
 
   constructor(opts: CoreCodexAdapterOpts) {
     super()
@@ -483,8 +489,8 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
       this.applyCoreState(event.state)
       return
     }
-    if (event.type === "session.update") {
-      this.handleUpdate(event.update)
+    if (event.type === "session.event") {
+      this.bridge.handle(event.event)
       return
     }
     if (event.type === "session.failed") {
@@ -500,42 +506,6 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
     if (state === "running") this.openTurn()
     else if (state === "idle") this.closeTurn()
     else if (state === "closed") this.completeStoppedTurn()
-  }
-
-  private handleUpdate(update: { protocol: "acp" | "native"; value: unknown; replay?: boolean }): void {
-    if (update.protocol !== "native" || update.replay) return
-    const frame = update.value as { method?: string; params?: Record<string, unknown> }
-    const method = frame?.method
-    const params = frame?.params
-    if (method === "turn/started") {
-      return
-    }
-    if (method === "turn/completed") {
-      this.nativeItems.deferredWebSearchStarts.clear()
-      return
-    }
-    if (method === "item/started") {
-      handleCodexItemStarted(params?.item as Record<string, unknown> | undefined, this.nativeItems, {
-        emitTool: (event) => this.emit("tool-call", event),
-      })
-      return
-    }
-    if (method === "item/completed") {
-      handleCodexItemCompleted(params?.item as Record<string, unknown> | undefined, this.nativeItems, {
-        emitAssistant: (text) => this.emit("assistant-message", { kind: "assistant-message", text }),
-        emitTool: (event) => this.emit("tool-call", event),
-      })
-      return
-    }
-    if (method === "item/agentMessage/delta") return
-    if (method === "error") {
-      this.surfaceFailure(new Error(String(params?.message ?? "codex error")), { completeTurn: false })
-      return
-    }
-    if (method === "account/rateLimits/updated") {
-      const data = codexUsageFromRateLimits(params?.rateLimits ?? params, this.getPrevUsage?.() ?? null)
-      if (data) this.onUsageUpdate?.(data)
-    }
   }
 
   private openTurn(): void {

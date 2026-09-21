@@ -1,10 +1,18 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createCore } from "../../../../packages/supermux-core/src/index.js"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { CoreGrokAdapter } from "./core-adapter"
+
+function attachGrokNormalizer(runtime: AgentRuntime): AgentRuntime {
+  const normalizer = createAcpNormalizer({ vendor: "grok" })
+  runtime.normalize = (update) => normalizer(update)
+  runtime.flush = () => normalizer.flush()
+  return runtime
+}
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0))
 const flush = async () => { await tick(); await tick() }
@@ -79,7 +87,7 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {
         },
         configuration: () => ({ ...liveConfig }),
       }
-      return runtime
+      return attachGrokNormalizer(runtime)
     },
   }
 
@@ -1045,4 +1053,47 @@ test("admission failure during native work errors without fake idle", async () =
   fake.completeActivity("bg")
   await flush()
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
+})
+
+function grokFrameToUpdate(frame: { method?: string; params?: Record<string, unknown> }) {
+  if (frame.method === "session/update" && frame.params && typeof frame.params.update === "object") {
+    return { protocol: "acp" as const, value: frame.params.update }
+  }
+  return { protocol: "native" as const, value: { method: frame.method, params: frame.params } }
+}
+
+test("replays real grok-turn.ndjson through Core normalizer into broker events", async () => {
+  const fake = fakeAgentDriver()
+  const { core, workdir } = await harness(fake.driver)
+  const adapter = new CoreGrokAdapter({
+    core, id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+  })
+  adapters.push(adapter)
+  const events = listen(adapter)
+  await adapter.start()
+  fake.holdNextPrompt()
+  const sent = adapter.send("Read notes.txt")
+  await waitUntil(() => fake.prompts.length === 1)
+  const raw = await readFile("packages/supermux-core/tests/fixtures/real/grok-turn.ndjson", "utf8")
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue
+    fake.emit(grokFrameToUpdate(JSON.parse(line)))
+  }
+  fake.completePrompt()
+  await sent
+  await flush()
+  await flush()
+  const kinds = events.map((e) => e.kind)
+  expect(kinds[0]).toBe("turn-start")
+  expect(kinds.at(-1)).toBe("turn-complete")
+  const tools = events.filter((e) => e.kind === "tool-call")
+  expect(tools.some((e) => e.phase === "started" && e.detail && typeof e.detail === "object")).toBe(true)
+  expect(tools.some((e) => e.phase === "completed" && e.detail && typeof e.detail === "object")).toBe(true)
+  const texts = events.filter((e) => e.kind === "assistant-message").map((e) => e.text).join("\n")
+  expect(texts).toContain("42")
+  expect(events.filter((e) => e.kind === "commands-update")).toHaveLength(1)
+  const assistantAt = kinds.lastIndexOf("assistant-message")
+  const completeAt = kinds.lastIndexOf("turn-complete")
+  expect(assistantAt).toBeGreaterThan(-1)
+  expect(assistantAt).toBeLessThan(completeAt)
 })

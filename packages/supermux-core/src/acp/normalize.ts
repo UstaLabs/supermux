@@ -64,6 +64,7 @@ function unwrapGrok(update: AgentUpdate): { kind: "acp"; value: Record<string, u
 export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update: AgentUpdate) => NormalizedBody[]) & { flush: () => NormalizedBody[] } {
   const assistant = new Map<string, string>()
   const thoughts = new Map<string, string>()
+  const toolNames = new Map<string, string>()
   let assistantSeq = 0
   let thoughtSeq = 0
   let lastCommandsJson: string | undefined
@@ -118,7 +119,14 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
         thoughtSeq += 1
       }
       const callId = str(value.toolCallId) ?? "tool"
-      const name = str(value.name) ?? str(value.title) ?? "tool"
+      // tool_call_update frames usually omit the name: keep the one announced by the matching
+      // tool_call so started/completed events describe the same tool (bounded map).
+      const announced = str(value.name)
+      if (announced) {
+        if (toolNames.size >= 256) toolNames.delete(toolNames.keys().next().value as string)
+        toolNames.set(callId, announced)
+      }
+      const name = announced ?? toolNames.get(callId) ?? str(value.title) ?? "tool"
       const phase = toolPhase(value.status, kind === "tool_call_update")
       const out: NormalizedBody[] = [{
         kind: "tool-call",
