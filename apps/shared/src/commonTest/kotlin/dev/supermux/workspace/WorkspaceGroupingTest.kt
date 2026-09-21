@@ -240,6 +240,56 @@ class WorkspaceGroupingTest {
     }
 
     @Test
+    fun fleetProjectsStayGroupedByHostRankNotInterleaved() {
+        // h1's two projects (sortOrder 0, 1) must both precede h2's, even though h2's
+        // project #0 has a lower sortOrder than h1's project #1.
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(
+                proj("h1p0", "H1-Zero", sortOrder = 0, hostId = "h1"),
+                proj("h1p1", "H1-One", sortOrder = 1, hostId = "h1"),
+                proj("h2p0", "H2-Zero", sortOrder = 0, hostId = "h2"),
+                proj("h2p1", "H2-One", sortOrder = 1, hostId = "h2"),
+            ),
+        )
+        assertEquals(
+            listOf(
+                projectGroupKey("h1", "h1p0"), projectGroupKey("h1", "h1p1"),
+                projectGroupKey("h2", "h2p0"), projectGroupKey("h2", "h2p1"),
+            ),
+            groups.map { it.key },
+        )
+    }
+
+    @Test
+    fun archivedFleetProjectsStayGroupedByHostRankNotInterleaved() {
+        val a1 = ws("w1", "a1", "/h1/app").copy(status = "archived", archivedAt = "2026-01-01", projectId = "h1p0")
+        val a2 = ws("w2", "a2", "/h1/app2").copy(status = "archived", archivedAt = "2026-01-01", projectId = "h1p1")
+        val b1 = ws("w3", "b1", "/h2/app").copy(status = "archived", archivedAt = "2026-01-01", projectId = "h2p0")
+        val b2 = ws("w4", "b2", "/h2/app2").copy(status = "archived", archivedAt = "2026-01-01", projectId = "h2p1")
+        val host = mapOf("w1" to "h1", "w2" to "h1", "w3" to "h2", "w4" to "h2")
+
+        val groups = groupArchivedWorkspaces(
+            listOf(a1, a2, b1, b2), home = "/home/u",
+            projects = listOf(
+                proj("h1p0", "H1-Zero", sortOrder = 0, hostId = "h1"),
+                proj("h1p1", "H1-One", sortOrder = 1, hostId = "h1"),
+                proj("h2p0", "H2-Zero", sortOrder = 0, hostId = "h2"),
+                proj("h2p1", "H2-One", sortOrder = 1, hostId = "h2"),
+            ),
+            hostOf = { host.getValue(it.id) },
+        )
+
+        assertEquals(
+            listOf(
+                projectGroupKey("h1", "h1p0"), projectGroupKey("h1", "h1p1"),
+                projectGroupKey("h2", "h2p0"), projectGroupKey("h2", "h2p1"),
+            ),
+            groups.map { it.key },
+        )
+    }
+
+    @Test
     fun archivedGroupingResolvesProjectsAndDropsEmptyOnes() {
         val a = ws("w1", "a", "/home/u/projects/app").copy(status = "archived", archivedAt = "2026-01-01", projectId = "p1")
         val b = ws("w2", "b", "/home/u/work/fork").copy(status = "archived", archivedAt = "2026-02-01", projectId = "p1")

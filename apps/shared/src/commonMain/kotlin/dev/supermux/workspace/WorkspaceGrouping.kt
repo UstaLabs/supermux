@@ -110,7 +110,13 @@ fun groupArchivedWorkspaces(
     return resolveGroups(dead, home, projects, hostOf, rowOrder, keepEmptyProjects = false)
 }
 
-/** Project groups (by sortOrder, name, id) followed by path-fallback groups (by label). */
+/**
+ * Project groups followed by path-fallback groups (by label).
+ *
+ * Projects are ordered by host first — so one host's projects never interleave with another's in
+ * fleet mode — then by sortOrder, name, id within that host. Host rank is the host's first
+ * appearance in [projects] (the caller's fleet order), not an alphabetic or arbitrary sort.
+ */
 private fun resolveGroups(
     rows: List<WorkspaceDto>,
     home: String,
@@ -119,9 +125,10 @@ private fun resolveGroups(
     rowOrder: Comparator<WorkspaceDto>,
     keepEmptyProjects: Boolean,
 ): List<WorkspaceGroup> {
+    val hostRank = projects.map { it.hostId }.distinct().withIndex().associate { (i, h) -> h to i }
     val refs = projects
         .distinctBy { projectGroupKey(it.hostId, it.project.id) }
-        .sortedWith(compareBy({ it.project.sortOrder }, { it.project.name }, { it.project.id }))
+        .sortedWith(compareBy({ hostRank[it.hostId] }, { it.project.sortOrder }, { it.project.name }, { it.project.id }))
     val byProject = LinkedHashMap<String, MutableList<WorkspaceDto>>()
     for (r in refs) byProject[projectGroupKey(r.hostId, r.project.id)] = mutableListOf()
 
