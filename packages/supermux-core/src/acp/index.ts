@@ -43,6 +43,8 @@ export type AcpOptions = {
    * notice. Generic ACP does not parse Grok `_x.ai` payloads itself.
    */
   classifyActivity?: AcpActivityClassifier
+  /** When `'grok'`, handle vendor `_x.ai/ask_user_question` agent→client requests. */
+  vendor?: "grok"
 }
 
 function abortError() { return new CoreError('aborted', 'ACP operation aborted') }
@@ -313,6 +315,46 @@ export function acp(options: AcpOptions): AgentDriver {
         io.ackConsumed()
       },
       async extNotification() {},
+      async extMethod(method, params) {
+        io.ackConsumed()
+        if (options.vendor === "grok" && method === "_x.ai/ask_user_question") {
+          const rec = params && typeof params === "object" && !Array.isArray(params) ? params as Record<string, unknown> : {}
+          const list = Array.isArray(rec.questions) ? rec.questions : []
+          const specs = list.map((q, i) => {
+            const row = q && typeof q === "object" && !Array.isArray(q) ? q as Record<string, unknown> : {}
+            return {
+              id: `q${i + 1}`,
+              question: typeof row.question === "string" ? row.question : "",
+              multiSelect: row.multiSelect === true,
+              options: Array.isArray(row.options) ? row.options.map(opt => {
+                const o = opt && typeof opt === "object" && !Array.isArray(opt) ? opt as Record<string, unknown> : {}
+                return {
+                  label: typeof o.label === "string" ? o.label : String(opt),
+                  ...(typeof o.description === "string" && o.description ? { description: o.description } : {}),
+                }
+              }) : [],
+            }
+          })
+          const toolCallId = typeof rec.toolCallId === "string" && rec.toolCallId ? rec.toolCallId : undefined
+          if (!session) return { outcome: "cancelled" }
+          const signals: AbortSignal[] = [lifetime.signal]
+          if (turn) signals.push(turn.signal)
+          const signal = AbortSignal.any(signals)
+          const result = await Promise.resolve().then(() => session.requestAnswers({
+            ...(toolCallId ? { toolCallId } : {}),
+            questions: specs,
+          }, signal)).catch(() => ({ outcome: "cancelled" as const }))
+          if (result.outcome !== "answered") return { outcome: "cancelled" }
+          const answers: Record<string, string> = {}
+          for (const spec of specs) {
+            const value = result.answers[spec.id]
+            if (value === undefined) continue
+            answers[spec.question] = Array.isArray(value) ? value.join(", ") : value
+          }
+          return { outcome: "accepted", answers }
+        }
+        throw new Error("Method not found")
+      },
     }), (() => {
       const framed = ndJsonStream(io.output, io.input)
       const forwardOpaque = (message: unknown) => {

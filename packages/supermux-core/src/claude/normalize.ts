@@ -56,31 +56,6 @@ function fileDiffFrom(input: Record<string, unknown> | undefined, result: unknow
   return
 }
 
-function questionsFrom(input: Record<string, unknown> | undefined, requestId: string): NormalizedBody {
-  const list = Array.isArray(input?.questions) ? input.questions : []
-  return {
-    kind: "user-question",
-    requestId,
-    blocking: true,
-    questions: list.map((q, i) => {
-      const row = rec(q) ?? {}
-      const qid = str(row.header) ?? str(row.id) ?? `${requestId}:${i}`
-      const options = Array.isArray(row.options)
-        ? row.options.map((opt, j) => {
-            const o = rec(opt) ?? {}
-            return { id: str(o.label) ?? `${qid}:${j}`, label: str(o.label) ?? str(o.text) ?? String(opt) }
-          })
-        : undefined
-      return {
-        id: qid,
-        prompt: str(row.question) ?? str(row.prompt) ?? "",
-        ...(options ? { options } : {}),
-        ...(row.multiSelect === true ? { allowFreeText: false } : {}),
-      }
-    }),
-  }
-}
-
 export type ClaudeNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & { flush: () => NormalizedBody[] }
 
 export function createClaudeNormalizer(): ClaudeNormalizer {
@@ -130,7 +105,6 @@ export function createClaudeNormalizer(): ClaudeNormalizer {
         label: str(input?.description) ?? str(input?.subagent_type) ?? name,
       })
     }
-    if (name === "AskUserQuestion" && phase === "started") extra.push(questionsFrom(input, callId))
     return extra
   }
 

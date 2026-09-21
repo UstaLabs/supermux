@@ -97,9 +97,10 @@ export type NormalizedBody =
       questions: {
         id: string
         prompt: string
-        options?: { id: string; label: string }[]
-        allowFreeText?: boolean
-        secret?: boolean
+        header?: string
+        multiSelect: boolean
+        allowFreeText: boolean
+        options: { id: string; label: string; description?: string }[]
       }[]
     }
   | {

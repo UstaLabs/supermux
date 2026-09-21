@@ -8,7 +8,7 @@ import type {DriverContext} from '../src/types.js'
 setDefaultTimeout(20_000)
 const fixture=fileURLToPath(new URL('./fixtures/codex-agent.mjs',import.meta.url))
 const signal=()=>new AbortController().signal
-const ctx=(extra:Partial<DriverContext>={}):DriverContext=>({sessionId:'core',cwd:process.cwd(),signal:signal(),onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),...extra})
+const ctx=(extra:Partial<DriverContext>={}):DriverContext=>({sessionId:'core',cwd:process.cwd(),signal:signal(),onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),requestAnswers:async()=>({outcome:'cancelled' as const}),...extra})
 const keeperDirs:string[]=[]
 const driver=(env={},extra:any={})=>{
  const stateDirectory=require('node:fs').mkdtempSync(join(tmpdir(),'codex-keeper-'))
@@ -571,4 +571,28 @@ test('codex() TypeError names each missing required field',()=>{
   expect(()=>codex(opts)).toThrow(TypeError)
   expect(()=>codex(opts)).toThrow(new RegExp(`Codex ${field} is required`))
  }
+})
+
+test('inline agentMessage questions are answerable: the answer is steered into the still-running turn',async()=>{
+ const asked:any[]=[]
+ const {r,dir,lines}=await traced({},{}, {requestAnswers:async(req:any)=>{asked.push(req);return {outcome:'answered' as const,answers:{q1:'Blue'}}}})
+ try{
+  expect(await r.prompt(input('ask-inline'),signal())).toEqual({stopReason:'end_turn'})
+  expect(asked).toHaveLength(1)
+  expect(asked[0].toolCallId).toBe('q-item-1')
+  expect(asked[0].questions[0]).toMatchObject({id:'q1',prompt:'Which color?',multiSelect:false,allowFreeText:true})
+  expect(asked[0].questions[0].options.map((o:any)=>o.label)).toEqual(['Red','Blue'])
+  const steer=(await lines()).find((l:any)=>l.method==='turn/steer')
+  expect(steer.params.expectedTurnId).toBe('turn-1')
+  expect(steer.params.input[0].text).toBe('Blue')
+ }finally{await r.close({mode:'shutdown'});await rm(dir,{recursive:true,force:true})}
+})
+
+test('declined inline question steers an explicit decline; cancelled sends nothing',async()=>{
+ const a=await traced({},{}, {requestAnswers:async()=>({outcome:'declined' as const})})
+ try{
+  expect(await a.r.prompt(input('ask-inline'),signal())).toEqual({stopReason:'end_turn'})
+  const steer=(await a.lines()).find((l:any)=>l.method==='turn/steer')
+  expect(steer.params.input[0].text).toContain('decline')
+ }finally{await a.r.close({mode:'shutdown'});await rm(a.dir,{recursive:true,force:true})}
 })

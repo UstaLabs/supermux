@@ -292,6 +292,7 @@ describe("optional configuration and history", () => {
       onUpdate() {},
       onExit() {},
       async requestPermission() { return { outcome: { outcome: "cancelled" } } },
+      async requestAnswers() { return { outcome: "cancelled" as const } },
     })
     const session = isolatedSession(runtime, async () => { throw new Error("disk full") })
     let persistRollback: unknown

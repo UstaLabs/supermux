@@ -68,6 +68,32 @@ const NEVER_TOOL_ITEM_TYPES = new Set([
   "exitedReviewMode",
 ])
 
+function mapQuestions(questions: unknown[], _fallback: string, opts: { freeTextFromOther?: boolean } = {}): Extract<NormalizedBody, { kind: "user-question" }>["questions"] {
+  const used = new Set<string>()
+  return questions.map((q, i) => {
+    const row = rec(q) ?? {}
+    const header = str(row.header) ?? str(row.title)
+    const candidate = str(row.id) ?? header
+    const id = candidate && !used.has(candidate) ? candidate : `q${i + 1}`
+    used.add(id)
+    const options = Array.isArray(row.options)
+      ? row.options.map((opt, j) => {
+          const o = rec(opt)
+          const label = o ? (str(o.label) ?? str(o.text) ?? String(opt)) : String(opt)
+          return { id: `o${j + 1}`, label }
+        })
+      : []
+    return {
+      id,
+      prompt: str(row.question) ?? str(row.title) ?? str(row.header) ?? "",
+      ...(header ? { header } : {}),
+      multiSelect: row.multiSelect === true,
+      allowFreeText: opts.freeTextFromOther ? row.isOther === true : false,
+      options,
+    }
+  })
+}
+
 export type CodexNormalizer = ((update: AgentUpdate) => NormalizedBody[]) & { flush: () => NormalizedBody[] }
 
 export function createCodexNormalizer(): CodexNormalizer {
@@ -86,25 +112,9 @@ export function createCodexNormalizer(): CodexNormalizer {
       const questions = item.questions
       const out: NormalizedBody[] = []
       if (text) out.push({ kind: "assistant-message", messageId: id, text })
-      if (Array.isArray(questions) && questions.length) {
-        out.push({
-          kind: "user-question",
-          requestId: id,
-          blocking: false,
-          questions: questions.map((q, i) => {
-            const row = rec(q) ?? {}
-            const qid = str(row.id) ?? `${id}:${i}`
-            const prompt = str(row.question) ?? str(row.title) ?? ""
-            const options = Array.isArray(row.options)
-              ? row.options.map((opt, j) => {
-                  const o = rec(opt) ?? {}
-                  return { id: str(o.id) ?? `${qid}:${j}`, label: str(o.label) ?? str(o.text) ?? String(opt) }
-                })
-              : undefined
-            return { id: qid, prompt, ...(options ? { options } : {}) }
-          }),
-        })
-      }
+      // Inline questions are asked by the driver through context.requestAnswers (answerable,
+      // steered into the still-running turn); the Session emits the user-question event.
+      void questions
       return out
     }
     if (type === "reasoning") {
@@ -384,23 +394,7 @@ export function createCodexNormalizer(): CodexNormalizer {
         kind: "user-question",
         requestId,
         blocking: params.isBlocking === true,
-        questions: questions.map((q, i) => {
-          const row = rec(q) ?? {}
-          const qid = str(row.id) ?? `${requestId}:${i}`
-          const options = Array.isArray(row.options)
-            ? row.options.map((opt, j) => {
-                const o = rec(opt) ?? {}
-                return { id: str(o.id) ?? `${qid}:${j}`, label: str(o.label) ?? str(o.text) ?? String(opt) }
-              })
-            : undefined
-          return {
-            id: qid,
-            prompt: str(row.question) ?? str(row.header) ?? "",
-            ...(options ? { options } : {}),
-            ...(row.isOther === true ? { allowFreeText: true } : {}),
-            ...(row.isSecret === true ? { secret: true } : {}),
-          }
-        }),
+        questions: mapQuestions(questions, requestId, { freeTextFromOther: true }),
       }]
     }
     return []

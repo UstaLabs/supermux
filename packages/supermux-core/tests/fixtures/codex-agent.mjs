@@ -102,6 +102,7 @@ createInterface({input:process.stdin}).on('line',line=>{
     if(text==='ask-unknown'){pendingApprovals.add('unknown');send({id:'unknown',method:'item/tool/requestUserInput',params:{threadId:thread,turnId:id}});return}
     if(text==='ask-permissions'){ask('perm-approval','item/permissions/requestApproval',{cwd:'/',reason:null,permissions:{network:null,fileSystem:null},startedAtMs:0,environmentId:null});return}
     if(text==='ask-dup'){ask('dup','item/commandExecution/requestApproval',{command:'ls',approvalId:'dup-1'});return}
+    if(text==='ask-inline'){send({method:'item/completed',params:{threadId:thread,turnId:id,item:{type:'agentMessage',id:'q-item-1',text:'Which color?',phase:'final_answer',delivery:'async',questions:[{title:'Which color?',options:['Red','Blue']}]}}});return}
     if(text==='ask-late'){ask('approval','item/commandExecution/requestApproval',{command:'ls',approvalId:'late-1'});setTimeout(()=>done(id),10);return}
     if(text==='ask-id-num'){pendingApprovals.add(1);send({id:1,method:'item/commandExecution/requestApproval',params:{threadId:thread,turnId:id,itemId:'item-1',command:'ls',approvalId:'num-1'}});return}
     if(text==='ask-id-str'){pendingApprovals.add('1');send({id:'1',method:'item/commandExecution/requestApproval',params:{threadId:thread,turnId:id,itemId:'item-1',command:'ls',approvalId:'str-1'}});return}

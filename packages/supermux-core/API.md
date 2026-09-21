@@ -72,7 +72,7 @@ Events are live microtask notifications, not a durable log. ACP history load upd
 
 `session.event` is emitted beside each `session.update` (the raw update is unchanged). Envelope: `{ sessionId, agent, seq, ts, turnId?, replay, origin: "live"|"replay", native: { protocol, method?, payload } }`. `seq` is per-session monotonic, minted by Session. `origin` follows the update `replay` flag. Turn boundaries are Session state (`running` → `turn-start`, `idle` → flush then `turn-complete`); vendor `turn_completed` is ignored.
 
-Body kinds: `turn-start`, `turn-complete`, `assistant-delta` / `assistant-message`, `reasoning-delta` / `reasoning` (`redacted: true` when the agent provided no text), `tool-call`, `command-output`, `file-diff`, `web-search`, `mcp-tool`, `plan`, `task`, `user-question`, `permission-request`, `request-resolved`, `commands-update`, `mode-update`, `session-info`, `usage`, `compaction`, `warning`, `error`. Unknown native frames produce no `session.event`. Permission requests are answerable via `session.requests`; user-question remains event-only until a later slice.
+Body kinds: `turn-start`, `turn-complete`, `assistant-delta` / `assistant-message`, `reasoning-delta` / `reasoning` (`redacted: true` when the agent provided no text), `tool-call`, `command-output`, `file-diff`, `web-search`, `mcp-tool`, `plan`, `task`, `user-question`, `permission-request`, `request-resolved`, `commands-update`, `mode-update`, `session-info`, `usage`, `compaction`, `warning`, `error`. Unknown native frames produce no `session.event`. Blocking `user-question` and `permission-request` are answerable via `session.requests`. Codex `agentMessage.questions` is non-blocking (`blocking: false`): it is not pending; answer with `session.send`.
 
 Mappers are pure (`createCodexNormalizer`, `createAcpNormalizer({ vendor?: "grok" })`) with their own buffers; `AgentRuntime.normalize` / `flush` are optional. ACP `agent_message_chunk` / `agent_thought_chunk` flush to final messages on turn-complete.
 
@@ -84,7 +84,7 @@ Mappers are pure (`createCodexNormalizer`, `createAcpNormalizer({ vendor?: "grok
 
 ## Requests
 
-`session.requests.list(): PendingRequest[]`. `session.requests.respond(requestId, { optionId, message? })`. Pending items are `kind: "permission"` with the emitted `permission-request` body. `respond` resolves the driver promise `{ outcome: { outcome: "selected", optionId }, message? }` and emits `request-resolved` `answered`. Unknown/already-resolved id → `request_not_found`. `optionId` not in the request → `invalid_input`. Driver AbortSignal / interrupt / close → cancelled + `request-resolved` `cancelled`. Cap is `limits.maxPending`; overflow is cancelled immediately plus a warning. `snapshot().pendingRequests` is the pending count.
+`session.requests.list(): PendingRequest[]`. Pending items are `kind: "permission"` (`permission-request` body) or `kind: "question"` (`user-question` body, `blocking: true`). `session.requests.respond(requestId, answer)`: permissions take `{ optionId, message? }` and resolve `{ outcome: { outcome: "selected", optionId }, message? }`; questions take `{ answers: Record<questionId, optionId | optionId[] | free text> }` (option ids are mapped to labels for the driver) or `{ decline: true }`. Wrong answer kind or unknown question id → `invalid_input`. Unknown/already-resolved id → `request_not_found`. A Codex non-blocking question id (`blocking: false`) is never listed; `respond` on it is `request_not_found` with message `non-blocking question: answer with session.send`. Driver AbortSignal / interrupt / close → cancelled + `request-resolved` `cancelled`. Cap is `limits.maxPending`; overflow is cancelled immediately plus a warning. `snapshot().pendingRequests` is the pending count.
 
 - `id`, `snapshot()`, `capabilities()` (`detach` is true only for keeper-backed runtimes).
 - `send({ content, whenBusy, idempotencyKey? })` → `Receipt`. Failures settle `completed` as `{ status: "failed", error }` rather than rejecting the receipt (invalid send still throws).
@@ -104,7 +104,7 @@ Steer without an active owned prompt → `session_not_running`. Close/fail/inter
 
 `ActivityNotice`: `{ id: string; phase: "started" | "completed" }` (`ActivityPhase`). Core clones via `copyActivityNotice`. Empty id / bad phase silently dropped. Duplicate `started` same id: no-op. Unknown `completed`: no-op. Max **256** distinct outstanding ids (open buffer and live map). Overflow → session `fail` with `activity_overflow`. Native activity is independent of owned receipts and does **not** emit `message.started`. Not a `CoreEvent`; hosts observe busy via `snapshot().state` / interrupt / send rejection.
 
-Drivers still receive `DriverContext.requestPermission` (Session implements it). Hosts must not pass `onPermission` on `createCore`; they subscribe to `permission-request` events and call `session.requests.respond`. No library always-approve default.
+Drivers still receive `DriverContext.requestPermission` and `DriverContext.requestAnswers` (Session implements both). Hosts must not pass `onPermission` on `createCore`; they subscribe to `permission-request` / `user-question` events and call `session.requests.respond`. No library always-approve default.
 
 ## Errors
 

@@ -318,6 +318,19 @@ export class Core {
           if (!attached || discarded || signal.aborted) return { outcome: { outcome: "cancelled" } }
           return attached.requestPermission(request, signal)
         },
+        requestAnswers: async (request, signal) => {
+          if (discarded || signal.aborted) return { outcome: "cancelled" as const }
+          const attached = session ?? await Promise.race([
+            sessionAttached,
+            new Promise<null>(resolve => {
+              const done = () => resolve(null)
+              if (signal.aborted) done()
+              else signal.addEventListener("abort", done, { once: true })
+            }),
+          ])
+          if (!attached || discarded || signal.aborted) return { outcome: "cancelled" as const }
+          return attached.requestAnswers(request, signal)
+        },
         onActivity: deliverActivity,
       })
       this.assertOpen()

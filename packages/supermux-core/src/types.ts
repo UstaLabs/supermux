@@ -6,14 +6,36 @@ import type { EventEnvelope, NormalizedBody } from "./events/normalized.js"
 
 export type PermissionOptionKind = "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
-export type RequestAnswer = { optionId: string; message?: string }
+export type PermissionAnswer = { optionId: string; message?: string }
+export type QuestionAnswer =
+  | { answers: Record<string, string | string[]> }
+  | { decline: true }
+export type RequestAnswer = PermissionAnswer | QuestionAnswer
 
-export type PendingRequest = {
-  requestId: string
-  kind: "permission"
-  createdAt: string
-  body: Extract<NormalizedBody, { kind: "permission-request" }>
+export type UserQuestionOption = { id?: string; label: string; description?: string }
+export type UserQuestionSpec = {
+  id?: string
+  header?: string
+  prompt?: string
+  question?: string
+  multiSelect?: boolean
+  allowFreeText?: boolean
+  options?: UserQuestionOption[]
 }
+
+export type PendingRequest =
+  | {
+      requestId: string
+      kind: "permission"
+      createdAt: string
+      body: Extract<NormalizedBody, { kind: "permission-request" }>
+    }
+  | {
+      requestId: string
+      kind: "question"
+      createdAt: string
+      body: Extract<NormalizedBody, { kind: "user-question" }>
+    }
 
 export type { AuthMethod, ContentBlock }
 
@@ -108,6 +130,21 @@ export type PermissionHandler = (
   signal: AbortSignal,
 ) => Promise<PermissionResponse>
 
+export type QuestionRequest = {
+  toolCallId?: string
+  questions: UserQuestionSpec[]
+}
+
+export type QuestionResponse =
+  | { outcome: "answered"; answers: Record<string, string | string[]> }
+  | { outcome: "declined" }
+  | { outcome: "cancelled" }
+
+export type AnswersHandler = (
+  request: QuestionRequest,
+  signal: AbortSignal,
+) => Promise<QuestionResponse>
+
 /** Driver-minted opaque turn/work identity. Core does not parse native payloads. */
 export type ActivityPhase = "started" | "completed"
 
@@ -127,6 +164,7 @@ export type DriverContext = {
   onUpdate(update: AgentUpdate): void
   onExit(error: Error): void
   requestPermission: PermissionHandler
+  requestAnswers: AnswersHandler
   /** Optional. Drivers that omit this retain owned-prompt lifecycle only. */
   onActivity?(notice: ActivityNotice): void
 }

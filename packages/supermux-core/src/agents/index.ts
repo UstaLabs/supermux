@@ -147,6 +147,7 @@ function grokAcp(options: GrokOptions, overrides: SessionConfiguration) {
     cancelRetryIntervalMs: options.cancelRetryIntervalMs,
     cancelRetryTimeoutMs: options.cancelRetryTimeoutMs,
     classifyActivity: createGrokClassifyActivity(),
+    vendor: "grok",
   })
 }
 

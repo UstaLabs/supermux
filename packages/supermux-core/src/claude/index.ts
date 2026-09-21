@@ -231,9 +231,78 @@ export function claude(options: ClaudeOptions): AgentDriver {
         }
       } finally { signal.removeEventListener('abort', cancel) }
     }
+    async function askUserQuestions(request: any, signal: AbortSignal) {
+      const list = Array.isArray(request?.input?.questions) ? request.input.questions : []
+      const specs = list.map((q: any, i: number) => ({
+        id: `q${i + 1}`,
+        ...(typeof q?.header === 'string' && q.header ? { header: q.header } : {}),
+        question: typeof q?.question === 'string' ? q.question : '',
+        multiSelect: q?.multiSelect === true,
+        options: Array.isArray(q?.options) ? q.options.map((o: any) => ({
+          label: typeof o?.label === 'string' ? o.label : String(o),
+          ...(typeof o?.description === 'string' && o.description ? { description: o.description } : {}),
+        })) : [],
+      }))
+      const toolCallId = typeof request?.tool_use_id === 'string' && request.tool_use_id ? request.tool_use_id : undefined
+      const result = await Promise.resolve().then(() => context.requestAnswers({
+        ...(toolCallId ? { toolCallId } : {}),
+        questions: specs,
+      }, signal)).catch(() => ({ outcome: 'cancelled' as const }))
+      if (result.outcome !== 'answered') return result
+      const answers: Record<string, string> = {}
+      for (const spec of specs) {
+        const value = result.answers[spec.id]
+        if (value === undefined) continue
+        answers[spec.question] = Array.isArray(value) ? value.join(', ') : value
+      }
+      return { outcome: 'answered' as const, answers }
+    }
+    function handleAskUserQuestion(message: any) {
+      const requestId = message.request_id
+      if (typeof requestId !== 'string') return
+      if (!hostPermissions || closed || fatal || !active) {
+        writePermission(requestId, false, undefined, { message: 'User declined to answer' })
+        return
+      }
+      if (pendingPermissions.has(requestId)) return
+      if (pendingPermissions.size >= MAX_PENDING_PERMISSIONS) {
+        writePermission(requestId, false, undefined, { message: 'User declined to answer' })
+        return
+      }
+      const controller = new AbortController()
+      const pending: PendingPermission = {
+        controller,
+        turnUuid: active.uuid,
+        input: message.request?.input,
+        fingerprint: permissionFingerprint(message.request),
+        suggestions: undefined,
+      }
+      pendingPermissions.set(requestId, pending)
+      void askUserQuestions(message.request, controller.signal).then(result => {
+        if (pendingPermissions.get(requestId) !== pending) return
+        pendingPermissions.delete(requestId)
+        const liveOk = !pending.controller.signal.aborted && !closed && !fatal && active?.uuid === pending.turnUuid
+        if (!liveOk || result.outcome !== 'answered') {
+          writePermission(requestId, false, undefined, { message: 'User declined to answer' })
+          return
+        }
+        const base = pending.input && typeof pending.input === 'object' && !Array.isArray(pending.input)
+          ? { ...(pending.input as Record<string, unknown>) }
+          : {}
+        writePermission(requestId, true, { ...base, answers: result.answers })
+      }, () => {
+        if (pendingPermissions.get(requestId) !== pending) return
+        pendingPermissions.delete(requestId)
+        writePermission(requestId, false, undefined, { message: 'User declined to answer' })
+      })
+    }
     function handleCanUseTool(message: any) {
       const requestId = message.request_id
       if (typeof requestId !== 'string') return
+      if (message.request?.tool_name === 'AskUserQuestion') {
+        handleAskUserQuestion(message)
+        return
+      }
       const fingerprint = permissionFingerprint(message.request)
       if (!hostPermissions || closed || fatal || !active) { denyTool(requestId, fingerprint); return }
       const answered = answeredPermissions.get(requestId)

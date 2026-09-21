@@ -12,7 +12,7 @@ const fixture = fileURLToPath(new URL('./fixtures/cursor-agent.mjs', import.meta
 const signal = () => new AbortController().signal
 const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
   sessionId: 'core', cwd: process.cwd(), signal: signal(), onUpdate() {}, onExit() {},
-  requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }), ...extra,
+  requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }), requestAnswers: async () => ({ outcome: 'cancelled' as const }), ...extra,
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => cursor({
   id: 'cursor', command: process.execPath, args: [fixture], env, inheritEnv: false,

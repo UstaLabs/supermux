@@ -41,6 +41,7 @@ const r = await acp({
   onUpdate() {},
   onExit() {},
   requestPermission: () => new Promise(() => {}),
+  requestAnswers: () => new Promise(() => {}),
 })
 
 const pending = r.prompt([{ type: 'text', text: prompt }], new AbortController().signal)

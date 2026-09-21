@@ -168,3 +168,86 @@ test("options the library cannot classify are dropped; a request with none usabl
   expect(answers[1]).toMatchObject({ outcome: { outcome: "selected", optionId: "nope" } })
   expect(events.some(e => e.type === "session.event" && e.event.kind === "warning")).toBe(true)
 })
+
+function questionDriver() {
+  let last: Awaited<ReturnType<DriverContext["requestAnswers"]>> | undefined
+  const driver: AgentDriver = {
+    id: "test",
+    async open(ctx) {
+      return {
+        agentSessionId: "native-1",
+        capabilities: { resume: true, steer: false, fork: false, detach: false },
+        async prompt(_content, signal) {
+          last = await ctx.requestAnswers({
+            toolCallId: "tq",
+            questions: [
+              { id: "color", question: "Favorite color?", options: [{ label: "Blue" }, { label: "Red" }] },
+              { id: "pets", question: "Pets?", multiSelect: true, options: [{ label: "Cat" }, { label: "Dog" }] },
+              { id: "other", question: "Notes?", allowFreeText: true, options: [] },
+            ],
+          }, signal)
+          return { stopReason: last.outcome === "cancelled" || last.outcome === "declined" ? "cancelled" : "end_turn" }
+        },
+        async interrupt() {},
+        async close() {},
+      }
+    },
+  }
+  return { driver, last: () => last }
+}
+
+test("user-question event, respond answers, decline, invalid_input, interrupt", async () => {
+  const fake = questionDriver()
+  const core = await setup(fake.driver)
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  const session = await core.sessions.create({ agent: "test", cwd: process.cwd(), id: nextId() })
+  const receipt = await session.send({ content: [{ type: "text", text: "go" }], whenBusy: "queue" })
+  const start = Date.now()
+  while (session.requests.list().length === 0 && Date.now() - start < 1000) await new Promise(r => setTimeout(r, 5))
+  const listed = session.requests.list()
+  expect(listed).toHaveLength(1)
+  expect(listed[0]!.kind).toBe("question")
+  expect(listed[0]!.body.kind).toBe("user-question")
+  expect(listed[0]!.body.blocking).toBe(true)
+  expect(listed[0]!.body.questions.map(q => q.id)).toEqual(["color", "pets", "other"])
+  expect(listed[0]!.body.questions[0]!.options.map(o => o.id)).toEqual(["o1", "o2"])
+  expect(events.some(e => e.type === "session.event" && e.event.kind === "user-question")).toBe(true)
+
+  await expect(session.requests.respond(listed[0]!.requestId, { optionId: "allow_once" })).rejects.toMatchObject({ code: "invalid_input" })
+  await expect(session.requests.respond(listed[0]!.requestId, { answers: { nope: "o1" } })).rejects.toMatchObject({ code: "invalid_input" })
+
+  await session.requests.respond(listed[0]!.requestId, {
+    answers: { color: "o1", pets: ["o1", "o2"], other: "freehand" },
+  })
+  expect(await receipt.completed).toEqual({ status: "completed", stopReason: "end_turn" })
+  expect(fake.last()).toEqual({
+    outcome: "answered",
+    answers: { color: "Blue", pets: ["Cat", "Dog"], other: "freehand" },
+  })
+  expect(events.some(e => e.type === "session.event" && e.event.kind === "request-resolved" && e.event.outcome === "answered")).toBe(true)
+
+  const fakeD = questionDriver()
+  const coreD = await setup(fakeD.driver)
+  const sessionD = await coreD.sessions.create({ agent: "test", cwd: process.cwd(), id: nextId() })
+  const receiptD = await sessionD.send({ content: [{ type: "text", text: "go" }], whenBusy: "queue" })
+  const td = Date.now()
+  while (sessionD.requests.list().length === 0 && Date.now() - td < 1000) await new Promise(r => setTimeout(r, 5))
+  await sessionD.requests.respond(sessionD.requests.list()[0]!.requestId, { decline: true })
+  expect(await receiptD.completed).toEqual({ status: "cancelled" })
+  expect(fakeD.last()).toEqual({ outcome: "declined" })
+
+  const fakeI = questionDriver()
+  const coreI = await setup(fakeI.driver)
+  const eventsI: CoreEvent[] = []
+  coreI.subscribe(e => { eventsI.push(e) })
+  const sessionI = await coreI.sessions.create({ agent: "test", cwd: process.cwd(), id: nextId() })
+  const receiptI = await sessionI.send({ content: [{ type: "text", text: "go" }], whenBusy: "queue" })
+  const ti = Date.now()
+  while (sessionI.requests.list().length === 0 && Date.now() - ti < 1000) await new Promise(r => setTimeout(r, 5))
+  await sessionI.interrupt({ pending: "discard" })
+  expect(await receiptI.completed).toEqual({ status: "cancelled" })
+  expect(sessionI.requests.list()).toEqual([])
+  expect(eventsI.some(e => e.type === "session.event" && e.event.kind === "request-resolved" && e.event.outcome === "cancelled")).toBe(true)
+})
+

@@ -103,6 +103,16 @@ new AgentSideConnection(client => ({
       nativeTurn = false
       return { stopReason: 'end_turn' }
     }
+    if (text === 'ask-user-question') {
+      const response = await client.extMethod('_x.ai/ask_user_question', {
+        sessionId: params.sessionId,
+        toolCallId: 'tc-1',
+        questions: [{ question: 'Favorite color?', options: [{ label: 'Blue', description: 'cool' }, { label: 'Red' }], multiSelect: false }],
+        mode: 'interview',
+      })
+      record(response)
+      return { stopReason: 'end_turn' }
+    }
     await client.sessionUpdate({ sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } } })
     await extensions(client)
     return { stopReason: 'end_turn' }

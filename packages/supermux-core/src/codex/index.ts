@@ -489,7 +489,43 @@ export function codex(options: CodexOptions): AgentDriver {
       const slot = live.get(turnId)
       if (!slot || slot.finished) return
       context.onUpdate({ protocol: 'native', value: { method, params } })
+      if (method === 'item/completed') askInlineQuestions(slot, params?.item)
       if (method === 'turn/completed' && params.turn?.id === slot.id) completeSlot(slot, params)
+    }
+    // Real Codex (0.153) asks the user by putting `questions:[{title, options:[string]}]` on an
+    // agentMessage item and KEEPING the turn running; the answer is steered into that turn
+    // (verified live: steering "Blue" yields the continuation). Surface it as a normal
+    // answerable question; if the turn ends first the request resolves as cancelled.
+    const askedQuestionItems = new Set<string>()
+    function askInlineQuestions(slot: TurnSlot, item: any) {
+      if (!item || item.type !== 'agentMessage' || !Array.isArray(item.questions) || !item.questions.length) return
+      const itemId = typeof item.id === 'string' && item.id ? item.id : undefined
+      if (!itemId || askedQuestionItems.has(itemId)) return
+      if (askedQuestionItems.size >= 256) askedQuestionItems.clear()
+      askedQuestionItems.add(itemId)
+      const questions = item.questions.map((q: any, index: number) => ({
+        id: `q${index + 1}`,
+        prompt: typeof q?.title === 'string' && q.title ? q.title : typeof q?.question === 'string' ? q.question : `Question ${index + 1}`,
+        multiSelect: false,
+        allowFreeText: true,
+        options: (Array.isArray(q?.options) ? q.options : []).map((o: any) => ({ label: typeof o === 'string' ? o : String(o?.label ?? o?.title ?? '') })).filter((o: { label: string }) => o.label),
+      }))
+      const controller = new AbortController()
+      const stop = () => controller.abort()
+      void slot.started.promise.catch(() => {})
+      const watch = setInterval(() => { if (slot.finished || closed || fatal) stop() }, 200)
+      void Promise.resolve().then(() => context.requestAnswers({ toolCallId: itemId, questions }, controller.signal)).then(async result => {
+        if (result.outcome === 'cancelled' || slot.finished || closed || fatal) return
+        const text = result.outcome === 'declined'
+          ? 'I decline to answer; continue using your best judgment.'
+          : questions.map((q: { id: string; prompt: string }) => {
+              const value = result.answers[q.id]
+              const answer = Array.isArray(value) ? value.join(', ') : value
+              return questions.length === 1 ? String(answer ?? '') : `${q.prompt} ${answer ?? ''}`
+            }).filter(Boolean).join('\n')
+        if (!text) return
+        await rpc.request('turn/steer', { threadId: agentSessionId, expectedTurnId: slot.id, input: input([{ type: 'text', text }]) })
+      }).catch(() => { /* turn ended or steer refused: the request was already resolved */ }).finally(() => clearInterval(watch))
     }
     const rpc = await transport({ command: options.command, args: options.args, env: { ...(options.inheritEnv ? process.env : {}), ...options.env, ...context.profile?.env }, cwd: context.cwd, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, sessionId: context.sessionId, keeper }, dispatchNotify, fail)
     const close = async (closeOptions: CloseOptions) => {

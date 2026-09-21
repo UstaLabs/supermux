@@ -123,6 +123,11 @@ describe("codex normalizer", () => {
     const n = createCodexNormalizer()
     expect(n(native("item/commandExecution/requestApproval", { itemId: "c", command: "ls" }, { id: 7 }))).toEqual([])
     expect(n(native("item/tool/requestUserInput", { itemId: "q", isBlocking: true, questions: [{ id: "1", header: "h", question: "Q?", isOther: false, isSecret: false, options: null }] }, { id: "req" }))[0]).toMatchObject({ kind: "user-question", requestId: "req", blocking: true })
+    const asyncQ = n(native("item/completed", { item: { type: "agentMessage", id: "item-q", text: "ask", questions: [{ title: "Color?", options: ["Blue"] }] } }))
+    // Inline agentMessage questions are asked by the DRIVER through context.requestAnswers (the
+    // Session emits the user-question); the normalizer only yields the message text.
+    expect(asyncQ.some(e => e.kind === "user-question")).toBe(false)
+    expect(asyncQ).toEqual([{ kind: "assistant-message", messageId: "item-q", text: "ask" }])
   })
 
   test("non-tool thread items never become tool-call; tool-like ones do", () => {

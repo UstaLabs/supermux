@@ -127,6 +127,10 @@ if (process.env.MODE === 'setup-hang') {
         } else if (process.env.EXPECT_PERM === 'deny-message') {
           if (behavior !== 'deny') fail(4, 'expected deny')
           if (m.response?.response?.message !== (process.env.EXPECT_DENY_MESSAGE || 'Denied by user')) fail(5, 'deny message mismatch')
+        } else if (process.env.EXPECT_PERM === 'question') {
+          if (behavior !== 'allow') fail(4, 'expected allow')
+          const answers = m.response?.response?.updatedInput?.answers
+          if (!answers || answers['Favorite color?'] !== 'Blue') fail(5, 'answers mismatch')
         } else if (behavior !== 'deny') fail(4, 'expected deny')
         if (replayDuplicate) {
           replayDuplicate = false
@@ -160,6 +164,16 @@ if (process.env.MODE === 'setup-hang') {
       setTimeout(() => {
         if (hanging) { finish(hanging, 'end_turn'); hanging = undefined }
       }, 1200)
+      return
+    }
+    if (text === 'ask-user-question') {
+      hanging = {session, uuid}
+      send({type: 'control_request', request_id: 'perm-q', request: {
+        subtype: 'can_use_tool',
+        tool_name: 'AskUserQuestion',
+        tool_use_id: 'tool-q',
+        input: { questions: [{ question: 'Favorite color?', header: 'Color', options: [{ label: 'Blue' }, { label: 'Red' }], multiSelect: false }] },
+      }})
       return
     }
     if (text === 'permission' || text === 'permission-tool-use-id' || text === 'permission-duplicate' || text === 'permission-native-cancel' || text === 'permission-late' || text === 'permission-cross-turn' || text === 'permission-changed-input' || text === 'permission-cancel-after-allow' || text === 'permission-always') {

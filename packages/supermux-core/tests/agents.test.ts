@@ -21,7 +21,7 @@ afterEach(async () => {
 
 function signal() { return new AbortController().signal }
 function ctx(extra: Partial<DriverContext> = {}): DriverContext {
-  return { sessionId: 'core', cwd: process.cwd(), signal: signal(), onUpdate() {}, onExit() {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }), ...extra }
+  return { sessionId: 'core', cwd: process.cwd(), signal: signal(), onUpdate() {}, onExit() {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }), requestAnswers: async () => ({ outcome: 'cancelled' as const }), ...extra }
 }
 function testKeeper() {
   const stateDirectory = mkdtempSync(join(tmpdir(), 'grok-k-'))
@@ -62,6 +62,20 @@ async function traced(env: Record<string, string> = {}, extra: Parameters<typeof
   }
 }
 function argvs(lines: any[]) { return lines.filter(l => l.argv).map(l => l.argv as string[]) }
+
+test('vendor ask_user_question replies accepted answers keyed by question text', async () => {
+  const { r, lines } = await traced({}, {}, {
+    requestAnswers: async req => {
+      expect(req.questions[0]?.question).toBe('Favorite color?')
+      return { outcome: 'answered', answers: { q1: 'Blue' } }
+    },
+  })
+  try {
+    expect(await r.prompt([{ type: 'text', text: 'ask-user-question' }], signal())).toEqual({ stopReason: 'end_turn' })
+    const rec = (await lines()).find((row: any) => row && row.outcome === 'accepted')
+    expect(rec).toMatchObject({ outcome: 'accepted', answers: { 'Favorite color?': 'Blue' } })
+  } finally { await r.close({ mode: 'shutdown' }) }
+})
 
 test('defaults never auto-approve and keep library noLeader', async () => {
   expect(() => grok({ ...grokRequired(), authPath: 'relative' })).toThrow('absolute')

@@ -8,6 +8,7 @@ import type {
   Receipt, SendOptions, SessionRecord, SessionState, ForkOptions,
   HistoryOptions, HistoryPage, SessionConfiguration, CloseOptions,
   PendingRequest, PermissionOptionKind, PermissionRequest, PermissionResponse, RequestAnswer,
+  QuestionRequest, QuestionResponse,
 } from "./types.js"
 import type { EventEnvelope, NormalizedBody, ToolCategory, TurnCompleteReason } from "./events/normalized.js"
 
@@ -42,10 +43,11 @@ export class Session {
   private completeReason: TurnCompleteReason = "ok"
   private readonly pendingRequests = new Map<string, {
     request: PendingRequest
-    resolve: (response: PermissionResponse) => void
+    resolve: (response: PermissionResponse | QuestionResponse) => void
     signal: AbortSignal
     onAbort: () => void
   }>()
+  private readonly nonBlockingQuestions = new Set<string>()
 
   constructor(
     private readonly record: SessionRecord,
@@ -126,19 +128,61 @@ export class Session {
       try {
         if (typeof requestId !== "string" || !requestId) throw new CoreError("request_not_found", "Unknown permission request")
         const slot = this.pendingRequests.get(requestId)
-        if (!slot) throw new CoreError("request_not_found", "Unknown permission request")
-        if (!answer || typeof answer.optionId !== "string") throw new CoreError("invalid_input", "optionId is required")
-        const allowed = slot.request.body.options.some(option => option.id === answer.optionId)
-        if (!allowed) throw new CoreError("invalid_input", "optionId is not among the request options")
-        this.finishRequest(requestId, {
-          outcome: { outcome: "selected", optionId: answer.optionId },
-          ...(answer.message !== undefined ? { message: answer.message } : {}),
-        }, "answered")
+        if (!slot) {
+          if (this.nonBlockingQuestions.has(requestId)) {
+            throw new CoreError("request_not_found", "non-blocking question: answer with session.send")
+          }
+          throw new CoreError("request_not_found", "Unknown permission request")
+        }
+        if (slot.request.kind === "permission") {
+          if (!answer || !("optionId" in answer) || typeof answer.optionId !== "string") {
+            throw new CoreError("invalid_input", "optionId is required")
+          }
+          const allowed = slot.request.body.options.some(option => option.id === answer.optionId)
+          if (!allowed) throw new CoreError("invalid_input", "optionId is not among the request options")
+          this.finishRequest(requestId, {
+            outcome: { outcome: "selected", optionId: answer.optionId },
+            ...("message" in answer && answer.message !== undefined ? { message: answer.message } : {}),
+          }, "answered")
+          return Promise.resolve()
+        }
+        if (answer && "decline" in answer && answer.decline === true) {
+          this.finishRequest(requestId, { outcome: "declined" }, "answered")
+          return Promise.resolve()
+        }
+        if (!answer || !("answers" in answer) || !answer.answers || typeof answer.answers !== "object" || Array.isArray(answer.answers)) {
+          throw new CoreError("invalid_input", "answers are required for a question request")
+        }
+        const mapped = mapQuestionAnswers(slot.request.body, answer.answers)
+        this.finishRequest(requestId, { outcome: "answered", answers: mapped }, "answered")
         return Promise.resolve()
       } catch (error) {
         return Promise.reject(error)
       }
     },
+  }
+
+  requestAnswers(request: QuestionRequest, signal: AbortSignal): Promise<QuestionResponse> {
+    if (this.state === "closed" || this.state === "closing" || this.state === "failed" || signal.aborted) {
+      return Promise.resolve({ outcome: "cancelled" })
+    }
+    if (this.pendingRequests.size >= this.maxPending) {
+      this.emitNormalized({ kind: "warning", message: "Pending permission request cap reached", source: "requests" }, undefined, false)
+      return Promise.resolve({ outcome: "cancelled" })
+    }
+    const requestId = randomUUID()
+    const body = questionBody(requestId, request)
+    const pending: PendingRequest = { requestId, kind: "question", createdAt: new Date().toISOString(), body }
+    return new Promise<QuestionResponse>(resolve => {
+      const onAbort = () => this.finishRequest(requestId, { outcome: "cancelled" }, "cancelled")
+      this.pendingRequests.set(requestId, { request: pending, resolve: resolve as (response: PermissionResponse | QuestionResponse) => void, signal, onAbort })
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+      signal.addEventListener("abort", onAbort, { once: true })
+      this.emitNormalized(body, undefined, false)
+    })
   }
 
   requestPermission(request: PermissionRequest, signal: AbortSignal): Promise<PermissionResponse> {
@@ -159,7 +203,7 @@ export class Session {
     const pending: PendingRequest = { requestId, kind: "permission", createdAt: new Date().toISOString(), body }
     return new Promise<PermissionResponse>(resolve => {
       const onAbort = () => this.finishRequest(requestId, { outcome: { outcome: "cancelled" } }, "cancelled")
-      this.pendingRequests.set(requestId, { request: pending, resolve, signal, onAbort })
+      this.pendingRequests.set(requestId, { request: pending, resolve: resolve as (response: PermissionResponse | QuestionResponse) => void, signal, onAbort })
       if (signal.aborted) {
         onAbort()
         return
@@ -491,10 +535,11 @@ export class Session {
       ...body,
     }
     if (this.currentTurnId) envelope.turnId = this.currentTurnId
+    if (body.kind === "user-question" && body.blocking === false) this.nonBlockingQuestions.add(body.requestId)
     this.emit({ type: "session.event", sessionId: this.id, event: envelope })
   }
 
-  private finishRequest(requestId: string, response: PermissionResponse, outcome: "answered" | "expired" | "cancelled"): void {
+  private finishRequest(requestId: string, response: PermissionResponse | QuestionResponse, outcome: "answered" | "expired" | "cancelled"): void {
     const slot = this.pendingRequests.get(requestId)
     if (!slot) return
     this.pendingRequests.delete(requestId)
@@ -504,8 +549,9 @@ export class Session {
   }
 
   private cancelPendingRequests(): void {
-    for (const id of [...this.pendingRequests.keys()]) {
-      this.finishRequest(id, { outcome: { outcome: "cancelled" } }, "cancelled")
+    for (const [id, slot] of [...this.pendingRequests.entries()]) {
+      if (slot.request.kind === "question") this.finishRequest(id, { outcome: "cancelled" }, "cancelled")
+      else this.finishRequest(id, { outcome: { outcome: "cancelled" } }, "cancelled")
     }
   }
 
@@ -521,6 +567,63 @@ const OPTION_KINDS = new Set<PermissionOptionKind>(["allow_once", "allow_always"
 const TOOL_CATEGORIES = new Set<ToolCategory>([
   "read", "edit", "delete", "move", "search", "execute", "fetch", "mcp", "web-search", "think", "other",
 ])
+
+function questionBody(requestId: string, request: QuestionRequest): Extract<NormalizedBody, { kind: "user-question" }> {
+  const raw = Array.isArray(request.questions) ? request.questions : []
+  const used = new Set<string>()
+  const questions = raw.map((q, index) => {
+    const header = typeof q.header === "string" && q.header ? q.header : undefined
+    const candidate = typeof q.id === "string" && q.id ? q.id : header
+    const id = candidate && !used.has(candidate) ? candidate : `q${index + 1}`
+    used.add(id)
+    const prompt = typeof q.question === "string" && q.question
+      ? q.question
+      : typeof q.prompt === "string" ? q.prompt : ""
+    const options = Array.isArray(q.options)
+      ? q.options.map((opt, j) => {
+          const label = typeof opt.label === "string" ? opt.label : String(opt)
+          return {
+            id: `o${j + 1}`,
+            label,
+            ...(typeof opt.description === "string" && opt.description ? { description: opt.description } : {}),
+          }
+        })
+      : []
+    return {
+      id,
+      prompt,
+      ...(header ? { header } : {}),
+      multiSelect: q.multiSelect === true,
+      allowFreeText: q.allowFreeText === true,
+      options,
+    }
+  })
+  return { kind: "user-question", requestId, blocking: true, questions }
+}
+
+function mapQuestionAnswers(
+  body: Extract<NormalizedBody, { kind: "user-question" }>,
+  answers: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const byId = new Map(body.questions.map(q => [q.id, q]))
+  const mapped: Record<string, string | string[]> = {}
+  for (const [qid, value] of Object.entries(answers)) {
+    const question = byId.get(qid)
+    if (!question) throw new CoreError("invalid_input", "Unknown question id")
+    const optionById = new Map(question.options.map(o => [o.id, o.label]))
+    if (Array.isArray(value)) {
+      mapped[qid] = value.map(item => {
+        if (typeof item !== "string") throw new CoreError("invalid_input", "Option ids must be strings")
+        return optionById.get(item) ?? item
+      })
+    } else if (typeof value === "string") {
+      mapped[qid] = optionById.get(value) ?? value
+    } else {
+      throw new CoreError("invalid_input", "Answer must be a string or string array")
+    }
+  }
+  return mapped
+}
 
 function permissionBody(requestId: string, request: PermissionRequest): Extract<NormalizedBody, { kind: "permission-request" }> {
   const rawCall = request.toolCall as { toolCallId?: string; title?: string; kind?: string; rawInput?: unknown } | undefined

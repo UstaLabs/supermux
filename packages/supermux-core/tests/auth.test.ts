@@ -10,7 +10,7 @@ async function setup() {
  const dir = await mkdtemp(join(tmpdir(),'core-auth-')); dirs.push(dir)
  const source = join(dir,'auth.json'); await writeFile(source, JSON.stringify({token:'old'}))
  const provider = copiedCredentials({source,homesDirectory:join(dir,'homes'),filename:'auth.json',homeVariable:'CODEX_HOME'})
- const ctx = {sessionId:'session-1',cwd:dir,signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled' as const}})} satisfies DriverContext
+ const ctx = {sessionId:'session-1',cwd:dir,signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled' as const}}),requestAnswers:async()=>({outcome:'cancelled' as const})} satisfies DriverContext
  return {dir,source,provider,ctx}
 }
 test('materializes owner-only credentials and preserves native session files on release',async()=>{

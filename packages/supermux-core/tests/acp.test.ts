@@ -35,7 +35,7 @@ function classifyActivity(update: AgentUpdate): AcpActivityHint | undefined {
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/acp-agent.mjs', import.meta.url))
 const driver = (env = {}, extra = {}) => acp({id:'fixture',command:process.execPath,args:[fixture],env,inheritEnv:true,mcpServers:[],setupTimeoutMs:3000,shutdownTimeoutMs:40,maxFrameBytes:16*1024*1024,maxOutstandingActivity:256,cancelRetryIntervalMs:250,cancelRetryTimeoutMs:10_000,keeper:testKeeper(),classifyActivity,...extra})
-function context(extra: Partial<DriverContext> = {}): DriverContext { return {sessionId:'core-1',cwd:process.cwd(),signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),...extra} }
+function context(extra: Partial<DriverContext> = {}): DriverContext { return {sessionId:'core-1',cwd:process.cwd(),signal:new AbortController().signal,onUpdate(){},onExit(){},requestPermission:async()=>({outcome:{outcome:'cancelled'}}),requestAnswers:async()=>({outcome:'cancelled' as const}),...extra} }
 test('create, prompt, preserve updates, and close process', async()=>{
  const dir=await mkdtemp(join(tmpdir(),'acp-')); const pidFile=join(dir,'pid'); const updates:any[]=[];
  const runtime=await driver({PID_FILE:pidFile}).open(context({onUpdate:u=>updates.push(u)}));

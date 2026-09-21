@@ -5,7 +5,9 @@ import {mkdtempSync, readFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {claude} from '../src/claude/index.js'
-import type {DriverContext} from '../src/types.js'
+import { createCore } from '../src/core.js'
+import type {CoreEvent, DriverContext} from '../src/types.js'
+import { TEST_LIMITS, nextId } from './helpers.js'
 
 setDefaultTimeout(20_000)
 const fixture = fileURLToPath(new URL('./fixtures/claude-agent.mjs', import.meta.url))
@@ -26,7 +28,7 @@ afterEach(async () => {
 })
 const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
   sessionId: 'core', cwd: process.cwd(), signal: signal(), onUpdate() {}, onExit() {},
-  requestPermission: async () => ({outcome: {outcome: 'cancelled'}}), ...extra,
+  requestPermission: async () => ({outcome: {outcome: 'cancelled'}}), requestAnswers: async () => ({outcome: 'cancelled' as const}), ...extra,
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => claude({
   id: 'claude', command: process.execPath, args: [fixture], env, inheritEnv: true, tools: [], permissionPrompts: 'none', partialMessages: false,
@@ -338,6 +340,50 @@ test('host allow_always writes updatedPermissions when suggestions exist', async
   }))
   try { expect(await r.prompt(input('permission-always'), signal())).toEqual({stopReason: 'end_turn'}) }
   finally { await r.close({ mode: "shutdown" }) }
+})
+
+test('AskUserQuestion through Core emits user-question and never permission-request', async () => {
+  const stateDirectory = mkdtempSync(join(tmpdir(), 'claude-core-q-'))
+  keeperDirs.push(stateDirectory)
+  const core = createCore({
+    stateDirectory,
+    agents: [hostDriver({EXPECT_PERM: 'question', EXPECT_DEFAULT_DENY: '0'})],
+    limits: TEST_LIMITS,
+  })
+  const events: CoreEvent[] = []
+  core.subscribe(e => { events.push(e) })
+  try {
+    const session = await core.sessions.create({ agent: 'claude', cwd: process.cwd(), id: nextId() })
+    const receipt = await session.send({ content: [{ type: 'text', text: 'ask-user-question' }], whenBusy: 'queue' })
+    const start = Date.now()
+    while (session.requests.list().length === 0 && Date.now() - start < 4000) await new Promise(r => setTimeout(r, 10))
+    const pending = session.requests.list()
+    expect(pending).toHaveLength(1)
+    expect(pending[0]!.kind).toBe('question')
+    expect(events.some(e => e.type === 'session.event' && e.event.kind === 'permission-request')).toBe(false)
+    expect(events.some(e => e.type === 'session.event' && e.event.kind === 'user-question')).toBe(true)
+    const qid = pending[0]!.body.questions[0]!.id
+    const oid = pending[0]!.body.questions[0]!.options[0]!.id
+    await session.requests.respond(pending[0]!.requestId, { answers: { [qid]: oid } })
+    expect((await receipt.completed).status).toBe('completed')
+  } finally {
+    await core.close({ agents: 'shutdown' })
+  }
+})
+
+test('AskUserQuestion is a question, not a permission, and updatedInput.answers uses question text', async () => {
+  const events: any[] = []
+  const r = await hostDriver({EXPECT_PERM: 'question'}).open(ctx({
+    onUpdate: u => events.push(u),
+    requestPermission: async () => { throw new Error('must not request permission') },
+    requestAnswers: async req => {
+      expect(req.questions[0]?.question).toBe('Favorite color?')
+      return { outcome: 'answered', answers: { q1: 'Blue' } }
+    },
+  }))
+  try {
+    expect(await r.prompt(input('ask-user-question'), signal())).toEqual({stopReason: 'end_turn'})
+  } finally { await r.close({ mode: "shutdown" }) }
 })
 
 test('host reject_once deny message is forwarded', async () => {

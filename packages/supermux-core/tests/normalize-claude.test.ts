@@ -163,7 +163,8 @@ describe("claude normalizer", () => {
         content: [{ type: "tool_use", id: "q", name: "AskUserQuestion", input: { questions: [{ question: "Q?", options: [{ label: "A" }] }] } }],
       },
     }))
-    expect(out.some(e => e.kind === "user-question" && e.requestId === "q")).toBe(true)
+    expect(out.some(e => e.kind === "user-question")).toBe(false)
+    expect(out.some(e => e.kind === "tool-call" && e.callId === "q")).toBe(true)
   })
 
   test("unknown ignored; replay is caller concern", () => {

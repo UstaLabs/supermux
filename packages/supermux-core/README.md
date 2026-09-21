@@ -107,7 +107,11 @@ When an agent needs approval, Session mints a `requestId`, stores a pending requ
 await session.requests.respond(requestId, { optionId: "allow_once", message?: string })
 ```
 
-`session.requests.list()` returns pending items. Unknown id → `request_not_found`. Bad `optionId` → `invalid_input`. Interrupt, close, or the driver's AbortSignal resolves the driver as cancelled and emits `request-resolved` with `outcome: "cancelled"`. Pending request count is capped by `limits.maxPending` (overflow is cancelled immediately plus a warning event). `snapshot().pendingRequests` is that count.
+Blocking questions (Claude `AskUserQuestion`, Grok `_x.ai/ask_user_question`) emit `kind: "user-question"` and sit in the same pending store (`kind: "question"`). Answer with `{ answers: { [questionId]: optionId | optionId[] | freeText } }` or `{ decline: true }`. Option ids are mapped to labels before the driver sees them.
+
+`session.requests.list()` returns pending items. Unknown id → `request_not_found`. Bad `optionId` / wrong answer kind / unknown question id → `invalid_input`. Interrupt, close, or the driver's AbortSignal resolves the driver as cancelled and emits `request-resolved` with `outcome: "cancelled"`. Pending request count is capped by `limits.maxPending` (overflow is cancelled immediately plus a warning event). `snapshot().pendingRequests` is that count.
+
+Codex questions on `agentMessage` are non-blocking: the turn already ended. They are not listed; `respond` returns `request_not_found` (`non-blocking question: answer with session.send`). Send the next user message instead.
 
 A request parked by the keeper while detached is redelivered on re-attach, flows through `requestPermission` again, and appears in `list()` as a new event.
 

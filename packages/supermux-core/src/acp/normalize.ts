@@ -243,8 +243,8 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
       if (!update) return []
       return mapAcp(update)
     }
-    if (method === "session/request_permission") {
-      // Drivers answer these via context.requestPermission; Session emits the event.
+    if (method === "session/request_permission" || method === "_x.ai/ask_user_question") {
+      // Drivers answer these via context.requestPermission / requestAnswers; Session emits the event.
       return []
     }
     return []

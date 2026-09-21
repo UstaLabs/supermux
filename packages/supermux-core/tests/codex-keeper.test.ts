@@ -54,6 +54,7 @@ function ctx(extra: Partial<DriverContext> = {}): DriverContext {
     onUpdate() {},
     onExit() {},
     requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
+    requestAnswers: async () => ({ outcome: 'cancelled' as const }),
     ...extra,
   }
 }
