@@ -169,6 +169,36 @@ class WorkspaceGroupingTest {
     }
 
     @Test
+    fun projectOrderTieBreaksByNameWhenSortOrderTies() {
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(proj("p1", "Zeta", sortOrder = 0), proj("p2", "Alpha", sortOrder = 0)),
+        )
+        assertEquals(listOf("Alpha", "Zeta"), groups.map { it.label })
+    }
+
+    @Test
+    fun projectOrderTieBreaksByIdWhenSortOrderAndNameTie() {
+        val groups = groupWorkspaces(
+            emptyList(), home = "/home/u",
+            projects = listOf(proj("p2", "Same", sortOrder = 0), proj("p1", "Same", sortOrder = 0)),
+        )
+        assertEquals(listOf("p1", "p2"), groups.map { it.project?.id })
+    }
+
+    @Test
+    fun rowsWithinAProjectGroupFollowSortOrderThenId() {
+        // Mixed sortOrder: w3 (0) sorts first; w1/w2 tie at 1 and break by id.
+        val a = ws("w2", "a", "/p/app", sortOrder = 1).copy(projectId = "p1")
+        val b = ws("w1", "b", "/p/app", sortOrder = 1).copy(projectId = "p1")
+        val c = ws("w3", "c", "/p/app", sortOrder = 0).copy(projectId = "p1")
+
+        val groups = groupWorkspaces(listOf(a, b, c), home = "/home/u", projects = listOf(proj("p1", "App")))
+
+        assertEquals(listOf("w3", "w1", "w2"), groups.single().workspaces.map { it.id })
+    }
+
+    @Test
     fun anUnknownProjectIdFallsBackToPathGroupingAfterProjects() {
         val known = ws("w1", "a", "/home/u/projects/app").copy(projectId = "p1")
         val orphan = ws("w2", "b", "/home/u/projects/other").copy(projectId = "gone")

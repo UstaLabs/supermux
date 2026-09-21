@@ -78,4 +78,20 @@ class HostReducerProjectsTest {
         val out = reduceHostFrame(start, ServerFrame.WorkspaceAdded(ws("w9", projectId = "p1")))
         assertEquals("p1", out.workspaces.single().projectId)
     }
+
+    /** [ServerFrame.WorkspaceRemoved] moves the workspace into [HostState.archivedWorkspaces] by
+     *  copying it with `status = "archived"` — every other field, including [WorkspaceDto.projectId],
+     *  must survive that copy so the archived list still groups by project. */
+    @Test fun workspaceRemovedKeepsProjectIdOnTheArchivedCopy() {
+        val start = HostState(
+            projects = listOf(project("p1")),
+            projectCatalogKnown = true,
+            workspaces = listOf(ws("w1", projectId = "p1")),
+        )
+        val out = reduceHostFrame(start, ServerFrame.WorkspaceRemoved("w1"))
+        assertEquals(emptyList(), out.workspaces)
+        val archived = out.archivedWorkspaces.single()
+        assertEquals("archived", archived.status)
+        assertEquals("p1", archived.projectId)
+    }
 }

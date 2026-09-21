@@ -159,6 +159,8 @@ class FleetStore(
     private val lastReadByHost = HashMap<String, Map<String, String>>()
     private val archivedByHost = HashMap<String, List<ArchivedDto>>()
     private val projectsByHost = HashMap<String, List<ProjectDto>>()
+    private val workspacesByHost = HashMap<String, List<WorkspaceDto>>()
+    private val archivedWorkspacesByHost = HashMap<String, List<WorkspaceDto>>()
     private val usageByHost = HashMap<String, UsageResponse?>()
     private val onlineHosts = HashMap<String, Boolean>()
     private var lastViewingHost: String? = null
@@ -201,6 +203,7 @@ class FleetStore(
         var lastRead: Map<String, String>? = null
         var archived: List<ArchivedDto>? = null
         var projects: List<HostProject>? = null
+        var workspaceHost: Map<String, String>? = null
         var hostViews: List<HostView>? = null
         var apps: List<HostStore>? = null
         /** Nullable value → a flag, so "publish null usage" is distinguishable from "not staged". */
@@ -220,6 +223,7 @@ class FleetStore(
         lastRead?.let { _lastRead.value = it }
         archived?.let { _archivedSessions.value = it }
         projects?.let { _projects.value = it }
+        workspaceHost?.let { _workspaceHost.value = it }
         hostViews?.let { _hostViews.value = it }
         if (usageStaged) _usageSnapshot.value = usage
     }
@@ -313,6 +317,15 @@ class FleetStore(
      */
     private val _projects = MutableStateFlow<List<HostProject>>(emptyList())
     val projects: StateFlow<List<HostProject>> = _projects.asStateFlow()
+
+    /**
+     * workspaceId → owning host recordId, covering BOTH active and archived workspaces of every
+     * connection — the same id space [HostProject.hostId] carries. Maintained the same way as the
+     * other per-host projections above (folded per host, cleaned up in [forgetHost] and on an
+     * identity merge in [backfillHostIdentity]); [hostIdForWorkspace] is a plain lookup into it.
+     */
+    private val _workspaceHost = MutableStateFlow<Map<String, String>>(emptyMap())
+    val workspaceHost: StateFlow<Map<String, String>> = _workspaceHost.asStateFlow()
 
     val hostFilter: Flow<String?> = deps.settings.string(SettingsKeys.HOST_FILTER).map { it?.takeIf(String::isNotBlank) }
 
@@ -445,6 +458,8 @@ class FleetStore(
         conn.jobs += fleetScope.launch { app.agentReplies.collect { _agentReplies.tryEmit(it) } }
         conn.jobs += fleetScope.launch { app.archivedSessions.collect { onHostArchived(recordId, it) } }
         conn.jobs += fleetScope.launch { app.projects.collect { onHostProjects(recordId, it) } }
+        conn.jobs += fleetScope.launch { app.workspaces.collect { onHostWorkspaces(recordId, it) } }
+        conn.jobs += fleetScope.launch { app.archivedWorkspaces.collect { onHostArchivedWorkspaces(recordId, it) } }
         conn.jobs += fleetScope.launch { app.usageSnapshot.collect { onHostUsage(recordId, it) } }
         var lost = false
         publishing { pub ->
@@ -541,6 +556,7 @@ class FleetStore(
                         sessionsByHost.remove(it); messagesByHost.remove(it)
                         agentByHost.remove(it); lastReadByHost.remove(it); archivedByHost.remove(it); onlineHosts.remove(it)
                         projectsByHost.remove(it)
+                        workspacesByHost.remove(it); archivedWorkspacesByHost.remove(it)
                     }
                 }
             }
@@ -559,7 +575,7 @@ class FleetStore(
     /** Every projection at once. Callers hold [lock]. */
     private fun stageAll(pub: Publication) {
         stageSessions(pub); stageMessages(pub); stageAgent(pub); stageLastRead(pub)
-        stageArchived(pub); stageProjects(pub); stageHostViews(pub)
+        stageArchived(pub); stageProjects(pub); stageWorkspaceHost(pub); stageHostViews(pub)
     }
 
     private fun stageSessions(pub: Publication) {
@@ -649,6 +665,28 @@ class FleetStore(
         known.forEach { rid -> projectsByHost[rid]?.forEach { out.add(HostProject(rid, it)) } }
         projectsByHost.forEach { (rid, list) -> if (rid !in known) list.forEach { out.add(HostProject(rid, it)) } }
         pub.projects = out
+    }
+
+    private fun onHostWorkspaces(recordId: String, workspaces: List<WorkspaceDto>) = publishing { pub ->
+        workspacesByHost[recordId] = workspaces
+        stageWorkspaceHost(pub)
+    }
+
+    private fun onHostArchivedWorkspaces(recordId: String, workspaces: List<WorkspaceDto>) = publishing { pub ->
+        archivedWorkspacesByHost[recordId] = workspaces
+        stageWorkspaceHost(pub)
+    }
+
+    /** workspaceId → owning recordId, both live and archived, every connection (then any stray host). */
+    private fun stageWorkspaceHost(pub: Publication) {
+        val out = LinkedHashMap<String, String>()
+        val known = store.list().map { it.recordId }
+        val hostIds = known + (workspacesByHost.keys + archivedWorkspacesByHost.keys).filter { it !in known }
+        hostIds.forEach { rid ->
+            workspacesByHost[rid]?.forEach { out[it.id] = rid }
+            archivedWorkspacesByHost[rid]?.forEach { out[it.id] = rid }
+        }
+        pub.workspaceHost = out
     }
 
     private fun stageHostViews(pub: Publication) {
@@ -869,6 +907,8 @@ class FleetStore(
             lastReadByHost.remove(recordId)
             archivedByHost.remove(recordId)
             projectsByHost.remove(recordId)
+            workspacesByHost.remove(recordId)
+            archivedWorkspacesByHost.remove(recordId)
             usageByHost.remove(recordId)
             onlineHosts.remove(recordId)
             snapshots?.remove(recordId)
@@ -930,12 +970,7 @@ class FleetStore(
         }?.app ?: activeApp()
 
     /** recordId of the host owning [workspaceId] (live or archived), or null when none does. */
-    fun hostIdForWorkspace(workspaceId: String): String? = synchronized(lock) {
-        conns.entries.firstOrNull { (_, c) ->
-            c.app.workspaces.value.any { it.id == workspaceId } ||
-                c.app.archivedWorkspaces.value.any { it.id == workspaceId }
-        }?.key
-    }
+    fun hostIdForWorkspace(workspaceId: String): String? = _workspaceHost.value[workspaceId]
 
     // ── Persistent projects — routed to the OWNING host by recordId (no active-host fallback:
     //    a project id means nothing on another broker). Null / false / Failed when it is gone.
@@ -963,6 +998,9 @@ class FleetStore(
 
     fun projectImageUrl(project: HostProject): String? =
         appForRecord(project.hostId)?.projectImageUrl(project.project)
+
+    suspend fun projectImageBytes(project: HostProject): ByteArray? =
+        appForRecord(project.hostId)?.projectImageBytes(project.project)
 
     private fun requireHost(app: HostStore?): HostStore =
         app ?: error("No host connected")

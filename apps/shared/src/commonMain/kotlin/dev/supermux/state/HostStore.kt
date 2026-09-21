@@ -767,14 +767,19 @@ class HostStore(
     suspend fun renameProject(id: String, name: String): ProjectDto? =
         runApi("renameProject") { api.renameProject(id, name) }?.also(::upsertProject)
 
-    /** PATCH /project-catalog/reorder — optimistic sortOrder; false on failure. */
+    /** PATCH /project-catalog/reorder — optimistic sortOrder; false on failure, and the optimistic
+     *  write is rolled back to the pre-call list so a failed PATCH never leaves a sortOrder the
+     *  broker never agreed to. */
     suspend fun reorderProjects(orderedIds: List<String>): Boolean {
         val order = orderedIds.withIndex().associate { (i, id) -> id to i }
         if (order.isEmpty()) return true
+        val previous = _state.value.projects
         _state.update { cur ->
             cur.copy(projects = cur.projects.map { p -> order[p.id]?.let { p.copy(sortOrder = it) } ?: p })
         }
-        return runApi("reorderProjects") { api.reorderProjects(orderedIds); true } ?: false
+        val ok = runApi("reorderProjects") { api.reorderProjects(orderedIds); true } ?: false
+        if (!ok) _state.update { cur -> cur.copy(projects = previous) }
+        return ok
     }
 
     /**
@@ -795,7 +800,13 @@ class HostStore(
         return project?.let { upsertProject(it); ProjectLocationResult.Added(it) } ?: ProjectLocationResult.Failed
     }
 
-    /** PATCH /project-catalog/locations/{locationId} {projectId} — the target project, null on failure. */
+    /**
+     * PATCH /project-catalog/locations/{locationId} {projectId} — the target project, null on
+     * failure. Only the TARGET project is upserted here; the source project (the one the
+     * location moved OUT of) is not touched by this response at all — it refreshes when the
+     * broker's `projects_changed` broadcast (which carries the updated membership for both sides
+     * of the move) arrives.
+     */
     suspend fun moveProjectLocation(locationId: String, projectId: String): ProjectDto? =
         runApi("moveProjectLocation") { api.moveProjectLocation(locationId, projectId) }?.also(::upsertProject)
 
@@ -811,14 +822,25 @@ class HostStore(
     fun projectImageUrl(project: ProjectDto): String? =
         project.imageId?.let { api.projectImageUrl(project.id, it) }
 
+    /** The project's image bytes over the authenticated client, or null (no image / any failure). */
+    suspend fun projectImageBytes(project: ProjectDto): ByteArray? {
+        val imageId = project.imageId ?: return null
+        return runApi("projectImageBytes") { api.projectImageBytes(project.id, imageId) ?: error("no image") }
+    }
+
+    /**
+     * INSERT-only: a returned project is added when its id is not yet in [HostState.projects] (so
+     * e.g. [createProject] shows up immediately), but an id already present is left alone.
+     *
+     * A mutation's HTTP response and the broker's `projects_changed` broadcast race independently,
+     * and the response can land AFTER a newer broadcast already updated (or removed) the same
+     * project — overwriting it here would resurrect the response's now-stale fields over data the
+     * broadcast just made current. The broadcast is authoritative for every UPDATE; this only ever
+     * seeds an id the broadcast hasn't announced yet.
+     */
     private fun upsertProject(p: ProjectDto) {
         _state.update { cur ->
-            val next = if (cur.projects.any { it.id == p.id }) {
-                cur.projects.map { if (it.id == p.id) p else it }
-            } else {
-                cur.projects + p
-            }
-            cur.copy(projects = next)
+            if (cur.projects.any { it.id == p.id }) cur else cur.copy(projects = cur.projects + p)
         }
     }
 
