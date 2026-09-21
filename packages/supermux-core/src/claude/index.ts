@@ -3,6 +3,7 @@ import type { AgentDriver, CloseOptions, ContentBlock, PermissionHandler } from 
 import { requireCloseMode } from '../types.js'
 import type { RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { transport } from './transport.js'
+import { createClaudeNormalizer } from './normalize.js'
 
 export type ClaudeOptions = {
   id: string
@@ -17,6 +18,7 @@ export type ClaudeOptions = {
   disallowedTools?: string[]
   permissionMode?: 'acceptEdits' | 'auto' | 'bypassPermissions' | 'manual' | 'dontAsk' | 'plan'
   permissionPrompts: 'host' | 'none'
+  partialMessages: boolean
   setupTimeoutMs: number
   requestTimeoutMs: number
   shutdownTimeoutMs: number
@@ -68,6 +70,7 @@ function argv(options: ClaudeOptions, sessionId: string, resume: boolean) {
   if (options.disallowedTools?.length) flags.push('--disallowedTools', options.disallowedTools.join(','))
   if (options.model) flags.push('--model', options.model)
   if (options.effort) flags.push('--effort', options.effort)
+  if (options.partialMessages) flags.push('--include-partial-messages')
   flags.push(resume ? `--resume=${sessionId}` : `--session-id=${sessionId}`)
   return [...options.args, ...flags]
 }
@@ -86,13 +89,14 @@ function requireKeeper(keeper: ClaudeOptions['keeper']): ClaudeOptions['keeper']
 
 export function claude(options: ClaudeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('Claude options are required')
-  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv'] as const) {
+  for (const field of ['id', 'command', 'args', 'setupTimeoutMs', 'requestTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes', 'permissionPrompts', 'tools', 'keeper', 'inheritEnv', 'partialMessages'] as const) {
     if (options[field] === undefined) throw new TypeError(`Claude ${field} is required`)
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('Claude id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('Claude command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Claude args is required')
   if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Claude inheritEnv is required')
+  if (typeof options.partialMessages !== 'boolean') throw new TypeError('Claude partialMessages is required')
   if (options.permissionPrompts !== 'host' && options.permissionPrompts !== 'none') throw new TypeError('Claude permissionPrompts is required')
   if (options.tools !== 'default' && !Array.isArray(options.tools)) throw new TypeError('Claude tools is required')
   const setupTimeoutMs = options.setupTimeoutMs
@@ -318,8 +322,11 @@ export function claude(options: ClaudeOptions): AgentDriver {
       if (active === a) await rpc.request({ subtype: 'interrupt' })
       if (active === a && !fatal) a.interrupted = true
     }
+    const normalizer = createClaudeNormalizer()
     return {
       agentSessionId: agentSessionId!, capabilities: { resume: true, steer: false, fork: false, detach: true }, close, interrupt,
+      normalize: normalizer,
+      flush: () => normalizer.flush(),
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Claude runtime closed')
         signal.throwIfAborted()

@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { existsSync } from "node:fs"
 import { createAcpNormalizer } from "../src/acp/normalize.js"
+import { createClaudeNormalizer } from "../src/claude/normalize.js"
 import { createCodexNormalizer } from "../src/codex/normalize.js"
+import { createCursorNormalizer } from "../src/cursor/normalize.js"
 import type { AgentUpdate } from "../src/types.js"
 import type { NormalizedBody } from "../src/events/normalized.js"
 
@@ -23,6 +26,24 @@ function replay(normalize: (update: AgentUpdate) => NormalizedBody[], updates: A
 
 function wrapCodex(frame: Record<string, unknown>): AgentUpdate {
   return { protocol: "native", value: { method: frame.method, params: frame.params } }
+}
+
+function wrapNative(frame: Record<string, unknown>): AgentUpdate {
+  return { protocol: "native", value: frame }
+}
+
+function assertRealTurn(events: NormalizedBody[]) {
+  expect(events.some(e => e.kind === "assistant-message" && e.text.length > 0)).toBe(true)
+  const finals = new Set<string>()
+  for (const ev of events) {
+    if (ev.kind === "assistant-message") finals.add(ev.messageId)
+    if (ev.kind === "reasoning") finals.add(ev.reasoningId)
+    if (ev.kind === "tool-call") expect(ev.callId).toBeTruthy()
+  }
+  for (const ev of events) {
+    if (ev.kind === "assistant-delta") expect(finals.has(ev.messageId)).toBe(true)
+    if (ev.kind === "reasoning-delta") expect(finals.has(ev.reasoningId)).toBe(true)
+  }
 }
 
 function wrapAcp(frame: Record<string, unknown>): AgentUpdate {
@@ -100,4 +121,34 @@ describe("real wire captures", () => {
     expect(seq[asst]).toBe("assistant-message")
     expect(asst).toBe(seq.length - 1)
   })
+
+  const claudePath = join(dir, "fixtures/real/claude-turn.ndjson")
+  if (existsSync(claudePath)) {
+    test("claude-turn.ndjson", () => {
+      const n = createClaudeNormalizer()
+      const bodies = replay(n, fixture("claude-turn.ndjson").map(wrapNative))
+      assertRealTurn(bodies)
+      // Partial stream + full assistant frame describe the SAME block: exactly one final per id.
+      const finals = bodies.filter((b: any) => b.kind === "assistant-message").map((b: any) => b.messageId)
+      expect(new Set(finals).size).toBe(finals.length)
+      expect(bodies.some((b: any) => b.kind === "tool-call" && b.tool === "Read" && b.phase === "started")).toBe(true)
+      expect(bodies.some((b: any) => b.kind === "tool-call" && (b.phase === "completed" || b.phase === "failed"))).toBe(true)
+    })
+  }
+
+  const cursorPath = join(dir, "fixtures/real/cursor-turn.ndjson")
+  if (existsSync(cursorPath)) {
+    test("cursor-turn.ndjson", () => {
+      const n = createCursorNormalizer()
+      const bodies = replay(n, fixture("cursor-turn.ndjson").map(wrapNative))
+      assertRealTurn(bodies)
+      const kinds = bodies.map((b: any) => b.kind)
+      // Real cursor-agent streams thinking; it must surface as reasoning, finalized before what follows it.
+      expect(kinds).toContain("reasoning-delta")
+      expect(kinds).toContain("reasoning")
+      expect(kinds.indexOf("reasoning")).toBeLessThan(kinds.lastIndexOf("assistant-message"))
+      // Text before and after the tool call are two separate messages.
+      expect(bodies.filter((b: any) => b.kind === "assistant-message").length).toBe(2)
+    })
+  }
 })

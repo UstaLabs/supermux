@@ -6,6 +6,7 @@ import { UnsupportedOperation } from '../errors.js'
 import type { AgentDriver, CloseOptions, ContentBlock, DriverContext } from '../types.js'
 import { requireCloseMode } from '../types.js'
 import { launchCursor } from './transport.js'
+import { createCursorNormalizer } from './normalize.js'
 
 export type CursorOptions = {
   id: string
@@ -176,10 +177,13 @@ export function cursor(options: CursorOptions): AgentDriver {
       await a.child.close()
       if (!a.gotResult) finish(a, { stopReason: 'cancelled' })
     }
+    const normalizer = createCursorNormalizer()
     return {
       agentSessionId: agentSessionId!,
       capabilities: { resume: true, steer: false, fork: false, detach: false, configure: false, history: false },
       close, interrupt,
+      normalize: normalizer,
+      flush: () => normalizer.flush(),
       async prompt(content, signal) {
         if (fatal || closed) throw fatal ?? new Error('Cursor runtime closed')
         signal.throwIfAborted()
