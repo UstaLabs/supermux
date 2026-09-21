@@ -38,10 +38,8 @@ import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
 import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 
 /**
@@ -169,7 +167,6 @@ fun rememberLauncherActions(
 }
 
 /** [LauncherActions] against the fleet's ACTIVE host — Android's wiring. */
-@OptIn(ExperimentalCoroutinesApi::class)
 @Composable
 fun rememberLauncherActions(
     fleet: FleetStore,
@@ -180,16 +177,9 @@ fun rememberLauncherActions(
         LauncherActions(
             listProjects = { fleet.listProjects() },
             // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill).
-            projectCatalog = fleet.activeHost.flatMapLatest { rid ->
-                val app = fleet.appForRecord(rid) ?: fleet.activeApp()
-                if (app == null) {
-                    flowOf(emptyList())
-                } else {
-                    combine(app.projectCatalogKnown, app.projects) { known, list ->
-                        if (known) list else emptyList()
-                    }
-                }
-            },
+            // Same routing as every other launcher call: the ACTIVE host (the launcher's host pill),
+            // bound to its LIVE HostStore so a connection rebuild rebinds (see FleetStore).
+            projectCatalog = fleet.activeProjectCatalog,
             addProjectLocation = { id, path ->
                 fleet.activeApp()?.addProjectLocation(id, path) ?: ProjectLocationResult.Failed
             },

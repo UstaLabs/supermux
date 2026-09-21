@@ -555,6 +555,7 @@ fun SupermuxApp(
             // The sidebar's "+" on a project; a workspace tab never consults projects.
             initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
             initialProjectId = if (tab == null) ui.launcherProject?.second else null,
+            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherProject() },
             hosts = hostViews,
             selectedHost = activeHostId,
             projectImageCache = projectImageCache,

@@ -374,6 +374,27 @@ class FleetStore(
             .flatMapLatest { app -> app?.onboarded ?: flowOf(null) }
             .stateIn(fleetScope, SharingStarted.Eagerly, null)
 
+    /**
+     * The ACTIVE host's project catalog for the launcher — empty until that host's catalog is
+     * known (an old broker, or before the first snapshot).
+     *
+     * Same shape as [onboarded], and for the same reasons: keyed on the live [HostStore] identity
+     * (via `hostApps`), not just the record id, so a close/open rebuild of the same record rebinds
+     * to the new store instead of staying on the dead one; and never falls back to some OTHER
+     * host's catalog when the active record is momentarily unconnected (`activeApp`'s own
+     * first-host fallback is the only fallback, matching every other launcher call).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val activeProjectCatalog: StateFlow<List<ProjectDto>> =
+        combine(hostApps, _activeHost) { _, _ -> activeApp() }
+            .distinctUntilChanged()
+            .flatMapLatest { app ->
+                app?.let { a ->
+                    combine(a.projectCatalogKnown, a.projects) { known, list -> if (known) list else emptyList() }
+                } ?: flowOf(emptyList())
+            }
+            .stateIn(fleetScope, SharingStarted.Eagerly, emptyList())
+
     // Agent replies merged across every host, for AppShell's NotificationController. Same
     // replay-0 + bounded-DROP_OLDEST shape as HostStore.agentReplies.
     private val _agentReplies = MutableSharedFlow<AgentReplyEvent>(

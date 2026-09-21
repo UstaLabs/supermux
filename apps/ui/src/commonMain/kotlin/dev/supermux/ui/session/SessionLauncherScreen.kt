@@ -88,6 +88,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -292,6 +293,11 @@ fun SessionLauncherScreen(
      */
     initialProjectId: String? = null,
     initialProjectHost: String? = null,
+    /**
+     * The preselect above was applied — the shell consumes the request so it is one-shot per
+     * navigation (a remount must not override the user's or a draft's workdir).
+     */
+    onInitialProjectApplied: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -364,6 +370,12 @@ fun SessionLauncherScreen(
     // A location-less project waiting for the omnibox to name a folder to register.
     var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
     var projectError by remember { mutableStateOf<String?>(null) }
+    // "Already in <owner>": the owning project's id and the path that collided, for "Use <owner>".
+    var projectConflict by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // Read from coroutines that outlive a composition: an in-flight registration must see the
+    // host the launcher targets NOW, not the one it started on.
+    val currentHost by rememberUpdatedState(selectedHost)
+    val currentCatalog by rememberUpdatedState(catalog)
     // Last location per (host, project) — persisted inside LauncherPrefs.
     var projectLocations by remember { mutableStateOf(emptyMap<String, String>()) }
     // Every prefs write goes through this, so no field (e.g. projectLocations) is dropped by a
@@ -588,6 +600,7 @@ fun SessionLauncherScreen(
         workdirTouched = true
         error = null
         projectError = null
+        projectConflict = null
         pendingLocationProject = null
         catalogMenu = false
         catalogLocationsFor = null
@@ -597,6 +610,7 @@ fun SessionLauncherScreen(
 
     fun applyProject(project: ProjectDto) {
         projectError = null
+        projectConflict = null
         when (val loc = launchLocation(project, projectLocations[projectLocationKey(projectHostKey, project.id)])) {
             is LaunchLocation.Chosen -> pickProjectLocation(project, loc.path)
             is LaunchLocation.Choose -> {
@@ -616,8 +630,13 @@ fun SessionLauncherScreen(
 
     /** The omnibox picked [path] for a location-less project: register it, never silently move it. */
     fun registerLocation(project: ProjectDto, path: String) {
+        val startedOn = currentHost
         scope.launch {
-            when (val r = actions.addProjectLocation(project.id, path)) {
+            val r = actions.addProjectLocation(project.id, path)
+            // The host pill moved while the broker answered: that project (ids are per-broker) and
+            // its location belong to the OLD host — neither apply nor remember them here.
+            if (currentHost != startedOn) return@launch
+            when (r) {
                 is ProjectLocationResult.Added -> {
                     // The broker normalizes; prefer its spelling of the new location.
                     val paths = r.project.locations.map { it.path }
@@ -625,16 +644,33 @@ fun SessionLauncherScreen(
                     pickProjectLocation(project, added)
                 }
                 is ProjectLocationResult.Conflict -> {
-                    val owner = catalog.firstOrNull { it.id == r.projectId }?.name ?: "another project"
-                    projectError = "Already in $owner"
+                    val owner = currentCatalog.firstOrNull { it.id == r.projectId }
+                    projectError = "Already in ${owner?.name ?: "another project"}"
+                    projectConflict = owner?.let { it.id to path }
                 }
                 ProjectLocationResult.Failed -> projectError = "Couldn't add this folder to ${project.name}"
             }
         }
     }
 
-    // Sidebar "+" on a project: preselect it once its host's catalog is showing. Keyed on the
-    // request, so a second "+" (the launcher already open) applies again.
+    /** "Use <owner>": the conflicting path already belongs to [ownerId] — launch there instead. */
+    fun useConflictOwner() {
+        val (ownerId, path) = projectConflict ?: return
+        val owner = catalog.firstOrNull { it.id == ownerId } ?: return
+        if (owner.locations.any { it.path == path }) pickProjectLocation(owner, path) else applyProject(owner)
+    }
+
+    // A project (and a half-finished location registration) is per-broker: a host switch drops it.
+    LaunchedEffect(selectedHost) {
+        pendingLocationProject = null
+        catalogLocationsFor = null
+        projectError = null
+        projectConflict = null
+    }
+
+    // Sidebar "+" on a project: preselect it once its host's catalog is showing. One-shot per
+    // request: [onInitialProjectApplied] lets the shell consume it (so a remount never re-applies
+    // over a draft), and a fresh "+" arrives as a new request that re-keys this flag.
     var initialProjectApplied by remember(initialProjectHost, initialProjectId) { mutableStateOf(false) }
     LaunchedEffect(initialProjectHost, initialProjectId, catalog, selectedHost, launcherRestoring) {
         if (initialProjectApplied || launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
@@ -646,6 +682,7 @@ fun SessionLauncherScreen(
         val project = catalog.firstOrNull { it.id == id } ?: return@LaunchedEffect
         initialProjectApplied = true
         applyProject(project)
+        onInitialProjectApplied()
     }
 
     // ── The shared chat composer, wearing the launcher's clothes (cluster F7) ────────────────────
@@ -866,7 +903,7 @@ fun SessionLauncherScreen(
                                     if (pending != null) {
                                         registerLocation(pending, path)
                                     } else {
-                                        workdir = path; workdirTouched = true; error = null; projectError = null
+                                        workdir = path; workdirTouched = true; error = null; projectError = null; projectConflict = null
                                     }
                                 },
                                 onDismiss = { projectMenu = false; pendingLocationProject = null },
@@ -908,6 +945,15 @@ fun SessionLauncherScreen(
                                 fontSize = 12.sp,
                                 modifier = Modifier.testTag("launcher_project_error"),
                             )
+                        }
+                        projectConflict?.let { (ownerId, _) ->
+                            val ownerName = catalog.firstOrNull { it.id == ownerId }?.name
+                            if (ownerName != null) {
+                                TextButton(
+                                    onClick = { useConflictOwner() },
+                                    modifier = Modifier.testTag("launcher_project_use_owner"),
+                                ) { Text("Use $ownerName", fontSize = 12.sp) }
+                            }
                         }
                         if (hosts.size > 1 && !pointer && workspaceWorkdir == null) {
                             Spacer(Modifier.height(Space.sm))
