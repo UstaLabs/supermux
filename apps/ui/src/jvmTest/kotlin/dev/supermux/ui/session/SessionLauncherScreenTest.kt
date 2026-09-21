@@ -309,6 +309,27 @@ class SessionLauncherScreenTest {
         assertEquals(Submitted("/ws/tree", "claude", null, null, "tab text", 0, false, null), captured)
     }
 
+    @Test fun a_workspace_tab_keeps_its_workdir_when_it_is_not_a_known_project() = runComposeUiTest {
+        // A workspace's workdir is usually a worktree, which GET /projects never lists. The
+        // "not a known project" correction used to swap it for the most-recent project.
+        var captured: Submitted? = null
+        pointerContent {
+            Harness(
+                draft = LauncherDraft(text = "hi"),
+                projects = listOf("/proj/a"),
+                workspaceWorkdir = "/ws/tree",
+                onSubmit = { w, a, m, r, t, s, wt, b, _ ->
+                    captured = Submitted(w, a, m, r, t, s.size, wt, b)
+                    null
+                },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_submit").performClick()
+        waitForIdle()
+        assertEquals("/ws/tree", captured?.workdir)
+    }
+
     @Test fun a_failed_submit_saves_the_draft_again() = runComposeUiTest {
         // The draft is cleared BEFORE the spawn (a workspace tab is disposed the moment the broker
         // binds it), so a refusal must re-arm the save — the text is still the user's.

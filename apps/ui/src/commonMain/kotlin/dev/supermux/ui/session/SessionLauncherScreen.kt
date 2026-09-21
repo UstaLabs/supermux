@@ -489,8 +489,9 @@ fun SessionLauncherScreen(
     // freezing the selection — only an explicit picker choice sets workdirTouched.
     // An EMPTY project list means "we could not enumerate projects" (slow host, failed fetch,
     // offline) — not "your workdir is gone". Don't reset a restored draft's workdir on that.
+    // A workspace tab is locked to its workdir, which is usually a worktree /projects never lists.
     LaunchedEffect(knownProjects, recentProjectPaths, launcherRestoring) {
-        if (launcherRestoring) return@LaunchedEffect
+        if (launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
         if (knownProjects.isEmpty()) return@LaunchedEffect
         val known = projects.toHashSet()
         if (workdir.isBlank() || (workdir != "~" && workdir !in known && recentProjectPaths.none { it == workdir })) {
