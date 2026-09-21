@@ -99,7 +99,8 @@ import kotlin.time.Clock
 
 /**
  * A pending "+ → Chat" tab hosting the launcher: the chat it starts JOINS [workspaceId], is born in
- * [workdir] and fills tab [viewId]. [draftText] is the tab's own saved composer text (restored
+ * [workdir] and fills tab [viewId]. [repoRoot] / [branch] name that work tree for display — a
+ * worktree's own path is an opaque `.mux/worktrees/<repo>-<hash>/<uuid>`. [draftText] is the tab's own saved composer text (restored
  * once), [onDraftText] saves it back into the tab's state.
  */
 data class LauncherTab(
@@ -107,6 +108,8 @@ data class LauncherTab(
     val workdir: String,
     val viewId: String,
     val draftText: String,
+    val repoRoot: String? = null,
+    val branch: String? = null,
     val onDraftText: (String) -> Unit,
 )
 /**
@@ -575,6 +578,8 @@ private fun WorkspacePaneContent(
                     viewId = v.id,
                     draftText = v.pendingChatDraft(),
                     onDraftText = { app.savePendingChatDraft(current.id, v.id, it) },
+                    repoRoot = current.repoRoot,
+                    branch = current.branch,
                 ),
             )
         }

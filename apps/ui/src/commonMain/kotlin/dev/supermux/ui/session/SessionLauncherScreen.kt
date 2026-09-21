@@ -97,6 +97,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -261,6 +262,8 @@ fun SessionLauncherScreen(
      * caller keeps that per tab), and the spawn never cuts a new worktree.
      */
     workspaceWorkdir: String? = null,
+    /** The folder caption inside a workspace tab (its repo + branch); null → the formatted workdir. */
+    workspaceLabel: String? = null,
     initialDraftId: String? = null,
     initialDraft: SessionInfo? = null,
     /** The mic behind dictation; defaults to the platform's. Tests inject a fake. */
@@ -1052,11 +1055,13 @@ fun SessionLauncherScreen(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            formatWorkdir(workdir, home),
+                            workspaceLabel ?: formatWorkdir(workdir, home),
                             color = cs.onSurfaceVariant,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("launcher_workdir_caption"),
                         )
                     }
                 }

@@ -142,6 +142,7 @@ class SessionLauncherScreenTest {
         projects: List<String> = emptyList(),
         standalone: Boolean = false,
         workspaceWorkdir: String? = null,
+        workspaceLabel: String? = null,
         onBack: () -> Unit = {},
         onPrefsChange: (LauncherPrefs) -> Unit = {},
         onDraftChange: (LauncherDraft) -> Unit = {},
@@ -172,6 +173,7 @@ class SessionLauncherScreenTest {
                 onOpenSession = onOpenSession,
                 standalone = standalone,
                 workspaceWorkdir = workspaceWorkdir,
+                workspaceLabel = workspaceLabel,
             )
         }
     }
@@ -328,6 +330,17 @@ class SessionLauncherScreenTest {
         onNodeWithTag("launcher_submit").performClick()
         waitForIdle()
         assertEquals("/ws/tree", captured?.workdir)
+    }
+
+    @Test fun a_workspace_tab_captions_its_repo_not_the_worktree_dir() = runComposeUiTest {
+        pointerContent {
+            Harness(
+                workspaceWorkdir = "/home/u/.mux/worktrees/app-1a2b/0f9e-uuid",
+                workspaceLabel = "~/projects/app · mux/app-3",
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("launcher_workdir_caption").assertTextEquals("~/projects/app · mux/app-3")
     }
 
     @Test fun a_failed_submit_saves_the_draft_again() = runComposeUiTest {

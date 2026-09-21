@@ -106,6 +106,7 @@ import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.session.asSettledSession
+import dev.supermux.session.formatWorkdir
 import dev.supermux.session.inferHomeDir
 import dev.supermux.state.FleetStore
 import dev.supermux.state.HostStore
@@ -525,6 +526,11 @@ fun SupermuxApp(
                 launcherActions.createDraftSession(workdir, agent, model, level, text, replaceDraftId)
             },
             workspaceWorkdir = tab?.workdir,
+            // The sidebar row's name for the same work tree: the repo, not the worktree's uuid dir.
+            workspaceLabel = tab?.let { t ->
+                val path = formatWorkdir(t.repoRoot ?: t.workdir, home)
+                if (t.branch.isNullOrBlank()) path else "$path · ${t.branch}"
+            },
             // A reopened task-list draft belongs to the New Session route, never to a tab.
             initialDraftId = if (tab == null) ui.launcherDraftId else null,
             initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
