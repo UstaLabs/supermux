@@ -374,3 +374,37 @@ describe("UpdateChecker timers", () => {
     }).not.toThrow()
   })
 })
+
+describe("UpdateChecker.checkNow — release channels", () => {
+  // stable 0.11.36 with an alpha train already ahead of it.
+  function bodyWithAlpha(): string {
+    const manifest = JSON.parse(versionsBody("0.11.36"))
+    manifest.channels.alpha = JSON.parse(versionsBody("0.12.0-alpha.3")).channels.stable
+    return JSON.stringify(manifest)
+  }
+
+  function checkerAt(currentVersion: string): UpdateChecker {
+    return new UpdateChecker({
+      url: PRIMARY_URL,
+      currentVersion,
+      commit: "abc1234",
+      mode: "binary",
+      bootJitterMs: 0,
+      fetchImpl: async () => new Response(bodyWithAlpha(), { status: 200 }),
+    })
+  }
+
+  test("a stable build is never offered the alpha", async () => {
+    const checker = checkerAt("0.11.36")
+    await checker.checkNow()
+    expect(checker.status().latest).toBe("0.11.36")
+    expect(checker.status().updateAvailable).toBe(false)
+  })
+
+  test("an alpha build follows the alpha channel", async () => {
+    const checker = checkerAt("0.12.0-alpha.1")
+    await checker.checkNow()
+    expect(checker.status().latest).toBe("0.12.0-alpha.3")
+    expect(checker.status().updateAvailable).toBe(true)
+  })
+})
