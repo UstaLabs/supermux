@@ -9,6 +9,11 @@
 //   CLIENT_DESKTOP_VERSION
 //   CLIENT_IOS_VERSION / CLIENT_IOS_BUILD
 //
+// Optional env VERSIONS_PREVIOUS = path to the versions.json that is published right now. The
+// release's version picks its channel (see scripts/lib/versions-manifest.ts): a prerelease
+// (0.12.0-alpha.1) lands in channels.alpha and REQUIRES the previous manifest, because its
+// channels.stable is carried over untouched.
+//
 // Emits versions.json (distribution spec §A schema) on stdout. The release
 // workflow publishes this to supermux.dev; the broker's update checker polls
 // broker assets, while native clients poll `clients` + desktop/android asset keys.
@@ -17,6 +22,9 @@
 //   compose-desktop-macos  → supermux-desktop-macos.dmg  (Supermux Desktop.app)
 // The key is historical — it once sat beside a `desktop-macos` entry for the retired native
 // SwiftUI Supermux.app — and stays because installed clients (ClientPlatform.DESKTOP_MACOS) read it.
+import { readFileSync } from "fs"
+import { assembleManifest } from "./lib/versions-manifest"
+
 const [
   version,
   shaLinuxX64,
@@ -84,17 +92,25 @@ if (iosVer) {
   clients.ios = entry
 }
 
-const stable: Record<string, unknown> = {
+const release: { version: string; [key: string]: unknown } = {
   version,
   publishedAt: new Date().toISOString(),
   notesUrl: `https://github.com/UstaLabs/supermux/releases/tag/v${version}`,
   assets,
 }
 if (Object.keys(clients).length > 0) {
-  stable.clients = clients
+  release.clients = clients
 }
 
-console.log(JSON.stringify({
-  schemaVersion: 1,
-  channels: { stable },
-}, null, 2))
+// No file / unreadable / not JSON all mean "nothing published yet".
+let previous: unknown = null
+const previousPath = process.env.VERSIONS_PREVIOUS?.trim()
+if (previousPath) {
+  try {
+    previous = JSON.parse(readFileSync(previousPath, "utf8"))
+  } catch {
+    previous = null
+  }
+}
+
+console.log(JSON.stringify(assembleManifest(release, previous), null, 2))
