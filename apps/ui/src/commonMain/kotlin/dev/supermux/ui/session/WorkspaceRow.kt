@@ -53,7 +53,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.supermux.host.HostView
 import dev.supermux.proto.LogEntry
-import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.LocalInputMode
 import dev.supermux.ui.host.HostBadge
@@ -94,8 +93,7 @@ fun archivedWorkspaceRowContextLabels(): List<String> = listOf("Restore")
  *
  * @param model the shared [WorkspaceRowModel] both lists derive with [deriveWorkspaceRow].
  * @param preview last message of the primary session — Pointer only (the phone row shows the path).
- * @param lastReadAt primary session's last-read stamp; with [preview] it drives the Pointer row's
- *   unread state (the sidebar's unread is primary-only; the Touch row uses `model.unread`, which is
+ * @param lastReadAt primary session's last-read stamp (the unread dot itself is `model.unread`:
  *   any chat of the workspace).
  * @param dropHover true while a tab dragged out of the layout hovers this row (desktop).
  * @param onRowBounds reports the row's root bounds so a tab drag can hit-test it (desktop).
@@ -187,12 +185,9 @@ private fun PointerWorkspaceRow(
     val cs = MaterialTheme.colorScheme
     val w = model.workspace
     val working = model.activity == WorkspaceActivity.WORKING
-    val hasUnread = sessionListShowsUnread(
-        active = active,
-        working = working,
-        lastMessageTs = preview?.ts,
-        lastReadAt = lastReadAt,
-    )
+    // Any chat of the workspace (model.unread), not just the primary — a second chat's reply must
+    // light the row too. The open row and a working workspace keep the shared rule's exceptions.
+    val hasUnread = !active && !working && model.unread
 
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val elevation by animateDpAsState(

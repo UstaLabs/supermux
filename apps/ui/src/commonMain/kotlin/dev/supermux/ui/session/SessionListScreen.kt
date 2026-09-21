@@ -106,6 +106,7 @@ import dev.supermux.session.groupSessions
 import dev.supermux.session.inferHomeDir
 import dev.supermux.session.projectLabel
 import dev.supermux.session.sectionKey
+import dev.supermux.session.sessionListShowsUnread
 import dev.supermux.session.sessionsByUserOrder
 import dev.supermux.ui.TestIds
 import dev.supermux.ui.adaptive.InputMode
@@ -642,6 +643,12 @@ fun SessionListScreen(
                             WorkspaceChildRow(
                                 name = names[child.sessionId] ?: child.sessionId,
                                 working = agentTyped[child.sessionId]?.working == true,
+                                unread = sessionListShowsUnread(
+                                    active = child.sessionId == activeId,
+                                    working = agentTyped[child.sessionId]?.working == true,
+                                    lastMessageTs = lastBySession[child.sessionId]?.ts,
+                                    lastReadAt = lastRead[child.sessionId],
+                                ),
                                 onClick = { openChild(w.id, child.sessionId) },
                             )
                         }
@@ -1143,6 +1150,45 @@ fun SessionListScreen(
         item(key = "bottom_spacer") { Spacer(Modifier.height(Space.lg)) }
     }
 
+    // ── Offscreen unread pills ────────────────────────────────────────────────────────────────
+    // Row keys of every unread row this list can emit (session rows use several key prefixes, one
+    // per section; workspace rows two). Same rule as each row's own dot: sessionListShowsUnread.
+    fun sessionUnread(sid: String) = sessionListShowsUnread(
+        active = sid == activeId,
+        working = agentState[sid]?.working == true,
+        lastMessageTs = lastBySession[sid]?.ts,
+        lastReadAt = lastRead[sid],
+    )
+    // Row key → dismissal token (key + newest unread message ts): a pill dismissed on this state
+    // comes back once the row gets another message.
+    val unreadRowTokens: Map<String, String> = remember(
+        useWorkspaces, visibleWorkspaces, visibleSessions, lastBySession, lastRead, agentState, activeId,
+    ) {
+        fun token(key: String, sids: List<String>) =
+            "$key@" + sids.filter(::sessionUnread).maxOf { lastBySession[it]?.ts.orEmpty() }
+        if (useWorkspaces) {
+            // The open workspace is being read, even when its row has scrolled away.
+            visibleWorkspaces
+                .filter { w -> !(openWorkspaceByWorkspaceId && w.id == activeId) }
+                .filter { w -> w.chatSessionIds().any(::sessionUnread) }
+                .flatMap { w ->
+                    listOf("ws:${w.id}", "flat:pa:${w.id}").map { it to token(it, w.chatSessionIds()) }
+                }
+        } else {
+            visibleSessions.filter { sessionUnread(it.id) }.flatMap { s ->
+                UNREAD_SESSION_KEY_PREFIXES.map { p -> (p + s.id).let { it to token(it, listOf(s.id)) } }
+            }
+        }.toMap()
+    }
+    // Run the list's own DSL through a key recorder: item index of every unread row, including rows
+    // far offscreen that the LazyColumn never laid out. Cheap (keys only, no row composes).
+    val unreadRows = LazyKeyRecorder().apply { body() }.keys
+        .withIndex().mapNotNull { (i, k) -> (k as? String)?.let(unreadRowTokens::get)?.let { UnreadRow(i, it) } }
+    // Scrolling reveals a row; it doesn't read it — only opening the chat advances last_read_at.
+    fun scrollToUnread(index: Int) {
+        listScope.launch { listState.animateScrollToCenter(index) }
+    }
+
     // ── Chrome ────────────────────────────────────────────────────────────────────────────────
     val listTag = if (useWorkspaces) WorkspaceListTestIds.LIST else TestIds.SESSION_LIST
     // One frame at every width (desktop's): new-session card, chips, section header, list, footer.
@@ -1209,6 +1255,11 @@ fun SessionListScreen(
                 state = listState,
                 modifier = Modifier.testTag(listTag).fillMaxSize(),
             ) { body() }
+            UnreadScrollPills(
+                listState = listState,
+                unreadRows = unreadRows,
+                onScrollTo = ::scrollToUnread,
+            )
         }
         footer?.invoke()
     }
@@ -1326,7 +1377,7 @@ private fun ArchivedGroupLabel(label: String, trailing: (@Composable () -> Unit)
 
 /** Indented child session under a multi-agent workspace (desktop's sidebar). */
 @Composable
-private fun WorkspaceChildRow(name: String, working: Boolean, onClick: () -> Unit) {
+private fun WorkspaceChildRow(name: String, working: Boolean, unread: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(
         Modifier
@@ -1336,13 +1387,13 @@ private fun WorkspaceChildRow(name: String, working: Boolean, onClick: () -> Uni
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SessionStatusRail(git = null, working = working, bgOpen = 0, unread = false)
+        SessionStatusRail(git = null, working = working, bgOpen = 0, unread = unread)
         Spacer(Modifier.width(8.dp))
         Text(
             name,
-            color = cs.onSurfaceVariant,
+            color = if (unread) cs.onSurface else cs.onSurfaceVariant,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = if (unread) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -1623,3 +1674,10 @@ private fun FooterIcon(image: ImageVector, label: String, tag: String, onClick: 
         Icon(image, contentDescription = label, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
     }
 }
+
+/**
+ * Every key prefix a session row carries across the flat/grouped sections (PA pin, task, settled,
+ * draft). Offline-host rows (`off:`) are left out: their chat can't be opened to read it anyway.
+ */
+private val UNREAD_SESSION_KEY_PREFIXES =
+    listOf("flat:pa:", "flat:", "task:", "group:pa:", "group:settled:", "f:draft:")

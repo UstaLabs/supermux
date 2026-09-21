@@ -94,6 +94,24 @@ class ShellUiState {
     var selectedId by mutableStateOf<String?>(null)
 
     /**
+     * A pending "bring this chat's tab to the front" from the sidebar's chat row. Selecting a
+     * session alone doesn't do it: the desktop tree keeps its own per-group tab, and clicking the
+     * chat that is already [selectedId] changes nothing. The workspace panel that owns the chat
+     * applies it and clears it ([consumeChatTabFocus]).
+     */
+    var chatTabFocus by mutableStateOf<String?>(null)
+        private set
+
+    fun focusChatTab(sessionId: String) {
+        selectSession(sessionId)
+        chatTabFocus = sessionId
+    }
+
+    fun consumeChatTabFocus() {
+        chatTabFocus = null
+    }
+
+    /**
      * Archived workspace highlighted in the sidebar fold. Never copied into [selectedId]
      * (that id is a session id and was once wrongly set to a workspace id).
      */

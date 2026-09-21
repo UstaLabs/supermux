@@ -76,6 +76,7 @@ fun ExtraWindowPanes(
         closeCandidate = closeCandidate,
         onCloseCandidate = { closeCandidate = it },
         sessionNames = bind.sessionNames,
+        unreadSessions = bind.unreadSessions,
         modifier = modifier,
         onTearOutTab = onTearOutTab,
         stripChrome = stripChrome,

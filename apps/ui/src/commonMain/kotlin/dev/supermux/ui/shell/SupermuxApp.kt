@@ -717,7 +717,7 @@ fun SupermuxApp(
                                 lastBySession = lastBySession,
                                 lastRead = lastRead,
                                 agentState = agentState,
-                                onOpenSession = { _, sid -> ui.selectSession(sid) },
+                                onOpenSession = { _, sid -> ui.focusChatTab(sid) },
                                 actions = remember(listActions, workspaces) {
                                     listActions.withWorkspaceOps(
                                         archiveWorkspace = { wid ->
@@ -1150,6 +1150,18 @@ private fun ShellHome(
 ) {
     val cs = MaterialTheme.colorScheme
     val sessionNames = remember(sessions) { sessions.associate { it.id to it.name } }
+    // Chats with news — the same rule as a sidebar row's dot, minus "is this the open row" (each
+    // tab decides that from its own selection).
+    val unreadSessions = remember(sessions, agentState, lastBySession, lastRead) {
+        sessions.filter { s ->
+            dev.supermux.session.sessionListShowsUnread(
+                active = false,
+                working = agentState[s.id]?.working == true,
+                lastMessageTs = lastBySession[s.id]?.ts,
+                lastReadAt = lastRead[s.id],
+            )
+        }.mapTo(HashSet()) { it.id }
+    }
     val liveWorkspaceIds = remember(workspaces) { workspaces.mapTo(linkedSetOf()) { it.id } }
 
     // The workspace layer — identical at every width except for the body each panel draws.
@@ -1186,6 +1198,7 @@ private fun ShellHome(
                     tabDragState = tabDragState,
                     stripChrome = stripChrome,
                     sessionNames = sessionNames,
+                    unreadSessions = unreadSessions,
                     onTearOutTab = onTearOutTab,
                 )
             }
@@ -1464,6 +1477,7 @@ private fun WorkspacePanel(
     tabDragState: PaneDragController,
     stripChrome: PaneStripChrome,
     sessionNames: Map<String, String>,
+    unreadSessions: Set<String>,
     onTearOutTab: (String) -> Unit,
 ) {
     // Set by PaneHost onCloseView; never ends work by itself.
@@ -1485,6 +1499,7 @@ private fun WorkspacePanel(
 
     val panesBind = ui.panesBindFor(current.id) ?: WorkspacePanesBind(
         current, workspaceSession, ws, wsApp, appFor, drafts, overlayScope, launcherPane, sessionNames,
+        unreadSessions,
     )
     panesBind.current = current
     panesBind.session = workspaceSession
@@ -1495,12 +1510,25 @@ private fun WorkspacePanel(
     panesBind.overlayScope = overlayScope
     panesBind.launcherPane = launcherPane
     panesBind.sessionNames = sessionNames
+    panesBind.unreadSessions = unreadSessions
     ui.panesBinds[current.id] = panesBind
     androidx.compose.runtime.DisposableEffect(panesBind) {
         panesBind.holders++
         onDispose { panesBind.holders-- }
     }
     if (isActive) ui.windows.setWorkspaceOnMain(current.id)
+    // A chat row click: bring that chat's tab to the front of its group (desktop tree) or make it
+    // the workspace's active view (phone tabs). Only the panel owning the chat consumes it.
+    LaunchedEffect(ui.chatTabFocus, current.views) {
+        val sid = ui.chatTabFocus ?: return@LaunchedEffect
+        val view = current.views.firstOrNull { it.chatSessionId() == sid } ?: return@LaunchedEffect
+        if (compact) {
+            if (current.activeViewId != view.id) wsApp.setActiveView(current.id, view.id)
+        } else {
+            layoutSync.edit { frontTab(it, view.id) }
+        }
+        ui.consumeChatTabFocus()
+    }
     LaunchedEffect(current.id, localLayout) { ui.windows.onWorkspaceTree(current.id, localLayout) }
 
     val lspSession = ws.let { current.primarySessionId }
@@ -1550,6 +1578,7 @@ private fun WorkspacePanel(
             shell = rememberShellActions(wsApp, appFor),
             launcherPane = launcherPane,
             sessionNames = sessionNames,
+            unreadSessions = unreadSessions,
             modifier = Modifier.fillMaxSize(),
         )
         return
@@ -1577,6 +1606,7 @@ private fun WorkspacePanel(
             closeCandidate = closeCandidate,
             onCloseCandidate = { closeCandidate = it },
             sessionNames = sessionNames,
+            unreadSessions = unreadSessions,
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("workspace_layout_host"),
             onTearOutTab = onTearOutTab,
             stripChrome = stripChrome,

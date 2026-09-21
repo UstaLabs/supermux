@@ -2,7 +2,9 @@ package dev.supermux.ui.session
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.runComposeUiTest
@@ -123,5 +125,33 @@ class SessionListUnreadRowTest {
             )
         }
         onNodeWithTag("session_rail_unread", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun an_unread_second_chat_lights_the_workspace_row_and_its_own_chat_row() = runComposeUiTest {
+        val w = workspaceDto(
+            id = "w1",
+            name = "Two Chats",
+            views = listOf(workspaceChatView("v1", "s1", "w1"), workspaceChatView("v2", "s2", "w1")),
+            primarySessionId = "s1",
+        )
+        setContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                SessionListScreen(
+                    workspaces = listOf(w),
+                    sessions = listOf(session("s1", "Main"), session("s2", "Second")),
+                    home = "/home/u",
+                    activeId = null,
+                    onOpen = {},
+                    // The primary is read; only the second chat has news.
+                    lastBySession = mapOf(
+                        "s1" to log("2026-08-01T11:00:00.000Z"),
+                        "s2" to log("2026-08-01T12:00:00.000Z"),
+                    ),
+                    lastRead = mapOf("s1" to "2026-08-01T11:00:00.000Z", "s2" to "2026-08-01T11:30:00.000Z"),
+                )
+            }
+        }
+        // One dot on the workspace row, one on the "Second" chat row under it.
+        onAllNodesWithTag("session_rail_unread", useUnmergedTree = true).assertCountEquals(2)
     }
 }
