@@ -24,11 +24,18 @@ import dev.supermux.net.WorktreeChangesDto
 
 /** What would be lost with a worktree: uncommitted files, unmerged commits, ignored entries.
  *  Ignored build output (well-known) is gray; anything else ignored (e.g. docs/) is normal text,
- *  because that is where agent work hides from `git status` (2026-09-22). */
+ *  because that is where agent work hides from `git status` (2026-09-22).
+ *  "No changes" is shown ONLY when the broker verified it: no inspection [WorktreeChangesDto.error]
+ *  and a known base branch ([WorktreeChangesDto.unmergedKnown]) — otherwise unmerged commits
+ *  could be hiding behind empty lists. */
 @Composable
 fun WorktreeChangesList(changes: WorktreeChangesDto, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    if (changes.files.isEmpty() && changes.commits.isEmpty() && changes.ignored.isEmpty()) {
+    changes.error?.let { err ->
+        Text("Couldn't inspect: $err", color = cs.error, fontSize = 13.sp, modifier = modifier.testTag("wt_changes_error"))
+        return
+    }
+    if (changes.unmergedKnown && changes.files.isEmpty() && changes.commits.isEmpty() && changes.ignored.isEmpty()) {
         Text("No changes", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = modifier)
         return
     }
@@ -49,6 +56,13 @@ fun WorktreeChangesList(changes: WorktreeChangesDto, modifier: Modifier = Modifi
                 changes.commits.forEach { Mono("${it.sha}  ${it.subject}") }
                 More(changes.truncated.commits)
             }
+        }
+        if (!changes.unmergedKnown) {
+            Text(
+                "Unmerged commits: unknown (base branch not found)",
+                fontSize = 13.sp,
+                modifier = Modifier.padding(vertical = 4.dp).testTag("wt_commits_unknown"),
+            )
         }
         if (changes.ignored.isNotEmpty()) {
             val label = "Ignored: " + changes.ignored.joinToString(" · ") { "${it.name}/" }

@@ -59,6 +59,13 @@ export interface WorktreeChanges {
   commits: Array<{ sha: string; subject: string }>
   ignored: IgnoredEntry[]
   truncated: { files: number; commits: number; ignored: number }
+  /** False when no base ref could be resolved: `commits` is then empty because unmerged
+   *  commits could not be listed, NOT because there are none. */
+  unmergedKnown: boolean
+  /** Why the worktree couldn't be (fully) inspected — same vocabulary as WorktreeSummary.error
+   *  ("repo gone", "not a git worktree", or a git error message). When set, the lists are
+   *  incomplete and a client must never present them as "no changes". */
+  error?: string
 }
 
 export const LIST_CAP = 500
@@ -308,17 +315,32 @@ export async function worktreeChanges(root: string, id: string, rows: OwnerRow[]
   const path = await resolveId(root, id)
   const canon = canonicalizer()
   const ownerRows = (await canonRows(rows, canon)).filter((r) => owns(path, r.workdir))
-  const empty: WorktreeChanges = { id, files: [], commits: [], ignored: [], truncated: { files: 0, commits: 0, ignored: 0 } }
-  if ((await probe(path)).kind !== "git") return empty
+  const failed = (error: string): WorktreeChanges =>
+    ({ id, files: [], commits: [], ignored: [], truncated: { files: 0, commits: 0, ignored: 0 }, unmergedKnown: false, error })
+  const p = await probe(path)
+  if (p.kind === "gone") return failed(REPO_GONE)
+  if (p.kind === "none") return failed(NOT_A_WORKTREE)
   let branch: string
-  try { branch = (await identify(path, path, canon)).branch } catch { return empty }
-  const { files, ignored: ignoredAll } = await statusOf(path).catch(() => ({ files: [], ignored: [] as IgnoredEntry[] }))
+  let files: Array<{ status: string; path: string }>
+  let ignoredAll: IgnoredEntry[]
+  try {
+    branch = (await identify(path, path, canon)).branch
+    ;({ files, ignored: ignoredAll } = await statusOf(path))
+  } catch (err: any) {
+    return failed(String(err?.message ?? err))
+  }
   const { ref: baseRef } = await unmergedOf(path, ownerRows)
-  const log = baseRef ? await gitAsync(path, ["log", "--format=%h%x09%s", `${baseRef}..HEAD`]).catch(() => "") : ""
+  let log = ""
+  if (baseRef) {
+    try { log = await gitAsync(path, ["log", "--format=%h%x09%s", `${baseRef}..HEAD`]) } catch (err: any) {
+      return { ...failed(String(err?.message ?? err)), branch, baseRef }
+    }
+  }
   const commits = log ? log.split("\n").map((l) => { const [sha, ...s] = l.split("\t"); return { sha: sha!, subject: s.join("\t") } }) : []
   const ignored = await pool(ignoredAll.slice(0, LIST_CAP), 4, async (e) => ({ ...e, bytes: await duBytes(join(path, e.name)) }))
   return {
     id, branch, baseRef,
+    unmergedKnown: baseRef !== undefined,
     files: files.slice(0, LIST_CAP),
     commits: commits.slice(0, LIST_CAP),
     ignored,

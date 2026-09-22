@@ -21,7 +21,8 @@ import kotlinx.serialization.Serializable
     val uncommitted: Int = 0,
     val unmerged: Int? = null,
     val ignored: List<IgnoredEntryDto> = emptyList(),
-    val hasChanges: Boolean = false,
+    /** Conservative default: a summary without this field is never treated as "no changes". */
+    val hasChanges: Boolean = true,
     val bytes: Long? = null,
     val error: String? = null,
 ) {
@@ -42,6 +43,12 @@ import kotlinx.serialization.Serializable
     val commits: List<WorktreeCommitDto> = emptyList(),
     val ignored: List<IgnoredEntryDto> = emptyList(),
     val truncated: WorktreeTruncatedDto = WorktreeTruncatedDto(),
+    /** False when the broker found no base branch, so [commits] could not be listed (not "none").
+     *  Conservative default false: a response without it never reads as verified. */
+    val unmergedKnown: Boolean = false,
+    /** Why the worktree couldn't be inspected ("repo gone", "not a git worktree", a git error).
+     *  When set the lists are incomplete and must never be shown as "no changes". */
+    val error: String? = null,
 )
 
 @Serializable data class WorktreeForWorkdirDto(

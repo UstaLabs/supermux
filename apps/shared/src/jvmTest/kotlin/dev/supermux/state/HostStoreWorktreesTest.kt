@@ -94,4 +94,25 @@ class HostStoreWorktreesTest {
         )
         assertEquals(listOf("DELETE /sessions/abc", "DELETE /workspaces/w1", "DELETE /workspaces/w1/views/v1"), f.seen)
     }
+
+    // Final review m3 / I-2: fields an older broker omits decode to the conservative value.
+    @Test fun missingSafetyFieldsDecodeConservatively() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = {
+            if (it == "GET /worktrees") """{"root":"/r","worktrees":[{"id":"s/u","path":"/r/s/u","repoName":"x"}]}"""
+            else """{"id":"s/u"}"""
+        })
+        assertEquals(true, f.store.worktrees()!!.single().hasChanges)
+        val ch = f.store.worktreeChanges("s/u")!!
+        assertEquals(false, ch.unmergedKnown)
+        assertNull(ch.error)
+    }
+
+    @Test fun changesDecodeErrorAndUnmergedKnown() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = {
+            """{"id":"s/u","files":[],"commits":[],"ignored":[],"truncated":{"files":0,"commits":0,"ignored":0},"unmergedKnown":true,"error":"not a git worktree"}"""
+        })
+        val ch = f.store.worktreeChanges("s/u")!!
+        assertEquals(true, ch.unmergedKnown)
+        assertEquals("not a git worktree", ch.error)
+    }
 }

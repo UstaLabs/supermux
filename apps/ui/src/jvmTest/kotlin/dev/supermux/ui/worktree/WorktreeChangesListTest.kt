@@ -23,6 +23,7 @@ class WorktreeChangesListTest {
         files = listOf(WorktreeFileDto("M", "a.kt"), WorktreeFileDto("??", "b.kt")),
         commits = listOf(WorktreeCommitDto("abc1234", "fix it")),
         ignored = listOf(IgnoredEntryDto("docs", false, 4096), IgnoredEntryDto("node_modules", true, 9_000_000)),
+        unmergedKnown = true,
     )
 
     @Test fun summariesThenExpand() = runComposeUiTest {
@@ -43,7 +44,32 @@ class WorktreeChangesListTest {
     }
 
     @Test fun emptyShowsNoChanges() = runComposeUiTest {
-        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) { WorktreeChangesList(WorktreeChangesDto(id = "s/u")) } }
+        setPlatformContent(platform = FakePlatform()) { SupermuxTheme(appearance = AppearanceMode.DARK) { WorktreeChangesList(WorktreeChangesDto(id = "s/u", unmergedKnown = true)) } }
         onNodeWithText("No changes").assertIsDisplayed()
+    }
+
+    // Final review I-2: "No changes" only when the broker verified it.
+    @Test fun inspectionErrorShowsCouldntInspectNeverNoChanges() = runComposeUiTest {
+        setPlatformContent(platform = FakePlatform()) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { WorktreeChangesList(WorktreeChangesDto(id = "s/u", error = "repo gone")) }
+        }
+        onNodeWithText("Couldn't inspect: repo gone").assertIsDisplayed()
+        onNodeWithText("No changes").assertDoesNotExist()
+    }
+
+    @Test fun unknownBaseShowsUnknownUnmergedNeverNoChanges() = runComposeUiTest {
+        setPlatformContent(platform = FakePlatform()) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { WorktreeChangesList(WorktreeChangesDto(id = "s/u", unmergedKnown = false)) }
+        }
+        onNodeWithText("Unmerged commits: unknown (base branch not found)").assertIsDisplayed()
+        onNodeWithText("No changes").assertDoesNotExist()
+    }
+
+    @Test fun unknownBaseStillListsFiles() = runComposeUiTest {
+        setPlatformContent(platform = FakePlatform()) {
+            SupermuxTheme(appearance = AppearanceMode.DARK) { WorktreeChangesList(changes.copy(commits = emptyList(), unmergedKnown = false)) }
+        }
+        onNodeWithText("2 files changed", substring = true).assertIsDisplayed()
+        onNodeWithText("Unmerged commits: unknown (base branch not found)").assertIsDisplayed()
     }
 }

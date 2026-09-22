@@ -397,3 +397,45 @@ test("final M5: an already-gone id inside the root is ok (end state reached); in
   expect(r.slice(2).every((x) => !x.ok && !!x.error)).toBe(true)
   expect(existsSync(outside)).toBe(true)
 })
+
+test("final I-2: worktreeChanges reports a resolved base as unmergedKnown and no error", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  const ch = await worktreeChanges(f.root, "repo-abc/u1", [row({ id: "a", workdir: a })])
+  expect(ch.error).toBeUndefined()
+  expect(ch.unmergedKnown).toBe(true)
+  expect(ch.baseRef).toBe("main")
+})
+
+test("final I-2: worktreeChanges with an unknown base says unmergedKnown false", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  writeFileSync(join(a, "c.txt"), "c"); git(a, "add", "."); git(a, "commit", "-q", "-m", "c")
+  const ch = await worktreeChanges(f.root, "repo-abc/u1", [row({ id: "a", workdir: a, base_branch: "deleted/base", status: "archived" })])
+  expect(ch.unmergedKnown).toBe(false)
+  expect(ch.baseRef).toBeUndefined()
+  expect(ch.commits).toEqual([])
+  expect(ch.error).toBeUndefined()
+  const orphan = await worktreeChanges(f.root, "repo-abc/u1", [])
+  expect(orphan.unmergedKnown).toBe(false)
+})
+
+test("final I-2: worktreeChanges on a folder that is not a git worktree sets error", async () => {
+  const f = fixture()
+  f.add("u1", "mux/a")
+  mkdirSync(join(f.root, "repo-abc", "stray"))
+  writeFileSync(join(f.root, "repo-abc", "stray", "x.txt"), "x")
+  const ch = await worktreeChanges(f.root, "repo-abc/stray", [])
+  expect(ch.error).toBe("not a git worktree")
+  expect(ch.unmergedKnown).toBe(false)
+  expect(ch.files).toEqual([])
+})
+
+test("final I-2: worktreeChanges on a worktree whose repo is gone sets error", async () => {
+  const f = fixture()
+  f.add("u1", "mux/a")
+  rmSync(f.repo, { recursive: true, force: true })
+  const ch = await worktreeChanges(f.root, "repo-abc/u1", [])
+  expect(ch.error).toBe("repo gone")
+  expect(ch.unmergedKnown).toBe(false)
+})
