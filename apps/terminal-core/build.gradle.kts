@@ -83,10 +83,17 @@ kotlin {
 
     jvm()
     androidTarget()
-    // Apple targets: declared so iosMain exists; their compile/link tasks are disabled on this
-    // Linux host (kotlin.native.ignoreDisabledTargets) and run on the Mac.
-    iosArm64()
-    iosSimulatorArm64()
+    // Apple targets: their compile/link/cinterop tasks are disabled on this Linux host
+    // (kotlin.native.ignoreDisabledTargets) and run on the Mac, against the static
+    // libsupermux_terminal.a that `native/build.sh ios-*` builds there.
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+        val nativeTarget = iosNativeTargets.entries.first { it.value == target.name }.key
+        target.compilations.getByName("main").cinterops.create("terminal") {
+            definitionFile.set(project.file("src/nativeInterop/cinterop/terminal.def"))
+            includeDirs(project.file("native/include"))
+            extraOpts("-libraryPath", File(nativeBuildDir, "$nativeTarget/lib").absolutePath)
+        }
+    }
     // Browser only; commonTest is compiled for wasm but executed on the JVM.
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {

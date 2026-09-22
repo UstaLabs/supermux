@@ -1,0 +1,10 @@
+# cinterop for the st_* ABI v1 (native/include/supermux_terminal.h) on iOS. The static archive
+# libsupermux_terminal.a (st_* wrapper + libghostty-vt folded in) is built on the Mac by
+# `native/build.sh ios-arm64` / `ios-simulator-arm64`; build.gradle.kts passes its directory per
+# target with -libraryPath and cinterop embeds it in the klib. The archive bundles C++ (highway,
+# simdutf) -> libc++.
+package = dev.supermux.terminal.cinterop
+headers = supermux_terminal.h
+headerFilter = supermux_terminal.h
+staticLibraries = libsupermux_terminal.a
+linkerOpts = -lc++
