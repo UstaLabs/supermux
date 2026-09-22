@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Code
@@ -622,6 +623,7 @@ internal fun SettingsSection.desc(): String = when (this) {
     SettingsSection.System -> "Broker update, restart and status"
     SettingsSection.GitHosting -> "GitHub & GitLab connections"
     SettingsSection.Proxies -> "Public URLs for session ports"
+    SettingsSection.Worktrees -> "Disk usage and cleanup of session worktrees"
     SettingsSection.Assistant -> "Shared soul.md for personal assistants"
     SettingsSection.Curator -> "Nightly knowledge curation schedule"
     SettingsSection.Voice -> "Speech engine, cleanup model & glossary"
@@ -636,6 +638,7 @@ private fun SettingsSection.icon(): ImageVector = when (this) {
     SettingsSection.System -> Icons.Filled.Dns
     SettingsSection.GitHosting -> Icons.Filled.Hub
     SettingsSection.Proxies -> Icons.Filled.Public
+    SettingsSection.Worktrees -> Icons.Filled.AccountTree
     SettingsSection.Assistant -> Icons.Filled.Badge
     SettingsSection.Curator -> Icons.Filled.AutoAwesome
     SettingsSection.Voice -> Icons.Filled.Mic

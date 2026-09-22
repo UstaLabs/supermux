@@ -20,6 +20,7 @@ import dev.supermux.ui.settings.AppearanceSettingsScreen
 import dev.supermux.ui.settings.EditorSettingsScreen
 import dev.supermux.ui.settings.SystemSettingsScreen
 import dev.supermux.ui.settings.VoiceSettingsScreen
+import dev.supermux.ui.settings.WorktreesSettingsScreen
 import dev.supermux.ui.settings.rememberAgentSettingsActions
 import dev.supermux.ui.settings.rememberCuratorSettingsActions
 import dev.supermux.ui.settings.rememberDevicesSettingsActions
@@ -29,6 +30,7 @@ import dev.supermux.ui.settings.rememberAssistantSettingsActions
 import dev.supermux.ui.settings.rememberGitHostingActions
 import dev.supermux.ui.settings.rememberSystemSettingsActions
 import dev.supermux.ui.settings.rememberVoiceSettingsActions
+import dev.supermux.ui.settings.rememberWorktreesSettingsActions
 import dev.supermux.ui.settings.SettingsExtra
 import dev.supermux.ui.settings.SettingsSlotScope
 import dev.supermux.ui.theme.AppearanceMode
@@ -59,6 +61,11 @@ fun DesktopSettingsSection(
         )
         SettingsSection.Proxies -> ProxiesSettingsScreen(
             actions = rememberProxiesSettingsActions(host),
+            onBack = scope.onClose,
+            topBarShown = scope.topBarShown,
+        )
+        SettingsSection.Worktrees -> WorktreesSettingsScreen(
+            actions = rememberWorktreesSettingsActions(host),
             onBack = scope.onClose,
             topBarShown = scope.topBarShown,
         )

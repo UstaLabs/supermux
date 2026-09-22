@@ -17,6 +17,7 @@ class UrlRoutesTest {
         assertEquals("/settings/voice", pathFor(Route.Settings(SettingsSection.Voice), null))
         assertEquals("/settings/git-hosting", pathFor(Route.Settings(SettingsSection.GitHosting), null))
         assertEquals("/settings/editor", pathFor(Route.Settings(SettingsSection.EditorLsp), null))
+        assertEquals("/settings/worktrees", pathFor(Route.Settings(SettingsSection.Worktrees), null))
         assertEquals("/personal-assistants", pathFor(Route.Settings(SettingsSection.PersonalAssistants), null))
     }
     @Test fun topLevels() {
@@ -28,7 +29,7 @@ class UrlRoutesTest {
     @Test fun parseRoundTrips() {
         val cases = listOf(Route.Home, Route.NewSession("d1"), Route.Settings(SettingsSection.Curator), Route.Usage, Route.Devices,
             Route.Archived, Route.Proxies, Route.Displays, Route.Appearance, Route.AppUpdate, Route.AddHost,
-            Route.Settings(SettingsSection.PersonalAssistants))
+            Route.Settings(SettingsSection.PersonalAssistants), Route.Settings(SettingsSection.Worktrees))
         for (r in cases) assertEquals(UrlTarget.Screen(r), parsePath(pathFor(r, null)), r.toString())
         assertEquals(UrlTarget.Session("abc"), parsePath("/s/abc"))
     }
