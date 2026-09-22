@@ -142,7 +142,7 @@ test("worktreeSize measures the folder", async () => {
 test("refuses a worktree a live session uses", async () => {
   const f = fixture()
   const a = f.add("u1", "mux/a")
-  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], [row({ id: "s", name: "Sess", workdir: a, status: "active" })])
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], () => [row({ id: "s", name: "Sess", workdir: a, status: "active" })])
   expect(r).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["Sess"] }])
   expect(existsSync(a)).toBe(true)
 })
@@ -152,7 +152,7 @@ test("force-deletes a dirty worktree with ignored files, and its mux branch", as
   const a = f.add("u1", "mux/a")
   writeFileSync(join(a, "new.txt"), "x")
   mkdirSync(join(a, "docs")); writeFileSync(join(a, "docs", "spec.md"), "s")
-  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], [row({ id: "s", workdir: a, status: "archived" })])
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], () => [row({ id: "s", workdir: a, status: "archived" })])
   expect(r).toEqual([{ id: "repo-abc/u1", ok: true }])
   expect(existsSync(a)).toBe(false)
   expect(git(f.repo, "branch", "--list", "mux/a")).toBe("")
@@ -161,7 +161,7 @@ test("force-deletes a dirty worktree with ignored files, and its mux branch", as
 test("keeps a non-mux branch", async () => {
   const f = fixture()
   const a = f.add("u1", "feature/x")
-  await deleteWorktrees(f.root, ["repo-abc/u1"], [])
+  await deleteWorktrees(f.root, ["repo-abc/u1"], () => [])
   expect(existsSync(a)).toBe(false)
   expect(git(f.repo, "branch", "--list", "feature/x")).toContain("feature/x")
 })
@@ -169,7 +169,7 @@ test("keeps a non-mux branch", async () => {
 test("deletes a folder git does not know", async () => {
   const f = fixture()
   mkdirSync(join(f.root, "repo-abc", "stray"), { recursive: true })
-  const r = await deleteWorktrees(f.root, ["repo-abc/stray"], [])
+  const r = await deleteWorktrees(f.root, ["repo-abc/stray"], () => [])
   expect(r[0]!.ok).toBe(true)
   expect(existsSync(join(f.root, "repo-abc", "stray"))).toBe(false)
 })
@@ -179,7 +179,7 @@ test("rejects ids outside the root, '..' and symlink escapes; the batch continue
   const a = f.add("u1", "mux/a")
   const outside = tmp("mux-outside-")
   symlinkSync(outside, join(f.root, "repo-abc", "link"))
-  const r = await deleteWorktrees(f.root, ["../repo", "repo-abc/..", "repo-abc/link", "repo-abc/u1"], [])
+  const r = await deleteWorktrees(f.root, ["../repo", "repo-abc/..", "repo-abc/link", "repo-abc/u1"], () => [])
   expect(r.slice(0, 3).every((x) => !x.ok)).toBe(true)
   expect(r[3]).toEqual({ id: "repo-abc/u1", ok: true })
   expect(existsSync(outside)).toBe(true)
@@ -195,11 +195,11 @@ test("C1: a symlinked root still protects a live session's worktree (owner store
   symlinkSync(f.root, link)
   const viaLink = join(link, "repo-abc", "u1")
   const rows = [row({ id: "s", name: "Sess", workdir: viaLink, status: "active" })]
-  expect(await deleteWorktrees(link, ["repo-abc/u1"], rows)).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["Sess"] }])
+  expect(await deleteWorktrees(link, ["repo-abc/u1"], () => rows)).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["Sess"] }])
   expect(existsSync(a)).toBe(true)
   // A live session in a subfolder that no longer exists, recorded through the link.
   const gone = [row({ id: "s2", name: "Gone", workdir: join(viaLink, "missing", "sub"), status: "active" })]
-  expect((await deleteWorktrees(link, ["repo-abc/u1"], gone))[0]!.error).toBe("in_use")
+  expect((await deleteWorktrees(link, ["repo-abc/u1"], () => gone))[0]!.error).toBe("in_use")
   expect(existsSync(a)).toBe(true)
   const list = await listWorktrees(link, rows)
   expect(list[0]!.owners).toEqual([{ id: "s", name: "Sess", status: "live" }])
@@ -213,7 +213,7 @@ test("C1: a symlinked root still sees an owner stored as a realpath", async () =
   const rows = [row({ id: "s", name: "Sess", workdir: a, status: "active" })]
   const list = await listWorktrees(link, rows)
   expect(list[0]!.owners).toEqual([{ id: "s", name: "Sess", status: "live" }])
-  expect((await deleteWorktrees(link, ["repo-abc/u1"], rows))[0]!.error).toBe("in_use")
+  expect((await deleteWorktrees(link, ["repo-abc/u1"], () => rows))[0]!.error).toBe("in_use")
   expect(existsSync(a)).toBe(true)
 })
 
@@ -222,7 +222,7 @@ test("C2: a live session working in a subfolder of the worktree protects it", as
   const a = f.add("u1", "mux/a")
   mkdirSync(join(a, "apps", "web"), { recursive: true })
   const rows = [row({ id: "s", name: "Sub", workdir: join(a, "apps", "web") + "/", status: "active" })]
-  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], rows)
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], () => rows)
   expect(r).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["Sub"] }])
   expect(existsSync(a)).toBe(true)
   const list = await listWorktrees(f.root, rows)
@@ -256,7 +256,7 @@ test("C3: hundreds of worktrees whose repo is gone list fast as 'repo gone' orph
     expect(w.repoName).toBe("deleted-repo")
   }
   expect(list.find((w) => w.id === "gone-slug/u7")!.owners).toEqual([{ id: "arch", name: "arch", status: "archived" }])
-  expect(await deleteWorktrees(root, ["gone-slug/u3"], [])).toEqual([{ id: "gone-slug/u3", ok: true }])
+  expect(await deleteWorktrees(root, ["gone-slug/u3"], () => [])).toEqual([{ id: "gone-slug/u3", ok: true }])
   expect(existsSync(join(root, "gone-slug", "u3"))).toBe(false)
 })
 
@@ -270,7 +270,7 @@ test("M1: repo gone by rename — an untracked file may still be there, so hasCh
   expect(list[0]!.error).toBe("repo gone")
   expect(list[0]!.hasChanges).toBe(true)
   const before = readdirSync(movedRepo).sort()
-  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], [])
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], () => [])
   expect(r).toEqual([{ id: "repo-abc/u1", ok: true }])
   expect(existsSync(a)).toBe(false)             // the worktree folder is gone
   expect(existsSync(movedRepo)).toBe(true)      // the renamed repo itself was never touched
@@ -312,7 +312,7 @@ test("I2: a folder without its own .git inside an enclosing repo is not a git wo
   const ch = await worktreeChanges(root, "slug/stray", [])
   expect(ch.branch).toBeUndefined()
   expect(ch.files).toEqual([])
-  expect(await deleteWorktrees(root, ["slug/stray"], [])).toEqual([{ id: "slug/stray", ok: true }])
+  expect(await deleteWorktrees(root, ["slug/stray"], () => [])).toEqual([{ id: "slug/stray", ok: true }])
   expect(git(f.repo, "branch", "--list", "mux/enclosing")).toContain("mux/enclosing")
 })
 
@@ -343,7 +343,7 @@ test("I5: relative gitdir (worktree.useRelativePaths) resolves the repo and dele
   expect(list[0]!.error).toBeUndefined()
   expect(list[0]!.repoRoot).toBe(f.repo)
   expect(list[0]!.branch).toBe("mux/rel")
-  expect(await deleteWorktrees(f.root, ["repo-abc/rel"], [])).toEqual([{ id: "repo-abc/rel", ok: true }])
+  expect(await deleteWorktrees(f.root, ["repo-abc/rel"], () => [])).toEqual([{ id: "repo-abc/rel", ok: true }])
   expect(git(f.repo, "branch", "--list", "mux/rel")).toBe("")
 })
 
@@ -352,7 +352,7 @@ test("M1: symlinked ids inside the root are rejected (no aliasing another worktr
   const a = f.add("u1", "mux/a")
   symlinkSync(a, join(f.root, "repo-abc", "alias"))
   symlinkSync(join(f.root, "repo-abc"), join(f.root, "alias-slug"))
-  const r = await deleteWorktrees(f.root, ["repo-abc/alias", "alias-slug/u1"], [])
+  const r = await deleteWorktrees(f.root, ["repo-abc/alias", "alias-slug/u1"], () => [])
   expect(r.every((x) => !x.ok)).toBe(true)
   expect(existsSync(a)).toBe(true)
   expect(git(f.repo, "branch", "--list", "mux/a")).toContain("mux/a")
@@ -364,4 +364,23 @@ test("M3: a draft row's base branch is ignored", async () => {
   writeFileSync(join(a, "c.txt"), "c"); git(a, "add", "."); git(a, "commit", "-q", "-m", "c")
   const list = await listWorktrees(f.root, [row({ id: "d", workdir: a, user_status: "draft", base_branch: "mux/a" })])
   expect(list[0]!.unmerged).toBeNull()
+})
+
+// ---- Final-review fixes (I1) ----
+
+test("final I1: owners are re-read per id — a session restored mid-batch keeps its worktree", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  const b = f.add("u2", "mux/b")
+  let calls = 0
+  // The 2nd read happens after the first delete started: by then a session is live in u2.
+  const owners = () => (++calls >= 2 ? [row({ id: "s", name: "Restored", workdir: b, status: "active" })] : [])
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1", "repo-abc/u2"], owners)
+  expect(r).toEqual([
+    { id: "repo-abc/u1", ok: true },
+    { id: "repo-abc/u2", ok: false, error: "in_use", inUseBy: ["Restored"] },
+  ])
+  expect(existsSync(a)).toBe(false)
+  expect(existsSync(b)).toBe(true)
+  expect(calls).toBeGreaterThanOrEqual(2)
 })

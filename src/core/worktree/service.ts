@@ -99,7 +99,7 @@ export class WorktreeService {
   }
 
   async remove(ids: string[]): Promise<DeleteResult[]> {
-    const results = await deleteWorktrees(this.deps.root, ids, this.deps.owners())
+    const results = await deleteWorktrees(this.deps.root, ids, () => this.deps.owners())
     const removed = results.filter((r) => r.ok).map((r) => r.id)
     for (const id of removed) this.sizes.delete(id)
     if (removed.length) this.deps.broadcast({ type: "worktrees_removed", ids: removed })

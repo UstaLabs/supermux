@@ -353,14 +353,9 @@ async function branchCheckedOutElsewhere(repoRoot: string, branch: string, excep
   return false
 }
 
-async function deleteOne(root: string, id: string, rows: OwnerRow[], canon: Canon): Promise<DeleteResult> {
+async function deleteOne(root: string, id: string, owners: () => OwnerRow[], canon: Canon): Promise<DeleteResult> {
   let path: string
   try { path = await resolveId(root, id) } catch (e: any) { return { id, ok: false, error: String(e?.message ?? e) } }
-  // Evaluated NOW, not from a stale list: a session that just started using it wins.
-  // Canonical on both sides, and a session in any subfolder counts. `canon` is shared across a
-  // batch (see deleteWorktrees) but the live-owner decision below is still made per id, now.
-  const live = ownersOf(path, await canonRows(rows, canon)).filter((o) => o.status === "live")
-  if (live.length) return { id, ok: false, error: "in_use", inUseBy: live.map((o) => o.name) }
   // Only a verified linked worktree gets git operations; "repo gone", a folder without its own
   // .git, or anything git can't identify as its own top level is just removed from disk.
   let repoRoot: string | undefined
@@ -372,6 +367,11 @@ async function deleteOne(root: string, id: string, rows: OwnerRow[], canon: Cano
       branch = idn.branch
     }
   }
+  // Live owners are read from the provider NOW — per id, immediately before the destructive
+  // step — never from a snapshot taken at the start of the batch: a session restored while an
+  // earlier id was being deleted wins. Canonical on both sides; a session in any subfolder counts.
+  const live = ownersOf(path, await canonRows(owners(), canon)).filter((o) => o.status === "live")
+  if (live.length) return { id, ok: false, error: "in_use", inUseBy: live.map((o) => o.name) }
   try {
     if (repoRoot) await gitAsync(repoRoot, ["worktree", "remove", "--force", "--force", path]).catch(() => {})
     if (await exists(path)) await rm(path, { recursive: true, force: true })
@@ -388,12 +388,13 @@ async function deleteOne(root: string, id: string, rows: OwnerRow[], canon: Cano
 }
 
 /** Delete each worktree regardless of its changes — the caller got explicit user consent.
- *  Never deletes one with a live owner. Per-id results; one failure never aborts the batch.
- *  One canonicalizer cache for the whole batch (rows are the same for every id here); the
- *  live-owner check itself still runs fresh per id inside deleteOne. */
-export async function deleteWorktrees(root: string, ids: string[], rows: OwnerRow[]): Promise<DeleteResult[]> {
+ *  Never deletes one with a live owner: `owners` is a provider, called again for every id right
+ *  before its live-owner check (see deleteOne), so rows are never a stale batch snapshot.
+ *  Per-id results; one failure never aborts the batch. Only the path canonicalizer cache is
+ *  shared across the batch. */
+export async function deleteWorktrees(root: string, ids: string[], owners: () => OwnerRow[]): Promise<DeleteResult[]> {
   const canon = canonicalizer()
   const out: DeleteResult[] = []
-  for (const id of ids) out.push(await deleteOne(root, id, rows, canon))
+  for (const id of ids) out.push(await deleteOne(root, id, owners, canon))
   return out
 }
