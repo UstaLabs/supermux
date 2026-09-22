@@ -1551,13 +1551,14 @@ class BrokerApi(
     /** GET /worktrees — every worktree folder; sizes follow as `worktree_sizes` frames. */
     suspend fun worktrees(): WorktreeListDto = getJson("$httpBase/worktrees")
 
-    /** GET /worktrees/{id}/changes — id is "<slug>/<uuid>", so its slash is encoded. */
+    /** GET /worktrees/{id}/changes — id is "<slug>/<uuid>": [percentEncode] (RFC 3986, UTF-8)
+     *  makes it ONE path segment, slash included. Same encoding for the worktree query params. */
     suspend fun worktreeChanges(id: String): WorktreeChangesDto =
-        getJson("$httpBase/worktrees/${urlEncode(id)}/changes")
+        getJson("$httpBase/worktrees/${percentEncode(id)}/changes")
 
     /** GET /worktrees/by-workdir — null when the workdir is not an existing worktree (404). */
     suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? {
-        val resp = http.get("$httpBase/worktrees/by-workdir?path=${urlEncode(workdir)}") { authHeader() }
+        val resp = http.get("$httpBase/worktrees/by-workdir?path=${percentEncode(workdir)}") { authHeader() }
         if (resp.status == HttpStatusCode.NotFound) return null
         return decode(resp)
     }
@@ -1576,7 +1577,7 @@ class BrokerApi(
      *  confirmed ("a%2Fb" — the id's slash is encoded). The broker deletes EXACTLY these ids
      *  after the archive, never ids it derives itself (live owners are still refused per id). */
     private fun deleteWorktreeQuery(worktreeIds: List<String>): String =
-        worktreeIds.joinToString("&") { "deleteWorktree=${urlEncode(it)}" }
+        worktreeIds.joinToString("&") { "deleteWorktree=${percentEncode(it)}" }
 
     /** DELETE /sessions/{id}?deleteWorktree=<id>[&deleteWorktree=<id>…] — archive, then delete exactly those worktrees. */
     suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =

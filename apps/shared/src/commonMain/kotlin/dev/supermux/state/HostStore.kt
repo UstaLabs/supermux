@@ -187,6 +187,15 @@ class HostStore(
     // whole surface, same as before this split.
     private val httpDictate = deps.httpFactory(120_000)
     private val apiDictate = apiOverride ?: BrokerApi(baseUrl, token, httpDictate)
+
+    // Worktree calls (final review I-1): the broker deletes a batch SEQUENTIALLY (a big
+    // `rm -rf node_modules` alone can pass 15 s) and by-workdir/changes run `du`, so on the 15 s
+    // default a slow-but-successful call would read as "Broker unreachable" while the broker keeps
+    // working. Lists/lookups share the 2-minute dictation client; deletes (plain and the three
+    // archive-and-delete calls) get a lazily built 10-minute one. [apiOverride] backs both in tests.
+    private val apiWorktreeRead = apiDictate
+    private val httpWorktreeDelete = lazy { deps.httpFactory(WORKTREE_DELETE_TIMEOUT_MS) }
+    private val apiWorktreeDelete by lazy { apiOverride ?: BrokerApi(baseUrl, token, httpWorktreeDelete.value) }
     private val sendFrame: suspend (ClientFrame) -> Unit = sendFrameOverride ?: { client.send(it) }
 
     // ── Viewing presence (mirrors iOS BrokerSession / web useViewing) ──────────────
@@ -1668,19 +1677,19 @@ class HostStore(
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
 
     // ── Worktrees ─────────────────────────────────────────────────────────
-    suspend fun worktrees(): List<WorktreeSummaryDto>? = runApi("worktrees") { api.worktrees().worktrees }
-    suspend fun worktreeChanges(id: String): WorktreeChangesDto? = runApi("worktreeChanges") { api.worktreeChanges(id) }
-    suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? = runApi("worktreeForWorkdir") { api.worktreeForWorkdir(workdir) }
-    suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto>? = runApi("deleteWorktrees") { api.deleteWorktrees(ids) }
+    suspend fun worktrees(): List<WorktreeSummaryDto>? = runApi("worktrees") { apiWorktreeRead.worktrees().worktrees }
+    suspend fun worktreeChanges(id: String): WorktreeChangesDto? = runApi("worktreeChanges") { apiWorktreeRead.worktreeChanges(id) }
+    suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? = runApi("worktreeForWorkdir") { apiWorktreeRead.worktreeForWorkdir(workdir) }
+    suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto>? = runApi("deleteWorktrees") { apiWorktreeDelete.deleteWorktrees(ids) }
     suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
-        runApi("killAndDeleteWorktree") { api.killAndDeleteWorktree(id, worktreeIds) }
+        runApi("killAndDeleteWorktree") { apiWorktreeDelete.killAndDeleteWorktree(id, worktreeIds) }
     suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? {
         // Same optimistic move as archiveWorkspace(): the row leaves the sidebar immediately.
         markWorkspaceArchivedLocally(id)
-        return runApi("archiveWorkspaceAndDeleteWorktree") { api.archiveWorkspaceAndDeleteWorktree(id, worktreeIds) }
+        return runApi("archiveWorkspaceAndDeleteWorktree") { apiWorktreeDelete.archiveWorkspaceAndDeleteWorktree(id, worktreeIds) }
     }
     suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
-        runApi("closeViewAndDeleteWorktree") { api.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds) }
+        runApi("closeViewAndDeleteWorktree") { apiWorktreeDelete.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds) }
 
     /** Fire-and-forget Android name for [revokeDevice]. */
     fun revoke(n: String) {
@@ -2136,6 +2145,12 @@ class HostStore(
         if (cancelProjections) projectionJob.cancel()
         http.close()
         httpDictate.close()
+        if (httpWorktreeDelete.isInitialized()) httpWorktreeDelete.value.close()
+    }
+
+    private companion object {
+        /** Ceiling for a worktree delete batch (final review I-1); the Settings screen also chunks. */
+        const val WORKTREE_DELETE_TIMEOUT_MS = 600_000L
     }
 }
 

@@ -115,4 +115,48 @@ class HostStoreWorktreesTest {
         assertEquals(true, ch.unmergedKnown)
         assertEquals("not a git worktree", ch.error)
     }
+
+    // Final review I-1: a batch delete or a `du`-heavy lookup can take far longer than the 15 s
+    // engine default; worktree calls must ride long-timeout clients, never the default one.
+    @Test fun worktreeCallsUseLongTimeoutClients() = runBlocking {
+        val byTimeout = mutableMapOf<Long?, MutableList<String>>()
+        val deps = HostStoreDeps(
+            httpFactory = { timeout ->
+                HttpClient(MockEngine { req ->
+                    synchronized(byTimeout) { byTimeout.getOrPut(timeout) { mutableListOf() } += "${req.method.value} ${req.url.encodedPath}" }
+                    respond("{}", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                })
+            },
+            settings = FakeSettingsStore(),
+            clock = FixedClock(),
+        )
+        val store = HostStore("http://h", "t", CoroutineScope(Dispatchers.Default), deps, connectOnInit = false)
+        store.worktrees()
+        store.worktreeChanges("s/u")
+        store.worktreeForWorkdir("/w")
+        store.deleteWorktrees(listOf("s/u"))
+        store.killAndDeleteWorktree("abc", listOf("s/u"))
+        store.archiveWorkspaceAndDeleteWorktree("w1", listOf("s/u"))
+        store.closeViewAndDeleteWorktree("w1", "v1", listOf("s/u"))
+        assertNull(byTimeout[null], "no worktree call may use the default-timeout client")
+        val reads = byTimeout.filterKeys { it != null && it >= 120_000 && it < 600_000 }.values.flatten()
+        val deletes = byTimeout.filterKeys { it != null && it >= 600_000 }.values.flatten()
+        assertEquals(setOf("GET /worktrees", "GET /worktrees/s%2Fu/changes", "GET /worktrees/by-workdir"), reads.toSet())
+        assertEquals(
+            setOf("DELETE /worktrees", "DELETE /sessions/abc", "DELETE /workspaces/w1", "DELETE /workspaces/w1/views/v1"),
+            deletes.toSet(),
+        )
+        store.close()
+    }
+
+    // Final review m4: ids / workdirs with reserved characters survive the trip intact.
+    @Test fun worktreeIdsAndWorkdirsArePercentEncoded() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default))
+        f.store.worktreeChanges("a b/c+d&e")
+        f.store.worktreeForWorkdir("/x/a b+c&d=é#?")
+        f.store.killAndDeleteWorktree("abc", listOf("a b/c+d&e"))
+        assertEquals("GET /worktrees/a%20b%2Fc%2Bd%26e/changes", f.seen[0])
+        assertEquals("path=%2Fx%2Fa%20b%2Bc%26d%3D%C3%A9%23%3F", f.queries[1])
+        assertEquals("deleteWorktree=a%20b%2Fc%2Bd%26e", f.queries[2])
+    }
 }

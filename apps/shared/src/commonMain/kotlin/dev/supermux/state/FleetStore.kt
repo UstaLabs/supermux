@@ -1452,7 +1452,11 @@ class FleetStore(
     // ── Worktrees ─────────────────────────────────────────────────────────
     suspend fun worktrees() = activeApp()?.worktrees()
     suspend fun worktreeChanges(id: String) = activeApp()?.worktreeChanges(id)
-    suspend fun worktreeForWorkdir(workdir: String) = activeApp()?.worktreeForWorkdir(workdir)
+    /** Archive-dialog lookups go to the host that OWNS the session / workspace (not the active
+     *  host), the same routing the archive-and-delete calls below use. */
+    suspend fun worktreeForSessionWorkdir(sessionId: String, workdir: String) = appFor(sessionId)?.worktreeForWorkdir(workdir)
+    suspend fun worktreeForWorkspaceWorkdir(workspaceId: String, workdir: String) =
+        appForWorkspace(workspaceId)?.worktreeForWorkdir(workdir)
     suspend fun deleteWorktrees(ids: List<String>) = activeApp()?.deleteWorktrees(ids)
     suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>) = appFor(id)?.killAndDeleteWorktree(id, worktreeIds)
     suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>) =
