@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the pinned libghostty-vt WASM engine and (with --test) run the smoke
-# fixture in Node and in headless Chrome.
+# fixture and the loader test (terminal-loader.mjs) in Node and in headless Chrome.
 #
 #   bash apps/terminal-core/wasm/build.sh [--test]
 #
@@ -122,6 +122,13 @@ if [[ $RUN_TEST -eq 1 ]]; then
        --work "$BUILD_DIR/wasm-smoke"; then
     TEST_RESULT="passed"
   else
+    TEST_RESULT="failed"; status=1
+  fi
+  # The browser loader (terminal-loader.mjs) over real HTTP: typed load failures, compile cache,
+  # the initialize() singleton, two handles across memory growth, two instances.
+  log "running loader test"
+  if ! "$NODE" "$WASM_DIR/loader-test.mjs" "$OUT_DIR/supermux-terminal.wasm" "${browser_args[@]}" \
+       --work "$BUILD_DIR/wasm-loader-test"; then
     TEST_RESULT="failed"; status=1
   fi
 fi
