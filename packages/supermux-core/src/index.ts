@@ -17,3 +17,7 @@ export type {
   CloseMode, CloseOptions, CoreCloseOptions,
 } from "./types.js"
 export { requireCloseMode, requireAgentsCloseMode } from "./types.js"
+export { createHost } from "./host/index.js"
+export type { Host, HostHandle, HostOptions, HostRegistration, HostStartOptions } from "./host/index.js"
+export { createHostProvider } from "./host/provider.js"
+export type { HostProvider, HostFactory } from "./host/provider.js"

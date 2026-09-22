@@ -20,7 +20,7 @@ Use `module` / `moduleResolution` `NodeNext`. Helpers such as `cursorConfigRoot`
 | `supermux-core/agents` | `grok`, `opencode` |
 | `supermux-core/auth` | `copiedCredentials`, `withAuth` |
 
-Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`.
+Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
 
 ## Core
 
@@ -110,9 +110,9 @@ Drivers still receive `DriverContext.requestPermission` and `DriverContext.reque
 
 ## Errors
 
-`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`.
+`CoreError` with `code`: `invalid_options`, `invalid_input`, `invalid_session_id`, `invalid_workdir`, `invalid_auth_profile`, `unknown_agent`, `session_exists`, `session_busy`, `session_not_found`, `session_closed`, `session_failed`, `session_not_running`, `queue_full`, `idempotency_conflict`, `request_not_found`, `core_closed`, `resume_identity_changed`, `fork_identity_unchanged`, `activity_overflow`, `unsupported_operation`, `already_live`, `host_closing`.
 
-`UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes.
+`UnsupportedOperation` extends `CoreError` (`unsupported_operation`). Driver-thrown values (e.g. Grok `TypeError` on effort) are not rewritten into these codes. Host adds `already_live` and `host_closing`.
 
 Auth-helper-only codes (`auth_home_locked`, `auth_source_locked`, `auth_missing`, `auth_invalid`) apply when using `copiedCredentials`, not the session surface.
 
@@ -131,6 +131,34 @@ Auth-helper-only codes (`auth_home_locked`, `auth_source_locked`, `auth_missing`
 **Cursor** `cursor({ id, command, args, inheritEnv, sandbox, trust, force, approveMcps, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, mode? })`. Required fields have **no defaults**; `cursor()` throws `TypeError` naming a missing field. Optional (absent = not sent): `mode`, `model`, `env`. Resume is intended to use a cwd-hashed `store.db`. Steer/fork/configure/history unsupported. **Durable native resume has not been verified** on a live `create-chat` path; do not assume it works.
 
 Env precedence: inherit process (unless `inheritEnv: false`) → factory `env` → `profile.env`.
+
+## Host
+
+Process-level owner of **one** `Core` for a single agent id. Consumers register per-session env/command/args (cloned; **never** written into session records), then `start` / `resume` / `stop`. No library defaults: `limits` and every close `mode` / `agents` are required.
+
+```ts
+createHost({
+  stateDirectory,
+  limits,          // CoreLimits, required
+  agent,           // driver id
+  driver: (registered, context) => AgentDriver | Promise<AgentDriver>,
+  prepare?: (registration) => Promise<void>,
+}): Host
+```
+
+`HostRegistration`: `{ id, env, command?, args?, extra? }`. `register` throws `host_closing` or `already_live` / `session_busy` (id already `admission` | `starting` | `ready` | `recovering`). A `failed-cleanup` id (start failed and the leftover process refused to die) may be re-registered: the new handle's `start` retries that cleanup first.
+
+`HostHandle.start({ cwd, configuration?, nativeSessionId? })` / `resume({ configuration? })` / `stop({ mode })`. Lifetime fence: a stale handle cannot start/resume after replacement; concurrent `start` calls on one handle join the same in-flight open; `stop` is idempotent after confirmed release and a **no-op on a handle that never owned the id** (it never closes a replacement's session); retry is allowed after a failed stop; replacement is allowed only after confirmed stop. `handle.session` is the Core `Session` once started. `host.core` is for `subscribe`.
+
+Admission fence is built in. `failed-cleanup` is retried **before** `prepare` (credential/config/home writes). Concurrent same-id starts from different handles: exactly one wins, the other rejects `session_busy` ("already awaiting failed-start cleanup" / "already starting") without closing anything. Recovering-token semantics match the former broker session fence.
+
+`host.close({ agents })` fences every handle, closes Core, then stops handles. Failed Core close leaves the registry for retry.
+
+```ts
+createHostProvider({ create: () => Host })
+```
+
+`get()` is lazy and once. `close({ agents })` keeps the handle on failed close for retry and forbids reopen after shutdown. `setFactoryForTests` refuses to replace a live host. `resetForTests` is test-only.
 
 ## Auth helper
 
