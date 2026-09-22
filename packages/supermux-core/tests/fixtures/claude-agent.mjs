@@ -154,6 +154,12 @@ if (process.env.MODE === 'setup-hang') {
       const id = process.env.MODE === 'wrong-resume' ? 'ffffffff-ffff-4fff-8fff-ffffffffffff' : session
       send(initFrame(id))
     }
+    // Broker UI journeys: the real answer shape, echoing the prompt.
+    if (process.env.MODE === 'echo') {
+      send({type: 'assistant', session_id: session, uuid, user_message_uuid: uuid, message: {role: 'assistant', content: [{type: 'text', text: `Fixture reply: ${text}`}]}})
+      finish({session, uuid}, 'end_turn')
+      return
+    }
     if (text === 'disconnect') { process.exit(1) }
     if (text === 'eof') { process.stdout.end(() => process.exit(0)); return }
     if (text === 'malformed') { process.stdout.write('{bad}\n'); return }

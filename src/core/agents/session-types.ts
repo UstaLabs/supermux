@@ -46,6 +46,7 @@ export type ResumeRow = {
   agent?: string
   reasoningLevel?: string
   prompts?: boolean
+  role?: string
 }
 
 /** The session-row slice an applyConfig dialect reads. `agent_home` is

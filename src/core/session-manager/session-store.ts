@@ -247,6 +247,20 @@ export class SessionStore {
     session.agent_session_id = agentSessionId
   }
 
+  setCore(id: string, core: boolean): void {
+    const session = this.cache.get(id)
+    if (!session) return
+    this.db.run("UPDATE sessions SET core = ? WHERE id = ?", [core ? 1 : 0, id])
+    session.core = core
+  }
+
+  setAgentHome(id: string, agentHome: string): void {
+    const session = this.cache.get(id)
+    if (!session) return
+    this.db.run("UPDATE sessions SET agent_home = ? WHERE id = ?", [agentHome, id])
+    session.agent_home = agentHome
+  }
+
   setTmuxWindowId(id: string, windowId: string | undefined): void {
     this.db.run("UPDATE sessions SET tmux_window_id = ? WHERE id = ?", [windowId ?? null, id])
     const session = this.cache.get(id)

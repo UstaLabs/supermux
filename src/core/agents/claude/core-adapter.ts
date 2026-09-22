@@ -117,6 +117,14 @@ export class CoreClaudeAdapter extends EventEmitter implements AgentAdapter {
   get effort(): string | undefined { return this._effort }
   get prompts(): boolean { return this._prompts }
 
+  sessionSnapshotState(): SessionState | undefined {
+    return this.session?.snapshot().state
+  }
+
+  turnIsRunning(): boolean {
+    return this.turnActive
+  }
+
   openRequests(): BrokerRequest[] {
     const session = this.session
     if (!session) return []

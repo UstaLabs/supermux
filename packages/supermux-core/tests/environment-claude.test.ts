@@ -49,6 +49,7 @@ describe("prepareClaudeEnvironment", () => {
       systemPromptFiles: [join(dir, "environment.md"), join(dir, "memory.md")],
       strictMcp: true,
       nativeMemory: false,
+      coreReplyContract: true,
       ...over,
     }
   }
@@ -96,13 +97,18 @@ describe("prepareClaudeEnvironment", () => {
 
   test("env CLAUDE_CODE_DISABLE_AUTO_MEMORY when nativeMemory is false", async () => {
     const prepared = await prepareClaudeEnvironment(spec({ nativeMemory: false }))
-    expect(prepared.env).toEqual({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" })
+    expect(prepared.env).toEqual({ CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", MUX_CORE: "1" })
     expect(prepared.credentials).toBe("none")
   })
 
   test("env is empty when nativeMemory is true", async () => {
     const prepared = await prepareClaudeEnvironment(spec({ nativeMemory: true }))
-    expect(prepared.env).toEqual({})
+    expect(prepared.env).toEqual({ MUX_CORE: "1" })
+  })
+
+  test("coreReplyContract false omits MUX_CORE", async () => {
+    const prepared = await prepareClaudeEnvironment(spec({ coreReplyContract: false }))
+    expect(prepared.env.MUX_CORE).toBeUndefined()
   })
 
   test("omits mcp.json and mcp flags when mcpServers is empty", async () => {
@@ -140,7 +146,7 @@ describe("prepareClaudeEnvironment", () => {
 
   for (const field of [
     "home", "workdir", "mcpServers", "skillsPaths", "instructions",
-    "pluginDirs", "addDirs", "systemPromptFiles", "strictMcp", "nativeMemory",
+    "pluginDirs", "addDirs", "systemPromptFiles", "strictMcp", "nativeMemory", "coreReplyContract",
   ]) {
     test(`missing ${field} throws TypeError naming it`, async () => {
       const s = spec() as unknown as Record<string, unknown>

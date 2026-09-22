@@ -25,6 +25,7 @@ export async function prepareClaudeEnvironment(spec: ClaudeEnvironmentSpec): Pro
     "systemPromptFiles",
     "strictMcp",
     "nativeMemory",
+    "coreReplyContract",
   ])
   validateMcpServerNames(spec.mcpServers)
   ensureHome(spec.home)
@@ -58,5 +59,6 @@ export async function prepareClaudeEnvironment(spec: ClaudeEnvironmentSpec): Pro
   }
 
   const env: Record<string, string> = spec.nativeMemory ? {} : { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }
+  if (spec.coreReplyContract) env.MUX_CORE = "1"
   return { env, files, credentials: "none", args }
 }

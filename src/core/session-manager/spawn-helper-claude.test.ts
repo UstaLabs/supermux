@@ -86,4 +86,40 @@ describe("Claude core spawn", () => {
     expect(child.claudeCalls[0]?.options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1")
     expect(child.claudeCalls[0]?.options.args?.some((a) => a === "--append-system-prompt-file")).toBe(true)
   })
+
+  test("rpc worker passes strict mcp from rpc config", async () => {
+    const child = fakeChildFactory()
+    const dir = mkdtempSync(join(tmpdir(), "mux-claude-core-"))
+    dirs.push(dir)
+    const host = createClaudeCoreHost({ stateDirectory: dir, driverFactory: child.factory })
+    hosts.push(host)
+    const reg = registry()
+    const workdir = mkdtempSync(join(tmpdir(), "mux-claude-"))
+    dirs.push(workdir)
+    const mcpPath = join(workdir, "rpc.json")
+    const { writeFileSync } = await import("fs")
+    writeFileSync(mcpPath, JSON.stringify({
+      mcpServers: {
+        "mux-rpc": { command: "bun", args: ["run", "shim.ts"], env: { MUX_RPC_ONLY: "1" } },
+      },
+    }))
+
+    await spawnSession({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      claudeHost: host,
+    }, {
+      workdir,
+      requestedName: "rpc-w",
+      agent: AgentKind.Claude,
+      internal: true,
+      rpcMcpConfig: mcpPath,
+    })
+
+    const args = child.claudeCalls[0]?.options.args ?? []
+    expect(args).toContain("--strict-mcp-config")
+    expect(args).toContain("--mcp-config")
+    expect(child.claudeCalls[0]?.options.env?.MUX_CORE).toBe("1")
+  })
 })

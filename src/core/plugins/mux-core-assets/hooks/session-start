@@ -27,7 +27,11 @@ escape_for_json() {
 # re-escape the assembled string — that would double-escape the content.
 reply_conventions=$(cat "${PLUGIN_ROOT}/skills/reply-conventions/SKILL.md" 2>&1 || echo "Error reading reply-conventions skill")
 reply_escaped=$(escape_for_json "$reply_conventions")
-session_context="<EXTREMELY_IMPORTANT>\nYou are a supermux session. The single rule that overrides your default behavior: every user-facing word goes through the mcp__mux-shim__reply tool, never your transcript.\n\nBelow is your 'mux:reply-conventions' skill in full:\n\n${reply_escaped}\n</EXTREMELY_IMPORTANT>"
+if [ "${MUX_CORE:-}" = "1" ]; then
+  session_context="<EXTREMELY_IMPORTANT>\nYou are a supermux session. Your normal assistant output IS your reply; use the reply tool ONLY for files[]. The broker streams your assistant text to the user. Do not also send text-only replies through mcp__mux-shim__reply — that would duplicate the message.\n\nBelow is your 'mux:reply-conventions' skill in full:\n\n${reply_escaped}\n</EXTREMELY_IMPORTANT>"
+else
+  session_context="<EXTREMELY_IMPORTANT>\nYou are a supermux session. The single rule that overrides your default behavior: every user-facing word goes through the mcp__mux-shim__reply tool, never your transcript.\n\nBelow is your 'mux:reply-conventions' skill in full:\n\n${reply_escaped}\n</EXTREMELY_IMPORTANT>"
+fi
 
 # Emit only the field the current platform consumes.
 # Cursor: additional_context (snake_case). Claude Code: hookSpecificOutput.additionalContext.

@@ -48,7 +48,6 @@ import { closeCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { closeOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
 import { closeCursorCoreHost } from "./core/agents/cursor/core-host-provider"
 import { closeClaudeCoreHost } from "./core/agents/claude/core-host-provider"
-import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
 import { buildRpcPrompt } from "./core/agent-rpc/prompts"
@@ -63,8 +62,7 @@ import { getUsageStore, isUsageProvider } from "./core/usage/store"
 import { ensureMuxCoreSkills, ensureMuxCoreRegistered } from "./core/plugins/mux-core"
 import { CommandRegistry, ClaudeCommandProvider, CodexCommandProvider, CursorCommandProvider, OpenCodeCommandProvider, GrokCommandProvider } from "./core/slash-commands"
 import { AgentKind } from "./shared/agents"
-import { sendChannelConsentEnter } from "./core/session-manager/post-spawn-keys"
-import { preAcceptTrust, writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
+import { writeRpcWorkerMcpConfig } from "./core/session-manager/trust"
 import { waitForRegisteredSession } from "./core/session-manager/spawn-registration"
 import { normalizeExistingWorkdir } from "./core/session-manager/workdir-paths"
 import { resolveDownloadAttachment } from "./core/session-manager/download"
@@ -116,8 +114,6 @@ import { homedir, hostname } from "os"
 import { home } from "./shared/home"
 import { join, dirname, resolve, isAbsolute, sep } from "path"
 import { fileURLToPath } from "url"
-import { ClaudeCodeAdapter } from "./core/agents/claude/index"
-import { writeClaudeHooksSettings, resolveInternalHookSecret, CLAUDE_HOOKS_SETTINGS_PATH } from "./core/agents/claude/hooks-settings"
 import type { AgentAdapter } from "./core/agents/types"
 import { ModelCache } from "./core/models/cache"
 import { discoverClaudeModels, discoverCodexModels, discoverCursorModels, discoverOpenCodeModels } from "./core/models/discovery"
@@ -136,9 +132,7 @@ import { ActivityStore } from "./core/session-manager/activity-store"
 import { AgentStateStore } from "./core/session-manager/agent-state-store"
 import { toAgentStateFrame } from "./core/session-manager/agent-state-frame"
 import { BackgroundTaskStore } from "./core/session-manager/background-task-store"
-import { TranscriptTailer } from "./core/agents/claude/transcript-tailer"
-import { BgTaskDetector } from "./core/agents/claude/bg-task-detector"
-import { claudeTranscriptPath } from "./core/agents/claude/transcript-path"
+
 import { normalizeToolName } from "./core/agents/tool-normalize"
 import { gcOrphanAgentHomes, reclaimCursorHomes } from "./core/agents/shared-runtime"
 import { CuratorScheduler } from "./core/curator/scheduler"
@@ -447,42 +441,9 @@ function gitServiceSessions(): ServiceSession[] {
   }))
 }
 
-const tailers = new Map<string, TranscriptTailer>()  // keyed by session UUID
-const bgDetectors = new Map<string, BgTaskDetector>()  // keyed by session UUID
-
-function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
-  const session = registry.get(sessionUuid)
-  if (!session || (session.agent ?? "claude") !== "claude" || session.core) return
-  const claudeSid = session.agent_session_id
-  if (!claudeSid || tailers.has(sessionUuid)) return
-  const detector = new BgTaskDetector({
-    onOpen: (t) => bgTaskStore.upsertOpen(sessionUuid, t),
-    onClose: (c) => bgTaskStore.close(sessionUuid, c),
-    // Notification delivery = the harness waking claude; reflect it immediately
-    // (same transcript-as-signal channel as interrupt detection).
-    onWake: () => agentStateStore.applyEvent(sessionUuid, "turn-start"),
-  })
-  bgDetectors.set(sessionUuid, detector)
-  const tailer = new TranscriptTailer({
-    path: claudeTranscriptPath(workdir, claudeSid),
-    onLine: (line) => bgDetectors.get(sessionUuid)?.feedLine(line),
-    onEvent: (event) => {
-      // The transcript interrupt marker is the SOLE interrupt signal (no hook fires
-      // on ESC) — and it catches terminal-direct ESC too. It is state, not activity.
-      if (event.kind === "interrupt") { agentStateStore.applyEvent(sessionUuid, "interrupt"); return }
-      activityStore.append(sessionUuid, event)
-    },
-    workdir,
-    seekToEnd,
-  })
-  tailer.start()
-  tailers.set(sessionUuid, tailer)
-}
+function ensureClaudeTailer(_sessionUuid: string, _name: string, _workdir: string, _seekToEnd = false): void {}
 
 function stopClaudeTailer(sessionUuid: string): void {
-  tailers.get(sessionUuid)?.stop()
-  tailers.delete(sessionUuid)
-  bgDetectors.delete(sessionUuid)
   activityStore.clear(sessionUuid)
   bgTaskStore.clear(sessionUuid)
 }
@@ -966,13 +927,7 @@ async function notifyAgentError(sessionId: string, sessionName: string, errorTyp
 // Claude's native "stop generating" key. The pane runs Claude as the foreground
 // process, so send-keys to its window reaches the REPL. Addressed strictly by
 // window id (healed from the registry) so a rename can't aim us at a stale name.
-async function interruptClaudePane(sessionId: string): Promise<void> {
-  const s = registry.get(sessionId)
-  if (!s || s.agent !== AgentKind.Claude) return
-  const wid = await runtimeTargetIdOf(s)
-  if (!wid) { log.warn("claude_interrupt_no_runtime_target", { sessionId }); return }
-  await sessionBackend.sendKeys(wid, ["Escape"])
-}
+async function interruptClaudePane(_sessionId: string): Promise<void> {}
 
 // The one funnel every Stop surface (web button, /stop command) routes through:
 // dispatch to the agent's own interrupt(). The broker does NOT flip the live
@@ -1322,7 +1277,7 @@ function spawnLoginProc(kind: string) {
 // hook config at CLI startup, so rotating this per boot would silently 403 the
 // hooks of every session that outlives a restart, freezing their status at
 // "idle". Generated once, persisted next to the hooks file it's embedded in.
-const INTERNAL_SECRET = resolveInternalHookSecret(() => randomBytes(24).toString("hex"))
+const INTERNAL_SECRET = randomBytes(24).toString("hex")
 
 // In-app update checker. Kill switch MUX_UPDATE_CHECK=0 → no checker at all
 // (the web routes then report disabled). Otherwise it polls versions.json on a
@@ -1522,8 +1477,10 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return payload
     },
     getSessionBgTasks: (id) => {
-      const s = registry.get(id)
-      return s ? bgTaskStore.get(s.id) : []
+      // Core-derived background tasks are not yet exposed on the adapter.
+      // Send an empty list (tmux transcript detector retired).
+      void id
+      return []
     },
     getSessionCommands: (id) => {
       const s = registry.get(id)
@@ -1546,27 +1503,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         resolved: commandRegistry.isPreviewResolved(kind, workdir),
       }
     },
-    onAgentHook: (event, body) => {
-      const claudeSid = body?.session_id
-      if (typeof claudeSid !== "string") return
-      const s = registry.list().find((x) => x.agent_session_id === claudeSid)
-      if (!s) return
-      const adapter = runtimes.get(s.id)?.adapter
-      if (!(adapter instanceof ClaudeCodeAdapter)) return
-      if (event === "StopFailure") {
-        // Field shape isn't firmly documented — accept flat (error_type/error_message),
-        // nested (error_details/error.{type,message}), or reason/message.
-        const pick = (...vals: unknown[]) => vals.find((v) => typeof v === "string" && v) as string | undefined
-        const det = (body?.error_details ?? body?.error) as Record<string, unknown> | undefined
-        const errorType = pick(body?.error_type, det?.type, body?.reason) ?? "error"
-        const errorMessage = pick(body?.error_message, det?.message, body?.message) ?? "Agent turn failed"
-        adapter.ingestHook("StopFailure", { errorType, errorMessage })
-        return
-      }
-      const tool = typeof body?.tool_name === "string" ? body.tool_name : undefined
-      log.info("agent_hook", { session: s.name, event, tool })
-      adapter.ingestHook(event, { tool })
-    },
+    onAgentHook: (_event, _body) => {},
     setMute: (id, muted) => {
       const s = registry.get(id)
       if (s) registry.setMuted(s.id, muted)
@@ -2366,10 +2303,7 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
     },
   })
   channels.web = webChannel as Channel
-  writeClaudeHooksSettings(MUX_WEB_PORT, INTERNAL_SECRET)
   getUsageStore().on("updated", (snap) => webChannel?.broadcastToAll({ type: "usage_updated", usage: snap }))
-} else {
-  try { rmSync(CLAUDE_HOOKS_SETTINGS_PATH, { force: true }) } catch {}
 }
 void getUsageStore().seedFromLocal()
 
@@ -3333,9 +3267,6 @@ async function gracefulShutdown(signal: string) {
   try {
     terminalManager.shutdown()
   } catch (err: any) { log.warn("terminal_shutdown_failed", { err: err?.message }) }
-  try {
-    for (const t of tailers.values()) t.stop()
-  } catch (err: any) { log.warn("tailers_shutdown_failed", { err: err?.message }) }
   try {
     await displayManager.stopAll()
   } catch (err: any) { log.warn("display_shutdown_failed", { err: err?.message }) }

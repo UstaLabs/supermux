@@ -10,8 +10,7 @@ import { tmpdir } from "os"
 // real ~/.mux/state).
 process.env.MUX_HOME = mkdtempSync(join(tmpdir(), "mux-home-"))
 
-const { buildClaudeSpawnCommand, buildCodexSpawnCommand, buildCursorSpawnCommand, buildOpenCodeSpawnCommand } = await import("./spawn-command")
-const { ensureMuxCoreRegistered, ensureMuxCoreSkills } = await import("../plugins/mux-core")
+const { buildCodexSpawnCommand, buildCursorSpawnCommand, buildOpenCodeSpawnCommand } = await import("./spawn-command")
 
 test("codex spawn command invokes codex app-server with env vars", () => {
   const cmd = buildCodexSpawnCommand({ name: "test-pa", sessionId: "sess-1" })
@@ -55,42 +54,4 @@ test("opencode spawn command invokes opencode serve with env vars", () => {
 test("opencode spawn command includes model flag when provided", () => {
   const cmd = buildOpenCodeSpawnCommand({ name: "test-pa", sessionId: "sess-1", port: 8080, model: "kimi-k2.6" })
   expect(cmd).toContain("kimi-k2.6")
-})
-
-// ── reply-fallback gate: the static fallback must be appended UNLESS mux-core's
-//    SessionStart hook is actually on disk. Keying on the file (not just the
-//    registry entry) is what stops a registered-but-half-installed plugin from
-//    suppressing the fallback while delivering no reply rules at all. ─────────
-
-test("claude spawn appends the reply fallback when mux-core is registered but its hook is absent", () => {
-  const root = mkdtempSync(join(tmpdir(), "spawn-nohook-"))
-  try {
-    const pluginsDir = join(root, "plugins")
-    const file = join(root, "plugins.json")
-    // Registered + a valid claude manifest (so --plugin-dir is emitted)…
-    ensureMuxCoreRegistered({ file, pluginsDir })
-    mkdirSync(join(pluginsDir, "mux-core", ".claude-plugin"), { recursive: true })
-    writeFileSync(join(pluginsDir, "mux-core", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "mux" }))
-    // …but NO hooks/session-start on disk (the fresh-install bug state).
-    const cmd = buildClaudeSpawnCommand({ name: "worker-nohook", pluginsFile: file, pluginsDir })
-    expect(cmd).toContain("--plugin-dir")
-    expect(cmd).toContain("reply-fallback.md")
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test("claude spawn suppresses the reply fallback when mux-core ships its SessionStart hook", () => {
-  const root = mkdtempSync(join(tmpdir(), "spawn-hook-"))
-  try {
-    const pluginsDir = join(root, "plugins")
-    const file = join(root, "plugins.json")
-    ensureMuxCoreRegistered({ file, pluginsDir })
-    ensureMuxCoreSkills({ pluginDir: join(pluginsDir, "mux-core") }) // writes manifest + hook
-    const cmd = buildClaudeSpawnCommand({ name: "worker-hook", pluginsFile: file, pluginsDir })
-    expect(cmd).toContain("--plugin-dir")
-    expect(cmd).not.toContain("reply-fallback.md")
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
 })

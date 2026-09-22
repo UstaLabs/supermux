@@ -137,6 +137,25 @@ test("shipped session-start hook emits the reply-tool instruction (Claude dialec
     expect(ctx).toContain("EXTREMELY_IMPORTANT")
     expect(ctx).toContain("mcp__mux-shim__reply")
     expect(ctx).toContain("reply-conventions") // the skill body got injected
+    expect(ctx).not.toContain("Your normal assistant output IS your reply")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("shipped session-start hook emits Core reply contract when MUX_CORE=1", () => {
+  const root = mkdtempSync(join(tmpdir(), "mux-core-hookrun-core-"))
+  try {
+    const pluginDir = join(root, "mux-core")
+    ensureMuxCoreSkills({ pluginDir })
+    const out = execFileSync("bash", [join(pluginDir, "hooks", "session-start")], {
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginDir, CURSOR_PLUGIN_ROOT: "", COPILOT_CLI: "", MUX_CORE: "1" },
+      encoding: "utf8",
+    })
+    const ctx = JSON.parse(out).hookSpecificOutput.additionalContext as string
+    expect(ctx).toContain("Your normal assistant output IS your reply")
+    expect(ctx).toContain("use the reply tool ONLY for files")
+    expect(ctx).not.toContain("every user-facing word goes through the mcp__mux-shim__reply")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

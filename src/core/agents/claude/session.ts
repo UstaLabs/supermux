@@ -1,12 +1,7 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
-import { buildClaudeSpawnSpec } from "../../session-manager/spawn-command"
-import { preAcceptTrust } from "../../session-manager/trust"
-import { sendChannelConsentEnter } from "../../session-manager/post-spawn-keys"
-import { getSessionBackend } from "../../runtime"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
-import { applyClaudeLiveSwitch } from "./live-switch"
 import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
 import { CoreClaudeAdapter } from "./core-adapter"
@@ -42,6 +37,8 @@ function prepareExtra(opts: {
   model?: string
   effort?: string
   prompts?: boolean
+  pa?: boolean
+  rpcMcpConfig?: string
 }): ClaudePrepareExtra {
   return {
     sessionHome: opts.sessionHome,
@@ -53,6 +50,8 @@ function prepareExtra(opts: {
     model: opts.model,
     effort: opts.effort,
     prompts: opts.prompts === true,
+    pa: opts.pa === true,
+    rpcMcpConfig: opts.rpcMcpConfig,
   }
 }
 
@@ -86,89 +85,18 @@ function createBoundAdapter(opts: {
   })
 }
 
-async function spawnTmux(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
-  const backend = getSessionBackend()
-  const base = args.requestedName ?? deriveName(args.workdir)
-  let name: string
-  if (args.pa) {
-    name = base
-  } else {
-    const existingWindows = (await backend.list(deps.tmuxSession)).map(target => target.name)
-    name = ensureUnique(base, new Set([...deps.registry.takenNames(), ...existingWindows]))
-  }
-  const id = args.id ?? randomUUID()
-  const claudeSessionId = randomUUID()
-  if (!args.pa) deps.registry.reserveName(name)
-  preAcceptTrust(args.workdir)
-  try {
-    await deps.bind(id)
-    if (args.pa && !args.pa.skipRegister) {
-      deps.registry.registerPA({
-        id,
-        name,
-        agent: AgentKind.Claude,
-        workdir: args.workdir,
-        model: args.model,
-        reasoningLevel: args.reasoningLevel,
-        pid: process.pid,
-        is_default: deps.registry.listPAs().length === 0,
-      })
-    }
-    const spec = buildClaudeSpawnSpec({
-      name, model: args.model, effort: args.effort, sessionId: id, claudeSessionId, workdir: args.workdir,
-      ...(args.pa ? { sessionRole: "personal_assistant" as const } : { rpcMcpConfig: args.rpcMcpConfig }),
-    })
-    const target = await backend.create({
-      group: deps.tmuxSession,
-      name,
-      cwd: args.workdir,
-      ...spec,
-      cols: 80,
-      rows: 24,
-    })
-    if (args.pa) {
-      deps.registry.sessions.setTmuxWindowId(id, target.id)
-      deps.registry.sessions.setAgentSessionId(id, claudeSessionId)
-      void sendChannelConsentEnter(target.id, { backend })
-    } else {
-      deps.registry.register({
-        id,
-        name,
-        agent: AgentKind.Claude,
-        workdir: args.workdir,
-        tmux_target: `${deps.tmuxSession}:${name}`,
-        tmux_window_id: target.id,
-        pid: target.pid ?? process.pid,
-        agent_session_id: claudeSessionId,
-        internal: args.internal,
-        connected: false,
-        base_commits: captureBaseCommits(args.workdir),
-      })
-      await sendChannelConsentEnter(target.id, { backend })
-    }
-    return { name, session_id: id, model: args.model, pid: target.pid ?? process.pid }
-  } catch (err) {
-    if (!args.pa) {
-      deps.registry.releaseName(name)
-      if (deps.registry.get(id)) deps.registry.sessions.deleteById(id)
-    }
-    throw err
-  }
-}
-
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
-  if (args.pa) return spawnTmux(deps, args)
-
   const base = args.requestedName ?? deriveName(args.workdir)
-  const name = ensureUnique(base, deps.registry.takenNames())
+  const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
   const id = args.id ?? randomUUID()
-  deps.registry.reserveName(name)
+  if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.claudeHost)
   const sessionHome = claudeSessionHome(name)
   const extra = prepareExtra({
     id, sessionName: name, sessionHome, workdir: args.workdir,
     model: args.model, effort: args.effort, prompts: false,
+    pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
   })
   const handle = host.register({
     id,
@@ -186,6 +114,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         extra: prepareExtra({
           id, sessionName: name, sessionHome, workdir: args.workdir,
           model: fields.model ?? args.model, effort: args.effort, prompts: fields.prompts,
+          pa: !!args.pa, rpcMcpConfig: args.rpcMcpConfig,
         }),
       }),
       core: host.core,
@@ -197,28 +126,42 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
       persistSessionId: persistNativeId(deps.onClaudeSessionId, name),
       resolveAttachment: deps.resolveAttachment,
     })
-    deps.registry.register({
-      id,
-      name,
-      workdir: args.workdir,
-      pid: 0,
-      agent: AgentKind.Claude,
-      agent_home: sessionHome,
-      base_commits: captureBaseCommits(args.workdir),
-      internal: args.internal,
-      core: true,
-    } as any)
+    if (args.pa) {
+      if (!args.pa.skipRegister) {
+        deps.registry.registerPA({
+          id,
+          name,
+          agent: AgentKind.Claude,
+          workdir: args.workdir,
+          model: args.model,
+          reasoningLevel: args.reasoningLevel,
+          pid: 0,
+          is_default: deps.registry.listPAs().length === 0,
+          agent_home: sessionHome,
+          core: true,
+        })
+      }
+    } else {
+      deps.registry.register({
+        id,
+        name,
+        workdir: args.workdir,
+        pid: 0,
+        agent: AgentKind.Claude,
+        agent_home: sessionHome,
+        base_commits: captureBaseCommits(args.workdir),
+        internal: args.internal,
+        core: true,
+      } as any)
+    }
     await adapter.start()
   } catch (err) {
     try {
       if (adapter) await adapter.stop()
       else await handle.stop({ mode: "shutdown" })
     } catch { /* failed-cleanup */ }
-    // A failed spawn must not leave a dead row or a held name behind: the
-    // row was registered before start so the native-id callback could find
-    // it, and the reservation is what a retry needs back.
-    deps.registry.releaseName(name)
-    if (deps.registry.get(id)) deps.registry.unregister(id)
+    if (!args.pa) deps.registry.releaseName(name)
+    if (!args.pa?.skipRegister && deps.registry.get(id)) deps.registry.unregister(id)
     throw err
   }
   deps.registerAdapter?.(name, adapter, { onExit: () => {} })
@@ -231,7 +174,18 @@ export async function resumeClaudeSession(
     onClaudeSessionId?: (name: string, sid: string) => void
     claudeHost?: ClaudeCoreHost
   },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
+  session: {
+    id: string
+    name: string
+    workdir: string
+    agent_home: string
+    model?: string
+    effort?: string
+    agent_session_id?: string
+    prompts?: boolean
+    pa?: boolean
+    rpcMcpConfig?: string
+  },
 ): Promise<{ adapter: CoreClaudeAdapter }> {
   const host = resolveHost(deps.claudeHost)
   const sessionHome = session.agent_home
@@ -245,6 +199,8 @@ export async function resumeClaudeSession(
     model: session.model,
     effort: session.effort,
     prompts: session.prompts,
+    pa: session.pa,
+    rpcMcpConfig: session.rpcMcpConfig,
   })
   const handle = host.register({ id: session.id, env: {}, extra })
   let adapter: CoreClaudeAdapter | undefined
@@ -263,6 +219,8 @@ export async function resumeClaudeSession(
           model: fields.model ?? session.model,
           effort: session.effort,
           prompts: fields.prompts,
+          pa: session.pa,
+          rpcMcpConfig: session.rpcMcpConfig,
         }),
       }),
       core: host.core,
@@ -297,28 +255,23 @@ export async function applyConfig(
   const adapter = ctx.adapter
   const coreAdapter = adapter instanceof CoreClaudeAdapter
     ? adapter
-    : (adapter && typeof (adapter as CoreClaudeAdapter).setConfiguration === "function" && !ctx.windowId
+    : (adapter && typeof (adapter as CoreClaudeAdapter).setConfiguration === "function"
       ? adapter as CoreClaudeAdapter
       : undefined)
   if (coreAdapter) {
-    const adapter = coreAdapter
     const patch: { model?: string; effort?: string } = {}
     if (change.changed?.model !== false && change.model) patch.model = change.model
     if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
     if (!("model" in patch) && !("effort" in patch)) return { ok: true }
     try {
-      await adapter.setConfiguration(patch)
+      await coreAdapter.setConfiguration(patch)
       return { ok: true }
     } catch (err) {
       if (isSessionBusy(err)) return { ok: false, busy: true }
       return { ok: false, error: asError(err).message }
     }
   }
-  if (!ctx.windowId) return { ok: false, error: "session window not found" }
-  return applyClaudeLiveSwitch(ctx.windowId, {
-    model: change.changed?.model === false ? undefined : change.model,
-    effort: change.changed?.effort === false ? undefined : change.effort,
-  }, { backend: ctx.backend })
+  return { ok: false, error: "claude adapter not found" }
 }
 
 export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreClaudeAdapter }> {
@@ -337,6 +290,7 @@ export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): 
       effort: ctx.sessionEffort(session),
       agent_session_id: session.agent_session_id,
       prompts: session.prompts,
+      pa: session.role === "personal_assistant",
     },
   )
 }

@@ -52,14 +52,14 @@ test("spawnSession binds the socket before opening the Core session", async () =
   expect(fake.opens).toHaveLength(1)
 })
 
-test("Claude spawn sends structured argv and env to the session backend", async () => {
+test("Claude PA spawn registers a Core row and does not create a tmux window", async () => {
   const registry = makeRegistry()
-  let created: Parameters<SessionBackend["create"]>[0] | undefined
+  let created = 0
   setSessionBackendForTests({
     list: async () => [],
-    create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
-      created = opts
-      return { id: "runtime-target-1", name: opts.name, pid: 4242, alive: true }
+    create: async () => {
+      created++
+      return { id: "runtime-target-1", name: "x", pid: 4242, alive: true }
     },
     capture: async () => LISTENING,
   } as unknown as SessionBackend)
@@ -68,19 +68,20 @@ test("Claude spawn sends structured argv and env to the session backend", async 
     registry,
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fake.host,
   }, {
-    workdir: String.raw`C:\Users\Ahmet Test\project`,
+    workdir: mkdtempSync(join(tmpDir, "pa-wd-")),
     requestedName: "windows-worker",
     model: "claude-opus-4-8",
     pa: { skipRegister: false },
   })
 
-  expect(created?.group).toBe("mux")
-  expect(created?.cwd).toBe(String.raw`C:\Users\Ahmet Test\project`)
-  expect(created?.argv[0]).toBe("claude")
-  expect(created?.argv).not.toContain("bash")
-  expect(created?.env.MUX_SESSION_ID).toBe(result.session_id)
-  expect(created?.env.MUX_DISPLAY_NAME).toBe("windows-worker")
+  expect(created).toBe(0)
+  expect(result.pid).toBe(0)
+  const row = registry.get(result.session_id)
+  expect(row?.core).toBe(true)
+  expect(row?.role).toBe("personal_assistant")
+  expect(row?.name).toBe("windows-worker")
 })
 
 test("spawnSession resolves a unique name before the Core open (no race)", async () => {

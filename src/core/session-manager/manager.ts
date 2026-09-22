@@ -4,7 +4,6 @@ import { RecentInboundIds } from "./recent-inbound-ids"
 import { isPersistentRuntimeSession } from "./types"
 import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
-import { ClaudeCodeAdapter } from "../agents/claude"
 import { CoreClaudeAdapter } from "../agents/claude/core-adapter"
 import { CodexAdapter } from "../agents/codex/adapter"
 import { CoreCodexAdapter } from "../agents/codex/core-adapter"
@@ -21,23 +20,20 @@ import { PendingReapply, shouldDeferReapply, changedSince, type PreChangeConfig 
 import { clampSessionReasoningLevel } from "../models/session-agent-settings"
 import { supportedReasoningLevels } from "../models/reasoning-levels"
 import type { ModelInfo } from "../models/discovery"
-import { buildClaudeSpawnSpec } from "./spawn-command"
-import { preAcceptTrust } from "./trust"
-import { sendChannelConsentEnter } from "./post-spawn-keys"
+import { claudeSessionHome } from "../agents/claude/core-host"
 import { ensureUnique, resolveSelfRename } from "./naming"
 import { randomBytes } from "crypto"
 import { resumedSessionPid } from "./resume-pid"
 import type { SessionBackend } from "../runtime/session-backend"
 import { AgentKind, isAgentKind } from "../../shared/agents"
-import { wireClaudeStateEvents } from "../agents/claude/state-projection"
-import { claudeTranscriptPath } from "../agents/claude/transcript-path"
+
 import { isDraftSession } from "./supervisor"
 import { isWorktreeReclaimable } from "../worktree/gc"
 import { removeWorktree } from "../worktree/manager"
 import { transformOutbound, parseAddress } from "../routing"
 import { resolveDownloadAttachment, type DownloadableApi } from "./download"
 import { propagateSessionRename } from "../workspace/name"
-import { renderTranscript } from "../search/transcript-render"
+
 import { buildProxyPublicUrl } from "../../channels/web/proxy"
 import { listDevices } from "../display/scrcpy/adb"
 import { INBOX_DIR } from "../../shared/paths"
@@ -271,7 +267,7 @@ export class SessionManager {
     this.runtimes.delete(sessionId)
   }
 
-  registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter | CoreClaudeAdapter): void {
+  registerClaudeRuntime(sessionId: string, adapter: CoreClaudeAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
   }
 
@@ -404,27 +400,9 @@ export class SessionManager {
       if (agentSessionId) {
         this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
       }
-      // Rebuild adapter if missing (first connect, or after broker restart)
-      if (!this.runtimes.has(sessionUuid) && (existing.agent ?? "claude") === "claude") {
-        const adapter = new ClaudeCodeAdapter({
-          sessionName: existing.name,
-          workdir: existing.workdir,
-          sendInboundSocket: (payload) => this.ports.socket.sendInbound(sessionUuid, payload),
-          interruptSocket: () => this.ports.register.interruptClaudePane(sessionUuid),
-        })
-        this.registerClaudeRuntime(sessionUuid, adapter)
-        wireClaudeStateEvents(adapter, {
-          onState: (event, tool) => this.ports.agentState.applyEvent(sessionUuid, event, tool),
-          onError: (errorType, message) => {
-            const s = this.registry.get(sessionUuid)
-            void this.ports.register.notifyAgentError(sessionUuid, s?.name ?? sessionUuid, errorType, message)
-          },
-        })
-      }
       if (existing.status === "suspended") {
         this.registry.sessions.activate(sessionUuid, msg.pid as number)
       }
-      this.ports.register.ensureClaudeTailer(sessionUuid, existing.name, existing.workdir, true)
       void this.ports.commands.refresh(existing.name)
       if (existing.role === "personal_assistant" && existing.is_default) {
         setTimeout(() => { void this.ports.register.maybeAutoSendSoulSetup(existing.id) }, SOUL_SETUP_AUTO_SEND_DELAY_MS)
@@ -675,13 +653,7 @@ export class SessionManager {
         const id = stringArg(op.args, "session_id")
         const row = this.ports.stores.db.query("SELECT workdir, agent, agent_session_id FROM sessions WHERE id = ? AND internal = 0").get(id) as { workdir: string; agent: string; agent_session_id: string | null } | null
         if (!row) return { ok: false, error: "no such session" }
-        if (row.agent !== "claude" || !row.agent_session_id) {
-          return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: this.ports.stores.messageLog.get(id, 200) } }
-        }
-        const includeToolCalls = op.args?.include_tool_calls !== false
-        const grep = typeof op.args?.grep === "string" ? op.args.grep : undefined
-        const text = renderTranscript(claudeTranscriptPath(row.workdir, row.agent_session_id), { includeToolCalls, grep })
-        return { ok: true, value: { transcript: true, session_id: id, text } }
+        return { ok: true, value: { transcript: false, note: "no JSONL transcript for this agent; use the broker message history", messages: this.ports.stores.messageLog.get(id, 200) } }
       }
       case "expose_port": {
         if (!s) return { ok: false, error: "unknown session" }
@@ -1119,29 +1091,9 @@ export class SessionManager {
     const effort = this.ports.resume.sessionEffort(session)
 
     if (session.agent === AgentKind.Claude) {
-      if (session.core) {
-        const runtime = this.runtimes.get(session.id)
-        const result = await agents.claude.applyConfig(
-          { ...this.resumeCtx(session.id), adapter: runtime?.adapter },
-          session, session.name,
-          { model: session.model, effort, changed },
-        )
-        if (!result.ok) return result
-        this.ports.getWebChannel()?.broadcastToAll({
-          type: "session_state",
-          session: session.id,
-          model: session.model,
-          reasoningLevel: effort,
-        })
-        return { ok: true }
-      }
-      // Live switch: type /model and/or /effort into the running TUI — never a
-      // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
-      // callers roll the registry back.
-      const wid = await this.ports.backend.runtimeTargetIdOf(session)
-      if (!wid) return { ok: false, error: "session window not found" }
+      const runtime = this.runtimes.get(session.id)
       const result = await agents.claude.applyConfig(
-        { ...this.resumeCtx(session.id), windowId: wid, backend: this.ports.resume.sessionBackend },
+        { ...this.resumeCtx(session.id), adapter: runtime?.adapter },
         session, session.name,
         { model: session.model, effort, changed },
       )
@@ -1280,28 +1232,12 @@ export class SessionManager {
         has_agent_session_id: !!session.agent_session_id,
       })
       await this.ports.resume.ensureSessionWorktree(session)
-      if (session.agent === "claude" && session.core && session.agent_home) {
+      if (session.agent === "claude") {
         await this.ports.resume.bind(session.id)
-        await this.resumeClaudeCoreArm({ ...session, agent_home: session.agent_home }, session.name)
-      } else if (session.agent === "claude") {
-        await this.ports.resume.bind(session.id)
-        preAcceptTrust(session.workdir)
-        // Clear ONLY our own prior window, by id — never kill by name (a name
-        // can be shared with a sibling's live window).
-        if (session.tmux_window_id) await sessionBackend.kill(session.tmux_window_id).catch(() => {})
-        const windowName = ensureUnique(session.name, new Set((await sessionBackend.list(tmuxSession)).map(target => target.name)))
-        log.info("resume_suspended_claude", { name: session.name, window: windowName })
-        const effort = this.ports.resume.sessionEffort(session)
-        const spec = buildClaudeSpawnSpec({
-          name: session.name, model: session.model, effort, sessionId: session.id,
-          claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
-          workdir: session.workdir,
-        })
-        const target = await sessionBackend.create({ group: tmuxSession, name: windowName, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
-        this.registry.sessions.setTmuxWindowId(session.id, target.id)
-        resumedRuntimePid = target.pid
-        await sendChannelConsentEnter(target.id, { backend: sessionBackend })
-        await this.waitForConnected(session.id, 25_000)
+        const agentHome = session.agent_home || claudeSessionHome(session.name)
+        await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, session.name)
+        this.registry.sessions.setCore(session.id, true)
+        this.registry.sessions.setAgentHome(session.id, agentHome)
       } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
         await this.ports.resume.bind(session.id)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, session.name)
@@ -1346,21 +1282,12 @@ export class SessionManager {
     let resumedRuntimePid: number | null = null
     try {
       await this.ports.resume.ensureSessionWorktree(session)
-      if (session.agent === "claude" && session.core && session.agent_home) {
+      if (session.agent === "claude") {
         await this.ports.resume.bind(sessionId)
-        await this.resumeClaudeCoreArm({ ...session, agent_home: session.agent_home }, name)
-      } else if (session.agent === "claude") {
-        await this.ports.resume.bind(sessionId)
-        const effort = this.ports.resume.sessionEffort(session)
-        const spec = buildClaudeSpawnSpec({
-          name, model: session.model, effort, sessionId,
-          claudeSessionId: session.agent_session_id, resume: !!session.agent_session_id,
-          workdir: session.workdir,
-        })
-        const target = await sessionBackend.create({ group: tmuxSession, name, cwd: session.workdir, ...spec, cols: 80, rows: 24 })
-        resumedRuntimeTargetId = target.id
-        resumedRuntimePid = target.pid
-        void sendChannelConsentEnter(target.id, { backend: sessionBackend })
+        const agentHome = session.agent_home || claudeSessionHome(name)
+        await this.resumeClaudeCoreArm({ ...session, agent_home: agentHome }, name)
+        this.registry.sessions.setCore(sessionId, true)
+        this.registry.sessions.setAgentHome(sessionId, agentHome)
       } else if (session.agent === "codex" && session.agent_session_id && session.agent_home) {
         await this.ports.resume.bind(sessionId)
         await this.resumeCodexArm({ ...session, agent_home: session.agent_home }, name)
@@ -1411,13 +1338,16 @@ export class SessionManager {
    *  reattach via the shim; dead ones suspend.) Failures log and continue. */
   async resumeAtBoot(): Promise<void> {
     for (const s of this.registry.list()) {
-      if (s.agent === "claude" && s.core) {
-        if (!s.agent_home) {
-          log.warn("claude_core_resume_skip", { name: s.name, reason: "missing agent_home" })
-          continue
-        }
+      if (s.agent === "claude") {
+        const agentHome = s.agent_home || claudeSessionHome(s.name)
         try {
-          await this.resumeClaudeCoreArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.agent_session_id) {
+            await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome }, s.name)
+          } else {
+            await this.resumeClaudeCoreArm({ ...s, agent_home: agentHome, agent_session_id: undefined }, s.name)
+          }
+          this.registry.sessions.setCore(s.id, true)
+          this.registry.sessions.setAgentHome(s.id, agentHome)
           if (s.status === "suspended") this.registry.sessions.activate(s.id, 0)
           log.info("claude_core_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
         } catch (err: any) {

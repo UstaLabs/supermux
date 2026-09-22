@@ -7,7 +7,9 @@ import { buildNamingRule } from "../session-manager/naming"
 // heavily and follow short imperative rules far better than buried prose.
 // Keep it short, imperative, and concrete (real session name + workdir).
 export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir: string }): string {
-  const who = opts.role === "main" ? "the personal-assistant session (orchestrator)" : "a worker session"
+  const who = opts.role === "main" || opts.role === "personal_assistant"
+    ? "the personal-assistant session (orchestrator)"
+    : "a worker session"
   return [
     `You are "${opts.name}", ${who} in supermux.`,
     "",
@@ -33,7 +35,7 @@ export function buildAgentHeader(opts: { name: string; role: AgentRole; workdir:
       "paths); text-only reply calls are rejected and would duplicate your message. " +
       "Keep responses concise.",
     `- SCOPE: You are bound to the working directory \`${opts.workdir}\`. Stay focused on it.`,
-    ...(opts.role !== "main" ? [`- NAMING: ${buildNamingRule(opts.name)}`] : []),
+    ...(opts.role !== "main" && opts.role !== "personal_assistant" ? [`- NAMING: ${buildNamingRule(opts.name)}`] : []),
     "",
     "Everything below is reference detail.",
     "",

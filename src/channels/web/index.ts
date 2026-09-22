@@ -22,7 +22,7 @@ import { pairJsonResponse } from "./pair-json"
 import { buildHostBody } from "./host-route"
 import { normalizeExistingWorkdir, uniqueKnownWorkdirs } from "../../core/session-manager/workdir-paths"
 import { worktreesRoot } from "../../core/worktree/manager"
-import { hooksFileUsesHookSecret } from "../../core/agents/claude/hooks-settings"
+
 import { getRepoInfo } from "../../core/git/repo-info"
 import { remoteStatus, fetchRemote, publishBranch, pushBranch, pullBranch } from "../../core/git/remote"
 import { listBranches, switchBranch } from "../../core/git/branches"
@@ -1584,8 +1584,7 @@ export class WebChannel implements Channel {
       // pre-restart session at "idle" for days before anyone could see why.
       if (this.opts.internalSecret) {
         const provided = url.searchParams.get("s")
-        const requiresSecret = hooksFileUsesHookSecret()
-        const mismatch = requiresSecret ? provided !== this.opts.internalSecret : Boolean(provided) && provided !== this.opts.internalSecret
+        const mismatch = provided !== this.opts.internalSecret
         if (mismatch) {
           log.warn("agent_hook_rejected", { path, hasSecret: provided !== null })
           return new Response("forbidden", { status: 403 })

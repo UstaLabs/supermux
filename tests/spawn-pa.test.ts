@@ -10,6 +10,7 @@ import type { SessionBackend } from "../src/core/runtime/session-backend"
 import { fakeCodexHost } from "./helpers/fake-codex-host"
 import { fakeOpenCodeHost } from "./helpers/fake-opencode-host"
 import { fakeCursorHost } from "./helpers/fake-cursor-host"
+import { fakeClaudeHost } from "./helpers/fake-claude-host"
 
 // Non-claude collaborators are swapped via bun module mocks (spawnPA has no
 // injection seams). mock.module is process-global: capture the real modules
@@ -21,6 +22,7 @@ const realOpenCodeHost = { ...(await import("../src/core/agents/opencode/core-ho
 let fake = fakeCodexHost()
 let fakeOc = fakeOpenCodeHost()
 let fakeCur = fakeCursorHost("cursor-session-id")
+let fakeCl = fakeClaudeHost()
 
 mock.module("../src/core/agents/codex/core-host-provider", () => ({
   ...realCodexCoreHost,
@@ -54,12 +56,14 @@ beforeEach(() => {
   fake = fakeCodexHost()
   fakeOc = fakeOpenCodeHost()
   fakeCur = fakeCursorHost("cursor-session-id")
+  fakeCl = fakeClaudeHost()
   process.env.CURSOR_API_KEY = process.env.CURSOR_API_KEY ?? "test-key"
 })
 afterEach(async () => {
   await fake.close()
   await fakeOc.close()
   await fakeCur.close()
+  await fakeCl.close()
   setSessionBackendForTests()
   rmSync(tmpDir, { recursive: true, force: true })
 })
@@ -81,6 +85,7 @@ test("spawns a Claude PA and registers it as personal_assistant", async () => {
     workdir: join(tmpDir, "pa-workdir"),
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fakeCl.host,
   })
 
   expect(result.name).toBe("assistant")
@@ -103,6 +108,7 @@ test("second PA gets is_default false", async () => {
     workdir: join(tmpDir, "pa-1"),
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fakeCl.host,
   })
 
   setSessionBackendForTests(claudeBackend("w2"))
@@ -113,6 +119,7 @@ test("second PA gets is_default false", async () => {
     workdir: join(tmpDir, "pa-2"),
     bind: async () => {},
     tmuxSession: "mux",
+    claudeHost: fakeCl.host,
   })
 
   expect(result.name).toBe("helper")

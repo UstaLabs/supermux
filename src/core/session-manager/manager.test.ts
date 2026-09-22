@@ -5,7 +5,7 @@ import { Registry } from "./registry"
 import { SessionManager, type SessionManagerPorts } from "./manager"
 import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { ClaudeCodeAdapter } from "../agents/claude"
+import type { CoreClaudeAdapter } from "../agents/claude/core-adapter"
 import { CoreCursorAdapter } from "../agents/cursor/core-adapter"
 import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import { GrokAdapter } from "../agents/grok/adapter"
@@ -126,7 +126,7 @@ describe("SessionManager resume frames", () => {
 describe("SessionManager runtime store", () => {
   test("registerClaudeRuntime stores the runtime; adapterFor returns its adapter", () => {
     const m = manager()
-    const adapter = { fake: true } as unknown as ClaudeCodeAdapter
+    const adapter = { fake: true } as unknown as CoreClaudeAdapter
     m.registerClaudeRuntime("s1", adapter)
     expect(m.adapterFor("s1")).toBe(adapter)
     expect(m.runtimes.get("s1")?.kind).toBe("claude")
@@ -134,7 +134,7 @@ describe("SessionManager runtime store", () => {
 
   test("deleteRuntime removes it; double delete is a no-op", () => {
     const m = manager()
-    m.registerClaudeRuntime("s1", { fake: true } as unknown as ClaudeCodeAdapter)
+    m.registerClaudeRuntime("s1", { fake: true } as unknown as CoreClaudeAdapter)
     m.deleteRuntime("s1")
     expect(m.adapterFor("s1")).toBeUndefined()
     m.deleteRuntime("s1") // must not throw
@@ -290,12 +290,11 @@ describe("SessionManager applyConfig", () => {
     await m.drainPendingReapply("k2", "running")
     expect(m.registry.get("k2")?.model).toBe("new-m")
 
-    // Idle → drain runs. No tmux window exists in tests, so the claude apply
-    // fails explicitly ("session window not found") → registry rolls back,
-    // clients get the corrected state, and the user is notified.
+    // Idle → drain runs. No Core adapter is registered in this test, so the
+    // claude apply fails explicitly → registry rolls back.
     await m.drainPendingReapply("k2", "idle")
     expect(m.registry.get("k2")?.model).toBe("old-m")
-    expect(agentErrors).toEqual(["config:Failed to apply model/effort change: session window not found"])
+    expect(agentErrors).toEqual(["config:Failed to apply model/effort change: claude adapter not found"])
     expect(frames).toContainEqual({ type: "session_state", session: "k2", model: "old-m", reasoningLevel: undefined })
 
     // The queue entry was consumed — a second idle transition is a no-op.
@@ -303,11 +302,11 @@ describe("SessionManager applyConfig", () => {
     expect(agentErrors).toHaveLength(1)
   })
 
-  test("an idle claude apply fails explicitly without a window and rolls back", async () => {
+  test("an idle claude apply fails explicitly without an adapter and rolls back", async () => {
     const m = manager()
     m.registry.register({ id: "k3", name: "cl3", workdir: "/tmp", pid: 1, agent: "claude", reasoningLevel: "low" })
     const r = await m.applyConfig("k3", { effort: "high" })
-    expect(r).toEqual({ ok: false, error: "session window not found" })
+    expect(r).toEqual({ ok: false, error: "claude adapter not found" })
     expect(m.registry.get("k3")?.reasoningLevel).toBe("low")
   })
 
@@ -744,7 +743,7 @@ describe("SessionManager.handleOutbound reply", () => {
     }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
-    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreClaudeAdapter })
     // A session on an older shim still sends chat_id; it must not reach the dispatcher.
     const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { chat_id: "telegram:999", text: "hi" } } } as any)
     expect(r.ok).toBe(true)
@@ -831,7 +830,7 @@ describe("SessionManager.handleOutbound reply", () => {
     ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev); return { ok: true as const, delivered: 1 } } }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
-    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as ClaudeCodeAdapter })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreClaudeAdapter })
     const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { text: "no destination" } } } as any)
     expect(r.ok).toBe(true)
     expect(seen).toEqual([{ text: "no destination", reply_to: undefined, files: undefined, format: undefined, keyboard: undefined }])

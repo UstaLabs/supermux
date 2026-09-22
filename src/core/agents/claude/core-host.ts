@@ -1,15 +1,18 @@
-import { join } from "path"
+import { existsSync, readFileSync } from "fs"
+import { basename, join } from "path"
 import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { claude, type ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { prepareClaudeEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
-import { claudeWorkerInstructions } from "./preamble-writer"
+import type { McpServerSpec } from "../../../../packages/supermux-core/src/environment/types.js"
+import { claudePersonalAssistantInstructions, claudeWorkerInstructions, writeSessionMemoryPreamble } from "./preamble-writer"
 import { claudeSpawnArgs } from "../../plugins"
-import { promptsDir } from "../../runtime-assets"
+import { environmentMdPath, promptsDir, replyFallbackPath } from "../../runtime-assets"
 import { STATE_DIR } from "../../../shared/paths"
 import { makeLogger } from "../../../shared/log"
 
 const log = makeLogger("agents/claude/core-host")
+const CORE_PLUGIN_NAME = "mux-core"
 
 export type ClaudeDriverFactory = (options: ClaudeOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -31,6 +34,8 @@ export type ClaudePrepareExtra = {
   model?: string
   effort?: string
   prompts?: boolean
+  pa?: boolean
+  rpcMcpConfig?: string
 }
 
 const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"])
@@ -43,16 +48,32 @@ function asEffort(value: unknown): ClaudeOptions["effort"] | undefined {
   return value as ClaudeOptions["effort"]
 }
 
-function pluginDirsFor(sessionName: string): string[] {
+function pluginDirsFor(sessionName: string): { dirs: string[]; coreReplyHookPresent: boolean } {
   const { args } = claudeSpawnArgs({ sessionName })
   const dirs: string[] = []
+  let coreReplyHookPresent = false
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--plugin-dir" && args[i + 1]) {
-      dirs.push(args[i + 1]!)
+      const dir = args[i + 1]!
+      dirs.push(dir)
+      if (basename(dir) === CORE_PLUGIN_NAME && existsSync(join(dir, "hooks", "session-start"))) {
+        coreReplyHookPresent = true
+      }
       i++
     }
   }
-  return dirs
+  return { dirs, coreReplyHookPresent }
+}
+
+function parseRpcMcpServers(path: string): McpServerSpec[] {
+  const raw = JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }> }
+  const servers = raw.mcpServers ?? {}
+  return Object.entries(servers).map(([name, v]) => ({
+    name,
+    command: v.command ?? "",
+    args: v.args ?? [],
+    env: v.env ?? {},
+  }))
 }
 
 function asPrepareExtra(registration: HostRegistration): ClaudePrepareExtra {
@@ -71,6 +92,7 @@ function asPrepareExtra(registration: HostRegistration): ClaudePrepareExtra {
   const native = extra.nativeSessionId
   const model = extra.model
   const effort = extra.effort
+  const rpc = extra.rpcMcpConfig
   return {
     sessionHome,
     sessionName,
@@ -81,6 +103,8 @@ function asPrepareExtra(registration: HostRegistration): ClaudePrepareExtra {
     model: typeof model === "string" ? model : undefined,
     effort: typeof effort === "string" ? effort : undefined,
     prompts: extra.prompts === true,
+    pa: extra.pa === true,
+    rpcMcpConfig: typeof rpc === "string" ? rpc : undefined,
   }
 }
 
@@ -122,17 +146,35 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
+      const { dirs: pluginDirs, coreReplyHookPresent } = pluginDirsFor(extra.sessionName)
+      const instructions = extra.pa
+        ? claudePersonalAssistantInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
+        : claudeWorkerInstructions({ sessionName: extra.sessionName, workdir: extra.workdir })
+      const systemPromptFiles: string[] = extra.pa
+        ? [
+            environmentMdPath(STATE_DIR),
+            writeSessionMemoryPreamble(
+              extra.sessionId,
+              extra.sessionName,
+              "personal_assistant",
+              extra.workdir,
+            ),
+            ...(!coreReplyHookPresent ? [replyFallbackPath(STATE_DIR)] : []),
+          ]
+        : []
+      const mcpServers = extra.rpcMcpConfig ? parseRpcMcpServers(extra.rpcMcpConfig) : []
       const prepared = await prepareClaudeEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        mcpServers: [],
+        mcpServers,
         skillsPaths: [],
-        instructions: claudeWorkerInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
-        pluginDirs: pluginDirsFor(extra.sessionName),
+        instructions,
+        pluginDirs,
         addDirs: [promptsDir(STATE_DIR)],
-        systemPromptFiles: [],
-        strictMcp: false,
+        systemPromptFiles,
+        strictMcp: extra.rpcMcpConfig ? true : false,
         nativeMemory: false,
+        coreReplyContract: true,
       })
       return { env: prepared.env, args: prepared.args }
     },

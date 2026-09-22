@@ -1,7 +1,7 @@
 import { getMuxHome, initMux } from "./init"
 import { rebuildIndex } from "./rebuild"
 
-export type AgentRole = "main" | "worker"
+export type AgentRole = "main" | "worker" | "personal_assistant"
 
 export interface InjectionOpts {
   role: AgentRole

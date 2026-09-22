@@ -116,6 +116,7 @@ export class Registry {
     tmux_target?: string
     agent_home?: string
     base_commits?: Record<string, string>
+    core?: boolean
   }): Session {
     return this.register({
       id: input.id,
@@ -130,6 +131,7 @@ export class Registry {
       tmux_target: input.tmux_target,
       agent_home: input.agent_home,
       base_commits: input.base_commits,
+      core: input.core,
     })
   }
 

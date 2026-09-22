@@ -139,6 +139,7 @@ export async function spawnPA(opts: {
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
+  onClaudeSessionId?: (name: string, sessionId: string) => void
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
@@ -187,6 +188,8 @@ export async function spawnPA(opts: {
       onCursorSessionId: opts.onCursorSessionId,
       onOpenCodeSessionId: opts.onOpenCodeSessionId,
       onGrokSessionId: opts.onGrokSessionId,
+      onClaudeSessionId: opts.onClaudeSessionId,
+      claudeHost: opts.claudeHost,
     },
     {
       workdir,
@@ -200,10 +203,8 @@ export async function spawnPA(opts: {
     },
   )
 
-  // A reused row keeps living (the fresh worker pid replaces the dead one);
-  // a fresh claude PA activates with its pane pid, exactly like before.
   if (skipRegister || agent === AgentKind.Claude) {
-    registry.sessions.activate(id, r.pid ?? process.pid)
+    registry.sessions.activate(id, r.pid ?? 0)
   }
   return { name: r.name, id: r.session_id }
 }
