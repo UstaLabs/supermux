@@ -154,4 +154,37 @@ class ViewportModelTest {
         model.apply(ViewportFixtures.partial(2, size, mapOf(0 to "next")))
         assertEquals(1L, assertNotNull(model.frame).frameNumber)
     }
+
+    @Test fun aMissedPublicationIsNotPatchedOver() {
+        val model = ViewportModel()
+        // Two surfaces share one session: this one applied publication 1 and the sibling then
+        // acknowledged publication 2, so the conflated flow hands this one publication 3 directly.
+        assertTrue(model.apply(ViewportFixtures.full(1, size, listOf("one", "two"), sequence = 1)) is ViewportUpdate.Applied)
+        val skipped = model.apply(ViewportFixtures.partial(3, size, mapOf(1 to "patched"), sequence = 3))
+        assertTrue(skipped is ViewportUpdate.Rejected, "got $skipped")
+        assertEquals(ViewportRejection.NEEDS_FULL, skipped.reason)
+        assertTrue("missed 1" in skipped.diagnostic, skipped.diagnostic)
+        // The screen kept the rows it could prove, and row 1 was NOT patched from the wrong base.
+        assertEquals(listOf("one", "two", "", ""), (0 until size.rows).map { assertNotNull(model.frame).rowText(it) })
+
+        // The surface asks for a full frame; that heals it whatever the sequence jumped to.
+        val healed = model.apply(ViewportFixtures.full(4, size, listOf("one", "patched"), sequence = 4))
+        assertTrue(healed is ViewportUpdate.Applied, "got $healed")
+        // And patching resumes from the new base.
+        assertTrue(model.apply(ViewportFixtures.partial(5, size, mapOf(2 to "three"), sequence = 5)) is ViewportUpdate.Applied)
+        assertEquals("three", assertNotNull(model.frame).rowText(2))
+    }
+
+    @Test fun consecutivePublicationsPatchAndUnpublishedFramesAreNotChecked() {
+        val model = ViewportModel()
+        model.apply(ViewportFixtures.full(1, size, listOf("one"), sequence = 7))
+        assertTrue(model.apply(ViewportFixtures.partial(2, size, mapOf(1 to "two"), sequence = 8)) is ViewportUpdate.Applied)
+        assertEquals("two", assertNotNull(model.frame).rowText(1))
+
+        // A frame that no session published (sequence 0) carries no counter to check: the generation
+        // ordering is all there is, and the reducer stays usable for hand-built frames and tests.
+        val fresh = ViewportModel()
+        fresh.apply(ViewportFixtures.full(1, size, listOf("one")))
+        assertTrue(fresh.apply(ViewportFixtures.partial(9, size, mapOf(1 to "two"))) is ViewportUpdate.Applied)
+    }
 }

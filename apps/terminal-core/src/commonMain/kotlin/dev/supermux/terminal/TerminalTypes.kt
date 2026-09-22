@@ -99,13 +99,22 @@ data class TerminalLink(val row: Int, val firstColumn: Int, val lastColumn: Int,
  * - [held]: this is the frame captured when the program began synchronized output (mode 2026) and
  *   the hold is still active; the owner keeps showing it and, after its timeout (~1 s), asks for
  *   `viewport(breakHold = true)`.
+ * - [sequence]: the SESSION's publication counter, not the engine's. It is 1 for the first frame a
+ *   [TerminalSession] publishes and increases by EXACTLY ONE per published frame, which
+ *   [generation] does not (the engine bumps that on every mutating call, so consecutive frames skip
+ *   numbers). `viewports` is a conflated [kotlinx.coroutines.flow.StateFlow], so a renderer that is
+ *   slower than a SIBLING renderer on the same session can miss a frame entirely: a partial frame's
+ *   rows are a delta against the last frame the engine had acknowledged, so patching one onto the
+ *   wrong base silently corrupts the screen. A gap in this counter is how a renderer notices and
+ *   asks for a full frame. Frames straight from [TerminalEngine.viewport] carry 0 — nothing
+ *   published them.
  */
 data class TerminalViewport(
     val generation: Long, val size: TerminalSize, val rows: List<TerminalRow>,
     val cursor: TerminalCursor, val modes: TerminalModes,
     val historyRows: Long, val viewportTop: Long, val full: Boolean,
     val links: List<TerminalLink>, val selection: TerminalSelection?,
-    val held: Boolean,
+    val held: Boolean, val sequence: Long = 0L,
 )
 
 /**

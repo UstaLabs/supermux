@@ -36,6 +36,8 @@ data class TerminalFrame(
     val links: List<TerminalLink>,
     val selection: TerminalSelection?,
     val held: Boolean,
+    /** [TerminalViewport.sequence] of the update this frame was built from; 0 if it had none. */
+    val sequence: Long,
 ) {
     /** The cell at ([row], [column]) in viewport coordinates, or null when there is none. */
     fun cellAt(row: Int, column: Int): TerminalCell? =
@@ -59,7 +61,11 @@ data class TerminalFrame(
 
 /** Why [ViewportModel.apply] refused an update. */
 enum class ViewportRejection {
-    /** There is nothing to patch (no full frame in this epoch yet) or the grid changed size. */
+    /**
+     * There is nothing to patch: no full frame in this epoch yet, the grid changed size, or a
+     * published frame was MISSED (see [TerminalViewport.sequence]) so this update's rows are a
+     * delta against a screen this model never had.
+     */
     NEEDS_FULL,
 
     /** The update is older than (or the same as) the frame already applied. */
@@ -99,6 +105,18 @@ class ViewportModel {
         private set
 
     private var frames = 0L
+
+    /**
+     * [TerminalViewport.sequence] of the last update applied, or 0 before the first one.
+     *
+     * `viewports` is conflated and the acknowledgement that releases the next frame may come from a
+     * SIBLING surface on the same session, so this model really can be handed a partial frame whose
+     * base it never saw. Patching an N+1 delta onto an N-1 screen corrupts cells silently — no
+     * exception, no wrong size, just stale text that survives until something else forces a full
+     * frame. A gap in the counter is the only way to notice, and NEEDS_FULL is how the surface
+     * recovers ([TerminalSession.requestFullFrame]).
+     */
+    private var appliedSequence = 0L
 
     /**
      * Fold [update] into the current screen.
@@ -165,6 +183,16 @@ class ViewportModel {
                     "generation ${update.generation} is not newer than ${current.generation}",
                 )
             }
+            // Exactly one publication apart, or this delta is against rows this model never had.
+            // Sequence 0 means the frame was not published by a session (a hand-built one, a test):
+            // there is no counter to check and the generation ordering above is all there is.
+            if (update.sequence != 0L && appliedSequence != 0L && update.sequence != appliedSequence + 1) {
+                return reject(
+                    ViewportRejection.NEEDS_FULL,
+                    "missed ${update.sequence - appliedSequence - 1} published frame(s) before " +
+                        "sequence ${update.sequence}",
+                )
+            }
             val patched = current.rows.toMutableList()
             for (row in update.rows) patched[row.index] = row
             rows = patched
@@ -183,8 +211,10 @@ class ViewportModel {
             links = update.links,
             selection = update.selection,
             held = update.held,
+            sequence = update.sequence,
         )
         frame = next
+        appliedSequence = update.sequence
         return ViewportUpdate.Applied(next)
     }
 
@@ -198,6 +228,7 @@ class ViewportModel {
     fun reset() {
         frame = null
         epoch++
+        appliedSequence = 0L
     }
 
     private fun reject(reason: ViewportRejection, diagnostic: String) =

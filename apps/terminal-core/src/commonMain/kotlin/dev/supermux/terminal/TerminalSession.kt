@@ -184,6 +184,14 @@ class TerminalSession private constructor(
      * Frames after the first are usually partial ([TerminalViewport.full] = false): they carry only
      * the rows that changed since the last acknowledged frame, so a renderer keeps its own row
      * model and patches it.
+     *
+     * This is a CONFLATED [StateFlow]: a collector that is slower than the session drops the frames
+     * it did not get to. With ONE renderer that cannot happen (the session waits for its
+     * acknowledgement before publishing again), but the acknowledgement that releases the next frame
+     * may come from a SIBLING renderer on the same session — so a slow renderer really can be handed
+     * a partial frame whose base it never saw. [TerminalViewport.sequence] is the counter that makes
+     * that visible: it increases by exactly one per published frame, and a gap means "ask for a full
+     * frame before patching anything".
      */
     val viewports: StateFlow<TerminalViewport>
         get() = checkNotNull(state) { "TerminalSession is not open" }
@@ -415,6 +423,13 @@ class TerminalSession private constructor(
     private var pendingGeneration: Long? = null
     private var publishedGeneration: Long = Long.MIN_VALUE
 
+    /**
+     * How many frames this session has published. Stamped onto every frame as
+     * [TerminalViewport.sequence]: `viewports` is conflated, so this is the ONLY way a renderer can
+     * tell "the next frame" from "the frame after the one I never saw" — engine generations skip.
+     */
+    private var publishedSequence: Long = 0L
+
     /** Something mutated the engine since the last viewport read. */
     private var dirty = false
 
@@ -461,7 +476,7 @@ class TerminalSession private constructor(
                     ready.completeExceptionally(t)
                     throw t
                 }
-                val flow = MutableStateFlow(first)
+                val flow = MutableStateFlow(first.copy(sequence = ++publishedSequence))
                 publishedGeneration = first.generation
                 pendingGeneration = first.generation
                 lastReadAt = timeSource.markNow()
@@ -729,9 +744,10 @@ class TerminalSession private constructor(
             // carries every row, so publish it — unless it is identical to what the flow already
             // holds, in which case the attaching renderer has the full rows anyway and publishing
             // nothing keeps `pendingGeneration` from waiting for an ack that will never come.
-            if (wantedFull && viewport != flow.value) {
+            // The flow's copy carries a sequence this one does not yet have; compare the rest.
+            if (wantedFull && viewport != flow.value.copy(sequence = 0L)) {
                 pendingGeneration = viewport.generation
-                flow.value = viewport
+                flow.value = viewport.copy(sequence = ++publishedSequence)
                 return
             }
             // A hold poll re-serialized the frame the renderer already drew: acknowledge it again so
@@ -745,7 +761,7 @@ class TerminalSession private constructor(
         }
         publishedGeneration = viewport.generation
         pendingGeneration = viewport.generation
-        flow.value = viewport
+        flow.value = viewport.copy(sequence = ++publishedSequence)
     }
 
     // ------------------------------------------------------------------ teardown ----

@@ -22,7 +22,9 @@ import dev.supermux.terminal.Underline
 object ViewportFixtures {
 
     /** The primary screen, no mouse reporting, no bracketed paste. */
-    val LIVE_MODES = TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false)
+    val LIVE_MODES = TerminalModes(
+        alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = false,
+    )
 
     val DEFAULT_STYLE = CellStyle(TerminalColor.DEFAULT, TerminalColor.DEFAULT, CellFlags.NONE, Underline.NONE)
 
@@ -42,6 +44,7 @@ object ViewportFixtures {
         viewportTop: Long = 0,
         historyRows: Long = 0,
         modes: TerminalModes = LIVE_MODES,
+        sequence: Long = 0,
     ): TerminalViewport = viewport(
         generation = generation,
         size = size,
@@ -52,6 +55,7 @@ object ViewportFixtures {
         viewportTop = viewportTop,
         historyRows = historyRows,
         modes = modes,
+        sequence = sequence,
     )
 
     /** A partial frame carrying only the rows in [lines] (index to text). */
@@ -60,12 +64,14 @@ object ViewportFixtures {
         size: TerminalSize,
         lines: Map<Int, String>,
         cursor: TerminalCursor = TerminalCursor(0, 0, CursorShape.BLOCK, visible = true),
+        sequence: Long = 0,
     ): TerminalViewport = viewport(
         generation = generation,
         size = size,
         rows = lines.entries.sortedBy { it.key }.map { row(it.key, it.value, size.columns) },
         full = false,
         cursor = cursor,
+        sequence = sequence,
     )
 
     fun viewport(
@@ -80,6 +86,7 @@ object ViewportFixtures {
         links: List<TerminalLink> = emptyList(),
         held: Boolean = false,
         modes: TerminalModes = LIVE_MODES,
+        sequence: Long = 0,
     ): TerminalViewport = TerminalViewport(
         generation = generation,
         size = size,
@@ -92,5 +99,6 @@ object ViewportFixtures {
         links = links,
         selection = selection,
         held = held,
+        sequence = sequence,
     )
 }

@@ -467,4 +467,63 @@ class TerminalSurfaceTest {
         const val SECOND_TAG = "terminal-surface-2"
         const val TIMEOUT = 10_000L
     }
+
+    // ------------------------------------------------------------------ two surfaces ----
+
+    /**
+     * Two surfaces on one session must both end up showing the SAME screen.
+     *
+     * They each collect the same conflated `viewports` flow and each acknowledge. The session
+     * publishes the next frame as soon as ANY of them acknowledges, so the slower one can be handed
+     * a partial frame whose base it never saw — and a partial frame is a DELTA. Patched onto the
+     * wrong base it corrupts cells silently: no exception, no wrong size, just stale text that
+     * survives until something else forces a full frame.
+     *
+     * [TerminalViewport.sequence] is what makes that visible, and the assertion is the one a user
+     * would make: both surfaces read back the same thing as the engine's own screen.
+     */
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun twoSurfacesOnOneSessionConvergeOnTheSameScreen() = runComposeUiTest {
+        val size = TerminalSize(30, 6, 8, 16)
+        val session = runBlocking { TerminalSession.open(size, TerminalLimits()) }
+        try {
+            setContent {
+                Column(Modifier.size(400.dp, 600.dp)) {
+                    Box(Modifier.size(400.dp, 300.dp)) {
+                        Terminal(session, Modifier.fillMaxSize().testTag("first"))
+                    }
+                    Box(Modifier.size(400.dp, 300.dp)) {
+                        Terminal(session, Modifier.fillMaxSize().testTag("second"))
+                    }
+                }
+            }
+            waitForIdle()
+
+            // Many small writes: every one of them is a frame, and the two collectors are never in
+            // step, which is exactly the situation a skipped publication comes out of.
+            repeat(60) { step ->
+                runBlocking { session.receive("\u001b[H\u001b[2Kstep-$step".encodeToByteArray()) }
+                waitForIdle()
+            }
+            runBlocking { session.receive("\u001b[H\u001b[2Kfinal line".encodeToByteArray()) }
+            waitUntil(timeoutMillis = 10_000) {
+                screenOf("first").startsWith("final line") && screenOf("second").startsWith("final line")
+            }
+            waitForIdle()
+
+            assertEquals(
+                screenOf("first"),
+                screenOf("second"),
+                "the two surfaces on one session drifted apart",
+            )
+        } finally {
+            runBlocking { session.close() }
+        }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    private fun androidx.compose.ui.test.ComposeUiTest.screenOf(tag: String): String =
+        onNodeWithTag(tag).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Text)
+            ?.joinToString("") { it.text }
+            .orEmpty()
 }
