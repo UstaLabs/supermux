@@ -142,16 +142,27 @@ export function cursor(options: CursorOptions): AgentDriver {
         if (!existsSync(store)) throw new Error('Cursor resume store missing')
         agentSessionId = context.resumeId
       } else {
+        // In a fresh HOME the real cursor-agent prints the chat id within seconds
+        // and then lingers for minutes on first-run bookkeeping (measured: >200 s,
+        // vs 5-8 s in a warm home). The id is all setup needs, so take it as soon
+        // as it is printed and stop the child instead of waiting for its exit.
+        const printed = deferred<string>()
         const child = launchCursor({
           command, args: [...options.args, 'create-chat'], env, cwd: context.cwd,
           shutdownTimeoutMs, maxFrameBytes, json: false,
-        }, () => {}, error => { fail(error) })
+        }, text => {
+          const first = String(text).trim().split('\n')[0] ?? ''
+          if (UUID.test(first)) printed.resolve(first)
+        }, error => { fail(error) })
         setupChild = child
-        await Promise.race([child.wait(), failure.promise])
+        const exited = child.wait().then(() => {
+          if (child.exitCode() !== 0 || child.exitSignal()) throw new Error('Cursor process failed')
+          return child.stdout().trim()
+        })
+        const id = await Promise.race([printed.promise, exited, failure.promise])
         if (fatal) throw fatal
-        if (child.exitCode() !== 0 || child.exitSignal()) throw new Error('Cursor process failed')
-        const id = child.stdout().trim()
         if (!UUID.test(id)) throw new Error('Cursor create-chat did not return a UUID')
+        await child.close()
         agentSessionId = id
         setupChild = undefined
       }

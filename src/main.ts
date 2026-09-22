@@ -46,6 +46,7 @@ import { SessionManager } from "./core/session-manager/manager"
 import { closeGrokCoreHost } from "./core/agents/grok/core-host-provider"
 import { closeCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { closeOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
+import { closeCursorCoreHost } from "./core/agents/cursor/core-host-provider"
 import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
@@ -3273,6 +3274,9 @@ async function gracefulShutdown(signal: string) {
   try {
     await closeOpenCodeCoreHost()
   } catch (err: any) { log.warn("opencode_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeCursorCoreHost()
+  } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }

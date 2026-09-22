@@ -85,6 +85,9 @@ export function launchCursor(options: CursorChildOptions, onMessage: (message: a
     if (!options.json) {
       if (stdoutText.length + chunk.length > options.maxFrameBytes) { fail(new Error('Cursor frame exceeds size limit')); return }
       stdoutText += chunk.toString('utf8')
+      // Plain-text mode hands the accumulated text over as it arrives: the caller
+      // may have what it needs before the process decides to exit.
+      onMessage(stdoutText)
       return
     }
     let offset = 0

@@ -3,20 +3,26 @@ import { EventEmitter } from "events"
 import { isCoreBacked } from "./activity-dispatch"
 import { CoreCodexAdapter } from "../codex/core-adapter"
 import { CoreGrokAdapter } from "../grok/core-adapter"
+import { CoreOpenCodeAdapter } from "../opencode/core-adapter"
+import { CoreCursorAdapter } from "../cursor/core-adapter"
 import type { AgentAdapter } from "../types"
 
-test("isCoreBacked is true for CoreCodexAdapter and CoreGrokAdapter", () => {
+test("isCoreBacked is true for CoreCodexAdapter, CoreGrokAdapter, CoreOpenCodeAdapter, and CoreCursorAdapter", () => {
   const fakeCore = {} as never
   const codex = Object.create(CoreCodexAdapter.prototype) as AgentAdapter
   const grok = Object.create(CoreGrokAdapter.prototype) as AgentAdapter
+  const opencode = Object.create(CoreOpenCodeAdapter.prototype) as AgentAdapter
+  const cursor = Object.create(CoreCursorAdapter.prototype) as AgentAdapter
   expect(isCoreBacked(codex)).toBe(true)
   expect(isCoreBacked(grok)).toBe(true)
+  expect(isCoreBacked(opencode)).toBe(true)
+  expect(isCoreBacked(cursor)).toBe(true)
   void fakeCore
 })
 
 test("isCoreBacked is false for other adapters", () => {
   class Other extends EventEmitter implements AgentAdapter {
-    kind = "cursor" as const
+    kind = "claude" as const
     sessionName = "s"
     workdir = "/w"
     async start() {}

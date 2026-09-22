@@ -36,3 +36,14 @@ export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
   /** `plugin` array; [] = omit. */
   pluginPaths: string[]
 }
+
+export type CursorEnvironmentSpec = EnvironmentSpec & {
+  credentials: {
+    apiKey: string | null
+    userCursorDir: string
+    userConfigDir: string
+  }
+  /** Link this home's cursor-agent runtime dir to one shared copy; null = do nothing. */
+  sharedRuntime: { source: string } | null
+  platform: NodeJS.Platform
+}

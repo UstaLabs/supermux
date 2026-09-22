@@ -94,6 +94,19 @@ test('setup timeout and abort during create-chat clean the child', async () => {
   await expect(pending).rejects.toThrow()
 })
 
+test('create-chat resolves on the printed UUID and reaps a lingering child', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cursor-linger-'))
+  const pidFile = join(dir, 'pid')
+  const started = Date.now()
+  const r = await driver({ MODE: 'create-linger', PID_FILE: pidFile }, { setupTimeoutMs: 5_000 }).open(ctx())
+  try {
+    expect(r.agentSessionId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    expect(Date.now() - started).toBeLessThan(4_000)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0)).toThrow()
+  } finally { await r.close({ mode: "shutdown" }); await rm(dir, { recursive: true }) }
+})
+
 test('close during active turn reaps child and is idempotent', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cursor-close-'))
   const pidFile = join(dir, 'pid')

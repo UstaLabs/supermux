@@ -13,8 +13,7 @@ import { mkdtempSync, rmSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { resolveClaudeAuth } from "../../src/core/agents/claude/auth"
-import { prepareCodexEnvironment, prepareGrokEnvironment } from "../../packages/supermux-core/src/environment/index.js"
-import { resolveCursorAuth } from "../../src/core/agents/cursor/auth"
+import { prepareCodexEnvironment, prepareGrokEnvironment, prepareCursorEnvironment } from "../../packages/supermux-core/src/environment/index.js"
 import { resolveOpenCodeAuth } from "../../src/core/agents/opencode/auth"
 
 let userHome: string
@@ -44,8 +43,17 @@ function resolvers() {
       credentials: { apiKey: null, canonicalHome: userHome },
       nativeMemory: false,
     }),
-    cursor: () => resolveCursorAuth({
-      userCursorDir: join(userHome, ".cursor"), userConfigDir: join(userHome, ".config"), sessionHome,
+    cursor: () => prepareCursorEnvironment({
+      home: sessionHome,
+      workdir: sessionHome,
+      sessionId: "s",
+      sessionName: "s",
+      mcpServers: [],
+      skillsPaths: [],
+      instructions: null,
+      credentials: { apiKey: null, userCursorDir: join(userHome, ".cursor"), userConfigDir: join(userHome, ".config") },
+      sharedRuntime: null,
+      platform: process.platform,
     }),
     opencode: () => resolveOpenCodeAuth({ home: userHome, env: {}, fileExists: () => false, platform: "linux" }),
     grok: () => prepareGrokEnvironment({

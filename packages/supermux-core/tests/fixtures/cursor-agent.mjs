@@ -26,6 +26,10 @@ const send = o => process.stdout.write(JSON.stringify(o) + '\n')
 if (argv.includes('create-chat')) {
   if (process.env.MODE === 'setup-hang') {
     setInterval(() => {}, 1 << 30)
+  } else if (process.env.MODE === 'create-linger') {
+    // Real cursor-agent in a fresh HOME: id first, exit much later.
+    process.stdout.write(CREATE_ID + '\n')
+    setInterval(() => {}, 1 << 30)
   } else if (process.env.MODE === 'create-invalid') {
     process.stdout.write('not-a-uuid\n')
     process.exit(0)

@@ -20,6 +20,8 @@ export type ResumeCtx = {
   codexHost?: import("./codex/core-host").CodexCoreHost
   /** Optional OpenCode core host (tests inject a fake; production uses the process provider). */
   opencodeHost?: import("./opencode/core-host").OpenCodeCoreHost
+  /** Optional Cursor core host (tests inject a fake; production uses the process provider). */
+  cursorHost?: import("./cursor/core-host").CursorCoreHost
 }
 
 /** Input for the optional `commandContext` leaf: build the opaque per-kind

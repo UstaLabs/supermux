@@ -16,7 +16,7 @@ describe("RuntimeRegistry", () => {
       interrupt: async () => {},
       on: () => adapter,
       emit: () => false,
-    } as unknown as import("../agents/cursor/adapter").CursorAdapter
+    } as unknown as import("../agents/cursor/core-adapter").CoreCursorAdapter
     runtimes.set("sid", { kind: AgentKind.Cursor, adapter })
     expect(runtimes.get("sid")?.kind).toBe(AgentKind.Cursor)
   })
@@ -34,7 +34,7 @@ describe("RuntimeRegistry", () => {
       interrupt: async () => {},
       on: () => adapter,
       emit: () => false,
-    } as unknown as import("../agents/cursor/adapter").CursorAdapter
+    } as unknown as import("../agents/cursor/core-adapter").CoreCursorAdapter
     runtimes.set("sid", { kind: AgentKind.Cursor, adapter })
     runtimes.delete("sid")
     expect(runtimes.get("sid")).toBeUndefined()

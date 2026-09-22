@@ -9,7 +9,7 @@ import { CodexAdapter } from "../agents/codex/adapter"
 import { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CodexRuntimeAdapter } from "./runtime"
-import { CursorAdapter } from "../agents/cursor/adapter"
+import { CoreCursorAdapter } from "../agents/cursor/core-adapter"
 import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import { GrokAdapter } from "../agents/grok/adapter"
 import { CoreGrokAdapter } from "../agents/grok/core-adapter"
@@ -282,7 +282,7 @@ export class SessionManager {
     })
   }
 
-  registerCursorRuntime(sessionId: string, adapter: CursorAdapter): void {
+  registerCursorRuntime(sessionId: string, adapter: CoreCursorAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Cursor, adapter })
   }
 
@@ -853,7 +853,7 @@ export class SessionManager {
       this.registerCodexRuntime(sid, name, adapter)
     } else if (adapter instanceof CodexAdapter) {
       this.registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-    } else if (adapter instanceof CursorAdapter) {
+    } else if (adapter instanceof CoreCursorAdapter) {
       this.registerCursorRuntime(sid, adapter)
     } else if (adapter instanceof CoreOpenCodeAdapter) {
       this.registerOpenCodeRuntime(sid, adapter)

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { createNormalizedActivity } from "./normalized-activity"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
+import { createCursorNormalizer } from "../../../../packages/supermux-core/src/cursor/normalize.js"
 import type { AgentUpdate } from "../../../../packages/supermux-core/src/types.js"
 import type { NormalizedEvent } from "../../../../packages/supermux-core/src/events/normalized.js"
 import type { ActivityEvent } from "../claude/activity-event"
@@ -319,6 +320,23 @@ test("parity: real grok-turn.ndjson tool cards", () => {
     const bodies = n(update)
     for (const body of bodies) {
       next.push(...act.handle(envelope("grok", body, seq++, frame), NOW))
+    }
+  }
+  const cards = next.map(publicCard)
+  expect(cards.some((c) => c.kind === "tool")).toBe(true)
+  expect(cards.some((c) => c.kind === "tool_result")).toBe(true)
+})
+
+test("parity: real cursor-turn.ndjson tool cards", () => {
+  const frames = loadNdjson("cursor-turn.ndjson")
+  const n = createCursorNormalizer()
+  const act = createNormalizedActivity({ workdir: WD })
+  const next: ActivityEvent[] = []
+  let seq = 0
+  for (const frame of frames) {
+    const bodies = n({ protocol: "native", value: frame })
+    for (const body of bodies) {
+      next.push(...act.handle(envelope("cursor", body, seq++, frame), NOW))
     }
   }
   const cards = next.map(publicCard)

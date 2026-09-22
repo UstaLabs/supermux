@@ -4,7 +4,6 @@ import { PassThrough } from "stream"
 import { mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { makeRealCursorRunner } from "../../src/core/agents/cursor/runner"
 import { spawnOpenCodeServer } from "../../src/core/agents/opencode/spawn"
 import { makeRealGrokRunner } from "../../src/core/agents/grok/runner"
 
@@ -18,23 +17,6 @@ function fakeChild(onSpawn?: (child: any) => void): any {
   onSpawn?.(child)
   return child
 }
-
-test("Cursor prefers cursor-agent then wraps the official agent.cmd fallback", async () => {
-  const calls: any[] = []
-  const runner = makeRealCursorRunner({
-    home: "C:\\Mux\\cursor", authEnv: { Path: "C:\\Cursor" }, platform: "win32",
-    fileExists: (path) => path.toLowerCase() === "c:\\cursor\\agent.cmd",
-    spawn: (command, args, options) => {
-      calls.push({ command, args, options })
-      return fakeChild((child) => queueMicrotask(() => child.emit("exit", 0)))
-    },
-  })
-  await runner(["--print", "hello & goodbye"], () => {}, () => {}, undefined)
-  expect(calls[0].command.toLowerCase()).toContain("cmd.exe")
-  expect(calls[0].args.slice(0, 4)).toEqual(["/d", "/v:off", "/s", "/c"])
-  expect(calls[0].options.windowsVerbatimArguments).toBe(true)
-  expect(calls[0].options.env.USERPROFILE).toBe("C:\\Mux\\cursor")
-})
 
 test("OpenCode runs a ps1 shim through PowerShell while preserving server argv", async () => {
   const calls: any[] = []

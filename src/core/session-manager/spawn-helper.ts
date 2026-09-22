@@ -7,7 +7,8 @@ import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexCoreHost } from "../agents/codex/core-host"
-import type { CursorAdapter } from "../agents/cursor/adapter"
+import type { CoreCursorAdapter } from "../agents/cursor/core-adapter"
+import type { CursorCoreHost } from "../agents/cursor/core-host"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
 import type { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import type { OpenCodeCoreHost } from "../agents/opencode/core-host"
@@ -57,12 +58,13 @@ export type SpawnDeps = {
   resolveAttachment?: (file_id: string) => Promise<string>
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
+    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
   codexHost?: CodexCoreHost
   opencodeHost?: OpenCodeCoreHost
+  cursorHost?: CursorCoreHost
   onThreadId?: (name: string, threadId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
@@ -136,12 +138,13 @@ export async function spawnPA(opts: {
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
+    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
   codexHost?: CodexCoreHost
   opencodeHost?: OpenCodeCoreHost
+  cursorHost?: CursorCoreHost
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -171,6 +174,7 @@ export async function spawnPA(opts: {
       grokHost: opts.grokHost,
       codexHost: opts.codexHost,
       opencodeHost: opts.opencodeHost,
+      cursorHost: opts.cursorHost,
       // PA thread-id persistence is keyed by the broker session id (the
       // supervisor writes setAgentSessionId directly); adapt codex's
       // name-keyed port to that contract.

@@ -9,42 +9,26 @@ import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
 import { fakeCodexHost } from "./helpers/fake-codex-host"
 import { fakeOpenCodeHost } from "./helpers/fake-opencode-host"
+import { fakeCursorHost } from "./helpers/fake-cursor-host"
 
 // Non-claude collaborators are swapped via bun module mocks (spawnPA has no
 // injection seams). mock.module is process-global: capture the real modules
 // first, restore them in afterAll so later test files see the real thing.
 const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
-const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
-const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
-const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
-const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter")) }
+const realCursorHost = { ...(await import("../src/core/agents/cursor/core-host-provider")) }
 const realOpenCodeHost = { ...(await import("../src/core/agents/opencode/core-host-provider")) }
 
 let fake = fakeCodexHost()
 let fakeOc = fakeOpenCodeHost()
+let fakeCur = fakeCursorHost("cursor-session-id")
 
 mock.module("../src/core/agents/codex/core-host-provider", () => ({
   ...realCodexCoreHost,
   getCodexCoreHost: () => fake.host,
 }))
-mock.module("../src/core/agents/cursor/auth", () => ({
-  ...realCursorAuth,
-  resolveCursorAuth: async () => ({ mode: "api_key", env: { CURSOR_API_KEY: "test" } }),
-}))
-mock.module("../src/core/agents/cursor/smoke", () => ({
-  ...realCursorSmoke,
-  smokeCursorAgent: async () => {},
-}))
-mock.module("../src/core/agents/cursor/runner", () => ({
-  ...realCursorRunner,
-  makeRealCursorRunner: () => async () => {},
-}))
-mock.module("../src/core/agents/cursor/adapter", () => ({
-  ...realCursorAdapter,
-  CursorAdapter: class {
-    constructor(private opts: any) {}
-    async start() { await this.opts.persistSessionId("cursor-session-id") }
-  },
+mock.module("../src/core/agents/cursor/core-host-provider", () => ({
+  ...realCursorHost,
+  getCursorCoreHost: () => fakeCur.host,
 }))
 mock.module("../src/core/agents/opencode/core-host-provider", () => ({
   ...realOpenCodeHost,
@@ -53,10 +37,7 @@ mock.module("../src/core/agents/opencode/core-host-provider", () => ({
 
 afterAll(() => {
   mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
-  mock.module("../src/core/agents/cursor/auth", () => realCursorAuth)
-  mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
-  mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)
-  mock.module("../src/core/agents/cursor/adapter", () => realCursorAdapter)
+  mock.module("../src/core/agents/cursor/core-host-provider", () => realCursorHost)
   mock.module("../src/core/agents/opencode/core-host-provider", () => realOpenCodeHost)
 })
 
@@ -72,10 +53,13 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-"))
   fake = fakeCodexHost()
   fakeOc = fakeOpenCodeHost()
+  fakeCur = fakeCursorHost("cursor-session-id")
+  process.env.CURSOR_API_KEY = process.env.CURSOR_API_KEY ?? "test-key"
 })
 afterEach(async () => {
   await fake.close()
   await fakeOc.close()
+  await fakeCur.close()
   setSessionBackendForTests()
   rmSync(tmpDir, { recursive: true, force: true })
 })

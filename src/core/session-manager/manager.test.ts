@@ -6,7 +6,7 @@ import { SessionManager, type SessionManagerPorts } from "./manager"
 import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { ClaudeCodeAdapter } from "../agents/claude"
-import { CursorAdapter, type CursorRunner } from "../agents/cursor/adapter"
+import { CoreCursorAdapter } from "../agents/cursor/core-adapter"
 import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import { GrokAdapter } from "../agents/grok/adapter"
 import type { GrokRunner } from "../agents/grok/runner"
@@ -157,14 +157,24 @@ describe("SessionManager runtime store", () => {
 
 // ── applyConfig: the model/effort entry (frame around the per-kind dialects) ─
 
-function cursorAdapter(model?: string): CursorAdapter {
-  return new CursorAdapter({
+function cursorAdapter(model?: string): CoreCursorAdapter {
+  const adapter = {
+    kind: "cursor" as const,
     sessionName: "t",
     workdir: "/tmp",
-    runner: (async () => { throw new Error("no turns in this test") }) as unknown as CursorRunner,
-    persistSessionId: async () => {},
     model,
-  })
+    async setConfiguration(patch: { model?: string }) {
+      if ("model" in patch) adapter.model = patch.model
+    },
+    async start() {},
+    async resume() {},
+    async stop() {},
+    async send() {},
+    async interrupt() {},
+    on() { return adapter },
+    emit() { return false },
+  }
+  return adapter as unknown as CoreCursorAdapter
 }
 
 function grokAdapter(model?: string): GrokAdapter {

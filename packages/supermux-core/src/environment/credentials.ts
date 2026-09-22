@@ -199,3 +199,10 @@ export function codexCredentialFreshness(path: string): number {
   const tokens = (parsed as { tokens?: { access_token?: unknown } }).tokens
   return jwtExpiryMs(tokens?.access_token)
 }
+
+/** Cursor freshness: `accessToken` is a JWT; `exp` moves on refresh. */
+export function cursorCredentialFreshness(path: string): number {
+  const parsed = readCredentialJson(path)
+  const token = parsed && typeof parsed === "object" ? (parsed as { accessToken?: unknown }).accessToken : undefined
+  return jwtExpiryMs(token)
+}
