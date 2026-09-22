@@ -1,7 +1,7 @@
 // src/core/worktree/inventory.test.ts
 import { afterAll, test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { existsSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from "fs"
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, renameSync, symlinkSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { deleteWorktrees, listWorktrees, worktreeChanges, worktreeSize, type OwnerRow } from "./inventory"
@@ -250,7 +250,7 @@ test("C3: hundreds of worktrees whose repo is gone list fast as 'repo gone' orph
   expect(list.length).toBe(200)
   for (const w of list) {
     expect(w.error).toBe("repo gone")
-    expect(w.hasChanges).toBe(false)
+    expect(w.hasChanges).toBe(true)   // unknown contents: never presumed clean (M1)
     expect(w.unmerged).toBeNull()
     expect(w.uncommitted).toBe(0)
     expect(w.repoName).toBe("deleted-repo")
@@ -258,6 +258,23 @@ test("C3: hundreds of worktrees whose repo is gone list fast as 'repo gone' orph
   expect(list.find((w) => w.id === "gone-slug/u7")!.owners).toEqual([{ id: "arch", name: "arch", status: "archived" }])
   expect(await deleteWorktrees(root, ["gone-slug/u3"], [])).toEqual([{ id: "gone-slug/u3", ok: true }])
   expect(existsSync(join(root, "gone-slug", "u3"))).toBe(false)
+})
+
+test("M1: repo gone by rename — an untracked file may still be there, so hasChanges is true and delete never touches the renamed repo", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  writeFileSync(join(a, "precious.txt"), "x")   // untracked — would be silently lost if presumed clean
+  const movedRepo = `${f.repo}-moved`
+  renameSync(f.repo, movedRepo)                 // repo renamed/moved, not deleted — its files are still there
+  const list = await listWorktrees(f.root, [])
+  expect(list[0]!.error).toBe("repo gone")
+  expect(list[0]!.hasChanges).toBe(true)
+  const before = readdirSync(movedRepo).sort()
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], [])
+  expect(r).toEqual([{ id: "repo-abc/u1", ok: true }])
+  expect(existsSync(a)).toBe(false)             // the worktree folder is gone
+  expect(existsSync(movedRepo)).toBe(true)      // the renamed repo itself was never touched
+  expect(readdirSync(movedRepo).sort()).toEqual(before)
 })
 
 test("I1: a base branch that no longer exists and no upstream is unknown, not 0", async () => {

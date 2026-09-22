@@ -41,7 +41,10 @@ export interface WorktreeSummary {
   bytes?: number
   /** Why it couldn't be (fully) inspected. Known values:
    *  - "repo gone": its main repository no longer exists on disk — a deletable orphan; no git
-   *    is run for it, owners are still computed, hasChanges is false, unmerged null, uncommitted 0.
+   *    is run for it, owners are still computed, unmerged null, uncommitted 0. hasChanges is
+   *    true (conservative): the repo can also be "gone" because it was renamed/moved or sits on
+   *    an unmounted drive, in which case the worktree folder may still hold real untracked or
+   *    modified files we simply can't see — never presume it's safe to select for deletion.
    *  - "not a git worktree": the folder has no .git of its own (never inspected via an
    *    enclosing repo); hasChanges is true because its contents are unknown.
    *  Anything else is a git error message; hasChanges is then true (conservative). */
@@ -260,7 +263,7 @@ async function probeEntry(
     id: e.id, path: e.path, repoName: e.id.split("/")[0]!, owners, mtime,
     uncommitted: 0, unmerged: null, ignored: [], hasChanges: true,
   }
-  if (p.kind === "gone") base = { ...base, repoRoot: p.repoRoot, repoName: basename(p.repoRoot), error: REPO_GONE, hasChanges: false }
+  if (p.kind === "gone") base = { ...base, repoRoot: p.repoRoot, repoName: basename(p.repoRoot), error: REPO_GONE }
   if (p.kind === "none") base = { ...base, error: NOT_A_WORKTREE }
   return { e, canonEntry, ownerRows, base, probe: p }
 }
@@ -348,12 +351,12 @@ async function branchCheckedOutElsewhere(repoRoot: string, branch: string, excep
   return false
 }
 
-async function deleteOne(root: string, id: string, rows: OwnerRow[]): Promise<DeleteResult> {
+async function deleteOne(root: string, id: string, rows: OwnerRow[], canon: Canon): Promise<DeleteResult> {
   let path: string
   try { path = await resolveId(root, id) } catch (e: any) { return { id, ok: false, error: String(e?.message ?? e) } }
   // Evaluated NOW, not from a stale list: a session that just started using it wins.
-  // Canonical on both sides, and a session in any subfolder counts.
-  const canon = canonicalizer()
+  // Canonical on both sides, and a session in any subfolder counts. `canon` is shared across a
+  // batch (see deleteWorktrees) but the live-owner decision below is still made per id, now.
   const live = ownersOf(path, await canonRows(rows, canon)).filter((o) => o.status === "live")
   if (live.length) return { id, ok: false, error: "in_use", inUseBy: live.map((o) => o.name) }
   // Only a verified linked worktree gets git operations; "repo gone", a folder without its own
@@ -383,9 +386,12 @@ async function deleteOne(root: string, id: string, rows: OwnerRow[]): Promise<De
 }
 
 /** Delete each worktree regardless of its changes — the caller got explicit user consent.
- *  Never deletes one with a live owner. Per-id results; one failure never aborts the batch. */
+ *  Never deletes one with a live owner. Per-id results; one failure never aborts the batch.
+ *  One canonicalizer cache for the whole batch (rows are the same for every id here); the
+ *  live-owner check itself still runs fresh per id inside deleteOne. */
 export async function deleteWorktrees(root: string, ids: string[], rows: OwnerRow[]): Promise<DeleteResult[]> {
+  const canon = canonicalizer()
   const out: DeleteResult[] = []
-  for (const id of ids) out.push(await deleteOne(root, id, rows))
+  for (const id of ids) out.push(await deleteOne(root, id, rows, canon))
   return out
 }
