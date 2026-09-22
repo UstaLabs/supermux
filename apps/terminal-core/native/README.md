@@ -48,7 +48,13 @@ android-x64 ios-arm64 ios-simulator-arm64`.
 What `native/build.sh` does, in order:
 
 1. Resolve Zig `0.16.0` (`~/.local/zig/0.16.0`, or download the pinned host
-   tarball, check its sha256 and minisign signature).
+   tarball, check its sha256 and minisign signature, extract into a staging
+   dir next to the install dir and rename it into place, so a partial or
+   corrupted install never survives). The minisign check needs python3
+   `cryptography`; without it the download **fails** unless
+   `ST_ALLOW_UNVERIFIED_ZIG=1` is set (then only the sha256 pin is enforced).
+   A custom `ST_ZIG_HOME` that exists but holds the wrong Zig is never
+   overwritten.
 2. Ensure the upstream cache is at the pinned commit.
 3. Resolve the Android NDK (android targets) and `llvm-objcopy` (from the
    pinned NDK `28.2.13676358`, or `ST_LLVM_OBJCOPY`, or `PATH`).
@@ -104,7 +110,7 @@ Other supported upstream flags (not used yet): `-Dsimd=false` (pure Zig, no
 libc/C++ runtime, slower), `-Dvt-features=-all,+render-state,...` to trim
 features, `-Demit-xcframework` (macOS host) for an Apple xcframework.
 
-Environment: `ST_ZIG_JOBS` (default 2), `ST_ZIG_HOME`, `ANDROID_NDK_HOME`,
+Environment: `ST_ZIG_JOBS` (default 2), `ST_ZIG_HOME`, `ST_ALLOW_UNVERIFIED_ZIG`, `ANDROID_NDK_HOME`,
 `ST_LLVM_OBJCOPY`; wasm: `ST_NODE`, `ST_CHROME`, `ST_NO_BROWSER=1`.
 
 ## Wrapper hook

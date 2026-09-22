@@ -16,6 +16,8 @@
 # Environment overrides:
 #   ST_ZIG_JOBS       parallel zig jobs (default 2 — shared build host)
 #   ST_ZIG_HOME       where Zig lives (default ~/.local/zig/<version>)
+#   ST_ALLOW_UNVERIFIED_ZIG=1  allow a Zig download without the minisign
+#                     check when python3 'cryptography' is missing (sha256 only)
 #   ANDROID_NDK_HOME  NDK root for android-* (default: lock's NDK version under
 #                     $ANDROID_HOME / $ANDROID_SDK_ROOT / ~/Android/Sdk)
 set -euo pipefail
@@ -140,6 +142,10 @@ header_probe() {
 }
 
 build_wrapper() {
+  # TODO(Task 3/4): the JNI/shared wrapper library must link the STATIC
+  # libghostty-vt archive with -fvisibility=hidden plus a version script
+  # (ELF) / exported-symbols list (Mach-O) / .def (PE) so that ONLY st_* and
+  # Java_* are exported (the upstream .so also leaks wuffs_*/hwy_* symbols).
   [[ ${#WRAPPER_SOURCES[@]} -gt 0 ]] || { log "wrapper: no sources yet (ST_ABI_VERSION=$ST_ABI_VERSION)"; return 0; }
   die "wrapper build not implemented yet; add it together with WRAPPER_SOURCES"
 }
