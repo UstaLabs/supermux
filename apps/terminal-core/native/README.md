@@ -409,8 +409,10 @@ returns that frame with `held = true` (last viewport field,
 `TerminalViewport.held`) and `ST_FRAME_HELD` in `out_frame_flags`. Kotlin:
 `viewport(forceFull, breakHold)`. The hold ends
 when the program resets 2026, on RIS/`st_reset`, on `st_resize`, or when the
-owner passes `ST_READ_BREAK_HOLD` — **Task 6's owner loop must do this after
-~1 s of `ST_FRAME_HELD`** (the engine has no clock). If the capture fails the
+owner passes `ST_READ_BREAK_HOLD` — **`TerminalSession`'s owner loop does this
+after `holdTimeout` (default 1 s) of `ST_FRAME_HELD`** (the engine has no
+clock), polling every `holdPollInterval` meanwhile so a hold the program ends
+itself is never broken. If the capture fails the
 hold is ignored (frames stay live). Begin+end within one chunk yields the
 live frame (tested).
 
@@ -497,6 +499,33 @@ byte boundary of a 93-byte fixture and one byte at a time (identical frames
 and effects), allocation failure injected at every allocation of a session (only
 `OK`/`OUT_OF_MEMORY`, no leaks, engine usable afterwards), golden fixtures,
 history budgets, the 1,024-terminal limit.
+
+## TerminalSession (the owner)
+
+`TerminalSession` (commonMain) is the only thing hosts are meant to drive: it
+owns ONE engine, ONE coroutine and a bounded mailbox, and publishes frames as a
+`StateFlow<TerminalViewport>`. Every engine call happens on that coroutine, so
+the "externally serialized" rule below is satisfied by construction and no UI
+draw ever holds a lock across native parsing.
+
+- `receive(bytes, origin)` suspends while the pending-output budget (default
+  1 MiB) is spent — that is the backpressure a transport must honour. Local
+  input (`key`/`mouse`/`focus`/`scrollTo`/`select`) is NON-blocking and returns
+  `EnqueueResult.Accepted` or `Rejected(QUEUE_FULL | CLOSED)`; its own budget
+  defaults to 64 KiB. The mailbox is bounded by count too (default 256).
+- At most ONE published frame may be unacknowledged. Output keeps being parsed
+  meanwhile and the engine accumulates dirty rows, so the frame published after
+  `acknowledge(generation)` carries everything that changed since the last
+  acknowledged one. `acknowledge` never rides the mailbox, so a saturated
+  mailbox cannot stall rendering.
+- `setRenderingEnabled(false)` (hidden view) stops publishing and reading frames
+  but keeps parsing and delivering effects; re-enabling publishes a full frame.
+- The loop yields every `maxCommandsPerBatch` / `maxBytesPerBatch`, which is what
+  keeps a burst from freezing the browser event loop (wasmJs runs the owner on
+  it; a web worker is a later, measured optimisation). On Android/JVM/iOS the
+  default context is `Dispatchers.Default`.
+- The package owns no transport and emits no "exit" event: `close()` stopping
+  the local engine says nothing about the remote program.
 
 ## Bindings
 

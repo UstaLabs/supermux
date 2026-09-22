@@ -136,8 +136,18 @@ kotlin {
     }
 
     sourceSets {
+        commonMain.dependencies {
+            // The ONE runtime dependency of this package: TerminalSession is a coroutine + channels
+            // + StateFlow, and its StateFlow is part of the API every host consumes. Pinned to the
+            // version the rest of the app already resolves (gradle/libs.versions.toml).
+            api(libs.coroutines.core)
+        }
         commonTest.dependencies {
             implementation(kotlin("test"))
+            // NO kotlinx-coroutines-test: its 1.9.0 wasm-js klib does not link against the Kotlin
+            // 2.4.10 stdlib (IR linker: "Key kotlin.text/substring ... is missing in the map"), and
+            // coroutines is pinned app-wide. VirtualClock (commonTest) is the deterministic
+            // scheduler + clock the session tests need, and it works on every target.
         }
         wasmJsMain {
             // js("…"), external declarations and JsAny are behind this opt-in.
