@@ -1449,6 +1449,16 @@ class FleetStore(
     suspend fun addDevice(name: String): AddDeviceResponse? = activeApp()?.addDevice(name)
     /** Revoke a device; true when the broker accepted the DELETE (cluster E4). */
     suspend fun revokeDevice(name: String): Boolean = activeApp()?.revokeDevice(name) == true
+    // ── Worktrees ─────────────────────────────────────────────────────────
+    suspend fun worktrees() = activeApp()?.worktrees()
+    suspend fun worktreeChanges(id: String) = activeApp()?.worktreeChanges(id)
+    suspend fun worktreeForWorkdir(workdir: String) = activeApp()?.worktreeForWorkdir(workdir)
+    suspend fun deleteWorktrees(ids: List<String>) = activeApp()?.deleteWorktrees(ids)
+    suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>) = appFor(id)?.killAndDeleteWorktree(id, worktreeIds)
+    suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>) =
+        appForWorkspace(id)?.archiveWorkspaceAndDeleteWorktree(id, worktreeIds)
+    suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>) =
+        appForWorkspace(workspaceId)?.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds)
     suspend fun archived(): List<ArchivedDto> = activeApp()?.archived().orEmpty()
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()

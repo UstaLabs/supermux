@@ -20,6 +20,7 @@ import io.ktor.http.isSuccess
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.proto.LayoutNodeDto
@@ -1544,6 +1545,50 @@ class BrokerApi(
             authHeader()
         })
     }
+
+    // ── Worktrees (spec 2026-09-22-explicit-worktree-cleanup) ──────────────
+
+    /** GET /worktrees — every worktree folder; sizes follow as `worktree_sizes` frames. */
+    suspend fun worktrees(): WorktreeListDto = getJson("$httpBase/worktrees")
+
+    /** GET /worktrees/{id}/changes — id is "<slug>/<uuid>", so its slash is encoded. */
+    suspend fun worktreeChanges(id: String): WorktreeChangesDto =
+        getJson("$httpBase/worktrees/${urlEncode(id)}/changes")
+
+    /** GET /worktrees/by-workdir — null when the workdir is not an existing worktree (404). */
+    suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? {
+        val resp = http.get("$httpBase/worktrees/by-workdir?path=${urlEncode(workdir)}") { authHeader() }
+        if (resp.status == HttpStatusCode.NotFound) return null
+        return decode(resp)
+    }
+
+    /** DELETE /worktrees {ids} — deletes regardless of changes; refuses live-owned ones per id. */
+    suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto> {
+        val resp = http.delete("$httpBase/worktrees") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(WorktreeDeleteBody(ids)))
+        }
+        return decode<WorktreeDeleteResponse>(resp).results
+    }
+
+    /** `deleteWorktree=<id>` once per worktree id the archive dialog displayed and the user
+     *  confirmed ("a%2Fb" — the id's slash is encoded). The broker deletes EXACTLY these ids
+     *  after the archive, never ids it derives itself (live owners are still refused per id). */
+    private fun deleteWorktreeQuery(worktreeIds: List<String>): String =
+        worktreeIds.joinToString("&") { "deleteWorktree=${urlEncode(it)}" }
+
+    /** DELETE /sessions/{id}?deleteWorktree=<id>[&deleteWorktree=<id>…] — archive, then delete exactly those worktrees. */
+    suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
+        decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/sessions/$id?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
+
+    /** DELETE /workspaces/{id}?deleteWorktree=<id>[&deleteWorktree=<id>…] */
+    suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
+        decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$id?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
+
+    /** DELETE /workspaces/{wid}/views/{vid}?deleteWorktree=<id>[&deleteWorktree=<id>…] */
+    suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto> =
+        decode<ArchiveWithWorktreeResponse>(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId?${deleteWorktreeQuery(worktreeIds)}") { authHeader() }).worktree
 
     /** GET /archived-workspaces */
     suspend fun listArchivedWorkspaces(): List<WorkspaceDto> =

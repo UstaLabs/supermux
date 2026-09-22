@@ -68,6 +68,10 @@ import dev.supermux.net.VerifySaveResult
 import dev.supermux.net.VerifySuggestResult
 import dev.supermux.net.ScrcpyClient
 import dev.supermux.net.VncClient
+import dev.supermux.net.WorktreeChangesDto
+import dev.supermux.net.WorktreeDeleteResultDto
+import dev.supermux.net.WorktreeForWorkdirDto
+import dev.supermux.net.WorktreeSummaryDto
 import dev.supermux.host.viewingFramesFor
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
@@ -1397,8 +1401,17 @@ class HostStore(
      * to kill, so the row never left the sidebar and looked un-archivable.
      */
     fun archiveWorkspace(workspaceId: String) {
-        // Optimistic: live list drops it, archived fold gains it. workspace_removed
-        // is authoritative for peers (they still have the DTO in live list).
+        markWorkspaceArchivedLocally(workspaceId)
+        stateScope.launch {
+            runCatching { api.archiveWorkspace(workspaceId) }
+                .onFailure { println("[HostStore] archiveWorkspace failed: $it") }
+        }
+    }
+
+    /** Optimistic: live list drops [workspaceId], archived fold gains it. workspace_removed
+     *  is authoritative for peers (they still have the DTO in live list). Shared by
+     *  [archiveWorkspace] and [archiveWorkspaceAndDeleteWorktree]. */
+    private fun markWorkspaceArchivedLocally(workspaceId: String) {
         _state.update { st ->
             val moving = st.workspaces.find { it.id == workspaceId } ?: return@update st
             val archived = moving.copy(status = "archived")
@@ -1410,10 +1423,6 @@ class HostStore(
                     st.archivedWorkspaces + archived
                 },
             )
-        }
-        stateScope.launch {
-            runCatching { api.archiveWorkspace(workspaceId) }
-                .onFailure { println("[HostStore] archiveWorkspace failed: $it") }
         }
     }
 
@@ -1657,6 +1666,21 @@ class HostStore(
     /** DELETE /devices/<name> — revoke a paired device. False on failure. */
     suspend fun revokeDevice(name: String): Boolean =
         runApi("revokeDevice") { api.revokeDevice(name); true } ?: false
+
+    // ── Worktrees ─────────────────────────────────────────────────────────
+    suspend fun worktrees(): List<WorktreeSummaryDto>? = runApi("worktrees") { api.worktrees().worktrees }
+    suspend fun worktreeChanges(id: String): WorktreeChangesDto? = runApi("worktreeChanges") { api.worktreeChanges(id) }
+    suspend fun worktreeForWorkdir(workdir: String): WorktreeForWorkdirDto? = runApi("worktreeForWorkdir") { api.worktreeForWorkdir(workdir) }
+    suspend fun deleteWorktrees(ids: List<String>): List<WorktreeDeleteResultDto>? = runApi("deleteWorktrees") { api.deleteWorktrees(ids) }
+    suspend fun killAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
+        runApi("killAndDeleteWorktree") { api.killAndDeleteWorktree(id, worktreeIds) }
+    suspend fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? {
+        // Same optimistic move as archiveWorkspace(): the row leaves the sidebar immediately.
+        markWorkspaceArchivedLocally(id)
+        return runApi("archiveWorkspaceAndDeleteWorktree") { api.archiveWorkspaceAndDeleteWorktree(id, worktreeIds) }
+    }
+    suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
+        runApi("closeViewAndDeleteWorktree") { api.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds) }
 
     /** Fire-and-forget Android name for [revokeDevice]. */
     fun revoke(n: String) {
