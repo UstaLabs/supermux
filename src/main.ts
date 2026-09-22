@@ -155,6 +155,7 @@ import { runInstallToCompletion } from "./core/lsp/install-sync"
 import { hydrateCredentialEnv, applyCredentialEnv } from "./core/settings/app-config"
 import { reverseProxySnippets } from "./core/settings/exposure"
 import { toActivityEvents } from "./core/agents/adapter-activity"
+import { isCoreBacked } from "./core/agents/core-bridge/activity-dispatch"
 import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
@@ -1070,11 +1071,18 @@ function wireAdapterEvents(adapter: AgentAdapter, sessionId: string): void {
     const now = Date.now()
     const session = registry.get(sessionId)
     const workdir = session?.workdir
-    try {
-      for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
-    } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
+    if (!isCoreBacked(adapter)) {
+      try {
+        for (const a of toActivityEvents(adapter.kind, ev, now, workdir)) activityStore.append(sessionId, a)
+      } catch (err) { log.warn("adapter_tool_call_activity_failed", { err: String(err) }) }
+    }
     if (ev?.phase === "started") agentStateStore.applyEvent(sessionId, "PreToolUse", normalizeToolName(adapter.kind, ev.tool), now)
     else agentStateStore.applyEvent(sessionId, "PostToolUse", undefined, now)
+  })
+  adapter.on("activity", (ev: any) => {
+    try {
+      for (const a of ev?.events ?? []) activityStore.append(sessionId, a)
+    } catch (err) { log.warn("adapter_activity_append_failed", { err: String(err) }) }
   })
   adapter.on("turn-start", () => agentStateStore.applyEvent(sessionId, "turn-start"))
   adapter.on("turn-complete", () => {

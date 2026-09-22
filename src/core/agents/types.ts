@@ -1,5 +1,6 @@
 import type { EventEmitter } from "events"
 import type { AgentKind as SharedAgentKind } from "../../shared/agents"
+import type { ActivityEvent } from "./claude/activity-event"
 
 export { AgentKind } from "../../shared/agents"
 
@@ -31,12 +32,15 @@ export type TurnCompleteEvent = { kind: "turn-complete" }
 // omitted by stream-derived adapters, which fall back to a generic "error".
 export type AgentErrorEvent   = { kind: "error"; error: Error; errorType?: string }
 
+export type ActivityCardsEvent = { kind: "activity"; events: ActivityEvent[] }
+
 export type AgentEvent =
   | AssistantMessageEvent
   | ToolCallEvent
   | TurnStartEvent
   | TurnCompleteEvent
   | AgentErrorEvent
+  | ActivityCardsEvent
 
 export type InboundMeta = {
   chat_id?: string

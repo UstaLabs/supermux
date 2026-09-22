@@ -136,7 +136,7 @@ afterEach(async () => {
 
 function listen(adapter: CoreGrokAdapter) {
   const events: any[] = []
-  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "commands-update"]) {
+  for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "commands-update", "activity"]) {
     adapter.on(k, (e) => events.push(e))
   }
   return events
@@ -1089,6 +1089,9 @@ test("replays real grok-turn.ndjson through Core normalizer into broker events",
   const tools = events.filter((e) => e.kind === "tool-call")
   expect(tools.some((e) => e.phase === "started" && e.detail && typeof e.detail === "object")).toBe(true)
   expect(tools.some((e) => e.phase === "completed" && e.detail && typeof e.detail === "object")).toBe(true)
+  const activity = events.filter((e) => e.kind === "activity").flatMap((e) => e.events ?? [])
+  expect(activity.some((c: { kind: string }) => c.kind === "tool")).toBe(true)
+  expect(activity.some((c: { kind: string }) => c.kind === "tool_result")).toBe(true)
   const texts = events.filter((e) => e.kind === "assistant-message").map((e) => e.text).join("\n")
   expect(texts).toContain("42")
   expect(events.filter((e) => e.kind === "commands-update")).toHaveLength(1)

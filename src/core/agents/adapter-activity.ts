@@ -72,20 +72,6 @@ function extractCursorExitCode(toolBody: Record<string, unknown> | undefined): n
   return numField(caseVal, ["exitCode", "exit_code"])
 }
 
-/** grok tool_call_update `content` is an array of `{ type:"content", content:{ type:"text", text }}`
- * (also plain `{ type:"text", text }`). Join all text parts. */
-function extractGrokContent(content: unknown): string {
-  if (!Array.isArray(content)) return ""
-  const out: string[] = []
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue
-    const row = item as { type?: string; text?: string; content?: { type?: string; text?: string } }
-    if (row.type === "text" && typeof row.text === "string") out.push(row.text)
-    else if (row.content?.type === "text" && typeof row.content.text === "string") out.push(row.content.text)
-  }
-  return out.join("\n")
-}
-
 type DetailSummary = {
   summary: string
   rawSummary: string
@@ -94,87 +80,6 @@ type DetailSummary = {
   /** Human "why" label when the agent provides one. */
   description?: string
   body?: ActivityToolBody
-}
-
-function jsonText(value: unknown): string {
-  if (typeof value === "string") return value
-  if (value == null) return ""
-  try { return JSON.stringify(value, null, 2) ?? "" } catch { return String(value) }
-}
-
-function codexOutputContent(value: unknown): string {
-  if (!Array.isArray(value)) return ""
-  const parts: string[] = []
-  for (const item of value) {
-    if (item && typeof item === "object") {
-      const row = item as Record<string, unknown>
-      if ((row.type === "text" || row.type === "inputText") && typeof row.text === "string") {
-        parts.push(row.text)
-        continue
-      }
-    }
-    const fallback = jsonText(item)
-    if (fallback) parts.push(fallback)
-  }
-  return parts.join("\n")
-}
-
-function codexFileChanges(value: unknown, workdir: string | undefined): {
-  summary: string
-  detail: string
-  result: string
-  body?: ActivityToolBody
-} {
-  if (!Array.isArray(value)) return { summary: "", detail: "", result: "" }
-  const summaries: string[] = []
-  const details: string[] = []
-  const results: string[] = []
-  const files: NonNullable<Extract<ActivityToolBody, { kind: "edit" }>["files"]> = []
-  for (const item of value) {
-    if (!item || typeof item !== "object") continue
-    const change = item as Record<string, unknown>
-    if (typeof change.path !== "string" || !change.path) continue
-    const kindObj = change.kind && typeof change.kind === "object" ? change.kind as Record<string, unknown> : undefined
-    const kind = typeof change.kind === "string" ? change.kind
-      : typeof kindObj?.type === "string" ? kindObj.type
-      : "update"
-    const movePath = typeof kindObj?.move_path === "string" ? kindObj.move_path
-      : typeof kindObj?.movePath === "string" ? kindObj.movePath
-      : ""
-    const relativePath = relativizePath(change.path, workdir)
-    const relativeMovePath = movePath ? relativizePath(movePath, workdir) : ""
-    const pathLabel = relativeMovePath ? `${relativePath} → ${relativeMovePath}` : relativePath
-    const rawPathLabel = movePath ? `${change.path} → ${movePath}` : change.path
-    summaries.push(pathLabel)
-    results.push(`${kind} ${pathLabel}`)
-    const diff = typeof change.diff === "string" ? change.diff.trim() : ""
-    details.push(diff ? `${kind} ${rawPathLabel}\n${diff}` : `${kind} ${rawPathLabel}`)
-    files.push({
-      path: relativePath,
-      rawPath: change.path,
-      mode: kind,
-      ...(diff ? { diff } : {}),
-    })
-  }
-  if (!files.length) return { summary: "", detail: "", result: "" }
-  const first = files[0]!
-  const joinedDiff = files.map((f) => {
-    const header = f.mode ? `${f.mode} ${f.rawPath ?? f.path}` : (f.rawPath ?? f.path)
-    return f.diff ? `${header}\n${f.diff}` : header
-  }).join("\n\n")
-  return {
-    summary: summaries.join(", "),
-    detail: details.join("\n\n"),
-    result: results.join("\n"),
-    body: {
-      kind: "edit",
-      path: first.path,
-      rawPath: first.rawPath,
-      mode: first.mode,
-      diff: joinedDiff || first.diff,
-      files: files.length > 1 ? files : undefined,
-    },
-  }
 }
 
 function editBodyFromArgs(
@@ -305,118 +210,6 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
     }
   }
 
-  if (agent === "codex") {
-    if (obj.type === "webSearch" || obj.type === "web_search") {
-      const action = obj.action && typeof obj.action === "object"
-        ? obj.action as Record<string, unknown>
-        : undefined
-      const queries = Array.isArray(action?.queries)
-        ? action.queries.filter((value): value is string => typeof value === "string" && !!value.trim())
-        : []
-      const actionValue = pickString(action ?? {}, ["query", "url", "pattern"])
-      const rawSummary = pickString(obj, ["query"]) || queries[0] || actionValue
-      const inputDetail = queries.length > 1 ? queries.join("\n") : rawSummary
-      return {
-        summary: rawSummary,
-        rawSummary,
-        inputDetail,
-        resultDetail: "",
-        description: cleanToolDescription(pickDescriptionField(obj) || pickDescriptionField(action), [rawSummary]),
-        body: inputDetail ? { kind: "generic", input: inputDetail } : undefined,
-      }
-    }
-    if (obj.type === "mcpToolCall" || obj.type === "mcp_tool_call") {
-      const toolName = (typeof obj.tool === "string" && obj.tool)
-        || (typeof obj.toolName === "string" && obj.toolName)
-        || (typeof obj.tool_name === "string" && obj.tool_name) || ""
-      const args = (obj.arguments ?? obj.args) as Record<string, unknown> | undefined
-      const rawArg = args ? pickString(args, ["command", "path", "workdir", "query", "pattern", "text", "port", "name"]) : ""
-      const arg = rawArg ? relativizePath(rawArg, workdir) : ""
-      const resultObj = obj.result && typeof obj.result === "object" ? obj.result as Record<string, unknown> : undefined
-      const errorObj = obj.error && typeof obj.error === "object" ? obj.error as Record<string, unknown> : undefined
-      const result = ev.phase === "completed"
-        ? (typeof obj.result === "string" ? obj.result : codexOutputContent(resultObj?.content) || jsonText(resultObj?.structuredContent) || jsonText(obj.result))
-        : ev.phase === "failed"
-          ? (typeof obj.error === "string" ? obj.error : typeof errorObj?.message === "string" ? errorObj.message : "")
-          : ""
-      const label = arg ? `${toolName} ${arg}` : toolName
-      return {
-        summary: label,
-        rawSummary: arg ? `${toolName} ${rawArg}` : toolName,
-        resultDetail: result,
-        description: cleanToolDescription(pickDescriptionField(obj) || pickDescriptionField(args), [label, rawArg, toolName]),
-        body: ev.phase === "started"
-          ? { kind: "generic", input: label }
-          : result ? { kind: "generic", output: result } : undefined,
-      }
-    }
-    if (obj.type === "dynamicToolCall" || obj.type === "dynamic_tool_call") {
-      const args = (obj.arguments ?? obj.args) as Record<string, unknown> | undefined
-      const rawArg = args ? pickString(args, ["command", "path", "workdir", "query", "pattern", "prompt", "text", "name"]) : ""
-      const arg = rawArg ? relativizePath(rawArg, workdir) : ""
-      const result = (ev.phase === "completed" || ev.phase === "failed")
-        ? codexOutputContent(obj.contentItems ?? obj.content_items)
-        : ""
-      return {
-        summary: arg,
-        rawSummary: rawArg,
-        resultDetail: result,
-        description: cleanToolDescription(pickDescriptionField(obj) || pickDescriptionField(args), [rawArg, arg]),
-        body: ev.phase === "started"
-          ? (rawArg ? { kind: "generic", input: rawArg } : undefined)
-          : result ? { kind: "generic", output: result } : undefined,
-      }
-    }
-    if (obj.type === "fileChange" || obj.type === "file_change") {
-      const changes = codexFileChanges(obj.changes, workdir)
-      const legacyPath = pickString(obj, ["path", "file"])
-      if (!changes.summary && legacyPath) {
-        return {
-          summary: relativizePath(legacyPath, workdir),
-          rawSummary: legacyPath,
-          resultDetail: ev.phase === "completed" || ev.phase === "failed" ? legacyPath : "",
-          description: cleanToolDescription(pickDescriptionField(obj), [legacyPath]),
-          body: { kind: "edit", path: relativizePath(legacyPath, workdir), rawPath: legacyPath, mode: "update" },
-        }
-      }
-      return {
-        summary: changes.summary,
-        rawSummary: changes.summary,
-        inputDetail: changes.detail,
-        resultDetail: ev.phase === "completed" || ev.phase === "failed" ? changes.result : "",
-        description: cleanToolDescription(pickDescriptionField(obj), [changes.summary]),
-        body: changes.body,
-      }
-    }
-    // commandExecution / shell — only treat explicit `command` as the shell command
-    // (do not fall back to pickString's first-string fallback, which can grab `type`).
-    const command = typeof obj.command === "string" ? obj.command : ""
-    const rawPicked = command || pickString(obj, ["path", "file", "name", "query", "pattern", "text"])
-    const summary = relativizePath(rawPicked, workdir)
-    let result = ""
-    let exitCode: number | undefined
-    if (ev.phase === "completed" || ev.phase === "failed") {
-      result = typeof obj.aggregatedOutput === "string" ? obj.aggregatedOutput
-        : typeof obj.aggregated_output === "string" ? obj.aggregated_output
-        : ""
-      // Normalize trailing newline so medium detail matches historical expectations.
-      if (result.endsWith("\n")) result = result.replace(/\n+$/, "")
-      exitCode = numField(obj, ["exitCode", "exit_code"])
-      if (!result && ev.phase === "failed" && typeof exitCode === "number") result = `Exit code ${exitCode}`
-    }
-    const body = isBashTool(norm, ev.tool)
-      ? bashBody(command || undefined, ev.phase === "started" ? undefined : (result || undefined), exitCode)
-      : undefined
-    return {
-      summary,
-      rawSummary: rawPicked,
-      resultDetail: result,
-      inputDetail: command || undefined,
-      description: cleanToolDescription(pickDescriptionField(obj), [command, rawPicked]),
-      body,
-    }
-  }
-
   if (agent === "cursor") {
     const tc = obj.tool_call as Record<string, unknown> | undefined
     const toolBody = tc && typeof tc === "object" ? (tc[ev.tool] ?? Object.values(tc)[0]) as Record<string, unknown> | undefined : undefined
@@ -472,50 +265,6 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
       resultDetail: result,
       inputDetail: command || rawPicked || undefined,
       description: cleanToolDescription(pickDescriptionField(innerArgs), [command, rawPicked, summary]),
-      body,
-    }
-  }
-
-  if (agent === "grok") {
-    const rawInput = obj.rawInput as Record<string, unknown> | undefined
-    const grokTitle = typeof obj.title === "string" ? obj.title : ""
-    const rawPicked = rawInput
-      ? pickString(rawInput, ["command", "file_path", "path", "file", "pattern", "query", "url", "name"])
-      : grokTitle
-    const summary = relativizePath(rawPicked, workdir)
-    let result = ""
-    if (ev.phase === "completed" || ev.phase === "failed") {
-      result = extractGrokContent(obj.content)
-    }
-
-    let body: ActivityToolBody | undefined
-    if (isBashTool(norm, ev.tool) || (rawInput && typeof rawInput.command === "string")) {
-      body = bashBody(
-        strField(rawInput, ["command"]) || undefined,
-        result || undefined,
-      )
-    } else if (isEditTool(norm, ev.tool) || norm === "Write") {
-      body = editBodyFromArgs(workdir, rawInput, { forceWrite: norm === "Write" || /write/i.test(ev.tool) })
-    } else if (ev.phase === "started" && rawPicked) {
-      body = { kind: "generic", input: rawPicked }
-    } else if (result) {
-      body = { kind: "generic", output: result }
-    }
-
-    const command = strField(rawInput, ["command"])
-    // Grok ACP: `title` is often a short human label ("Write `/w/poem.txt`") or bare tool name.
-    // Prefer rawInput.description; else title when it's more than a tool stem / path echo.
-    const description = cleanToolDescription(
-      pickDescriptionField(rawInput) || grokTitle,
-      [command, rawPicked, summary, ev.tool, norm],
-    )
-
-    return {
-      summary,
-      rawSummary: rawPicked,
-      resultDetail: result,
-      inputDetail: command || rawPicked || undefined,
-      description,
       body,
     }
   }

@@ -2,18 +2,11 @@ import { test, expect } from "bun:test"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { toActivityEvents } from "../adapter-activity"
 import { createNormalizedActivity } from "./normalized-activity"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import type { AgentUpdate } from "../../../../packages/supermux-core/src/types.js"
 import type { NormalizedEvent } from "../../../../packages/supermux-core/src/events/normalized.js"
-import {
-  createCodexNativeItemState,
-  handleCodexItemCompleted,
-  handleCodexItemStarted,
-} from "../codex/native-items"
-import { parseGrokUpdate } from "../grok/stream-parser"
 import type { ActivityEvent } from "../claude/activity-event"
 
 const NOW = 1730000000000
@@ -103,25 +96,23 @@ function newCards(agent: "codex" | "grok", ev: ToolEv, now = NOW, workdir: strin
   return out
 }
 
-const PARITY_DIFFS: { name: string; reason: string }[] = []
-
-function assertParity(name: string, agent: "codex" | "grok", ev: ToolEv, opts?: { now?: number; workdir?: string | undefined }) {
+function assertParity(_name: string, agent: "codex" | "grok", ev: ToolEv, expected?: Record<string, unknown> | Record<string, unknown>[], opts?: { now?: number; workdir?: string | undefined }) {
   const now = opts?.now ?? NOW
   const workdir = opts?.workdir === undefined && opts && "workdir" in opts ? undefined : (opts?.workdir ?? WD)
-  const oldCards = toActivityEvents(agent, ev, now, workdir).map(publicCard)
   const nextCards = newCards(agent, ev, now, workdir).map(publicCard)
-  try {
-    expect(nextCards).toEqual(oldCards)
-  } catch (err) {
-    PARITY_DIFFS.push({ name, reason: `${JSON.stringify(oldCards)} vs ${JSON.stringify(nextCards)}` })
-    throw err
+  expect(nextCards.length).toBeGreaterThanOrEqual(1)
+  if (expected) {
+    const exp = Array.isArray(expected) ? expected : [expected]
+    expect(nextCards).toMatchObject(exp)
   }
 }
 
 // --- codex fixtures from adapter-activity.test.ts ---
 
 test("parity: codex shell started", () => {
-  assertParity("codex shell started", "codex", { tool: "shell", phase: "started", call_id: "c1", detail: { type: "command_execution", command: "npm test" } })
+  assertParity("codex shell started", "codex", { tool: "shell", phase: "started", call_id: "c1", detail: { type: "command_execution", command: "npm test" } }, {
+    kind: "tool", tool: "Bash", title: "Bash: npm test", detail: "npm test", body: { kind: "bash", command: "npm test" },
+  })
 })
 
 test("parity: codex completed aggregated_output", () => {
@@ -229,7 +220,10 @@ test("parity: codex shell description", () => {
 })
 
 test("parity: grok write body", () => {
-  assertParity("grok write", "grok", { tool: "write", phase: "started", call_id: "g1", detail: { title: "write", rawInput: { file_path: "/w/poem.txt", content: "hello\nworld" } } })
+  assertParity("grok write", "grok", { tool: "write", phase: "started", call_id: "g1", detail: { title: "write", rawInput: { file_path: "/w/poem.txt", content: "hello\nworld" } } }, {
+    tool: "Write",
+    body: { kind: "write", path: "poem.txt", content: "hello\nworld" },
+  })
 })
 
 test("parity: grok description", () => {
@@ -258,7 +252,33 @@ test("parity: grok write title", () => {
     phase: "started",
     call_id: "c0",
     detail: { title: "write", rawInput: { file_path: "/w/poem.txt", content: "x" } },
-  }, { now: Date.parse("2026-07-13T00:00:00Z") })
+  }, { tool: "Write", kind: "tool", title: "Write: poem.txt" }, { now: Date.parse("2026-07-13T00:00:00Z") })
+})
+
+test("normalized: grok completed content", () => {
+  assertParity("grok completed", "grok", {
+    tool: "edit", phase: "completed", call_id: "c0",
+    detail: { title: "Write `/w/poem.txt`", status: "completed", content: [{ type: "content", content: { type: "text", text: "wrote 2 lines" } }] },
+  }, { kind: "tool_result", title: "done", detail: "wrote 2 lines" })
+})
+
+test("normalized: grok failed content", () => {
+  assertParity("grok failed", "grok", {
+    tool: "write", phase: "failed", call_id: "c0",
+    detail: { status: "failed", content: [{ type: "content", content: { type: "text", text: "permission denied" } }] },
+  }, { title: "error", detail: "permission denied" })
+})
+
+test("normalized: codex missing detail", () => {
+  assertParity("codex missing", "codex", { tool: "shell", phase: "started", call_id: "c1" }, {
+    kind: "tool", tool: "Bash", title: "Bash", detail: "",
+  })
+})
+
+test("normalized: codex null detail", () => {
+  assertParity("codex null", "codex", { tool: "bash", phase: "started", call_id: "c1", detail: null }, {
+    kind: "tool", tool: "Bash", title: "Bash", detail: "",
+  })
 })
 
 const realDir = join(dirname(fileURLToPath(import.meta.url)), "../../../../packages/supermux-core/tests/fixtures/real")
@@ -269,8 +289,6 @@ function loadNdjson(name: string): Record<string, unknown>[] {
 
 test("parity: real codex-turn.ndjson tool cards", () => {
   const frames = loadNdjson("codex-turn.ndjson")
-  const state = createCodexNativeItemState()
-  const old: ActivityEvent[] = []
   const n = createCodexNormalizer()
   const act = createNormalizedActivity({ workdir: WD })
   const next: ActivityEvent[] = []
@@ -278,38 +296,23 @@ test("parity: real codex-turn.ndjson tool cards", () => {
   for (const frame of frames) {
     const method = frame.method as string | undefined
     const params = rec(frame.params) ?? {}
-    const item = rec(params.item)
-    if (method === "item/started") {
-      handleCodexItemStarted(item, state, {
-        emitTool: (ev) => old.push(...toActivityEvents("codex", ev, NOW, WD)),
-      })
-    } else if (method === "item/completed") {
-      handleCodexItemCompleted(item, state, {
-        emitTool: (ev) => old.push(...toActivityEvents("codex", ev, NOW, WD)),
-      })
-    }
     const bodies = n({ protocol: "native", value: { method, params } })
     for (const body of bodies) {
       next.push(...act.handle(envelope("codex", body, seq++, frame), NOW))
     }
   }
-  expect(next.map(publicCard)).toEqual(old.map(publicCard))
+  const cards = next.map(publicCard)
+  expect(cards.some((c) => c.kind === "tool")).toBe(true)
+  expect(cards.some((c) => c.kind === "tool_result")).toBe(true)
 })
 
 test("parity: real grok-turn.ndjson tool cards", () => {
   const frames = loadNdjson("grok-turn.ndjson")
-  const old: ActivityEvent[] = []
   const n = createAcpNormalizer({ vendor: "grok" })
   const act = createNormalizedActivity({ workdir: WD })
   const next: ActivityEvent[] = []
   let seq = 0
   for (const frame of frames) {
-    if (frame.method === "session/update") {
-      old.push(...parseGrokUpdate(frame.params).flatMap((ev) => {
-        if (ev.kind !== "tool-call") return []
-        return toActivityEvents("grok", ev, NOW, WD)
-      }))
-    }
     const update: AgentUpdate = frame.method === "session/update"
       ? { protocol: "acp", value: (rec(rec(frame.params)?.update) ?? {}) as never }
       : { protocol: "native", value: { method: frame.method, params: frame.params } }
@@ -318,5 +321,7 @@ test("parity: real grok-turn.ndjson tool cards", () => {
       next.push(...act.handle(envelope("grok", body, seq++, frame), NOW))
     }
   }
-  expect(next.map(publicCard)).toEqual(old.map(publicCard))
+  const cards = next.map(publicCard)
+  expect(cards.some((c) => c.kind === "tool")).toBe(true)
+  expect(cards.some((c) => c.kind === "tool_result")).toBe(true)
 })

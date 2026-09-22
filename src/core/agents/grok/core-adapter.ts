@@ -1,6 +1,7 @@
 import { EventEmitter } from "events"
 import type { AgentAdapter, AgentKind, InboundMeta } from "../types"
 import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
+import { createNormalizedActivity } from "../core-bridge/normalized-activity"
 import type {
   Completion,
   Core,
@@ -78,6 +79,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
   private lastNativeId?: string
+  private readonly activity
   private readonly bridge = createNormalizedBridge({
     agent: "grok",
     emit: (event) => {
@@ -102,6 +104,7 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
     this._effort = opts.effort
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
+    this.activity = createNormalizedActivity({ workdir: opts.workdir })
   }
 
   get model(): string | undefined { return this._model }
@@ -424,6 +427,9 @@ export class CoreGrokAdapter extends EventEmitter implements AgentAdapter {
     if (event.type === "session.event") {
       if (this.stallTimer) this.armStall()
       this.bridge.handle(event.event)
+      const env = event.event
+      const cards = this.activity.handle({ ...env, event: env }, Date.now())
+      if (cards.length) this.emit("activity", { kind: "activity", events: cards })
       return
     }
     if (event.type === "session.failed") {

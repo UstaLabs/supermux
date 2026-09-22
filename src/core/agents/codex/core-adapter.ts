@@ -5,6 +5,7 @@ import { makeLogger } from "../../../shared/log"
 import type { CodexUsage } from "../../usage/index"
 import { codexUsageFromRateLimits } from "../../usage/local"
 import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
+import { createNormalizedActivity } from "../core-bridge/normalized-activity"
 import type {
   Completion,
   ContentBlock,
@@ -104,6 +105,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   private failureEmitted = false
   private lastNativeId?: string
   private runtimeRequest?: (method: string, params: unknown) => Promise<unknown>
+  private readonly activity
   private readonly bridge = createNormalizedBridge({
     agent: "codex",
     emit: (event) => {
@@ -129,6 +131,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
     this.resolveAttachment = opts.resolveAttachment
     this.onUsageUpdate = opts.onUsageUpdate
     this.getPrevUsage = opts.getPrevUsage
+    this.activity = createNormalizedActivity({ workdir: opts.workdir })
   }
 
   get model(): string | undefined { return this._model }
@@ -491,6 +494,9 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
     }
     if (event.type === "session.event") {
       this.bridge.handle(event.event)
+      const env = event.event
+      const cards = this.activity.handle({ ...env, event: env }, Date.now())
+      if (cards.length) this.emit("activity", { kind: "activity", events: cards })
       return
     }
     if (event.type === "session.failed") {
