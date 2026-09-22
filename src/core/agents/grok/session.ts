@@ -3,8 +3,7 @@ import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { GrokAcpCommand } from "../../slash-commands/types"
-import { GrokAdapter } from "./adapter"
-import { CoreGrokAdapter } from "./core-adapter"
+import { CoreAdapter, GROK_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getGrokCoreHost } from "./core-host-provider"
 import type { GrokCoreHost, GrokPrepareExtra } from "./core-host"
 import { join } from "path"
@@ -26,7 +25,7 @@ export function commandContext(ctx: CommandContextCtx): GrokCommandContext {
   }
 }
 
-export type GrokSessionAdapter = CoreGrokAdapter | GrokAdapter
+export type GrokSessionAdapter = CoreAdapter
 
 function resolveHost(explicit?: GrokCoreHost): GrokCoreHost {
   return explicit ?? getGrokCoreHost()
@@ -60,8 +59,8 @@ function createBoundAdapter(opts: {
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
-}): CoreGrokAdapter {
-  return new CoreGrokAdapter({
+}): CoreAdapter {
+  return new CoreAdapter(GROK_CORE_PROFILE, {
     handle: opts.handle,
     reregister: opts.reregister,
     core: opts.core,
@@ -96,7 +95,7 @@ function prepareExtra(opts: {
   }
 }
 
-/** grok's worker is an in-process CoreGrokAdapter driving a `grok agent stdio`
+/** grok's worker is an in-process CoreAdapter driving a `grok agent stdio`
  * child via a process-owned GrokCoreHost. Unlike cursor (per-turn CLI) the child
  * is persistent; unlike codex/opencode it's owned by the adapter, so there's no
  * separate handle and no pid to track — the row is registered with pid 0 and
@@ -120,7 +119,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     env: {},
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir }),
   })
-  let adapter: CoreGrokAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     await deps.bind(id)
 
@@ -204,7 +203,7 @@ export async function resumeGrokSession(
     grokHost?: GrokCoreHost
   },
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
-): Promise<{ adapter: CoreGrokAdapter }> {
+): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.grokHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
@@ -220,7 +219,7 @@ export async function resumeGrokSession(
       prompts: session.prompts,
     }),
   })
-  let adapter: CoreGrokAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
@@ -272,32 +271,24 @@ export async function applyConfig(
   change: ApplyConfigChange,
 ): Promise<ApplyConfigResult> {
   const adapter = ctx.adapter
-  const coreAdapter = adapter instanceof CoreGrokAdapter
-    ? adapter
-    : (adapter && typeof (adapter as CoreGrokAdapter).setConfiguration === "function" && !(adapter instanceof GrokAdapter)
-      ? adapter as CoreGrokAdapter
-      : undefined)
-  if (coreAdapter) {
-    const adapter = coreAdapter
-    const patch: { model?: string; effort?: string } = {}
-    if (change.changed?.model !== false && change.model) patch.model = change.model
-    if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
-    if (!("model" in patch) && !("effort" in patch)) return { ok: true }
-    try {
-      await adapter.setConfiguration(patch)
-      return { ok: true }
-    } catch (err) {
-      if (isSessionBusy(err)) return { ok: false, busy: true }
-      return { ok: false, error: asError(err).message }
-    }
+  const live = adapter && typeof (adapter as CoreAdapter).setConfiguration === "function"
+    ? adapter as CoreAdapter
+    : undefined
+  if (!live) return { ok: false, error: "grok session has no live adapter" }
+  const patch: { model?: string; effort?: string } = {}
+  if (change.changed?.model !== false && change.model) patch.model = change.model
+  if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
+  if (!("model" in patch) && !("effort" in patch)) return { ok: true }
+  try {
+    await live.setConfiguration(patch)
+    return { ok: true }
+  } catch (err) {
+    if (isSessionBusy(err)) return { ok: false, busy: true }
+    return { ok: false, error: asError(err).message }
   }
-  if (!(adapter instanceof GrokAdapter)) return { ok: false, error: "grok session has no live adapter" }
-  if (change.changed?.model !== false && change.model) adapter.model = change.model
-  if (change.changed?.effort !== false) await adapter.setEffort(change.effort)
-  return { ok: true }
 }
 
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreGrokAdapter }> {
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreAdapter }> {
   return resumeGrokSession(
     {
       resolveAttachment: ctx.resolveAttachment,

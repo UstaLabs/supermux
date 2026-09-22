@@ -3,8 +3,6 @@ import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from "os"
 import { join } from "path"
 import { applyConfig, resumeGrokSession, spawn } from "./session"
-import { GrokAdapter } from "./adapter"
-import type { GrokRunner } from "./runner"
 import type { ApplyConfigCtx } from "../session-types"
 import { createGrokCoreHost, type GrokCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
@@ -13,9 +11,9 @@ import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../../shared/agents"
 import { openDb, runMigrations } from "../../storage/db"
 import { Registry } from "../../session-manager/registry"
-import { CoreGrokAdapter } from "./core-adapter"
+import { CoreAdapter } from "../core-bridge/core-adapter"
 
-const ctx = (adapter?: GrokAdapter): ApplyConfigCtx => ({
+const ctx = (adapter?: CoreAdapter): ApplyConfigCtx => ({
   sessionEffort: () => undefined,
   resolveAttachment: async () => { throw new Error("unused in this test") },
   persistAgentSessionId: () => {},
@@ -24,43 +22,45 @@ const ctx = (adapter?: GrokAdapter): ApplyConfigCtx => ({
 
 const row = { id: "s1", workdir: "/tmp" }
 
-function adapterWith(model?: string): { adapter: GrokAdapter; effortCalls: (string | undefined)[] } {
-  const adapter = new GrokAdapter({
-    sessionName: "t",
-    workdir: "/tmp",
-    runner: (() => { throw new Error("no child in this test") }) as unknown as GrokRunner,
-    persistSessionId: async () => {},
+function adapterWith(model?: string): { adapter: CoreAdapter; patches: { model?: string; effort?: string }[] } {
+  const patches: { model?: string; effort?: string }[] = []
+  const adapter = {
+    kind: "grok" as const,
     model,
-  })
-  const effortCalls: (string | undefined)[] = []
-  adapter.setEffort = async (e) => { effortCalls.push(e) }
-  return { adapter, effortCalls }
+    effort: undefined as string | undefined,
+    async setConfiguration(patch: { model?: string; effort?: string }) {
+      if ("model" in patch) this.model = patch.model
+      if ("effort" in patch) this.effort = patch.effort
+      patches.push(patch)
+    },
+  }
+  return { adapter: adapter as unknown as CoreAdapter, patches }
 }
 
-describe("grok applyConfig dialect (legacy GrokAdapter)", () => {
+describe("grok applyConfig dialect", () => {
   test("no live adapter → the exact error", async () => {
     const r = await applyConfig(ctx(undefined), row, "n", { model: "grok-4" })
     expect(r).toEqual({ ok: false, error: "grok session has no live adapter" })
   })
 
   test("model half applies live; a masked effort half is untouched", async () => {
-    const { adapter, effortCalls } = adapterWith("grok-4")
+    const { adapter, patches } = adapterWith("grok-4")
     const r = await applyConfig(ctx(adapter), row, "n", {
       model: "grok-4-fast", effort: "high", changed: { model: true, effort: false },
     })
     expect(r).toEqual({ ok: true })
     expect(adapter.model).toBe("grok-4-fast")
-    expect(effortCalls).toEqual([])
+    expect(patches).toEqual([{ model: "grok-4-fast" }])
   })
 
-  test("effort half goes through setEffort; a masked model half is untouched", async () => {
-    const { adapter, effortCalls } = adapterWith("grok-4")
+  test("effort half goes through setConfiguration; a masked model half is untouched", async () => {
+    const { adapter, patches } = adapterWith("grok-4")
     const r = await applyConfig(ctx(adapter), row, "n", {
       model: "grok-4-fast", effort: "low", changed: { model: false, effort: true },
     })
     expect(r).toEqual({ ok: true })
     expect(adapter.model).toBe("grok-4")
-    expect(effortCalls).toEqual(["low"])
+    expect(patches).toEqual([{ effort: "low" }])
   })
 })
 
@@ -187,7 +187,7 @@ describe("grok core spawn/resume dialect", () => {
         model: "grok-4",
       },
     )
-    expect(adapter).toBeInstanceOf(CoreGrokAdapter)
+    expect(adapter).toBeInstanceOf(CoreAdapter)
     expect(child.opens).toHaveLength(1)
     expect(child.opens[0]?.resumeId).toBe("native-keep")
     expect(child.opens[0]?.sessionId).toBe("existing-row")
@@ -219,7 +219,7 @@ describe("grok core spawn/resume dialect", () => {
     expect(existsSync(join(workdir, "AGENTS.md"))).toBe(true)
   })
 
-  test("CoreGrokAdapter setConfiguration session_busy is typed busy, native errors are not", async () => {
+  test("CoreAdapter setConfiguration session_busy is typed busy, native errors are not", async () => {
     const busyAdapter = {
       setConfiguration: async () => { throw new CoreError("session_busy", "Session is busy") },
     }
@@ -362,7 +362,7 @@ describe("grok core spawn/resume dialect", () => {
     expect(fulfilled).toHaveLength(1)
     expect(rejected).toHaveLength(1)
     expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/already awaiting failed-start cleanup|already starting|already live/)
-    const winner = (fulfilled[0] as PromiseFulfilledResult<{ adapter: CoreGrokAdapter }>).value
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ adapter: CoreAdapter }>).value
     expect(readFileSync(toml, "utf8")).not.toBe("SENTINEL")
     await winner.adapter.stop()
     const replacement = await resumeGrokSession({ grokHost: host }, session)

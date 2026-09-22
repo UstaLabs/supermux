@@ -1,6 +1,44 @@
 import type { ModelInfo } from "../../models/discovery"
-import { AcpClient } from "./acp-client"
 import { realGrokRunner, type GrokRunner } from "./runner"
+
+/** Minimal JSON-RPC client for the discovery handshake (inlined from the deleted tmux-era ACP client). */
+class AcpClient {
+  private nextId = 1
+  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  private buf = ""
+  private write: (line: string) => void
+  constructor(write: (line: string) => void) { this.write = write }
+  setWrite(fn: (line: string) => void): void { this.write = fn }
+  request<T = unknown>(method: string, params: unknown): Promise<T> {
+    const id = this.nextId++
+    const line = JSON.stringify({ jsonrpc: "2.0", id, method, params })
+    return new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject })
+      this.write(line)
+    })
+  }
+  feed(chunk: string): void {
+    this.buf += chunk
+    let i: number
+    while ((i = this.buf.indexOf("\n")) >= 0) {
+      const line = this.buf.slice(0, i)
+      this.buf = this.buf.slice(i + 1)
+      if (!line.trim()) continue
+      let m: { id?: number; result?: unknown; error?: { message?: string } }
+      try { m = JSON.parse(line) as typeof m } catch { continue }
+      if (m.id == null) continue
+      const p = this.pending.get(m.id)
+      if (!p) continue
+      this.pending.delete(m.id)
+      if (m.error) p.reject(new Error(typeof m.error.message === "string" ? m.error.message : "jsonrpc error"))
+      else p.resolve(m.result)
+    }
+  }
+  fail(err: Error): void {
+    for (const p of this.pending.values()) p.reject(err)
+    this.pending.clear()
+  }
+}
 
 // Shape of `_meta.modelState` from ACP `initialize` (verified live, grok 0.2.99).
 export type GrokModelEntry = {

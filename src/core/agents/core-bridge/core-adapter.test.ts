@@ -1,14 +1,39 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { AgentDriver, AgentRuntime, DriverContext, Host, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
-import { CoreGrokAdapter } from "./core-adapter"
-import { createGrokCoreHost } from "./core-host"
+import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
+import { createCursorNormalizer } from "../../../../packages/supermux-core/src/cursor/normalize.js"
+import { CoreAdapter, CORE_ADAPTER_PROFILES } from "./core-adapter"
+import { createGrokCoreHost } from "../grok/core-host"
+import { createCodexCoreHost } from "../codex/core-host"
+import { createCursorCoreHost } from "../cursor/core-host"
+import { createOpenCodeCoreHost } from "../opencode/core-host"
+import { createClaudeCoreHost } from "../claude/core-host"
+import type { AgentKind } from "../types"
 
-function attachGrokNormalizer(runtime: AgentRuntime): AgentRuntime {
-  const normalizer = createAcpNormalizer({ vendor: "grok" })
+const QUEUE_KINDS = ["grok", "opencode", "cursor", "claude"] as const
+type QueueKind = typeof QUEUE_KINDS[number]
+type Kind = AgentKind
+
+function attachNormalizer(kind: Kind, runtime: AgentRuntime): AgentRuntime {
+  if (kind === "codex") {
+    const normalizer = createCodexNormalizer()
+    runtime.normalize = (update) => normalizer(update)
+    runtime.flush = () => normalizer.flush()
+    return runtime
+  }
+  if (kind === "cursor") {
+    const normalizer = createCursorNormalizer()
+    runtime.normalize = (update) => normalizer(update)
+    runtime.flush = () => normalizer.flush()
+    return runtime
+  }
+  const vendor = (kind === "opencode" ? "opencode" : kind === "claude" ? "claude" : "grok") as "grok"
+  const normalizer = createAcpNormalizer({ vendor })
   runtime.normalize = (update) => normalizer(update)
   runtime.flush = () => normalizer.flush()
   return runtime
@@ -29,9 +54,11 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {}) {
+function fakeAgentDriver(kind: Kind, options: { configure?: boolean; nativeId?: string; steer?: boolean; steerBusy?: boolean } = {}) {
   const opens: DriverContext[] = []
-  const prompts: string[][] = []
+  const prompts: ContentBlock[][] = []
+  const promptTexts: string[][] = []
+  const steers: ContentBlock[][] = []
   const applied: SessionConfiguration[] = []
   let closes = 0
   let interruptCalls = 0
@@ -42,22 +69,21 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {
   let nextFail: Error | undefined
   let interruptHangs = false
   let ignoreAbort = false
-  const attachmentHold = deferred<string>()
-  let attachmentWaiting: ReturnType<typeof deferred<string>> | undefined
 
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open(ctx) {
       opens.push(ctx)
       if (ctx.configuration) liveConfig = { ...ctx.configuration }
       const runtime: AgentRuntime = {
         agentSessionId: ctx.resumeId ?? options.nativeId ?? `native-${opens.length}`,
         capabilities: {
-          resume: true, steer: false, fork: false, detach: false,
+          resume: true, steer: options.steer === true || kind === "codex", fork: false, detach: false,
           configure: options.configure !== false, history: false,
         },
         async prompt(content, signal) {
-          prompts.push(content.map((c) => ("text" in c ? String(c.text) : "")))
+          prompts.push(content)
+          promptTexts.push(content.map((c) => ("text" in c ? String(c.text) : "")))
           if (nextFail) {
             const err = nextFail
             nextFail = undefined
@@ -75,6 +101,10 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {
             if (promptGate === work) promptGate = undefined
           }
         },
+        async steer(content) {
+          if (options.steerBusy) throw new CoreError("session_busy", "Native work is ambiguous")
+          steers.push(content)
+        },
         async interrupt() {
           interruptCalls++
           if (interruptHangs) return
@@ -87,12 +117,12 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {
         },
         configuration: () => ({ ...liveConfig }),
       }
-      return attachGrokNormalizer(runtime)
+      return attachNormalizer(kind, runtime)
     },
   }
 
   return {
-    driver, opens, prompts, applied,
+    driver, opens, prompts, promptTexts, steers, applied,
     get closes() { return closes },
     get interruptCalls() { return interruptCalls },
     holdNextPrompt() { holdPrompt = true },
@@ -107,29 +137,36 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {
     completeActivity(id: string) { opens.at(-1)?.onActivity?.({ id, phase: "completed" }) },
     failRuntime(error: Error) { opens.at(-1)?.onExit(error) },
     get lastCtx() { return opens.at(-1) },
-    waitAttachment: () => { attachmentWaiting = attachmentHold; return attachmentHold },
   }
 }
 
 const dirs: string[] = []
 const hosts: Host[] = []
-const adapters: CoreGrokAdapter[] = []
+const adapters: CoreAdapter[] = []
 
-async function harness(fake: { driver: AgentDriver } | AgentDriver = fakeAgentDriver()) {
-  const workdir = await mkdtemp(join(tmpdir(), "grok-wd-"))
-  const stateDirectory = await mkdtemp(join(tmpdir(), "grok-core-"))
+function createHostFor(kind: Kind, stateDirectory: string, driver: AgentDriver): Host {
+  const limits = { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 }
+  const opts = { stateDirectory, driverFactory: () => driver, limits }
+  if (kind === "codex") return createCodexCoreHost(opts)
+  if (kind === "cursor") {
+    return createCursorCoreHost({ ...opts, smoke: async () => {}, sharedRuntime: null })
+  }
+  if (kind === "opencode") return createOpenCodeCoreHost(opts)
+  if (kind === "claude") return createClaudeCoreHost(opts)
+  return createGrokCoreHost(opts)
+}
+
+async function harness(kind: Kind, fake: { driver: AgentDriver } | AgentDriver = fakeAgentDriver(kind)) {
+  const workdir = await mkdtemp(join(tmpdir(), `${kind}-wd-`))
+  const stateDirectory = await mkdtemp(join(tmpdir(), `${kind}-core-`))
   dirs.push(workdir, stateDirectory)
   const driver = "driver" in fake ? fake.driver : fake
-  const host = createGrokCoreHost({
-    stateDirectory,
-    driverFactory: () => driver,
-    limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
-  })
+  const host = createHostFor(kind, stateDirectory, driver)
   hosts.push(host)
   return { host, workdir, stateDirectory }
 }
 
-function makeAdapter(host: Host, opts: {
+function makeAdapter(kind: Kind, host: Host, opts: {
   id: string
   sessionName: string
   workdir: string
@@ -139,7 +176,9 @@ function makeAdapter(host: Host, opts: {
   effort?: string
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
-}): CoreGrokAdapter {
+  onUsageUpdate?: CoreAdapter["onUsageUpdate"]
+  getPrevUsage?: CoreAdapter["getPrevUsage"]
+}): CoreAdapter {
   const extra: Record<string, unknown> = {
     cwd: opts.workdir,
     workdir: opts.workdir,
@@ -149,7 +188,7 @@ function makeAdapter(host: Host, opts: {
   }
   if (opts.initialSessionId) extra.nativeSessionId = opts.initialSessionId
   const handle = host.register({ id: opts.id, env: {}, extra })
-  const adapter = new CoreGrokAdapter({
+  const adapter = new CoreAdapter(CORE_ADAPTER_PROFILES[kind], {
     handle,
     reregister: (fields) => host.register({
       id: opts.id,
@@ -159,6 +198,7 @@ function makeAdapter(host: Host, opts: {
     core: host.core,
     ...opts,
   })
+  adapters.push(adapter)
   return adapter
 }
 
@@ -168,19 +208,29 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })))
 })
 
-function listen(adapter: CoreGrokAdapter) {
-  const events: any[] = []
+function listen(adapter: CoreAdapter) {
+  const events: Array<{ kind: string; error?: Error; text?: string; phase?: string; detail?: unknown; events?: unknown[] }> = []
   for (const k of ["assistant-message", "tool-call", "turn-start", "turn-complete", "error", "commands-update", "activity"]) {
-    adapter.on(k, (e) => events.push(e))
+    adapter.on(k, (e: { kind: string }) => events.push(e))
   }
   return events
 }
 
-test("adopt uses exact resume id and never session/new (no extra open without resumeId)", async () => {
-  const fake = fakeAgentDriver({ nativeId: "native-prior" })
-  const { host, workdir } = await harness(fake)
+function acrossQueue(name: string, fn: (kind: QueueKind) => Promise<void>) {
+  for (const kind of QUEUE_KINDS) {
+    test(`${kind}: ${name}`, async () => { await fn(kind) })
+  }
+}
+
+function acrossGrok(name: string, fn: (kind: "grok") => Promise<void>) {
+  test(`grok: ${name}`, async () => { await fn("grok") })
+}
+
+acrossQueue("adopt uses exact resume id and never session/new (no extra open without resumeId)", async (kind) => {
+  const fake = fakeAgentDriver(kind, { nativeId: "native-prior" })
+  const { host, workdir } = await harness(kind, fake)
   const persisted: string[] = []
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     initialSessionId: "native-prior",
     persistSessionId: async (id) => { persisted.push(id) },
   })
@@ -192,29 +242,29 @@ test("adopt uses exact resume id and never session/new (no extra open without re
   expect(record?.agentSessionId).toBe("native-prior")
 })
 
-test("existing core record with mismatched agent/cwd/native id is rejected", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const first = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+acrossQueue("existing core record with mismatched agent/cwd/native id is rejected", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const first = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await first.start()
   await first.stop()
   const other = await mkdtemp(join(tmpdir(), "grok-wd-"))
   dirs.push(other)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir: other,
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir: other,
     persistSessionId: async () => {},
   })
   await expect(adapter.start()).rejects.toThrow(/cwd mismatch/)
   expect(fake.opens).toHaveLength(1) // first start only
 })
 
-test("existing record with wrong native id is rejected before a replacement open", async () => {
-  const fake = fakeAgentDriver({ nativeId: "native-a" })
-  const { host, workdir } = await harness(fake)
-  const first = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+acrossQueue("existing record with wrong native id is rejected before a replacement open", async (kind) => {
+  const fake = fakeAgentDriver(kind, { nativeId: "native-a" })
+  const { host, workdir } = await harness(kind, fake)
+  const first = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await first.start()
   await first.stop()
   const opensAfterCreate = fake.opens.length
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     initialSessionId: "native-other",
     persistSessionId: async () => {},
   })
@@ -222,11 +272,11 @@ test("existing record with wrong native id is rejected before a replacement open
   expect(fake.opens.length).toBe(opensAfterCreate)
 })
 
-test("new session creates with broker id and persists native id", async () => {
-  const fake = fakeAgentDriver({ nativeId: "minted" })
-  const { host, workdir } = await harness(fake)
+acrossQueue("new session creates with broker id and persists native id", async (kind) => {
+  const fake = fakeAgentDriver(kind, { nativeId: "minted" })
+  const { host, workdir } = await harness(kind, fake)
   const persisted: string[] = []
-  const adapter = makeAdapter(host, {id: "broker-id", sessionName: "s1", workdir,
+  const adapter = makeAdapter(kind, host, {id: "broker-id", sessionName: "s1", workdir,
     persistSessionId: async (id) => { persisted.push(id) },
   })
   await adapter.start()
@@ -235,10 +285,10 @@ test("new session creates with broker id and persists native id", async () => {
   expect((await host.core.sessions.get("broker-id"))?.agentSessionId).toBe("minted")
 })
 
-test("persist failure closes the opened session and leaves adapter stopped", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("persist failure closes the opened session and leaves adapter stopped", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => { throw new Error("disk full") },
   })
   await expect(adapter.start()).rejects.toThrow("disk full")
@@ -246,13 +296,13 @@ test("persist failure closes the opened session and leaves adapter stopped", asy
   await expect(adapter.send("hi")).rejects.toThrow(/not initialized|stopped/)
 })
 
-test("send waits for completion and serializes attachment resolution before later messages", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
+acrossQueue("send waits for completion and serializes attachment resolution before later messages", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
   const order: string[] = []
   let releaseFirst!: (path: string) => void
   const firstPath = new Promise<string>((r) => { releaseFirst = r })
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async (id) => {
       order.push(`resolve:${id}`)
@@ -267,7 +317,7 @@ test("send waits for completion and serializes attachment resolution before late
   const second = adapter.send("two", { attachment_file_id: "b" })
   await tick()
   expect(order).toEqual(["resolve:a"])
-  expect(fake.prompts).toHaveLength(0)
+  expect(fake.promptTexts).toHaveLength(0)
   releaseFirst("/tmp/a.txt")
   await tick()
   fake.completePrompt()
@@ -275,17 +325,17 @@ test("send waits for completion and serializes attachment resolution before late
   fake.holdNextPrompt()
   await tick()
   expect(order).toEqual(["resolve:a", "resolve:b"])
-  expect(fake.prompts[0]?.[0]).toContain("[Attached file: /tmp/a.txt]")
+  expect(fake.promptTexts[0]?.[0]).toContain("[Attached file: /tmp/a.txt]")
   fake.completePrompt()
   await second
-  expect(fake.prompts[1]?.[0]).toContain("[Attached file: /tmp/b]")
+  expect(fake.promptTexts[1]?.[0]).toContain("[Attached file: /tmp/b]")
 })
 
-test("stop during attachment resolution does not deliver the prompt", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
+acrossQueue("stop during attachment resolution does not deliver the prompt", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
   const gate = deferred<string>()
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async () => gate.promise,
   })
@@ -295,43 +345,43 @@ test("stop during attachment resolution does not deliver the prompt", async () =
   await adapter.stop()
   gate.resolve("/tmp/x")
   await expect(sent).rejects.toThrow(/stopped/)
-  expect(fake.prompts).toHaveLength(0)
+  expect(fake.promptTexts).toHaveLength(0)
 })
 
-test("interrupt discards queued core work, invalidates pre-interrupt inputs, and surfaces unconfirmed", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
+acrossQueue("interrupt discards queued core work, invalidates pre-interrupt inputs, and surfaces unconfirmed", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
   const attach = deferred<string>()
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async () => attach.promise,
   })
   await adapter.start()
   fake.holdNextPrompt()
   const first = adapter.send("one")
-  for (let i = 0; i < 20 && fake.prompts.length === 0; i++) await tick()
-  expect(fake.prompts).toHaveLength(1)
+  for (let i = 0; i < 20 && fake.promptTexts.length === 0; i++) await tick()
+  expect(fake.promptTexts).toHaveLength(1)
   const second = adapter.send("two", { attachment_file_id: "held" })
   await tick()
   await adapter.interrupt()
   await first
   attach.resolve("/tmp/held")
   await expect(second).rejects.toThrow(/stopped/)
-  expect(fake.prompts).toHaveLength(1)
+  expect(fake.promptTexts).toHaveLength(1)
 
   fake.hangInterrupt()
   fake.holdNextPrompt()
   const third = adapter.send("three")
-  for (let i = 0; i < 20 && fake.prompts.length < 2; i++) await tick()
+  for (let i = 0; i < 20 && fake.promptTexts.length < 2; i++) await tick()
   await expect(adapter.interrupt()).rejects.toThrow(/unconfirmed/)
   fake.completePrompt()
   await third.catch(() => {})
 })
 
-test("new user input after confirmed interrupt continues the paused empty queue", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("new user input after confirmed interrupt continues the paused empty queue", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   await adapter.start()
@@ -345,13 +395,13 @@ test("new user input after confirmed interrupt continues the paused empty queue"
   await tick()
   fake.completePrompt()
   await second
-  expect(fake.prompts.map((p) => p[0])).toEqual(["one", "two"])
+  expect(fake.promptTexts.map((p) => p[0])).toEqual(["one", "two"])
 })
 
-test("skips replay chat but still applies commands and initialize metadata", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossGrok("skips replay chat but still applies commands and initialize metadata", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -377,10 +427,10 @@ test("skips replay chat but still applies commands and initialize metadata", asy
   expect(events.some((e) => e.kind === "commands-update")).toBe(true)
 })
 
-test("buffers assistant deltas and flushes before tool start and turn end", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossGrok("buffers assistant deltas and flushes before tool start and turn end", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -399,10 +449,10 @@ test("buffers assistant deltas and flushes before tool start and turn end", asyn
   expect(events.filter((e) => e.kind === "tool-call")[0]?.phase).toBe("started")
 })
 
-test("self-started background turns via vendor notifications get their own turn latch", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossGrok("self-started background turns via vendor notifications get their own turn latch", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -430,10 +480,10 @@ test("self-started background turns via vendor notifications get their own turn 
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
-test("session.failed and message failure emit a single error", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("session.failed and message failure emit a single error", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -448,13 +498,13 @@ test("session.failed and message failure emit a single error", async () => {
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/child died/)
 })
 
-test("stop during start closes the late-opened session; resume after stop uses the same id", async () => {
+acrossQueue("stop during start closes the late-opened session; resume after stop uses the same id", async (kind) => {
   const openGate = deferred<void>()
   const entered = deferred<void>()
   let closes = 0
   let opens = 0
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open(ctx) {
       opens++
       entered.resolve()
@@ -470,8 +520,8 @@ test("stop during start closes the late-opened session; resume after stop uses t
       }
     },
   }
-  const { host, workdir } = await harness(driver)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, driver)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const started = adapter.start()
@@ -481,17 +531,17 @@ test("stop during start closes the late-opened session; resume after stop uses t
   await stopping
   await started.catch(() => {})
   expect(closes).toBe(1)
-  const resumed = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const resumed = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await resumed.start()
   expect(opens).toBe(2)
   expect((await host.core.sessions.get("sess-1"))?.id).toBe("sess-1")
 })
 
-test("setConfiguration awaits core configure and rolls adapter fields back on failure", async () => {
+acrossGrok("setConfiguration awaits core configure and rolls adapter fields back on failure", async (kind) => {
   let fail = false
   let opens = 0
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open() {
       opens++
       if (fail) throw new Error("native configure failed")
@@ -508,8 +558,8 @@ test("setConfiguration awaits core configure and rolls adapter fields back on fa
       }
     },
   }
-  const { host, workdir } = await harness(driver)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, driver)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     model: "grok-4.5",
     effort: "low",
@@ -524,13 +574,13 @@ test("setConfiguration awaits core configure and rolls adapter fields back on fa
   expect(adapter.model).toBe("grok-fast")
 })
 
-test("stop awaits blocked open; start during stop does not join the abandoned open", async () => {
+acrossQueue("stop awaits blocked open; start during stop does not join the abandoned open", async (kind) => {
   const openGate = deferred<void>()
   const entered = deferred<void>()
   let closes = 0
   let opens = 0
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open(ctx) {
       opens++
       entered.resolve()
@@ -546,8 +596,8 @@ test("stop awaits blocked open; start during stop does not join the abandoned op
       }
     },
   }
-  const { host, workdir } = await harness(driver)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, driver)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const started = adapter.start()
@@ -557,16 +607,16 @@ test("stop awaits blocked open; start during stop does not join the abandoned op
   await stopping
   expect(closes).toBe(1)
   await started.catch(() => {})
-  const next = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const next = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await next.start()
   await next.send("hi")
   expect(opens).toBe(2)
 })
 
-test("failed close is retained: stop rejects and retry stop can close", async () => {
+acrossQueue("failed close is retained: stop rejects and retry stop can close", async (kind) => {
   let closeAttempts = 0
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open() {
       return {
         agentSessionId: "n-fail-close",
@@ -582,46 +632,46 @@ test("failed close is retained: stop rejects and retry stop can close", async ()
       }
     },
   }
-  const { host, workdir } = await harness(driver)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, driver)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   await adapter.start()
   await expect(adapter.stop()).rejects.toThrow(/native close failed/)
   await adapter.stop()
   expect(closeAttempts).toBe(2)
-  const next = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const next = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await next.start()
   await next.send("hi")
 })
 
-test("interrupt of an already-accepted queued send fulfills without a duplicate error", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("interrupt of an already-accepted queued send fulfills without a duplicate error", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const first = adapter.send("one")
-  for (let i = 0; i < 20 && fake.prompts.length === 0; i++) await tick()
-  expect(fake.prompts).toHaveLength(1)
+  for (let i = 0; i < 20 && fake.promptTexts.length === 0; i++) await tick()
+  expect(fake.promptTexts).toHaveLength(1)
   const second = adapter.send("two")
   for (let i = 0; i < 20; i++) await tick()
   await adapter.interrupt()
   await first
   await second
-  expect(fake.prompts).toHaveLength(1)
+  expect(fake.promptTexts).toHaveLength(1)
   expect(events.filter((e) => e.kind === "error")).toHaveLength(0)
 })
 
-test("setConfiguration does not adopt model fields after stop wins the race", async () => {
+acrossGrok("setConfiguration does not adopt model fields after stop wins the race", async (kind) => {
   const cfgGate = deferred<void>()
   const enteredCfg = deferred<void>()
   let holdConfigure = false
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open() {
       let live: SessionConfiguration = { model: "grok-4.5" }
       return {
@@ -641,8 +691,8 @@ test("setConfiguration does not adopt model fields after stop wins the race", as
       }
     },
   }
-  const { host, workdir } = await harness(driver)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, driver)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     model: "grok-4.5",
   })
@@ -658,13 +708,13 @@ test("setConfiguration does not adopt model fields after stop wins the race", as
   expect(adapter.model).toBe("grok-4.5")
 })
 
-test("resume during stop waits for close then reopens a new epoch", async () => {
+acrossQueue("resume during stop waits for close then reopens a new epoch", async (kind) => {
   const closeEntered = deferred<void>()
   const closeRelease = deferred<void>()
   let opens = 0
   let closes = 0
   const driver: AgentDriver = {
-    id: "grok",
+    id: kind,
     async open(ctx) {
       opens++
       return {
@@ -682,8 +732,8 @@ test("resume during stop waits for close then reopens a new epoch", async () => 
       }
     },
   }
-  const { host, workdir } = await harness(driver)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, driver)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   await adapter.start()
@@ -692,17 +742,17 @@ test("resume during stop waits for close then reopens a new epoch", async () => 
   await closeEntered.promise
   closeRelease.resolve()
   await stopping
-  const next = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const next = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
   await next.start()
   expect(opens).toBe(2)
   await next.send("hi")
   expect(closes).toBe(1)
 })
 
-test("active-turn delayed close emits turn-complete only after native close", async () => {
+acrossGrok("active-turn delayed close emits turn-complete only after native close", async (kind) => {
   const closeEntered = deferred<void>()
   const closeRelease = deferred<void>()
-  const fake = fakeAgentDriver()
+  const fake = fakeAgentDriver(kind)
   const origOpen = fake.driver.open.bind(fake.driver)
   fake.driver.open = async (ctx) => {
     const runtime = await origOpen(ctx)
@@ -714,15 +764,15 @@ test("active-turn delayed close emits turn-complete only after native close", as
     }
     return runtime
   }
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const sent = adapter.send("hi")
-  for (let i = 0; i < 20 && fake.prompts.length === 0; i++) await tick()
+  for (let i = 0; i < 20 && fake.promptTexts.length === 0; i++) await tick()
   fake.emit({ protocol: "acp", value: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial" } } })
   await tick()
   expect(events.filter((e) => e.kind === "turn-start")).toHaveLength(1)
@@ -743,9 +793,9 @@ test("active-turn delayed close emits turn-complete only after native close", as
   }
 })
 
-test("active-turn failed close keeps pending buffer and does not fake idle", async () => {
+acrossGrok("active-turn failed close keeps pending buffer and does not fake idle", async (kind) => {
   let closeAttempts = 0
-  const fake = fakeAgentDriver()
+  const fake = fakeAgentDriver(kind)
   const origOpen = fake.driver.open.bind(fake.driver)
   fake.driver.open = async (ctx) => {
     const runtime = await origOpen(ctx)
@@ -757,15 +807,15 @@ test("active-turn failed close keeps pending buffer and does not fake idle", asy
     }
     return runtime
   }
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const sent = adapter.send("hi")
-  for (let i = 0; i < 20 && fake.prompts.length === 0; i++) await tick()
+  for (let i = 0; i < 20 && fake.promptTexts.length === 0; i++) await tick()
   fake.emit({ protocol: "acp", value: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "held" } } })
   await tick()
   await expect(adapter.stop()).rejects.toThrow(/native close failed/)
@@ -778,10 +828,10 @@ test("active-turn failed close keeps pending buffer and does not fake idle", asy
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
-test("stall watchdog cancels through core after no activity", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("stall watchdog cancels through core after no activity", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
@@ -795,10 +845,10 @@ test("stall watchdog cancels through core after no activity", async () => {
   expect(fake.interruptCalls).toBeGreaterThan(0)
 })
 
-test("native A plus queued B: no stall until owned dispatch; idle then running order", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("native A plus queued B: no stall until owned dispatch; idle then running order", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
@@ -816,12 +866,12 @@ test("native A plus queued B: no stall until owned dispatch; idle then running o
   fake.holdNextPrompt()
   const sent = adapter.send("B")
   await sleep(50)
-  expect(fake.prompts).toHaveLength(0)
+  expect(fake.promptTexts).toHaveLength(0)
   expect(events.filter((e) => e.kind === "error")).toHaveLength(0)
   expect(fake.interruptCalls).toBe(0)
   fake.completeActivity("A")
-  await waitUntil(() => fake.prompts.length === 1)
-  expect(fake.prompts[0]?.[0]).toBe("B")
+  await waitUntil(() => fake.promptTexts.length === 1)
+  expect(fake.promptTexts[0]?.[0]).toBe("B")
   await flush()
   const idleAt = coreEvents.indexOf("idle")
   const startedAt = coreEvents.indexOf("started")
@@ -834,10 +884,10 @@ test("native A plus queued B: no stall until owned dispatch; idle then running o
   await flush()
 })
 
-test("interrupt discard does not fake A complete before ack", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("interrupt discard does not fake A complete before ack", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -847,7 +897,7 @@ test("interrupt discard does not fake A complete before ack", async () => {
   fake.holdNextPrompt()
   const queued = adapter.send("B")
   await flush()
-  expect(fake.prompts).toHaveLength(0)
+  expect(fake.promptTexts).toHaveLength(0)
   const interrupting = adapter.interrupt()
   await flush()
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(0)
@@ -861,10 +911,10 @@ test("interrupt discard does not fake A complete before ack", async () => {
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
-test("stale raw completion cannot close current native work", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("stale raw completion cannot close current native work", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -880,10 +930,10 @@ test("stale raw completion cannot close current native work", async () => {
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
 })
 
-test("watchdog arms on actual dispatch; follow-up after confirmed stall works", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("watchdog arms on actual dispatch; follow-up after confirmed stall works", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
@@ -897,7 +947,7 @@ test("watchdog arms on actual dispatch; follow-up after confirmed stall works", 
   expect(events.filter((e) => e.kind === "error")).toHaveLength(0)
   expect(fake.interruptCalls).toBe(0)
   fake.completeActivity("A")
-  await waitUntil(() => fake.prompts.length === 1)
+  await waitUntil(() => fake.promptTexts.length === 1)
   await sleep(60)
   expect(events.find((e) => e.kind === "error")?.error?.message).toMatch(/stalled/)
   expect(fake.interruptCalls).toBeGreaterThan(0)
@@ -905,16 +955,16 @@ test("watchdog arms on actual dispatch; follow-up after confirmed stall works", 
   await flush()
   fake.holdNextPrompt()
   const second = adapter.send("follow-up")
-  await waitUntil(() => fake.prompts.length === 2)
+  await waitUntil(() => fake.promptTexts.length === 2)
   fake.completePrompt()
   await second
-  expect(fake.prompts[1]?.[0]).toBe("follow-up")
+  expect(fake.promptTexts[1]?.[0]).toBe("follow-up")
 })
 
-test("unconfirmed stall retains latch", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("unconfirmed stall retains latch", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
@@ -924,7 +974,7 @@ test("unconfirmed stall retains latch", async () => {
   fake.hangInterrupt()
   fake.ignoreAbort()
   const sent = adapter.send("hi")
-  await waitUntil(() => fake.prompts.length === 1)
+  await waitUntil(() => fake.promptTexts.length === 1)
   // stallTimeout 30ms + host interruptTimeout 40ms; stay live past the combined bound
   await sleep(50)
   expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(0)
@@ -936,10 +986,10 @@ test("unconfirmed stall retains latch", async () => {
   await sent.catch(() => {})
 })
 
-test("direct and nested native params both flush assistant and replay commands", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossGrok("direct and nested native params both flush assistant and replay commands", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   const events = listen(adapter)
@@ -973,15 +1023,15 @@ test("direct and nested native params both flush assistant and replay commands",
   expect(events.filter((e) => e.kind === "assistant-message").map((e) => e.text)).toEqual(["plain wrapped"])
 })
 
-test("initial configuration is captured in driver.open including resume clear", async () => {
-  const fake = fakeAgentDriver()
+acrossGrok("initial configuration is captured in driver.open including resume clear", async (kind) => {
+  const fake = fakeAgentDriver(kind)
   const origOpen = fake.driver.open.bind(fake.driver)
   fake.driver.open = async (ctx) => {
     ctx.onActivity?.({ id: "boot", phase: "started" })
     return origOpen(ctx)
   }
-  const { host, workdir } = await harness(fake)
-  const first = makeAdapter(host, {id: "sess-cfg", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(kind, fake)
+  const first = makeAdapter(kind, host, {id: "sess-cfg", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     model: "grok-4.5",
     effort: "high",
@@ -993,7 +1043,7 @@ test("initial configuration is captured in driver.open including resume clear", 
   fake.completeActivity("boot")
   await flush()
   await first.stop()
-  const second = makeAdapter(host, {id: "sess-cfg", sessionName: "s1", workdir,
+  const second = makeAdapter(kind, host, {id: "sess-cfg", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
   await second.start()
@@ -1001,10 +1051,11 @@ test("initial configuration is captured in driver.open including resume clear", 
   expect(fake.lastCtx?.configuration).toEqual({ model: "grok-4.5", reasoningEffort: "high" })
 })
 
-test("admission failure during native work errors without fake idle", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
+acrossQueue("admission failure during native work errors without fake idle", async (kind) => {
+  if (CORE_ADAPTER_PROFILES[kind].attachments === "image-block") return
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async () => { throw new Error("missing file") },
   })
@@ -1029,16 +1080,16 @@ function grokFrameToUpdate(frame: { method?: string; params?: Record<string, unk
   return { protocol: "native" as const, value: { method: frame.method, params: frame.params } }
 }
 
-test("replays real grok-turn.ndjson through Core normalizer into broker events", async () => {
-  const fake = fakeAgentDriver()
-  const { host, workdir } = await harness(fake)
-  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+acrossGrok("replays real grok-turn.ndjson through Core normalizer into broker events", async (kind) => {
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, {id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
   })
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const sent = adapter.send("Read notes.txt")
-  await waitUntil(() => fake.prompts.length === 1)
+  await waitUntil(() => fake.promptTexts.length === 1)
   const raw = await readFile("packages/supermux-core/tests/fixtures/real/grok-turn.ndjson", "utf8")
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue
@@ -1055,8 +1106,8 @@ test("replays real grok-turn.ndjson through Core normalizer into broker events",
   expect(tools.some((e) => e.phase === "started" && e.detail && typeof e.detail === "object")).toBe(true)
   expect(tools.some((e) => e.phase === "completed" && e.detail && typeof e.detail === "object")).toBe(true)
   const activity = events.filter((e) => e.kind === "activity").flatMap((e) => e.events ?? [])
-  expect(activity.some((c: { kind: string }) => c.kind === "tool")).toBe(true)
-  expect(activity.some((c: { kind: string }) => c.kind === "tool_result")).toBe(true)
+  expect(activity.some((c) => typeof c === "object" && c !== null && (c as { kind: string }).kind === "tool")).toBe(true)
+  expect(activity.some((c) => typeof c === "object" && c !== null && (c as { kind: string }).kind === "tool_result")).toBe(true)
   const texts = events.filter((e) => e.kind === "assistant-message").map((e) => e.text).join("\n")
   expect(texts).toContain("42")
   expect(events.filter((e) => e.kind === "commands-update")).toHaveLength(1)
@@ -1065,3 +1116,148 @@ test("replays real grok-turn.ndjson through Core normalizer into broker events",
   expect(assistantAt).toBeGreaterThan(-1)
   expect(assistantAt).toBeLessThan(completeAt)
 })
+
+test("cursor: setPrompts(true) throws unsupported_operation", async () => {
+  const kind = "cursor" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  await expect(adapter.setPrompts(true)).rejects.toMatchObject({ code: "unsupported_operation" })
+})
+
+test("opencode: setConfiguration({ model }) restarts the same native id", async () => {
+  const kind = "opencode" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  await adapter.start()
+  await adapter.setConfiguration({ model: "new/model" })
+  expect(adapter.model).toBe("new/model")
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.opens[1]?.resumeId).toBe("native-keep")
+})
+
+test("claude: setConfiguration({ model }) restarts the same native id", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  await adapter.start()
+  await adapter.setConfiguration({ model: "new/model" })
+  expect(adapter.model).toBe("new/model")
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.opens[1]?.resumeId).toBe("native-keep")
+})
+
+test("claude: send during model restart is delivered", async () => {
+  const kind = "claude" as const
+  const fake = fakeAgentDriver(kind, { nativeId: "native-keep" })
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {}, model: "old/model" })
+  const errors: unknown[] = []
+  adapter.on("error", (e) => errors.push(e))
+  await adapter.start()
+  const restart = adapter.setConfiguration({ model: "new/model" })
+  const sent = adapter.send("hello after switch")
+  await Promise.all([restart, sent])
+  await flush()
+  expect(fake.opens).toHaveLength(2)
+  expect(fake.promptTexts.flat()).toContain("hello after switch")
+  expect(errors).toHaveLength(0)
+})
+
+test("codex: idle send waits for one completion", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  const events = listen(adapter)
+  await adapter.start()
+  await adapter.send("hello")
+  await flush()
+  expect(fake.prompts).toHaveLength(1)
+  expect(fake.steers).toHaveLength(0)
+  expect(events.filter((e) => e.kind === "turn-start")).toHaveLength(1)
+  expect(events.filter((e) => e.kind === "turn-complete")).toHaveLength(1)
+})
+
+test("codex: mid-turn send uses steer not a second prompt", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  fake.holdNextPrompt()
+  const first = adapter.send("one")
+  await waitUntil(() => fake.prompts.length === 1)
+  await adapter.send("steer-me")
+  expect(fake.steers).toHaveLength(1)
+  expect((fake.steers[0]?.[0] as { text?: string }).text).toBe("steer-me")
+  expect(fake.prompts).toHaveLength(1)
+  fake.completePrompt()
+  await first
+})
+
+test("codex: image attachment becomes a Core image block", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const img = join(workdir, "pic.png")
+  await writeFile(img, Buffer.from("PNGDATA"))
+  const note = join(workdir, "note.txt")
+  await writeFile(note, "hello")
+  const adapter = makeAdapter(kind, host, {
+    id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    resolveAttachment: async (id) => id === "img" ? img : note,
+  })
+  await adapter.start()
+  await adapter.send("see", { attachment_file_id: "img", attachment_mime: "image/png", attachment_kind: "image" })
+  const imageBlock = fake.prompts[0]?.find((b) => b.type === "image") as { type: "image"; data: string; mimeType: string }
+  expect(imageBlock?.type).toBe("image")
+  expect(imageBlock?.mimeType).toBe("image/png")
+  await adapter.send("read", { attachment_file_id: "doc", attachment_name: "note.txt" })
+  const text = (fake.prompts[1]?.[0] as { text: string }).text
+  expect(text).toContain("[Attached file: note.txt")
+})
+
+test("codex: rpc passthrough refuses turn/* methods", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const adapter = makeAdapter(kind, host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await adapter.start()
+  adapter.attachRuntimeRequest(async (method, params) => {
+    if (method.startsWith("turn/") || method.startsWith("thread/")) throw new Error(`Codex runtime request refuses ${method}`)
+    if (method === "skills/list") return { data: [] }
+    return { method, params }
+  })
+  expect(await adapter.rpc.request<{ data: unknown[] }>("skills/list", {})).toEqual({ data: [] })
+  await expect(adapter.rpc.request("turn/start", {})).rejects.toThrow(/refuses turn\/start/)
+})
+
+test("codex: rate-limit notify maps through onUsageUpdate", async () => {
+  const kind = "codex" as const
+  const fake = fakeAgentDriver(kind)
+  const { host, workdir } = await harness(kind, fake)
+  const usage: unknown[] = []
+  const adapter = makeAdapter(kind, host, {
+    id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+    onUsageUpdate: (data) => { usage.push(data) },
+  })
+  await adapter.start()
+  fake.emit({
+    protocol: "native",
+    value: {
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          primary: { used_percent: 10, window_duration_mins: 5, resets_at: 1_700_000_000 },
+        },
+      },
+    },
+  })
+  await flush()
+  expect(usage.length).toBeGreaterThan(0)
+})
+

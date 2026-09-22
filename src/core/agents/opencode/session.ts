@@ -3,7 +3,7 @@ import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { OpenCodeCommandClient } from "../../slash-commands/types"
-import { CoreOpenCodeAdapter } from "./core-adapter"
+import { CoreAdapter, OPENCODE_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getOpenCodeCoreHost } from "./core-host-provider"
 import type { OpenCodeCoreHost, OpenCodePrepareExtra } from "./core-host"
 import { opencodeConfigEntries } from "../../plugins"
@@ -58,8 +58,8 @@ function createBoundAdapter(opts: {
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
-}): CoreOpenCodeAdapter {
-  return new CoreOpenCodeAdapter({
+}): CoreAdapter {
+  return new CoreAdapter(OPENCODE_CORE_PROFILE, {
     handle: opts.handle,
     reregister: opts.reregister,
     prompts: opts.prompts,
@@ -95,7 +95,7 @@ function prepareExtra(opts: {
   }
 }
 
-/** opencode's worker is an in-process CoreOpenCodeAdapter driving `opencode acp`
+/** opencode's worker is an in-process CoreAdapter driving `opencode acp`
  * via a process-owned OpenCodeCoreHost. The row is registered with pid 0 and
  * adapter.stop() is the kill. Config/preamble writes run in the host prepare hook. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
@@ -111,7 +111,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     env: {},
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: args.model }),
   })
-  let adapter: CoreOpenCodeAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     await deps.bind(id)
 
@@ -187,7 +187,7 @@ export async function resumeOpenCodeSession(
     opencodeHost?: OpenCodeCoreHost
   },
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string; prompts?: boolean },
-): Promise<{ adapter: CoreOpenCodeAdapter }> {
+): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.opencodeHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
@@ -204,7 +204,7 @@ export async function resumeOpenCodeSession(
       prompts: session.prompts,
     }),
   })
-  let adapter: CoreOpenCodeAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
@@ -255,10 +255,10 @@ export async function applyConfig(
     return { ok: false, error: "opencode does not support reasoning effort" }
   }
   const adapter = ctx.adapter
-  const coreAdapter = adapter instanceof CoreOpenCodeAdapter
+  const coreAdapter = adapter instanceof CoreAdapter
     ? adapter
-    : (adapter && typeof (adapter as CoreOpenCodeAdapter).setConfiguration === "function"
-      ? adapter as CoreOpenCodeAdapter
+    : (adapter && typeof (adapter as CoreAdapter).setConfiguration === "function"
+      ? adapter as CoreAdapter
       : undefined)
   if (!coreAdapter) return { ok: true }
   const patch: { model?: string } = {}
@@ -273,7 +273,7 @@ export async function applyConfig(
   }
 }
 
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreOpenCodeAdapter }> {
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreAdapter }> {
   return resumeOpenCodeSession(
     {
       resolveAttachment: ctx.resolveAttachment,

@@ -11,9 +11,9 @@ import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../../shared/agents"
 import { openDb, runMigrations } from "../../storage/db"
 import { Registry } from "../../session-manager/registry"
-import { CoreOpenCodeAdapter } from "./core-adapter"
+import { CoreAdapter } from "../core-bridge/core-adapter"
 
-const ctx = (adapter?: CoreOpenCodeAdapter): ApplyConfigCtx => ({
+const ctx = (adapter?: CoreAdapter): ApplyConfigCtx => ({
   sessionEffort: () => undefined,
   resolveAttachment: async () => { throw new Error("unused in this test") },
   persistAgentSessionId: () => {},
@@ -130,13 +130,13 @@ describe("opencode core spawn/resume dialect", () => {
     const reg = registry()
     const workdir = mkdtempSync(join(tmpdir(), "mux-oc-wd-"))
     dirs.push(workdir)
-    let adapter: CoreOpenCodeAdapter | undefined
+    let adapter: CoreAdapter | undefined
     await spawn({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
       opencodeHost: host,
-      registerAdapter: (_name, registered) => { adapter = registered as CoreOpenCodeAdapter },
+      registerAdapter: (_name, registered) => { adapter = registered as CoreAdapter },
     }, {
       workdir,
       requestedName: "oc-model",
@@ -179,7 +179,7 @@ describe("opencode core spawn/resume dialect", () => {
         model: "opencode/gpt",
       },
     )
-    expect(adapter).toBeInstanceOf(CoreOpenCodeAdapter)
+    expect(adapter).toBeInstanceOf(CoreAdapter)
     expect(child.opens).toHaveLength(1)
     expect(child.opens[0]?.resumeId).toBe("native-keep")
     expect(child.opens[0]?.sessionId).toBe("existing-row")

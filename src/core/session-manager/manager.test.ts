@@ -3,13 +3,8 @@ import { join } from "path"
 import { openDb, runMigrations, type Db } from "../storage/db"
 import { Registry } from "./registry"
 import { SessionManager, type SessionManagerPorts } from "./manager"
-import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { CoreClaudeAdapter } from "../agents/claude/core-adapter"
-import { CoreCursorAdapter } from "../agents/cursor/core-adapter"
-import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
-import { GrokAdapter } from "../agents/grok/adapter"
-import type { GrokRunner } from "../agents/grok/runner"
+import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import type { AgentPhase } from "./agent-state-store"
 import type { FileStore } from "../files/store"
 import { ReviewStore } from "../review/store"
@@ -126,7 +121,7 @@ describe("SessionManager resume frames", () => {
 describe("SessionManager runtime store", () => {
   test("registerClaudeRuntime stores the runtime; adapterFor returns its adapter", () => {
     const m = manager()
-    const adapter = { fake: true } as unknown as CoreClaudeAdapter
+    const adapter = { fake: true } as unknown as CoreAdapter
     m.registerClaudeRuntime("s1", adapter)
     expect(m.adapterFor("s1")).toBe(adapter)
     expect(m.runtimes.get("s1")?.kind).toBe("claude")
@@ -134,7 +129,7 @@ describe("SessionManager runtime store", () => {
 
   test("deleteRuntime removes it; double delete is a no-op", () => {
     const m = manager()
-    m.registerClaudeRuntime("s1", { fake: true } as unknown as CoreClaudeAdapter)
+    m.registerClaudeRuntime("s1", { fake: true } as unknown as CoreAdapter)
     m.deleteRuntime("s1")
     expect(m.adapterFor("s1")).toBeUndefined()
     m.deleteRuntime("s1") // must not throw
@@ -148,7 +143,7 @@ describe("SessionManager runtime store", () => {
       kill: () => {},
       onExit: (cb: (code: number | null) => void) => { onExit = cb },
     } as unknown as CodexSpawnHandle
-    m.registerCodexRuntime("s2", "n", { fake: true } as unknown as CodexAdapter, handle)
+    m.registerCodexRuntime("s2", "n", { fake: true } as unknown as CoreAdapter, handle)
     expect(m.adapterFor("s2")).toBeDefined()
     onExit?.(0)
     expect(m.adapterFor("s2")).toBeUndefined()
@@ -157,7 +152,7 @@ describe("SessionManager runtime store", () => {
 
 // ── applyConfig: the model/effort entry (frame around the per-kind dialects) ─
 
-function cursorAdapter(model?: string): CoreCursorAdapter {
+function cursorAdapter(model?: string): CoreAdapter {
   const adapter = {
     kind: "cursor" as const,
     sessionName: "t",
@@ -174,17 +169,21 @@ function cursorAdapter(model?: string): CoreCursorAdapter {
     on() { return adapter },
     emit() { return false },
   }
-  return adapter as unknown as CoreCursorAdapter
+  return adapter as unknown as CoreAdapter
 }
 
-function grokAdapter(model?: string): GrokAdapter {
-  return new GrokAdapter({
-    sessionName: "t",
-    workdir: "/tmp",
-    runner: (() => { throw new Error("no child in this test") }) as unknown as GrokRunner,
-    persistSessionId: async () => {},
+function grokAdapter(model?: string): CoreAdapter {
+  const adapter = {
+    kind: "grok" as const,
     model,
-  })
+    effort: undefined as string | undefined,
+    async setConfiguration(patch: { model?: string; effort?: string }) {
+      if ("model" in patch) this.model = patch.model
+      if ("effort" in patch) this.effort = patch.effort
+    },
+    async setEffort(e: string | undefined) { this.effort = e },
+  }
+  return adapter as unknown as CoreAdapter
 }
 
 describe("SessionManager applyConfig", () => {
@@ -216,7 +215,7 @@ describe("SessionManager applyConfig", () => {
         if (patch.model) this.model = patch.model
       },
     }
-    m.registerOpenCodeRuntime("o1", adapter as unknown as CoreOpenCodeAdapter)
+    m.registerOpenCodeRuntime("o1", adapter as unknown as CoreAdapter)
     const r = await m.applyConfig("o1", { model: "anthropic/claude-sonnet-5" })
     expect(r).toEqual({ ok: true, status: "applied" })
     expect(adapter.model).toBe("anthropic/claude-sonnet-5")
@@ -673,8 +672,8 @@ function managerForDeliver(): {
   return { m: new SessionManager(new Registry(db), ports), socketSends, delivered, targets }
 }
 
-function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CodexAdapter {
-  return { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CodexAdapter
+function mockSendAdapter(sent: Array<{ text: string; meta: any }>): CoreAdapter {
+  return { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CoreAdapter
 }
 
 describe("SessionManager.deliver", () => {
@@ -743,7 +742,7 @@ describe("SessionManager.handleOutbound reply", () => {
     }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl2", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
-    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreClaudeAdapter })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
     // A session on an older shim still sends chat_id; it must not reach the dispatcher.
     const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { chat_id: "telegram:999", text: "hi" } } } as any)
     expect(r.ok).toBe(true)
@@ -830,7 +829,7 @@ describe("SessionManager.handleOutbound reply", () => {
     ports.outbound = { ...ports.outbound, onAssistantMessage: async (_id, ev) => { seen.push(ev); return { ok: true as const, delivered: 1 } } }
     const m = new SessionManager(new Registry(db), ports)
     const s = m.registry.register({ name: "cl3", workdir: "/tmp", pid: 0, agent: "claude", connected: true })
-    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreClaudeAdapter })
+    m.registerRuntime(s.id, { kind: "claude", adapter: { kind: "claude" } as unknown as CoreAdapter })
     const r = await m.handleOutbound({ session_id: s.id, op: { name: "reply", args: { text: "no destination" } } } as any)
     expect(r.ok).toBe(true)
     expect(seen).toEqual([{ text: "no destination", reply_to: undefined, files: undefined, format: undefined, keyboard: undefined }])

@@ -4,22 +4,13 @@ import { preAcceptTrust } from "./trust"
 // erased at runtime. The dialect CODE lives in the agents/<kind>/session.ts
 // modules, dispatched through the agents map.
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { CodexAdapter } from "../agents/codex/adapter"
-import type { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexCoreHost } from "../agents/codex/core-host"
-import type { CoreCursorAdapter } from "../agents/cursor/core-adapter"
 import type { CursorCoreHost } from "../agents/cursor/core-host"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
-import type { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import type { OpenCodeCoreHost } from "../agents/opencode/core-host"
-import type { GrokAdapter } from "../agents/grok/adapter"
-import type { CoreGrokAdapter } from "../agents/grok/core-adapter"
 import type { GrokCoreHost } from "../agents/grok/core-host"
-import type { CoreClaudeAdapter } from "../agents/claude/core-adapter"
 import type { ClaudeCoreHost } from "../agents/claude/core-host"
-
-export type GrokLikeAdapter = CoreGrokAdapter | GrokAdapter
-export type CodexLikeAdapter = CoreCodexAdapter | CodexAdapter
+import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 // Dispatcher-only import: the per-agent session modules import types/helpers
 // back from this file, which is a benign cycle as long as neither side
 // dereferences the other at module-init time (functions + types only).
@@ -60,7 +51,7 @@ export type SpawnDeps = {
   resolveAttachment?: (file_id: string) => Promise<string>
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter | CoreClaudeAdapter,
+    adapter: CoreAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
@@ -143,7 +134,7 @@ export async function spawnPA(opts: {
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter | CoreClaudeAdapter,
+    adapter: CoreAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost

@@ -3,8 +3,7 @@ import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { CodexRpc } from "../../slash-commands/types"
-import { CodexAdapter } from "./adapter"
-import { CoreCodexAdapter } from "./core-adapter"
+import { CoreAdapter, CODEX_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getCodexCoreHost } from "./core-host-provider"
 import { attachCodexRuntimeAdapter, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
 import { codexSpawnArgs } from "../../plugins"
@@ -27,7 +26,7 @@ export function commandContext(ctx: CommandContextCtx): CodexRpc | undefined {
   return undefined
 }
 
-export type CodexSessionAdapter = CoreCodexAdapter | CodexAdapter
+export type CodexSessionAdapter = CoreAdapter
 
 function resolveHost(explicit?: CodexCoreHost): CodexCoreHost {
   return explicit ?? getCodexCoreHost()
@@ -74,8 +73,8 @@ function createBoundAdapter(opts: {
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
-}): CoreCodexAdapter {
-  const adapter = new CoreCodexAdapter({
+}): CoreAdapter {
+  const adapter = new CoreAdapter(CODEX_CORE_PROFILE, {
     handle: opts.handle,
     reregister: opts.reregister,
     core: opts.core,
@@ -85,8 +84,8 @@ function createBoundAdapter(opts: {
     model: opts.model,
     effort: opts.effort,
     prompts: opts.prompts,
-    initialThreadId: opts.initialSessionId,
-    persistThreadId: opts.persistSessionId,
+    initialSessionId: opts.initialSessionId,
+    persistSessionId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
   })
   attachCodexRuntimeAdapter(opts.id, adapter)
@@ -112,7 +111,7 @@ function prepareExtra(opts: {
   }
 }
 
-/** Codex's worker is an in-process CoreCodexAdapter driving app-server via a
+/** Codex's worker is an in-process CoreAdapter driving app-server via a
  * process-owned CodexCoreHost. Private-home writes (auth, config.toml, preamble)
  * run in the host prepare hook, after admission. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
@@ -130,7 +129,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     args: brokerCodexArgs(name),
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir }),
   })
-  let adapter: CoreCodexAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     await deps.bind(id)
 
@@ -216,7 +215,7 @@ export async function resumeCodexSession(
     codexHost?: CodexCoreHost
   },
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
-): Promise<{ adapter: CoreCodexAdapter }> {
+): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.codexHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
@@ -234,7 +233,7 @@ export async function resumeCodexSession(
       prompts: session.prompts,
     }),
   })
-  let adapter: CoreCodexAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
@@ -284,28 +283,24 @@ export async function applyConfig(
   change: ApplyConfigChange,
 ): Promise<ApplyConfigResult> {
   const adapter = ctx.adapter
-  const coreAdapter = adapter instanceof CoreCodexAdapter
-    ? adapter
-    : (adapter && typeof (adapter as CoreCodexAdapter).setConfiguration === "function" && !(adapter instanceof CodexAdapter)
-      ? adapter as CoreCodexAdapter
-      : undefined)
-  if (coreAdapter) {
-    const patch: { model?: string; effort?: string } = {}
-    if (change.changed?.model !== false && change.model) patch.model = change.model
-    if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
-    if (!("model" in patch) && !("effort" in patch)) return { ok: true }
-    try {
-      await coreAdapter.setConfiguration(patch)
-      return { ok: true }
-    } catch (err) {
-      if (isSessionBusy(err)) return { ok: false, busy: true }
-      return { ok: false, error: asError(err).message }
-    }
+  const live = adapter && typeof (adapter as CoreAdapter).setConfiguration === "function"
+    ? adapter as CoreAdapter
+    : undefined
+  if (!live) return { ok: false, error: "codex session has no live adapter" }
+  const patch: { model?: string; effort?: string } = {}
+  if (change.changed?.model !== false && change.model) patch.model = change.model
+  if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
+  if (!("model" in patch) && !("effort" in patch)) return { ok: true }
+  try {
+    await live.setConfiguration(patch)
+    return { ok: true }
+  } catch (err) {
+    if (isSessionBusy(err)) return { ok: false, busy: true }
+    return { ok: false, error: asError(err).message }
   }
-  return { ok: false, error: "codex session has no live adapter" }
 }
 
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreCodexAdapter }> {
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreAdapter }> {
   return resumeCodexSession(
     {
       resolveAttachment: ctx.resolveAttachment,

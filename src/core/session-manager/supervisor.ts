@@ -15,7 +15,7 @@ import { getSessionBackend } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
 import { resumeClaudeSession } from "../agents/claude/session"
 import { claudeSessionHome } from "../agents/claude/core-host"
-import { CoreClaudeAdapter } from "../agents/claude/core-adapter"
+import { CoreAdapter } from "../agents/core-bridge/core-adapter"
 
 const TMUX_SESSION = process.env.MUX_TMUX_SESSION ?? "mux"
 const log = makeLogger("supervisor")
@@ -88,7 +88,7 @@ export function createSupervisor(opts: SupervisorOpts): Supervisor {
 
   function corePaAlive(pa: Session): boolean {
     const adapter = opts.sessionManager?.adapterFor?.(pa.id)
-    if (!(adapter instanceof CoreClaudeAdapter)) return false
+    if (!(adapter instanceof CoreAdapter) || adapter.kind !== "claude") return false
     const state = adapter.sessionSnapshotState()
     return state !== undefined && state !== "closed" && state !== "failed"
   }

@@ -11,7 +11,7 @@ import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../../shared/agents"
 import { openDb, runMigrations } from "../../storage/db"
 import { Registry } from "../../session-manager/registry"
-import { CoreCodexAdapter } from "./core-adapter"
+import { CoreAdapter } from "../core-bridge/core-adapter"
 
 const ctx = (adapter?: unknown): ApplyConfigCtx => ({
   sessionEffort: () => undefined,
@@ -106,7 +106,7 @@ describe("codex applyConfig dialect (Core)", () => {
     expect(r).toEqual({ ok: false, error: "codex session has no live adapter" })
   })
 
-  test("CoreCodexAdapter setConfiguration session_busy is typed busy, native errors are not", async () => {
+  test("CoreAdapter setConfiguration session_busy is typed busy, native errors are not", async () => {
     const busyAdapter = {
       setConfiguration: async () => { throw new CoreError("session_busy", "Session is busy") },
     }
@@ -171,7 +171,7 @@ describe("codex core spawn/resume dialect", () => {
         model: "gpt-5",
       },
     )
-    expect(adapter).toBeInstanceOf(CoreCodexAdapter)
+    expect(adapter).toBeInstanceOf(CoreAdapter)
     expect(child.opens).toHaveLength(1)
     expect(child.opens[0]?.resumeId).toBe("native-keep")
     expect(child.opens[0]?.sessionId).toBe("existing-row")
@@ -387,7 +387,7 @@ describe("codex core spawn/resume dialect", () => {
     expect(fulfilled).toHaveLength(1)
     expect(rejected).toHaveLength(1)
     expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/already awaiting failed-start cleanup|already starting|already live/)
-    const winner = (fulfilled[0] as PromiseFulfilledResult<{ adapter: CoreCodexAdapter }>).value
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ adapter: CoreAdapter }>).value
     expect(readFileSync(toml, "utf8")).not.toBe("SENTINEL")
     await winner.adapter.stop()
     const replacement = await resumeCodexSession({ codexHost: host }, session)

@@ -11,9 +11,9 @@ import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 import { AgentKind } from "../../../shared/agents"
 import { openDb, runMigrations } from "../../storage/db"
 import { Registry } from "../../session-manager/registry"
-import { CoreCursorAdapter } from "./core-adapter"
+import { CoreAdapter } from "../core-bridge/core-adapter"
 
-const ctx = (adapter?: CoreCursorAdapter): ApplyConfigCtx => ({
+const ctx = (adapter?: CoreAdapter): ApplyConfigCtx => ({
   sessionEffort: () => undefined,
   resolveAttachment: async () => { throw new Error("unused in this test") },
   persistAgentSessionId: () => {},
@@ -135,13 +135,13 @@ describe("cursor core spawn/resume dialect", () => {
     const reg = registry()
     const workdir = mkdtempSync(join(tmpdir(), "mux-cur-wd-"))
     dirs.push(workdir)
-    let adapter: CoreCursorAdapter | undefined
+    let adapter: CoreAdapter | undefined
     await spawn({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
       cursorHost: host,
-      registerAdapter: (_name, registered) => { adapter = registered as CoreCursorAdapter },
+      registerAdapter: (_name, registered) => { adapter = registered as CoreAdapter },
     }, {
       workdir,
       requestedName: "cur-model",
@@ -184,7 +184,7 @@ describe("cursor core spawn/resume dialect", () => {
         model: "composer-1",
       },
     )
-    expect(adapter).toBeInstanceOf(CoreCursorAdapter)
+    expect(adapter).toBeInstanceOf(CoreAdapter)
     expect(child.opens).toHaveLength(1)
     expect(child.opens[0]?.resumeId).toBe("native-keep")
     expect(child.opens[0]?.sessionId).toBe("existing-row")

@@ -10,7 +10,7 @@ import { Registry } from "../../session-manager/registry"
 import { createClaudeCoreHost, type ClaudeCoreHost } from "./core-host"
 import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import type { ClaudeOptions } from "../../../../packages/supermux-core/src/claude/index.js"
-import { CoreClaudeAdapter } from "./core-adapter"
+import { CoreAdapter } from "../core-bridge/core-adapter"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 
 // Contract of the claude applyConfig DIALECT: it types into the live TUI via
@@ -55,7 +55,7 @@ describe("claude applyConfig dialect", () => {
     expect(patches).toEqual([{ model: "m1", effort: "high" }])
   })
 
-  test("CoreClaudeAdapter setConfiguration session_busy is typed busy", async () => {
+  test("CoreAdapter setConfiguration session_busy is typed busy", async () => {
     const busyAdapter = {
       setConfiguration: async () => { throw new CoreError("session_busy", "Session is busy") },
     }
@@ -186,7 +186,7 @@ describe("claude core spawn/resume dialect", () => {
         agent_session_id: "native-keep",
       },
     )
-    expect(adapter).toBeInstanceOf(CoreClaudeAdapter)
+    expect(adapter).toBeInstanceOf(CoreAdapter)
     expect(child.opens).toHaveLength(1)
     expect(child.opens[0]?.resumeId).toBe("native-keep")
   })

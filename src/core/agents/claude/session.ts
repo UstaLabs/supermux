@@ -4,7 +4,7 @@ import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/sp
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
-import { CoreClaudeAdapter } from "./core-adapter"
+import { CoreAdapter, CLAUDE_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getClaudeCoreHost } from "./core-host-provider"
 import { claudeSessionHome, type ClaudeCoreHost, type ClaudePrepareExtra } from "./core-host"
 import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
@@ -68,8 +68,8 @@ function createBoundAdapter(opts: {
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
-}): CoreClaudeAdapter {
-  return new CoreClaudeAdapter({
+}): CoreAdapter {
+  return new CoreAdapter(CLAUDE_CORE_PROFILE, {
     handle: opts.handle,
     reregister: opts.reregister,
     core: opts.core,
@@ -103,7 +103,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     env: {},
     extra,
   })
-  let adapter: CoreClaudeAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     await deps.bind(id)
     adapter = createBoundAdapter({
@@ -186,7 +186,7 @@ export async function resumeClaudeSession(
     pa?: boolean
     rpcMcpConfig?: string
   },
-): Promise<{ adapter: CoreClaudeAdapter }> {
+): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.claudeHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
@@ -203,7 +203,7 @@ export async function resumeClaudeSession(
     rpcMcpConfig: session.rpcMcpConfig,
   })
   const handle = host.register({ id: session.id, env: {}, extra })
-  let adapter: CoreClaudeAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
@@ -253,10 +253,10 @@ export async function applyConfig(
   change: ApplyConfigChange,
 ): Promise<ApplyConfigResult> {
   const adapter = ctx.adapter
-  const coreAdapter = adapter instanceof CoreClaudeAdapter
+  const coreAdapter = adapter instanceof CoreAdapter
     ? adapter
-    : (adapter && typeof (adapter as CoreClaudeAdapter).setConfiguration === "function"
-      ? adapter as CoreClaudeAdapter
+    : (adapter && typeof (adapter as CoreAdapter).setConfiguration === "function"
+      ? adapter as CoreAdapter
       : undefined)
   if (coreAdapter) {
     const patch: { model?: string; effort?: string } = {}
@@ -274,7 +274,7 @@ export async function applyConfig(
   return { ok: false, error: "claude adapter not found" }
 }
 
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreClaudeAdapter }> {
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreAdapter }> {
   return resumeClaudeSession(
     {
       resolveAttachment: ctx.resolveAttachment,

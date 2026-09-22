@@ -1,10 +1,17 @@
 import { EventEmitter } from "events"
+import { readFile } from "node:fs/promises"
 import type { AgentAdapter, AgentKind, BrokerRequest, InboundMeta, RequestAnswerInput } from "../types"
-import { mapPendingRequest, toCoreAnswer } from "../core-bridge/request-map"
-import { createNormalizedBridge } from "../core-bridge/normalized-bridge"
-import { createNormalizedActivity } from "../core-bridge/normalized-activity"
+import { mapPendingRequest, toCoreAnswer } from "./request-map"
+import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
+import { makeLogger } from "../../../shared/log"
+import type { CodexUsage } from "../../usage/index"
+import { codexUsageFromRateLimits } from "../../usage/local"
+import { createNormalizedBridge } from "./normalized-bridge"
+import { createNormalizedActivity } from "./normalized-activity"
+import { detachCodexRuntimeAdapter } from "../codex/core-host"
 import type {
   Completion,
+  ContentBlock,
   Core,
   CoreEvent,
   HostHandle,
@@ -13,13 +20,79 @@ import type {
   SessionConfiguration,
   SessionState,
 } from "../../../../packages/supermux-core/src/index.js"
-import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
 
 const DEFAULT_STALL_MS = 90_000
+const log = makeLogger("agents/core-adapter")
 
-export type CoreOpenCodeAdapterOpts = {
+export type CoreAdapterProfile = {
+  kind: AgentKind
+  /** How a model/effort change is applied. */
+  configuration: { model: "configure" | "restart" | "unsupported"; effort: "configure" | "restart" | "unsupported" }
+  /** Whether prompts can be switched on (cursor: unsupported → setPrompts throws). */
+  prompts: "restart" | "unsupported"
+  /** Attachment rendering. */
+  attachments: "image-block" | "path-in-prompt"
+  /** Idle-send vs mid-turn: queue through Core, or steer when the session is already running. */
+  sendWhenBusy: "queue" | "steer"
+  /** What HostHandle.start receives as configuration. */
+  startConfiguration: "desired" | "empty"
+}
+
+export const GROK_CORE_PROFILE: CoreAdapterProfile = {
+  kind: "grok",
+  configuration: { model: "configure", effort: "configure" },
+  prompts: "restart",
+  attachments: "path-in-prompt",
+  sendWhenBusy: "queue",
+  startConfiguration: "desired",
+}
+
+export const CODEX_CORE_PROFILE: CoreAdapterProfile = {
+  kind: "codex",
+  configuration: { model: "configure", effort: "configure" },
+  prompts: "restart",
+  attachments: "image-block",
+  sendWhenBusy: "steer",
+  startConfiguration: "desired",
+}
+
+export const OPENCODE_CORE_PROFILE: CoreAdapterProfile = {
+  kind: "opencode",
+  configuration: { model: "restart", effort: "unsupported" },
+  prompts: "restart",
+  attachments: "path-in-prompt",
+  sendWhenBusy: "queue",
+  startConfiguration: "empty",
+}
+
+export const CURSOR_CORE_PROFILE: CoreAdapterProfile = {
+  kind: "cursor",
+  configuration: { model: "restart", effort: "unsupported" },
+  prompts: "unsupported",
+  attachments: "path-in-prompt",
+  sendWhenBusy: "queue",
+  startConfiguration: "empty",
+}
+
+export const CLAUDE_CORE_PROFILE: CoreAdapterProfile = {
+  kind: "claude",
+  configuration: { model: "restart", effort: "restart" },
+  prompts: "restart",
+  attachments: "image-block",
+  sendWhenBusy: "queue",
+  startConfiguration: "empty",
+}
+
+export const CORE_ADAPTER_PROFILES = {
+  grok: GROK_CORE_PROFILE,
+  codex: CODEX_CORE_PROFILE,
+  opencode: OPENCODE_CORE_PROFILE,
+  cursor: CURSOR_CORE_PROFILE,
+  claude: CLAUDE_CORE_PROFILE,
+} as const
+
+export type CoreAdapterOpts = {
   handle: HostHandle
-  /** Host.stop() terminals the handle; model restart re-registers then starts. */
   reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
   core: Core
   id: string
@@ -32,6 +105,13 @@ export type CoreOpenCodeAdapterOpts = {
   prompts?: boolean
   resolveAttachment?: (file_id: string) => Promise<string>
   stallTimeoutMs?: number
+  onUsageUpdate?: (data: CodexUsage) => void
+  getPrevUsage?: () => CodexUsage | null
+}
+
+type JsonRpcLike = {
+  request<T = unknown>(method: string, params: unknown): Promise<T>
+  onNotification(h: (n: { method: string; params: unknown }) => void): void
 }
 
 function asError(err: unknown): Error {
@@ -47,19 +127,35 @@ function once<T extends (...args: never[]) => void>(fn: T): T {
   }) as T
 }
 
-/** Broker-facing OpenCode adapter that talks to a host-owned supermux-core instance.
- * Does not spawn a native child, subclass OpenCodeAdapter, or close the shared Core. */
-export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
-  readonly kind: AgentKind = "opencode"
+function isSessionBusy(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
+}
+
+function guessImageMime(path: string, mime?: string): string {
+  if (mime && mime.startsWith("image/")) return mime
+  const lower = path.toLowerCase()
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+  if (lower.endsWith(".gif")) return "image/gif"
+  if (lower.endsWith(".webp")) return "image/webp"
+  return "image/png"
+}
+
+/** One broker-facing adapter for every Core-backed agent. Differences live in CoreAdapterProfile. */
+export class CoreAdapter extends EventEmitter implements AgentAdapter {
+  readonly kind: AgentKind
   readonly sessionName: string
   readonly workdir: string
   readonly id: string
+  readonly profile: CoreAdapterProfile
 
   availableModels: { modelId: string }[] = []
   availableCommands: { name: string; description?: string; _meta?: { scope?: string; path?: string } }[] = []
 
+  onUsageUpdate?: (data: CodexUsage) => void
+  getPrevUsage?: () => CodexUsage | null
+
   private handle: HostHandle
-  private readonly reregister: CoreOpenCodeAdapterOpts["reregister"]
+  private readonly reregister: CoreAdapterOpts["reregister"]
   private readonly core: Core
   private readonly persistSessionId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
@@ -76,7 +172,6 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private inputEpoch = 0
   private stopped = false
   private starting?: Promise<void>
-  /** In-flight config restart (stop → re-register → start): sends wait for it instead of failing. */
   private restarting?: Promise<void>
   private stopping?: Promise<void>
   private sendTail: Promise<void> = Promise.resolve()
@@ -84,21 +179,14 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
   private turnActive = false
   private stallTimer?: ReturnType<typeof setTimeout>
   private failureEmitted = false
+  private runtimeRequest?: (method: string, params: unknown) => Promise<unknown>
   private readonly activity
-  private readonly bridge = createNormalizedBridge({
-    agent: "opencode",
-    emit: (event) => {
-      if (event.kind === "error") this.surfaceFailure(event.error, { completeTurn: false })
-      else this.emit(event.kind, event)
-    },
-    onCommands: (commands) => {
-      this.availableCommands = commands
-      this.emit("commands-update", { kind: "commands-update" })
-    },
-  })
+  private readonly bridge
 
-  constructor(opts: CoreOpenCodeAdapterOpts) {
+  constructor(profile: CoreAdapterProfile, opts: CoreAdapterOpts) {
     super()
+    this.profile = profile
+    this.kind = profile.kind
     this.handle = opts.handle
     this.reregister = opts.reregister
     this.core = opts.core
@@ -113,12 +201,37 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this._prompts = opts.prompts === true
     this.resolveAttachment = opts.resolveAttachment
     this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_MS
+    this.onUsageUpdate = opts.onUsageUpdate
+    this.getPrevUsage = opts.getPrevUsage
     this.activity = createNormalizedActivity({ workdir: opts.workdir })
+    this.bridge = createNormalizedBridge({
+      agent: profile.kind,
+      emit: (event) => {
+        if (event.kind === "error") this.surfaceFailure(event.error, { completeTurn: false })
+        else this.emit(event.kind, event)
+      },
+      onCommands: (commands) => {
+        this.availableCommands = commands
+        this.emit("commands-update", { kind: "commands-update" })
+      },
+      onUsage: (rateLimits) => {
+        const data = codexUsageFromRateLimits(rateLimits, this.getPrevUsage?.() ?? null)
+        if (data) this.onUsageUpdate?.(data)
+      },
+    })
   }
 
   get model(): string | undefined { return this._model }
   get effort(): string | undefined { return this._effort }
   get prompts(): boolean { return this._prompts }
+
+  sessionSnapshotState(): SessionState | undefined {
+    return this.session?.snapshot().state
+  }
+
+  turnIsRunning(): boolean {
+    return this.turnActive
+  }
 
   openRequests(): BrokerRequest[] {
     const session = this.session
@@ -130,63 +243,84 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     await this.requireSession().requests.respond(requestId, toCoreAnswer(answer))
   }
 
+  attachRuntimeRequest(request: (method: string, params: unknown) => Promise<unknown>): void {
+    this.runtimeRequest = request
+  }
+
+  get rpc(): JsonRpcLike {
+    return {
+      request: async <T = unknown>(method: string, params: unknown): Promise<T> => {
+        if (!this.runtimeRequest) throw new Error(`${this.kind} rpc unavailable`)
+        return this.runtimeRequest(method, params) as Promise<T>
+      },
+      onNotification: () => {},
+    }
+  }
+
   async setPrompts(enabled: boolean): Promise<void> {
+    if (this.profile.prompts === "unsupported") {
+      if (enabled) {
+        throw new CoreError("unsupported_operation", `${this.kind} sessions cannot prompt`)
+      }
+      return
+    }
     const session = this.requireSession()
     if (enabled === this._prompts) return
     if (session.snapshot().state === "running") {
-      throw new CoreError("session_busy", "opencode session is busy")
+      throw new CoreError("session_busy", `${this.kind} session is busy`)
     }
-    const nativeSessionId = session.snapshot().agentSessionId
-    const previous = this._prompts
-    const generation = this.startEpoch
-    this._prompts = enabled
-    this.nativeSessionId = nativeSessionId
-    this.restarting = (async () => {
-      try {
-        await this.handle.stop({ mode: "shutdown" })
-        this.session = undefined
-        this.unsubscribe?.()
-        this.unsubscribe = undefined
-        this.handle = this.reregister({ model: this._model, prompts: this._prompts })
-        if (this.stopped || generation !== this.startEpoch) return
-        await this.start()
-      } catch (err) {
-        if (!this.stopped && generation === this.startEpoch) this._prompts = previous
-        throw asError(err)
-      }
-    })()
-    try { await this.restarting } finally { this.restarting = undefined }
+    await this.restartNative({ prompts: enabled })
   }
 
   async setConfiguration(patch: { model?: string; effort?: string }): Promise<void> {
-    if ("effort" in patch && !("model" in patch)) return
-    if (!("model" in patch)) return
-    // Re-selecting the current model must not restart the native session.
-    if (patch.model === this._model) return
-    const session = this.requireSession()
-    if (session.snapshot().state === "running") {
-      throw new CoreError("session_busy", "opencode session is busy")
+    if (!("model" in patch) && !("effort" in patch)) return
+    const modelMode = this.profile.configuration.model
+    const effortMode = this.profile.configuration.effort
+    const wantsModel = "model" in patch
+    const wantsEffort = "effort" in patch
+    if (wantsModel && modelMode === "unsupported") return
+    if (wantsEffort && !wantsModel && effortMode === "unsupported") return
+    if (wantsEffort && effortMode === "unsupported") {
+      patch = wantsModel ? { model: patch.model } : {}
+      if (!("model" in patch)) return
     }
-    const nativeSessionId = session.snapshot().agentSessionId
-    const previous = this._model
-    const generation = this.startEpoch
-    this._model = patch.model
-    this.nativeSessionId = nativeSessionId
-    this.restarting = (async () => {
-      try {
-        await this.handle.stop({ mode: "shutdown" })
-        this.session = undefined
-        this.unsubscribe?.()
-        this.unsubscribe = undefined
-        this.handle = this.reregister({ model: this._model, prompts: this._prompts })
-        if (this.stopped || generation !== this.startEpoch) return
-        await this.start()
-      } catch (err) {
-        if (!this.stopped && generation === this.startEpoch) this._model = previous
-        throw asError(err)
+
+    const modelChanged = "model" in patch && patch.model !== this._model
+    const effortChanged = "effort" in patch && patch.effort !== this._effort
+    if (!modelChanged && !effortChanged) return
+
+    const modelRestart = "model" in patch && modelMode === "restart"
+    const effortRestart = "effort" in patch && effortMode === "restart"
+    if (modelRestart || effortRestart) {
+      const session = this.requireSession()
+      if (session.snapshot().state === "running") {
+        throw new CoreError("session_busy", `${this.kind} session is busy`)
       }
-    })()
-    try { await this.restarting } finally { this.restarting = undefined }
+      await this.restartNative({
+        model: "model" in patch ? patch.model : this._model,
+        effort: "effort" in patch ? patch.effort : this._effort,
+      })
+      return
+    }
+
+    const session = this.requireSession()
+    const previous = { model: this._model, effort: this._effort }
+    const requested: SessionConfiguration = {}
+    if ("model" in patch) requested.model = patch.model
+    if ("effort" in patch) requested.reasoningEffort = patch.effort
+    const generation = this.startEpoch
+    try {
+      await session.configure(requested)
+      if (this.stopped || generation !== this.startEpoch) return
+      if ("model" in patch) this._model = patch.model
+      if ("effort" in patch) this._effort = patch.effort
+    } catch (err) {
+      if (!this.stopped && generation === this.startEpoch) {
+        this._model = previous.model
+        this._effort = previous.effort
+      }
+      throw asError(err)
+    }
   }
 
   async setEffort(effort: string | undefined): Promise<void> {
@@ -255,6 +389,8 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.session = undefined
     this.unsubscribe?.()
     this.unsubscribe = undefined
+    this.runtimeRequest = undefined
+    if (this.kind === "codex") detachCodexRuntimeAdapter(this.id)
     this.completeStoppedTurn()
   }
 
@@ -267,8 +403,6 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async send(text: string, meta?: InboundMeta): Promise<void> {
-    // A model/prompts change restarts the native session; a message that lands
-    // in that window belongs to the restarted session, not to an error toast.
     if (this.restarting) await this.restarting.catch(() => {})
     const epoch = this.inputEpoch
     let releaseGate!: () => void
@@ -276,24 +410,53 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const previous = this.sendTail
     this.sendTail = this.sendTail.then(() => gate).catch(() => gate)
     await previous.catch(() => {})
+    this.failureEmitted = false
     try {
       this.assertLive(epoch)
-      const body = await this.withAttachment(text, meta?.attachment_file_id, epoch)
+      const content = await this.buildContent(text, meta, epoch)
       this.assertLive(epoch)
       const session = this.requireSession()
       if (this.continueAfterConfirmedInterrupt) {
         session.pending.continue()
         this.continueAfterConfirmedInterrupt = false
       }
+      if (this.profile.sendWhenBusy === "steer") {
+        const snap = session.snapshot()
+        if (snap.state === "running") {
+          try {
+            await session.steer({ content })
+          } catch (err) {
+            throw asError(err)
+          }
+          releaseGate()
+          return
+        }
+        let receipt
+        try {
+          receipt = await session.send({ content, whenBusy: "reject" })
+        } catch (err) {
+          if (!isSessionBusy(err) || this.stopped || epoch !== this.inputEpoch) throw asError(err)
+          if (session.snapshot().state !== "running") throw asError(err)
+          try {
+            await session.steer({ content })
+          } catch (steerErr) {
+            throw asError(steerErr)
+          }
+          releaseGate()
+          return
+        }
+        releaseGate()
+        const result = await receipt.completed
+        if (this.stopped || epoch !== this.inputEpoch) return
+        this.handleCompletion(result)
+        return
+      }
       const receipt = await session.send({
-        content: [{ type: "text", text: body }],
+        content,
         whenBusy: "queue",
       })
       releaseGate()
       const result = await receipt.completed
-      // Cancelled after interrupt is intentional idle: broker send() is void.
-      // Do not treat discarded queued receipts as errors (avoids duplicate toasts).
-      // Stop invalidates the turn: finish only after confirmed native cleanup.
       if (this.stopped || epoch !== this.inputEpoch) return
       this.handleCompletion(result)
     } catch (err) {
@@ -310,6 +473,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   async interrupt(): Promise<void> {
     this.inputEpoch++
+    this.failureEmitted = false
     const generation = this.startEpoch
     const session = this.session
     if (!session) return
@@ -317,12 +481,41 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     const result: InterruptResult = await session.interrupt({ pending: "discard" })
     if (this.stopped || generation !== this.startEpoch) return
     if (result.status === "unconfirmed") {
-      const error = new Error("opencode interrupt is unconfirmed; the turn may still be running")
+      const error = new Error(`${this.kind} interrupt is unconfirmed; the turn may still be running`)
       this.surfaceFailure(error, { completeTurn: false })
       throw error
     }
     this.continueAfterConfirmedInterrupt = true
     this.bridge.flush()
+  }
+
+  private async restartNative(next: { model?: string; effort?: string; prompts?: boolean }): Promise<void> {
+    const previous = { model: this._model, effort: this._effort, prompts: this._prompts }
+    const generation = this.startEpoch
+    const nativeSessionId = this.requireSession().snapshot().agentSessionId
+    if ("model" in next) this._model = next.model
+    if ("effort" in next) this._effort = next.effort
+    if ("prompts" in next) this._prompts = next.prompts === true
+    this.nativeSessionId = nativeSessionId
+    this.restarting = (async () => {
+      try {
+        await this.handle.stop({ mode: "shutdown" })
+        this.session = undefined
+        this.unsubscribe?.()
+        this.unsubscribe = undefined
+        this.handle = this.reregister({ model: this._model, prompts: this._prompts })
+        if (this.stopped || generation !== this.startEpoch) return
+        await this.start()
+      } catch (err) {
+        if (!this.stopped && generation === this.startEpoch) {
+          this._model = previous.model
+          this._effort = previous.effort
+          this._prompts = previous.prompts
+        }
+        throw asError(err)
+      }
+    })()
+    try { await this.restarting } finally { this.restarting = undefined }
   }
 
   private async openViaHandle(epoch: number): Promise<void> {
@@ -364,24 +557,57 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private assertCompatibleRecord(record: { agent: string; cwd: string; agentSessionId: string }): void {
-    if (record.agent !== "opencode") {
-      throw new Error(`core session ${this.id} is agent ${record.agent}, expected opencode`)
+    if (record.agent !== this.kind) {
+      throw new Error(`core session ${this.id} is agent ${record.agent}, expected ${this.kind}`)
     }
     if (record.cwd !== this.workdir) {
       throw new Error(`core session ${this.id} cwd mismatch`)
     }
-    const expectedNative = this.nativeSessionId ?? this.initialSessionId
-    if (expectedNative && record.agentSessionId !== expectedNative) {
+    if (this.initialSessionId && record.agentSessionId !== this.initialSessionId) {
       throw new Error(`core session ${this.id} native id mismatch`)
     }
   }
 
   private desiredConfiguration(): SessionConfiguration {
-    // Model is a driver option (ACP set_config_option after open), not Session.configure.
-    return {}
+    if (this.profile.startConfiguration === "empty") return {}
+    const requested: SessionConfiguration = {}
+    if (this._model) requested.model = this._model
+    if (this._effort) requested.reasoningEffort = this._effort
+    return requested
   }
 
-  private async withAttachment(text: string, fileId: string | undefined, epoch: number): Promise<string> {
+  private async buildContent(text: string, meta: InboundMeta | undefined, epoch: number): Promise<ContentBlock[]> {
+    if (this.profile.attachments === "path-in-prompt") {
+      const body = await this.withPathAttachment(text, meta?.attachment_file_id, epoch)
+      return [{ type: "text", text: body }]
+    }
+    const blocks: ContentBlock[] = []
+    let prompt = text
+    if (meta?.attachment_file_id && this.resolveAttachment) {
+      try {
+        const path = await this.resolveAttachment(meta.attachment_file_id)
+        this.assertLive(epoch)
+        const isImage = !!meta.attachment_mime?.startsWith("image/")
+          || meta.attachment_kind === "photo" || meta.attachment_kind === "image"
+        if (isImage) {
+          const data = await readFile(path, { encoding: "base64" })
+          this.assertLive(epoch)
+          blocks.push({ type: "image", data, mimeType: guessImageMime(path, meta.attachment_mime) })
+        } else {
+          const label = meta.attachment_name ? `${meta.attachment_name} (${path})` : path
+          prompt = prompt ? `${prompt}\n\n[Attached file: ${label}]` : `[Attached file: ${label}]`
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err)
+        if (message.includes("stopped")) throw asError(err)
+        log.warn(`${this.kind}_attachment_resolve_failed`, { session: this.sessionName, file_id: meta.attachment_file_id, err: message })
+      }
+    }
+    if (prompt || blocks.length === 0) blocks.push({ type: "text", text: prompt })
+    return blocks
+  }
+
+  private async withPathAttachment(text: string, fileId: string | undefined, epoch: number): Promise<string> {
     if (!fileId || !this.resolveAttachment) return text
     const path = await this.resolveAttachment(fileId)
     this.assertLive(epoch)
@@ -390,12 +616,12 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
 
   private assertLive(epoch: number): void {
     if (this.stopped || epoch !== this.inputEpoch || !this.session) {
-      throw new Error("opencode adapter is stopped")
+      throw new Error(`${this.kind} adapter is stopped`)
     }
   }
 
   private requireSession(): Session {
-    if (!this.session) throw new Error("opencode session not initialized")
+    if (!this.session) throw new Error(`${this.kind} session not initialized`)
     return this.session
   }
 
@@ -453,7 +679,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private ingestInitialize(params: unknown): void {
-    type Command = CoreOpenCodeAdapter["availableCommands"][number]
+    type Command = CoreAdapter["availableCommands"][number]
     const init = params as {
       _meta?: { modelState?: { availableModels?: { modelId: string }[] }; availableCommands?: Command[] }
       modelState?: { availableModels?: { modelId: string }[] }
@@ -509,7 +735,7 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     this.stallTimer = setTimeout(() => {
       this.stallTimer = undefined
       const error = new Error(
-        `opencode produced no response within ${Math.round(this.stallTimeoutMs / 1000)}s — the request appears stalled; please try again`,
+        `${this.kind} produced no response within ${Math.round(this.stallTimeoutMs / 1000)}s — the request appears stalled; please try again`,
       )
       this.surfaceFailure(error, { completeTurn: false })
       void this.interrupt().catch(() => {})
@@ -523,3 +749,9 @@ export class CoreOpenCodeAdapter extends EventEmitter implements AgentAdapter {
     }
   }
 }
+
+export type CoreGrokAdapter = CoreAdapter
+export type CoreCodexAdapter = CoreAdapter
+export type CoreOpenCodeAdapter = CoreAdapter
+export type CoreCursorAdapter = CoreAdapter
+export type CoreClaudeAdapter = CoreAdapter

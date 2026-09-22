@@ -4,16 +4,8 @@ import { RecentInboundIds } from "./recent-inbound-ids"
 import { isPersistentRuntimeSession } from "./types"
 import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
-import { CoreClaudeAdapter } from "../agents/claude/core-adapter"
-import { CodexAdapter } from "../agents/codex/adapter"
-import { CoreCodexAdapter } from "../agents/codex/core-adapter"
+import { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
-import type { CodexRuntimeAdapter } from "./runtime"
-import { CoreCursorAdapter } from "../agents/cursor/core-adapter"
-import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
-import { GrokAdapter } from "../agents/grok/adapter"
-import { CoreGrokAdapter } from "../agents/grok/core-adapter"
-import type { GrokRuntimeAdapter } from "./runtime"
 import { agents } from "../agents/registry"
 import type { ResumeCtx, ResumeRow } from "../agents/session-types"
 import { PendingReapply, shouldDeferReapply, changedSince, type PreChangeConfig } from "./pending-reapply"
@@ -267,11 +259,20 @@ export class SessionManager {
     this.runtimes.delete(sessionId)
   }
 
-  registerClaudeRuntime(sessionId: string, adapter: CoreClaudeAdapter): void {
+  registerCoreRuntime(sessionId: string, name: string, adapter: CoreAdapter, handle?: CodexSpawnHandle): void {
+    const kind = adapter.kind
+    if (kind === AgentKind.Codex) this.registerCodexRuntime(sessionId, name, adapter, handle)
+    else if (kind === AgentKind.Cursor) this.registerCursorRuntime(sessionId, adapter)
+    else if (kind === AgentKind.OpenCode) this.registerOpenCodeRuntime(sessionId, adapter)
+    else if (kind === AgentKind.Grok) this.registerGrokRuntime(sessionId, adapter)
+    else this.registerClaudeRuntime(sessionId, adapter)
+  }
+
+  registerClaudeRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
   }
 
-  registerCodexRuntime(sessionId: string, name: string, adapter: CodexRuntimeAdapter, handle?: CodexSpawnHandle): void {
+  registerCodexRuntime(sessionId: string, name: string, adapter: CoreAdapter, handle?: CodexSpawnHandle): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Codex, adapter, handle })
     handle?.onExit?.((code: number | null) => {
       log.info("codex_app_server_exited", { name, code })
@@ -279,17 +280,15 @@ export class SessionManager {
     })
   }
 
-  registerCursorRuntime(sessionId: string, adapter: CoreCursorAdapter): void {
+  registerCursorRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Cursor, adapter })
   }
 
-  // grok's stdio child is owned by the adapter (no separate handle), so unlike
-  // opencode there's no handle.onExit to unregister on — adapter.stop() is the kill.
-  registerGrokRuntime(sessionId: string, adapter: GrokRuntimeAdapter): void {
+  registerGrokRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
   }
 
-  registerOpenCodeRuntime(sessionId: string, adapter: CoreOpenCodeAdapter): void {
+  registerOpenCodeRuntime(sessionId: string, adapter: CoreAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter })
   }
 
@@ -834,18 +833,8 @@ export class SessionManager {
   registerSpawnedAdapter(name: string, adapter: AgentAdapter, handle?: unknown): void {
     const session = this.registry.resolveName(name)
     const sid = session?.id ?? name
-    if (adapter instanceof CoreCodexAdapter) {
-      this.registerCodexRuntime(sid, name, adapter)
-    } else if (adapter instanceof CodexAdapter) {
-      this.registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
-    } else if (adapter instanceof CoreCursorAdapter) {
-      this.registerCursorRuntime(sid, adapter)
-    } else if (adapter instanceof CoreOpenCodeAdapter) {
-      this.registerOpenCodeRuntime(sid, adapter)
-    } else if (adapter instanceof CoreGrokAdapter || adapter instanceof GrokAdapter) {
-      this.registerGrokRuntime(sid, adapter)
-    } else if (adapter instanceof CoreClaudeAdapter) {
-      this.registerClaudeRuntime(sid, adapter)
+    if (adapter instanceof CoreAdapter) {
+      this.registerCoreRuntime(sid, name, adapter, handle as CodexSpawnHandle | undefined)
     }
     this.ports.resume.wireAdapterEvents(adapter, sid)
   }
@@ -1215,7 +1204,7 @@ export class SessionManager {
 
   private async resumeClaudeCoreArm(session: ResumeRow, name: string): Promise<void> {
     const { adapter } = await agents.claude.resume!(this.resumeCtx(session.id), session, name)
-    this.registerClaudeRuntime(session.id, adapter as CoreClaudeAdapter)
+    this.registerClaudeRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 

@@ -5,7 +5,7 @@ import { join } from "path"
 import { runCurator, type CuratorDeps } from "./run"
 import { Registry } from "../session-manager/registry"
 import { SessionManager, type SessionManagerPorts } from "../session-manager/manager"
-import type { CodexAdapter } from "../agents/codex/adapter"
+import type { CoreAdapter } from "../agents/core-bridge/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 
 let promptPath: string
@@ -130,7 +130,7 @@ test("codex-kind curator: prompt lands via the adapter funnel, readiness is adap
   setTimeout(() => {
     manager.registerRuntime(row.id, {
       kind: "codex",
-      adapter: { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CodexAdapter,
+      adapter: { send: async (text: string, meta: any) => { sent.push({ text, meta }) } } as unknown as CoreAdapter,
       handle: {} as CodexSpawnHandle,
     })
   }, 20)

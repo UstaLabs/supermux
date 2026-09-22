@@ -2,7 +2,7 @@ import { deriveName, ensureUnique } from "../../session-manager/naming"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
-import { CoreCursorAdapter } from "./core-adapter"
+import { CoreAdapter, CURSOR_CORE_PROFILE } from "../core-bridge/core-adapter"
 import { getCursorCoreHost } from "./core-host-provider"
 import type { CursorCoreHost, CursorPrepareExtra } from "./core-host"
 import { join } from "path"
@@ -41,8 +41,8 @@ function createBoundAdapter(opts: {
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
-}): CoreCursorAdapter {
-  return new CoreCursorAdapter({
+}): CoreAdapter {
+  return new CoreAdapter(CURSOR_CORE_PROFILE, {
     handle: opts.handle,
     reregister: opts.reregister,
     core: opts.core,
@@ -75,7 +75,7 @@ function prepareExtra(opts: {
   }
 }
 
-/** cursor's worker is an in-process CoreCursorAdapter driving `cursor-agent`
+/** cursor's worker is an in-process CoreAdapter driving `cursor-agent`
  * via a process-owned CursorCoreHost. The row is registered with pid 0 and
  * adapter.stop() is the kill. Config/preamble writes run in the host prepare hook. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
@@ -91,7 +91,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     env: {},
     extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: args.model }),
   })
-  let adapter: CoreCursorAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     await deps.bind(id)
 
@@ -167,7 +167,7 @@ export async function resumeCursorSession(
     cursorHost?: CursorCoreHost
   },
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
-): Promise<{ adapter: CoreCursorAdapter }> {
+): Promise<{ adapter: CoreAdapter }> {
   const host = resolveHost(deps.cursorHost)
   const sessionHome = session.agent_home
   const initialSessionId = session.agent_session_id || undefined
@@ -183,7 +183,7 @@ export async function resumeCursorSession(
       model: session.model,
     }),
   })
-  let adapter: CoreCursorAdapter | undefined
+  let adapter: CoreAdapter | undefined
   try {
     adapter = createBoundAdapter({
       handle,
@@ -232,10 +232,10 @@ export async function applyConfig(
     return { ok: false, error: "cursor sessions use model selection for reasoning depth" }
   }
   const adapter = ctx.adapter
-  const coreAdapter = adapter instanceof CoreCursorAdapter
+  const coreAdapter = adapter instanceof CoreAdapter
     ? adapter
-    : (adapter && typeof (adapter as CoreCursorAdapter).setConfiguration === "function"
-      ? adapter as CoreCursorAdapter
+    : (adapter && typeof (adapter as CoreAdapter).setConfiguration === "function"
+      ? adapter as CoreAdapter
       : undefined)
   if (!coreAdapter) return { ok: true }
   const patch: { model?: string } = {}
@@ -250,7 +250,7 @@ export async function applyConfig(
   }
 }
 
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreCursorAdapter }> {
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreAdapter }> {
   return resumeCursorSession(
     {
       resolveAttachment: ctx.resolveAttachment,
