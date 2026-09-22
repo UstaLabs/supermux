@@ -68,11 +68,13 @@ function fakeChildFactory(options: { nativeId?: string; failOpens?: number } = {
   const opens: DriverContext[] = []
   let openAttempts = 0
   const envs: Record<string, string>[] = []
+  const optionsSeen: ClaudeOptions[] = []
   const factory = (gopts: ClaudeOptions, _overrides: SessionConfiguration): AgentDriver => ({
     id: "claude",
     async open(ctx) {
       openAttempts++
       envs.push({ ...(gopts.env ?? {}) })
+      optionsSeen.push(gopts)
       if (openAttempts <= (options.failOpens ?? 0)) throw new Error("open failed")
       opens.push(ctx)
       const runtime: AgentRuntime = {
@@ -85,7 +87,7 @@ function fakeChildFactory(options: { nativeId?: string; failOpens?: number } = {
       return runtime
     },
   })
-  return { factory, opens, envs }
+  return { factory, opens, envs, optionsSeen }
 }
 
 const hosts: ClaudeCoreHost[] = []
@@ -161,6 +163,10 @@ describe("claude core spawn/resume dialect", () => {
     expect(env.MUX_SESSION_ROLE).toBe("worker")
     expect(env.MUX_SOCKETS_DIR).toMatch(/sockets$/)
     expect(env.MUX_CORE).toBe("1")
+    // Prompts off = bypass tool approvals, but agent questions must still reach
+    // the host: headless Claude drops AskUserQuestion under prompts "none".
+    expect(child.optionsSeen[0]?.permissionMode).toBe("bypassPermissions")
+    expect(child.optionsSeen[0]?.permissionPrompts).toBe("host")
   })
 
   test("resume of an existing native id adopts then exact-resumes", async () => {

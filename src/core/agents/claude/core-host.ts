@@ -129,8 +129,13 @@ export function createClaudeCoreHost(options: ClaudeCoreHostOptions): ClaudeCore
         model: extraModel,
         effort: extraEffort,
         tools: "default",
+        // Prompts always route to the host: headless Claude removes
+        // AskUserQuestion when nobody can answer it (verified on the real CLI),
+        // and agent questions must work regardless of the permission policy.
+        // The opt-in only decides whether tool calls need approval: with
+        // bypassPermissions Claude skips them and never asks the host.
         permissionMode: prompts ? undefined : "bypassPermissions",
-        permissionPrompts: prompts ? "host" : "none",
+        permissionPrompts: "host",
         partialMessages: true,
         setupTimeoutMs: 60_000,
         requestTimeoutMs: 30_000,
