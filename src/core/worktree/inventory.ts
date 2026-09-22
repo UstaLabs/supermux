@@ -83,12 +83,14 @@ function owns(worktree: string, workdir: string): boolean {
   return w === worktree || w.startsWith(worktree + sep)
 }
 
-type Canon = (p: string) => Promise<string>
+export type Canon = (p: string) => Promise<string>
 
 /** Canonical path key: realpath of the longest existing ancestor + the missing rest, no trailing
  *  slash. Owner rows store both unresolved (manager.ts) and realpath'd (workdir-paths.ts) paths,
- *  so every ownership comparison goes through this. Async and memoised per call. */
-function canonicalizer(): Canon {
+ *  so every ownership comparison goes through this. Async and memoised per call.
+ *  Exported so service.ts can canonicalize a caller-supplied workdir/rows the same way listWorktrees
+ *  and deleteOne do, instead of reimplementing the ancestor-walk fallback. */
+export function canonicalizer(): Canon {
   const cache = new Map<string, Promise<string>>()
   const canon: Canon = (p) => {
     const abs = resolve(p)
@@ -106,7 +108,7 @@ function canonicalizer(): Canon {
 }
 
 /** Non-draft rows with canonical workdirs. */
-async function canonRows(rows: OwnerRow[], canon: Canon): Promise<OwnerRow[]> {
+export async function canonRows(rows: OwnerRow[], canon: Canon): Promise<OwnerRow[]> {
   const owning = rows.filter((r) => r.user_status !== "draft" && r.workdir)
   return Promise.all(owning.map(async (r) => ({ ...r, workdir: await canon(r.workdir) })))
 }
