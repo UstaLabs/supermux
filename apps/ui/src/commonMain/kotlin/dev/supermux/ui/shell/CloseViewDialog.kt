@@ -1,12 +1,19 @@
 package dev.supermux.ui.shell
 
 import dev.supermux.ui.widgets.AlertDialog
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.chatSessionId
 import dev.supermux.proto.stateString
+import dev.supermux.ui.worktree.WorktreeCleanupSection
 import dev.supermux.workspace.viewTitle
 
 /**
@@ -14,8 +21,9 @@ import dev.supermux.workspace.viewTitle
  *
  * ONE question, TWO buttons. This is deliberately NOT the Finish flow: the user
  * was explicit that closing a chat settles only that view, with no Merge / Open
- * PR / Keep / Discard. The work tree and the branch stay on disk; Finish stays
- * available later from the archived row and the workspace menu.
+ * PR / Keep / Discard. The work tree and the branch stay on disk UNLESS the user
+ * ticks "also delete worktree" (spec 2026-09-22-explicit-worktree-cleanup); Finish
+ * stays available later from the archived row and the workspace menu.
  *
  * An editor view never reaches here — closing one stops nothing.
  */
@@ -25,11 +33,37 @@ fun CloseViewDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     sessionNames: Map<String, String> = emptyMap(),
+    /** Chat views only: the session's workdir, and how to look up its worktree. */
+    chatWorkdir: String? = null,
+    worktreeForWorkdir: (suspend (String) -> WorktreeForWorkdirDto?)? = null,
+    /** Close, then delete exactly the worktree ids the section displayed and the user confirmed. */
+    onConfirmDeletingWorktree: ((worktreeIds: List<String>) -> Unit)? = null,
 ) {
+    var deleteWt by remember(view.id) { mutableStateOf(false) }
+    var deleteIds by remember(view.id) { mutableStateOf(emptyList<String>()) }
+    val sessionId = view.chatSessionId()
     AlertDialog(
         onDismissRequest = onDismiss,
-        text = { Text(closeConfirmText(view, view.chatSessionId()?.let { sessionNames[it] })) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Close") } },
+        text = {
+            Column {
+                Text(closeConfirmText(view, sessionId?.let { sessionNames[it] }))
+                if (view.kind == "chat" && chatWorkdir != null && worktreeForWorkdir != null) {
+                    WorktreeCleanupSection(
+                        listOf(chatWorkdir), setOfNotNull(sessionId), worktreeForWorkdir,
+                        onDeleteChange = { c, ids -> deleteWt = c; deleteIds = ids },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (deleteWt && deleteIds.isNotEmpty() && onConfirmDeletingWorktree != null) {
+                    onConfirmDeletingWorktree(deleteIds)
+                } else {
+                    onConfirm()
+                }
+            }) { Text(if (deleteWt) "Close & delete" else "Close") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

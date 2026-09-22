@@ -32,6 +32,8 @@ import dev.supermux.net.ModelInfo
 import dev.supermux.net.PathValidation
 import dev.supermux.net.ReasoningResponse
 import dev.supermux.net.RepoInfo
+import dev.supermux.net.WorktreeDeleteResultDto
+import dev.supermux.net.WorktreeForWorkdirDto
 import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.state.FleetStore
@@ -239,6 +241,12 @@ class SessionListActions(
     val restoreWorkspace: (workspaceId: String) -> Unit = {},
     val renameHost: (recordId: String, name: String) -> Unit = { _, _ -> },
     val forgetHost: (recordId: String) -> Unit = {},
+    /** Worktree lookup for the archive dialogs (spec 2026-09-22-explicit-worktree-cleanup). */
+    val worktreeForWorkdir: suspend (String) -> WorktreeForWorkdirDto? = { null },
+    /** Archive + delete exactly [worktreeIds] (the ids the dialog displayed and the user confirmed);
+     *  returns per-worktree results, null on transport failure. */
+    val killAndDeleteWorktree: suspend (id: String, worktreeIds: List<String>) -> List<WorktreeDeleteResultDto>? = { _, _ -> null },
+    val archiveWorkspaceAndDeleteWorktree: suspend (workspaceId: String, worktreeIds: List<String>) -> List<WorktreeDeleteResultDto>? = { _, _ -> null },
 )
 
 /**
@@ -262,6 +270,9 @@ fun SessionListActions.withWorkspaceOps(
     restoreWorkspace = restoreWorkspace,
     renameHost = renameHost,
     forgetHost = forgetHost,
+    worktreeForWorkdir = worktreeForWorkdir,
+    killAndDeleteWorktree = killAndDeleteWorktree,
+    archiveWorkspaceAndDeleteWorktree = archiveWorkspaceAndDeleteWorktree,
 )
 
 /** [SessionListActions] against ONE paired host — single-host desktop. */
@@ -287,6 +298,9 @@ fun rememberSessionListActions(
             restoreWorkspace = { app.restoreWorkspace(it) },
             renameHost = { id, name -> renameHost(id, name) },
             forgetHost = { id -> forgetHost(id) },
+            worktreeForWorkdir = { app.worktreeForWorkdir(it) },
+            killAndDeleteWorktree = { id, ids -> app.killAndDeleteWorktree(id, ids) },
+            archiveWorkspaceAndDeleteWorktree = { id, ids -> app.archiveWorkspaceAndDeleteWorktree(id, ids) },
         )
     }
 }
@@ -307,5 +321,8 @@ fun rememberSessionListActions(fleet: FleetStore): SessionListActions = remember
         restoreWorkspace = { fleet.restoreWorkspace(it) },
         renameHost = { id, name -> fleet.renameHost(id, name) },
         forgetHost = { id -> fleet.forgetHost(id) },
+        worktreeForWorkdir = { fleet.worktreeForWorkdir(it) },
+        killAndDeleteWorktree = { id, ids -> fleet.killAndDeleteWorktree(id, ids) },
+        archiveWorkspaceAndDeleteWorktree = { id, ids -> fleet.archiveWorkspaceAndDeleteWorktree(id, ids) },
     )
 }
