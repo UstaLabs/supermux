@@ -17,14 +17,21 @@ class TerminalCodecException(message: String, cause: Throwable? = null) : Runtim
  * Little-endian; strings are u32 length + UTF-8; booleans u8 0/1; nullable = u8 presence + value;
  * Long = i64 except colours (u64 [TerminalColor]); Int = i32; collections = u32 count + elements.
  * Every rule is enforced: the buffer must be exactly `12 + payloadBytes` long, payloadBytes ≤ 8 MiB,
- * sizes 1..4096, counts possible for the remaining bytes, enums and colours in range.
+ * sizes 1..4096 with at most [MAX_CELLS] cells, counts possible for the remaining bytes, enums and
+ * colours in range, cell text ≤ [MAX_CELL_TEXT_BYTES] and empty for width-0 cells, selection inside
+ * the history + screen rows.
  */
 object ViewportCodec {
     const val MAGIC: Int = 0x53545654
     const val ABI: Int = 1
     const val HEADER_BYTES: Int = 12
     const val MAX_PAYLOAD_BYTES: Int = 8 * 1024 * 1024
-    const val MAX_DIMENSION: Int = 4096
+    const val MAX_DIMENSION: Int = TerminalSize.MAX_DIMENSION
+    const val MAX_CELLS: Int = TerminalSize.MAX_CELLS
+    const val MAX_CELL_TEXT_BYTES: Int = TerminalSize.MAX_CELL_TEXT_BYTES
+
+    /** Upper bound for list pre-sizing; counts are validated against the bytes, not trusted. */
+    private const val MAX_PRESIZE = 4096
 
     const val KIND_VIEWPORT: Int = 1
     const val KIND_EFFECTS: Int = 2
@@ -49,7 +56,9 @@ object ViewportCodec {
         val rows = r.i32()
         val cellWidth = r.i32()
         val cellHeight = r.i32()
-        if (columns !in 1..MAX_DIMENSION || rows !in 1..MAX_DIMENSION) fail("viewport size ${columns}x$rows out of range")
+        if (columns !in 1..MAX_DIMENSION || rows !in 1..MAX_DIMENSION || columns.toLong() * rows > MAX_CELLS) {
+            fail("viewport size ${columns}x$rows out of range")
+        }
         if (cellWidth < 1 || cellHeight < 1) fail("cell size ${cellWidth}x$cellHeight out of range")
         val size = TerminalSize(columns, rows, cellWidth, cellHeight)
 
@@ -83,7 +92,7 @@ object ViewportCodec {
         if (full && rowCount != rows) fail("full frame with $rowCount of $rows rows")
 
         val linkCount = r.count(MIN_LINK_BYTES)
-        val links = ArrayList<TerminalLink>(linkCount)
+        val links = ArrayList<TerminalLink>(minOf(linkCount, MAX_PRESIZE))
         repeat(linkCount) {
             val row = r.i32()
             val first = r.i32()
@@ -95,23 +104,26 @@ object ViewportCodec {
             links.add(TerminalLink(row, first, last, uri))
         }
         val selection = if (r.bool()) {
-            val start = r.point(columns)
-            val end = r.point(columns)
+            val lastRow = historyRows + rows - 1
+            val start = r.point(columns, lastRow)
+            val end = r.point(columns, lastRow)
             TerminalSelection(start, end)
         } else {
             null
         }
+        val held = r.bool()
         r.end()
         return TerminalViewport(
             generation = generation, size = size, rows = rowList, cursor = cursor, modes = modes,
             historyRows = historyRows, viewportTop = viewportTop, full = full, links = links, selection = selection,
+            held = held,
         )
     }
 
     fun decodeEffects(bytes: ByteArray): List<TerminalEffect> {
         val r = open(bytes, KIND_EFFECTS)
         val count = r.count(MIN_EFFECT_BYTES)
-        val effects = ArrayList<TerminalEffect>(count)
+        val effects = ArrayList<TerminalEffect>(minOf(count, MAX_PRESIZE))
         repeat(count) {
             effects.add(
                 when (val tag = r.u8()) {
@@ -218,8 +230,9 @@ object ViewportCodec {
             return out
         }
 
-        fun string(): String {
+        fun string(maxBytes: Int = Int.MAX_VALUE): String {
             val n = length()
+            if (n > maxBytes) fail("string of $n bytes exceeds $maxBytes")
             val s = try {
                 b.decodeToString(pos, pos + n, throwOnInvalidSequence = true)
             } catch (e: CharacterCodingException) {
@@ -236,9 +249,10 @@ object ViewportCodec {
         }
 
         fun cell(): TerminalCell {
-            val text = string()
+            val text = string(MAX_CELL_TEXT_BYTES)
             val width = i32()
             if (width !in 0..2) fail("cell width $width")
+            if (width == 0 && text.isNotEmpty()) fail("text in a width-0 cell")
             val fg = color()
             val bg = color()
             val flags = i32()
@@ -248,10 +262,10 @@ object ViewportCodec {
             return TerminalCell(text, width, CellStyle(fg, bg, flags, underline))
         }
 
-        fun point(columns: Int): TerminalPoint {
+        fun point(columns: Int, lastRow: Long): TerminalPoint {
             val row = i64()
             val column = i32()
-            if (row < 0 || column !in 0 until columns) fail("selection point ($row, $column) out of range")
+            if (row !in 0..lastRow || column !in 0 until columns) fail("selection point ($row, $column) out of range")
             return TerminalPoint(row, column)
         }
 

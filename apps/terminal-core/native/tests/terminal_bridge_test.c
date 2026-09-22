@@ -280,6 +280,7 @@ typedef struct {
   bool has_sel;
   int64_t s_row, e_row;
   int32_t s_col, e_col;
+  bool held;
 } View;
 
 static void view_free(View *v) {
@@ -302,7 +303,8 @@ static bool decode_view(const uint8_t *buf, size_t len, View *v, const char **wh
     v->rows = rd_i32(&r);
     v->cw = rd_i32(&r);
     v->ch = rd_i32(&r);
-    if (r.ok && (v->cols < 1 || v->cols > 4096 || v->rows < 1 || v->rows > 4096 || v->cw < 1 || v->ch < 1))
+    if (r.ok && (v->cols < 1 || v->cols > 4096 || v->rows < 1 || v->rows > 4096 || v->cw < 1 || v->ch < 1 ||
+                 (int64_t)v->cols * v->rows > (int64_t)ST_MAX_CELLS))
       rd_fail(&r, "bad size");
     uint32_t n = rd_count(&r, 8);
     if (r.ok && n > (uint32_t)v->rows) rd_fail(&r, "more rows than viewport");
@@ -330,6 +332,8 @@ static bool decode_view(const uint8_t *buf, size_t len, View *v, const char **wh
         c->flags = rd_i32(&r);
         c->underline = rd_i32(&r);
         if (r.ok && (c->width < 0 || c->width > 2)) rd_fail(&r, "bad width");
+        if (r.ok && c->width == 0 && c->text_len != 0) rd_fail(&r, "text in a width-0 cell");
+        if (r.ok && c->text_len > ST_MAX_CELL_TEXT) rd_fail(&r, "cell text too long");
         if (r.ok && (!color_ok(c->fg) || !color_ok(c->bg))) rd_fail(&r, "bad colour");
         if (r.ok && (c->flags & ~0xFF)) rd_fail(&r, "bad flags");
         if (r.ok && (c->underline < 0 || c->underline > 5)) rd_fail(&r, "bad underline");
@@ -368,7 +372,12 @@ static bool decode_view(const uint8_t *buf, size_t len, View *v, const char **wh
       v->s_col = rd_i32(&r);
       v->e_row = rd_i64(&r);
       v->e_col = rd_i32(&r);
+      int64_t max_row = v->history + v->rows - 1;
+      if (r.ok && (v->s_row < 0 || v->s_row > max_row || v->e_row < 0 || v->e_row > max_row || v->s_col < 0 ||
+                   v->s_col >= v->cols || v->e_col < 0 || v->e_col >= v->cols))
+        rd_fail(&r, "selection out of range");
     }
+    v->held = rd_bool(&r);
     if (r.ok && r.pos != r.len) rd_fail(&r, "trailing bytes");
   }
   if (why) *why = r.why;
@@ -791,6 +800,10 @@ static void test_input(void) {
   CHECK(st_paste(h, (const uint8_t *)"hi", 2, 0) == ST_OK && expect_input(h, "\x1b[200~hi\x1b[201~", 14),
         "bracketed paste -> ESC[200~hi ESC[201~ as ONE Input effect");
   CHECK(st_paste(h, NULL, 0, 0) == ST_OK && expect_input(h, "", 0), "empty paste -> nothing");
+  CHECK(st_paste(h, (const uint8_t *)"a\x1b[201~b", 9, 0) == ST_ERR_REJECTED && expect_input(h, "", 0),
+        "bracketed paste containing the end marker rejected, nothing queued");
+  CHECK(st_paste(h, (const uint8_t *)"a\x1b[201~b", 9, ST_PASTE_ALLOW_UNSAFE) == ST_OK, "... and accepted with ALLOW_UNSAFE");
+  drain_discard(h);
 
   /* Input never mixes with responses */
   feed(h, "\x1b[6n");
@@ -1128,8 +1141,8 @@ static void test_render_hold(void) {
   View v;
   uint32_t ff = 0;
   REQUIRE(read_view(h, 0, &v, &ff) == ST_OK, "read during hold");
-  CHECK((ff & ST_FRAME_HELD) && strcmp(row_text(&v, 0), "A") == 0, "held frame shows the pre-hold screen \"A\" (%s)",
-        row_text(&v, 0));
+  CHECK((ff & ST_FRAME_HELD) && v.held && strcmp(row_text(&v, 0), "A") == 0,
+        "held frame (held field + flag) shows the pre-hold screen \"A\" (%s)", row_text(&v, 0));
   view_free(&v);
   feed(h, "C");
   REQUIRE(read_view(h, 0, &v, &ff) == ST_OK, "read during hold again");
@@ -1137,12 +1150,12 @@ static void test_render_hold(void) {
   view_free(&v);
   feed(h, "\x1b[?2026l");
   REQUIRE(read_view(h, 0, &v, &ff) == ST_OK, "read after hold");
-  CHECK(!(ff & ST_FRAME_HELD) && strcmp(row_text(&v, 0), "ABC") == 0, "hold released: \"ABC\"");
+  CHECK(!(ff & ST_FRAME_HELD) && !v.held && strcmp(row_text(&v, 0), "ABC") == 0, "hold released: \"ABC\", held = false");
   view_free(&v);
 
   feed(h, "\x1b[?2026hD");
   REQUIRE(read_view(h, ST_READ_BREAK_HOLD, &v, &ff) == ST_OK, "owner timeout: BREAK_HOLD");
-  CHECK(!(ff & ST_FRAME_HELD) && strcmp(row_text(&v, 0), "ABCD") == 0, "hold broken: live frame \"ABCD\"");
+  CHECK(!(ff & ST_FRAME_HELD) && !v.held && strcmp(row_text(&v, 0), "ABCD") == 0, "hold broken: live frame \"ABCD\"");
   view_free(&v);
   feed(h, "E");
   REQUIRE(read_view(h, 0, &v, &ff) == ST_OK, "read");
@@ -1291,18 +1304,76 @@ static void test_framing(void) {
   free(bb);
   st_destroy(h);
 
-  /* the encoder refuses frames over 8 MiB and stays usable */
-  h = mk(4096, 64);
+  /* Size cap: every accepted size can render; beyond ST_MAX_CELLS is refused up front. */
+  st_handle hh = 0;
+  CHECK(st_create(ST_ABI_VERSION, 1000, 101, 8, 16, 0, 0, NULL, &hh) == ST_ERR_INVALID_ARGUMENT,
+        "1000x101 (101,000 cells > ST_MAX_CELLS) rejected at create");
+  CHECK(st_create(ST_ABI_VERSION, 4096, 64, 8, 16, 0, 0, NULL, &hh) == ST_ERR_INVALID_ARGUMENT, "4096x64 rejected at create");
+  h = mk_alloc(1000, 100, 0, 0, NULL);
   uint8_t *vb = NULL;
   uint32_t vl = 0;
-  CHECK(st_read_viewport(h, ST_READ_FORCE_FULL, &vb, &vl, NULL) == ST_ERR_LIMIT && vb == NULL,
-        "4096x64 full frame (> 8 MiB) -> ST_ERR_LIMIT");
-  CHECK(st_resize(h, 4096, 60, 8, 16) == ST_OK && st_read_viewport(h, 0, &vb, &vl, NULL) == ST_OK && vl <= 12 + ST_MAX_PAYLOAD,
-        "4096x60 frame fits (%u bytes) and is full after the failure", vl);
+  CHECK(st_read_viewport(h, ST_READ_FORCE_FULL, &vb, &vl, NULL) == ST_OK && vl <= 12 + ST_MAX_PAYLOAD,
+        "1000x100 (exactly ST_MAX_CELLS) full frame fits (%u bytes)", vl);
+  st_free_buffer(vb);
+  CHECK(st_resize(h, 4096, 25, 8, 16) == ST_ERR_INVALID_ARGUMENT, "resize to 4096x25 (102,400 cells) rejected");
+  CHECK(st_resize(h, 4096, 24, 8, 16) == ST_OK, "resize to 4096x24 (98,304 cells) accepted");
+  vb = NULL;
+  CHECK(st_read_viewport(h, 0, &vb, &vl, NULL) == ST_OK, "and renders (%u bytes)", vl);
   if (vb) {
     View vv;
-    CHECK(decode_view(vb, vl, &vv, &why) && vv.full, "decodes, full");
+    CHECK(decode_view(vb, vl, &vv, &why) && vv.full && vv.cols == 4096 && vv.rows == 24, "decodes, full 4096x24");
     view_free(&vv);
+  }
+  st_free_buffer(vb);
+  st_destroy(h);
+
+  /* Worst case at the cap: 400x250, every cell an 18-code-point (35-byte) cluster, 20 rows of
+   * 2000-byte links, a different one per cell (far more than the link budget). */
+  h = mk_alloc(400, 250, 0, 0, NULL);
+  static char cell[128];
+  size_t cl = 0;
+  cell[cl++] = 'e';
+  for (int m = 0; m < 17; m++) {
+    cell[cl++] = (char)0xCC;
+    cell[cl++] = (char)(0x80 + (m % 16));
+  }
+  static char uri[2100];
+  size_t rowcap = 400 * (cl + 2100) + 64;
+  char *row = malloc(rowcap);
+  for (int y = 0; y < 250; y++) {
+    size_t k = (size_t)snprintf(row, rowcap, "\x1b[%d;1H", y + 1);
+    for (int x = 0; x < 400; x++) {
+      if (y < 3) {
+        int u = snprintf(uri, sizeof(uri), "\x1b]8;;https://example.com/%04d/%03d/", y, x);
+        while (u < 2000) uri[u++] = 'x';
+        uri[u++] = 0x1b, uri[u++] = '\\', uri[u] = 0;
+        memcpy(row + k, uri, (size_t)u);
+        k += (size_t)u;
+      }
+      memcpy(row + k, cell, cl);
+      k += cl;
+    }
+    st_feed(h, (const uint8_t *)row, (uint32_t)k, ST_ORIGIN_LIVE);
+  }
+  free(row);
+  vb = NULL;
+  st_status ws = st_read_viewport(h, ST_READ_FORCE_FULL, &vb, &vl, NULL);
+  CHECK(ws == ST_OK && vl <= 12 + ST_MAX_PAYLOAD, "worst-case 100,000-cell frame fits: %u bytes (status %d)", vl, ws);
+  if (vb) {
+    View vv;
+    bool ok = decode_view(vb, vl, &vv, &why);
+    bool cut = ok;
+    for (uint32_t i = 0; ok && i < vv.nrows; i++)
+      for (uint32_t j = 0; j < vv.rows_v[i].ncells; j++) {
+        Cell *c = &vv.rows_v[i].cells[j];
+        cut = cut && c->text_len <= ST_MAX_CELL_TEXT && c->text_len >= 31 && c->text[0] == 'e';
+      }
+    size_t link_bytes = 0;
+    for (uint32_t i = 0; ok && i < vv.nlinks; i++) link_bytes += 16 + strlen(vv.links[i].uri);
+    CHECK(ok && cut, "clusters cut to <= %u bytes at a code point boundary (%s)", ST_MAX_CELL_TEXT, ok ? "decoded" : why);
+    CHECK(ok && vv.nlinks > 0 && vv.nlinks < 1200 && link_bytes <= ST_MAX_LINK_BYTES && link_bytes > ST_MAX_LINK_BYTES - 2100,
+          "links beyond the %u-byte budget omitted (%u of 1200 kept, %zu bytes)", ST_MAX_LINK_BYTES, vv.nlinks, link_bytes);
+    if (ok) view_free(&vv);
   }
   st_free_buffer(vb);
   st_destroy(h);
@@ -1352,6 +1423,18 @@ static void test_chunk_splits(void) {
     st_destroy(h);
   }
   CHECK(bad == 0, "%zu split points: identical frames and effects (%d differ)", n - 1, bad);
+  h = mk(20, 4);
+  for (size_t i = 0; i < n; i++) st_feed(h, (const uint8_t *)fixture + i, 1, ST_ORIGIN_LIVE);
+  {
+    uint8_t *f, *x;
+    uint32_t fl, xl;
+    snapshot(h, &f, &fl, &x, &xl);
+    CHECK(fl == wfl && memcmp(f, wf, 12) == 0 && memcmp(f + 20, wf + 20, fl - 20) == 0 && xl == wxl && memcmp(x, wx, xl) == 0,
+          "one byte at a time (%zu feeds): identical frame and effects", n);
+    st_free_buffer(f);
+    st_free_buffer(x);
+  }
+  st_destroy(h);
   st_free_buffer(wf);
   st_free_buffer(wx);
 }
@@ -1668,6 +1751,14 @@ static void test_golden(void) {
   st_free_buffer(b);
   REQUIRE(st_drain_effects(h, &b, &l) == ST_OK, "drain empty");
   golden("effects_empty", b, l);
+  st_free_buffer(b);
+  feed(h, "\x1b[?2026h\x1b[3;5Hheld");
+  uint32_t ff = 0;
+  REQUIRE(st_read_viewport(h, 0, &b, &l, &ff) == ST_OK, "read held");
+  REQUIRE(decode_view(b, l, &pv, NULL), "decode held");
+  CHECK(pv.held && (ff & ST_FRAME_HELD) && strcmp(row_text(&pv, 2), "rev") == 0, "golden held frame: held, pre-hold content");
+  view_free(&pv);
+  golden("viewport_held", b, l);
   st_free_buffer(b);
   st_destroy(h);
 }

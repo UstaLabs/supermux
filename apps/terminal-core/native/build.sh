@@ -282,21 +282,36 @@ build_bridge_test() {
   fi
   "$LLVM_OBJCOPY" --strip-debug "$BRIDGE_EXE"
   rm -f "${BRIDGE_EXE%.exe}.pdb"
+
+  # Two-thread/many-handle stress test of the handle table (POSIX threads;
+  # built for linux targets, run on a matching host).
+  THREADS_EXE=""
+  if [[ "$TARGET" == linux-* ]]; then
+    THREADS_EXE="$OUT_DIR/bin/terminal_bridge_threads_test"
+    cc_target "$NATIVE_DIR/tests/terminal_bridge_threads_test.c" "$WORK_DIR/terminal_bridge_threads_test.o" "${cflags[@]}"
+    "$ZIG" cc -target "$ZIG_TARGET" "$WORK_DIR/terminal_bridge_threads_test.o" "$WRAPPER_STATIC" -lc++ -lpthread \
+      -o "$THREADS_EXE"
+    "$LLVM_OBJCOPY" --strip-debug "$THREADS_EXE"
+  fi
 }
 
 # Sanitizer build of the bridge test (Linux host only: gcc ships ASan/UBSan
 # runtimes, zig cc has UBSan but no ASan runtime). Not an artifact.
 build_bridge_asan() {
-  BRIDGE_ASAN_EXE=""
+  BRIDGE_ASAN_EXE=""; THREADS_TSAN_EXE=""
   [[ ${#WRAPPER_SOURCES[@]} -gt 0 && "$TARGET" == linux-* && "$host_os" == linux ]] || return 0
   [[ "$TARGET" == linux-x64 && "$host_arch" == x86_64 || "$TARGET" == linux-arm64 && "$host_arch" == aarch64 ]] || return 0
   command -v gcc >/dev/null || { log "gcc not found: sanitizer run skipped"; return 0; }
   BRIDGE_ASAN_EXE="$WORK_DIR/terminal_bridge_test_asan"
-  log "compile bridge test with ASan + UBSan (gcc)"
+  THREADS_TSAN_EXE="$WORK_DIR/terminal_bridge_threads_test_tsan"
+  log "compile bridge test with ASan + UBSan and the threads test with TSan (gcc)"
   gcc -std=c11 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -Wall -Wextra -Werror -I "$NATIVE_DIR/include" -I "$OUT_DIR/include" \
     "${WRAPPER_SOURCES[@]}" "$NATIVE_DIR/tests/terminal_bridge_test.c" "$OUT_DIR/lib/libghostty-vt.a" -lm \
     -o "$BRIDGE_ASAN_EXE" || { log "sanitizer build failed"; return 1; }
+  gcc -std=c11 -O1 -g -fsanitize=thread -Wall -Wextra -Werror -I "$NATIVE_DIR/include" -I "$OUT_DIR/include" \
+    "${WRAPPER_SOURCES[@]}" "$NATIVE_DIR/tests/terminal_bridge_threads_test.c" "$OUT_DIR/lib/libghostty-vt.a" \
+    -lm -lpthread -o "$THREADS_TSAN_EXE" || { log "TSan build failed"; return 1; }
 }
 
 # CodecGolden.kt must be generated from the checked-in fixtures/codec/*.bin.
@@ -424,7 +439,15 @@ run_smoke() {
       return 1
     fi
   fi
+  if [[ -n "${THREADS_EXE:-}" ]]; then
+    log "running handle-table threads test"
+    "$THREADS_EXE" || { TEST_RESULT="failed"; return 1; }
+  fi
   run_shared_load_check || { TEST_RESULT="failed"; return 1; }
+  if [[ -n "${THREADS_TSAN_EXE:-}" ]]; then
+    log "running threads test under ThreadSanitizer"
+    TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 "$THREADS_TSAN_EXE" || { TEST_RESULT="failed"; return 1; }
+  fi
   if [[ -n "${BRIDGE_ASAN_EXE:-}" ]]; then
     log "running st_* bridge test under ASan + UBSan (heavy fixtures skipped)"
     if ! ST_FIXTURES_DIR="$FIXTURES_DIR" ST_SKIP_HEAVY=1 ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \

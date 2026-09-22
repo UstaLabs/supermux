@@ -92,7 +92,9 @@ What `native/build.sh` does, in order:
     byte), a `dlopen` check of the shared library (python ctypes drives one
     terminal through the exported symbols only) and, on a Linux host with
     `gcc`, the bridge test again under **ASan + UBSan + LeakSanitizer**
-    (`ST_SKIP_HEAVY=1`), only if the target matches this host (or, for
+    (`ST_SKIP_HEAVY=1`); for linux targets also the handle-table threads
+    test (`tests/terminal_bridge_threads_test.c`), plainly and under
+    **ThreadSanitizer** — all only if the target matches this host (or, for
     Android, an adb device with the matching ABI). Otherwise the manifest says
     `runtime_tested: false` with the reason, and the script exits 3.
 12. Write `build/native/<target>/manifest.json`: target, Zig triple/cpu, ABI
@@ -188,12 +190,24 @@ keys → `UNIDENTIFIED`).
 `st_handle` is an opaque `uint32_t` from a process-wide table of
 `ST_MAX_TERMINALS = 1024` slots: `generation << 10 | slot`, never 0, never a
 pointer. 0, a destroyed handle (including one whose slot was reused) and any
-value never issued fail with `ST_ERR_INVALID_HANDLE` without touching freed
-memory; `st_destroy` is therefore idempotent. `st_create` rejects any
-`abi_version` other than 1 with `ST_ERR_ABI_MISMATCH`. Slots are claimed and
-released with C11 atomics, so different terminals may live on different
-threads; one handle must be used by one thread at a time. No callback ever
-crosses the ABI.
+value never issued fail with `ST_ERR_INVALID_HANDLE`: the table stores the
+issued handle next to the engine pointer and compares it atomically before
+dereferencing, so a stale handle never touches memory another thread may be
+freeing; `st_destroy` is idempotent. `st_create` rejects any `abi_version`
+other than 1 with `ST_ERR_ABI_MISMATCH`. No callback ever crosses the ABI.
+
+**Threading.** The table is safe for *different* handles on different
+threads (create, every call and destroy may run concurrently as long as each
+involves a different handle). Calls on the *same* handle must be externally
+serialized — including `st_destroy` against any concurrent use of that
+handle, which is undefined. Bindings (Task 4) therefore keep a per-engine lock
+plus a closed flag and never call a handle after closing it. Tested by
+`tests/terminal_bridge_threads_test.c` (6 threads × 150 cycles, two handles
+each, create/feed/read/ack/drain/key/select/destroy, own-content check,
+stale-handle check) plainly and under **ThreadSanitizer** (gcc) on the Linux
+host; TSan found a real stale-handle race in the first design (lookup read a
+reused slot's engine while its owner destroyed it), fixed by the atomic
+handle compare.
 
 ### Ownership and freeing
 
@@ -224,7 +238,8 @@ wasm), over-allocated by 64 bytes for 16-byte alignment + the free header.
 ```text
 u32 magic = 0x53545654; u16 abi = 1; u16 kind; u32 payloadBytes; payload
 All integers little-endian. Buffer length is exactly 12 + payloadBytes.
-Limits: payload <= 8 MiB; columns/rows 1..4096; strings fit the payload.
+Limits: payload <= 8 MiB; columns/rows 1..4096 and columns*rows <= 100,000;
+cell text <= 32 bytes; strings fit the payload.
 kind=1 viewport, kind=2 effects, kind=3 selected text.
 str = u32 byte length + UTF-8 (always valid: invalid input bytes become U+FFFD)
 bytes = u32 length + raw bytes; bool = u8 0/1; nullable = u8 presence + value
@@ -244,6 +259,7 @@ viewport (kind 1), TerminalViewport field order:
   i64 historyRows, i64 viewportTop, bool full
   u32 linkCount; links[]: i32 row, i32 firstColumn, i32 lastColumn, str uri
   bool hasSelection; [i64 startRow, i32 startColumn, i64 endRow, i32 endColumn]
+  bool held                      (synchronized-output frame, hold active)
 effects (kind 2):
   u32 count; effects[]: u8 tag, then
     1 Response: bytes   2 Input: bytes   3 Title: str   4 Bell: -
@@ -255,8 +271,11 @@ selected text (kind 3):
 Decoders (C test, `ViewportCodec.kt`) reject: short buffers, bad
 magic/ABI/kind, payload length ≠ remaining bytes or > 8 MiB, trailing bytes,
 counts whose minimum encoding cannot fit the remaining bytes (row 8 B, cell
-32 B, link 16 B, effect 1 B), sizes outside 1..4096, rows out of order/range
-or not `columns` wide, full frames without every row, width ∉ 0..2, invalid
+32 B, link 16 B, effect 1 B; list pre-sizing is additionally capped at 4096),
+sizes outside 1..4096 or above 100,000 cells, rows out of order/range or not
+`columns` wide, full frames without every row, cell text > 32 bytes or
+non-empty in a width-0 cell, selection rows outside `0..historyRows+rows-1`,
+width ∉ 0..2, invalid
 colours (bits 33..63, or DEFAULT with RGBA bits), flags beyond 8 bits,
 underline ∉ 0..5, shape ∉ 0..3, booleans ∉ {0,1}, unknown effect tags, a
 clipboard read carrying text, links/selection outside the grid, scroll
@@ -271,6 +290,20 @@ To change the encoding: bump the ABI, rerun the bridge test with
 `ST_WRITE_GOLDEN=1 ST_FIXTURES_DIR=apps/terminal-core/fixtures/codec`, then
 the generator.
 
+### Size cap: every accepted size renders
+
+`ST_MAX_CELLS = 100,000` (`TerminalSize.MAX_CELLS`; e.g. 1000×100, 400×250,
+4096×24), enforced by `st_create`/`st_resize` (`INVALID_ARGUMENT`, terminal
+unchanged), `TerminalSize` and both decoders. Together with
+`ST_MAX_CELL_TEXT = 32` (a longer grapheme cluster is cut at a code point
+boundary) and `ST_MAX_LINK_BYTES = 1 MiB` (links beyond the budget are
+omitted from that frame) a worst-case full frame is at most
+100,000 × (32 + 32) + 4096 × 8 + 1 MiB + 256 = 7.48 MB < 8 MiB — a
+`_Static_assert` in `terminal_bridge.c`. Tested: 1000×101 and 4096×64
+rejected at create, 4096×25 at resize; 1000×100 and 4096×24 render; a
+400×250 frame of 35-byte clusters with 1,200 distinct 2,000-byte links is
+7,349,810 bytes (clusters cut to ≤ 32 bytes, 521 links kept within 1 MiB).
+
 ### Effects
 
 - `st_feed` sets the origin for the duration of the call. Ghostty's
@@ -279,7 +312,11 @@ the generator.
   both origins. During REPLAY Ghostty still processes queries, but their
   replies are dropped and clipboard writes are denied.
 - `st_key` / `st_mouse` / `st_paste` / `st_focus` queue **Input** (user input
-  bytes), never Response. Paste output (which Ghostty streams through
+  bytes), never Response. `st_paste` returns `ST_ERR_REJECTED` (Kotlin
+  `paste(text, allowUnsafe = false): Boolean` → false) and queues nothing for
+  text that could inject commands (a newline without bracketed paste, the
+  bracketed-paste end marker `ESC[201~` with it); the host may confirm and
+  retry with `ST_PASTE_ALLOW_UNSAFE`. Paste output (which Ghostty streams through
   `WRITE_PTY` in chunks) is routed to Input for that call.
 - Consecutive chunks of the same kind within one call are merged into one
   effect (a CSI 6n reply is one Response; a bracketed paste is one Input).
@@ -290,7 +327,8 @@ the generator.
   engine cannot wait for the embedder, so it always **denies** (the program
   receives an empty clipboard, xterm's behaviour for a disallowed read — a
   `Response ESC]52;c;BEL` effect follows the ClipboardRequest) and reports
-  `ClipboardRequest(write=false)` for information only. Answering reads would
+  `ClipboardRequest(write=false)` for information only (the Kotlin KDoc says
+  the same). Answering reads would
   need an ABI addition (a pre-set clipboard policy/content); v1 does not.
 - DA1/DA2 (`CSI c`, `CSI > c`) answer as a VT220-class terminal with ANSI
   colour (`ESC[?62;22c`); XTWINOPS size queries (`CSI 14/16/18 t`) and mode
@@ -321,6 +359,9 @@ render state is still exactly that frame, whether it was full).
   (no later read, no hold capture). Mutations fed after that frame were
   serialized are *not* lost by the clean: they live in the terminal's own
   dirty tracking and move into the render state at the next update (tested).
+  The full-frame epoch a frame satisfies is recorded when its render state
+  is captured (not when it is serialized), so an event between a hold
+  capture and the read keeps the next frame full.
   Acknowledging an older/superseded frame is a no-op (`ST_OK`) — a pending
   generation is never cleaned by an older ack (tested). An ack of a
   generation never produced returns `INVALID_ARGUMENT` and forces the next
@@ -338,7 +379,9 @@ render state is still exactly that frame, whether it was full).
 The engine installs `RENDER_HOLD`. When a hold begins it captures the frame
 the program wants shown (render-state update inside the callback, new
 generation) and stops updating the render state; `st_read_viewport` then
-returns that frame with `ST_FRAME_HELD` in `out_frame_flags`. The hold ends
+returns that frame with `held = true` (last viewport field,
+`TerminalViewport.held`) and `ST_FRAME_HELD` in `out_frame_flags`. Kotlin:
+`viewport(forceFull, breakHold)`. The hold ends
 when the program resets 2026, on RIS/`st_reset`, on `st_resize`, or when the
 owner passes `ST_READ_BREAK_HOLD` — **Task 6's owner loop must do this after
 ~1 s of `ST_FRAME_HELD`** (the engine has no clock). If the capture fails the
@@ -423,9 +466,9 @@ absolute coordinates, reset/resize, generations (older ack, post-serialization
 mutation, invalid ack, randomized model check), synchronized output, buffer
 ownership (valid after more output and after destroy; freed exactly once; no
 leaks), framing (every truncation, trailing/magic/ABI/kind/impossible count/
-> 8 MiB; a 4096×64 frame → `ST_ERR_LIMIT`, 4096×60 fits), whole vs split
-input at every byte boundary of a 93-byte fixture (identical frames and
-effects), allocation failure injected at every allocation of a session (only
+> 8 MiB), the size cap and worst-case frame, whole vs split input at every
+byte boundary of a 93-byte fixture and one byte at a time (identical frames
+and effects), allocation failure injected at every allocation of a session (only
 `OK`/`OUT_OF_MEMORY`, no leaks, engine usable afterwards), golden fixtures,
 history budgets, the 1,024-terminal limit.
 
@@ -445,7 +488,7 @@ Toolchain IDs:
 
 | target | built | runtime-tested | result / notes |
 |---|---|---|---|
-| linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**; st_* bridge test **196 checks, 0 failures — BRIDGE TEST PASSED**; `dlopen` check OK; ASan+UBSan+LSan bridge run **175 checks, 0 failures**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `libsupermux_terminal.a` 3.4 MB (`fb26df366b41…`), `libsupermux_terminal.so` 2.4 MB (`2e53dcb19abd…`, exports exactly the 18 `st_*`, needs libc/librt only). `.so` files need glibc ≤ 2.27 symbols. |
+| linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**; st_* bridge test **208 checks, 0 failures — BRIDGE TEST PASSED**; threads test 6 × 150 cycles OK, and again under TSan; `dlopen` check OK; ASan+UBSan+LSan bridge run **187 checks, 0 failures**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `libsupermux_terminal.a` 3.4 MB (`fb26df366b41…`), `libsupermux_terminal.so` 2.4 MB (`2e53dcb19abd…`, exports exactly the 18 `st_*`, needs libc/librt only). `.so` files need glibc ≤ 2.27 symbols. |
 | wasm32 | yes | **yes** (Node 24 + headless Chrome 148) | `wasm/build.sh --test`: **47 checks, 0 failures in each runtime — WASM SMOKE PASSED** (run against `supermux-terminal.wasm`). `supermux-terminal.wasm` 831 KB (sha256 `e8f5df919983…`): the same `terminal_bridge.c` compiled `wasm32-freestanding` and linked with the wasm `libghostty-vt.a` by `zig cc` (`--export-dynamic --export-table`, 128 KiB stack, table made growable by `wasm/patch_growable_table.py`), 205 function exports = 187 `ghostty_*` + the 18 `st_*`, no imports. Raw upstream `ghostty-vt.wasm` 814 KB (`75f0ed5b23ef…`) is still staged. |
 | linux-arm64 | yes | no (no arm64 host/qemu here) | smoke test cross-linked (`aarch64`, glibc 2.28). |
 | windows-x64 | yes | no (no Windows host/wine) | `x86_64-windows-gnu`: `ghostty-vt-static.lib`, `ghostty-vt.dll` + import lib, smoke `.exe`; imports only KERNEL32/ntdll/UCRT (`api-ms-win-crt-*`). PDBs dropped. |

@@ -51,6 +51,7 @@ class ViewportCodecTest {
         assertEquals(0L, v.viewportTop)
         assertEquals(listOf(TerminalLink(1, 0, 1, "https://x.y/z")), v.links)
         assertEquals(TerminalSelection(TerminalPoint(0, 0), TerminalPoint(0, 5)), v.selection)
+        assertFalse(v.held)
     }
 
     @Test fun decodesPartialViewport() {
@@ -65,6 +66,14 @@ class ViewportCodecTest {
         assertEquals(TerminalModes(alternateScreen = false, mouseTracking = true, bracketedPaste = true), v.modes)
         assertEquals(full.links, v.links)
         assertEquals(full.selection, v.selection)
+        assertFalse(v.held)
+    }
+
+    @Test fun decodesHeldViewport() {
+        // Captured when mode 2026 began: "held" written afterwards is not visible yet.
+        val v = ViewportCodec.decodeViewport(CodecGolden.VIEWPORT_HELD)
+        assertTrue(v.held)
+        assertEquals("rev", v.row(2).text())
     }
 
     @Test fun decodesEffects() {
@@ -163,6 +172,25 @@ class ViewportCodecTest {
         assertFailsWith<TerminalCodecException>("columns 4097") {
             ViewportCodec.decodeViewport(g.copyOf().also { it.putU32(ViewportCodec.HEADER_BYTES + 8, 4097) })
         }
+        assertFailsWith<TerminalCodecException>("text in a width-0 cell") {
+            ViewportCodec.decodeViewport(g.copyOf().also { it.putU32(widthOffset, 0) })
+        }
+        val tooLong = assertFailsWith<TerminalCodecException>("cell text > 32 bytes") {
+            ViewportCodec.decodeViewport(g.copyOf().also { it.putU32(cellOffset, 33) })
+        }
+        assertTrue("exceeds 32" in tooLong.message!!, tooLong.message)
+        assertFailsWith<TerminalCodecException>("4096x4096 exceeds MAX_CELLS") {
+            ViewportCodec.decodeViewport(
+                g.copyOf().also { it.putU32(ViewportCodec.HEADER_BYTES + 8, 4096); it.putU32(ViewportCodec.HEADER_BYTES + 12, 4096) },
+            )
+        }
+        // Selection start row 3 in a 3-row screen without history (valid rows 0..2).
+        assertFailsWith<TerminalCodecException>("selection row") {
+            ViewportCodec.decodeViewport(g.copyOf().also { it.putU32(it.size - 25, 3) })
+        }
+        assertFailsWith<TerminalCodecException>("held byte 2") {
+            ViewportCodec.decodeViewport(g.copyOf().also { it[it.size - 1] = 2 })
+        }
         // Effects: bool byte 2, unknown tag.
         val fx = CodecGolden.EFFECTS
         assertFailsWith<TerminalCodecException>("tag") {
@@ -186,11 +214,13 @@ class ViewportCodecTest {
         for (i in 0 until 4) this[offset + i] = (value ushr (8 * i)).toByte()
     }
 
-    /** The selection is the last field: presence byte + i64 + i32 + i64 + i32. */
+    /** The tail is: selection (presence byte + i64 + i32 + i64 + i32), then the held byte. */
     private fun ByteArray.clearSelection(): ByteArray {
-        val tail = 1 + 8 + 4 + 8 + 4
-        val out = copyOf(size - tail + 1)
-        out[out.size - 1] = 0
+        val tail = 1 + 8 + 4 + 8 + 4 + 1
+        val held = this[size - 1]
+        val out = copyOf(size - tail + 2)
+        out[out.size - 2] = 0
+        out[out.size - 1] = held
         out.putU32(8, (out.size - ViewportCodec.HEADER_BYTES).toLong())
         return out
     }

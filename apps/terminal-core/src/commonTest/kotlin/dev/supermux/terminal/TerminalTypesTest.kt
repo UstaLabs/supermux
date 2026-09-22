@@ -24,6 +24,17 @@ class TerminalTypesTest {
         assertFailsWith<IllegalArgumentException> { TerminalLimits(0, -1) }
     }
 
+    @Test fun sizeIsCappedAtMaxCells() {
+        TerminalSize(1000, 100, 8, 16) // exactly MAX_CELLS
+        TerminalSize(4096, 24, 8, 16)
+        TerminalSize(1, TerminalSize.MAX_DIMENSION, 8, 16)
+        assertEquals(100_000, TerminalSize.MAX_CELLS)
+        assertFailsWith<IllegalArgumentException> { TerminalSize(1000, 101, 8, 16) }
+        assertFailsWith<IllegalArgumentException> { TerminalSize(4096, 25, 8, 16) }
+        assertFailsWith<IllegalArgumentException> { TerminalSize(4097, 1, 8, 16) }
+        assertFailsWith<IllegalArgumentException> { TerminalSize(0, 1, 8, 16) }
+    }
+
     @Test fun cellWidthIsZeroOneOrTwo() {
         val style = CellStyle(TerminalColor.DEFAULT, TerminalColor.DEFAULT, CellFlags.NONE, Underline.NONE)
         for (w in 0..2) TerminalCell("", w, style)

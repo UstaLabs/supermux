@@ -2,6 +2,7 @@ package dev.supermux.terminal
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -128,6 +129,32 @@ class EngineContractTest {
         engine.feed("\u0007".encodeToByteArray(), OutputOrigin.LIVE)
         assertEquals(listOf<TerminalEffect>(TerminalEffect.Bell), engine.drainEffects())
         assertEquals(emptyList(), engine.drainEffects())
+    }
+
+    @Test fun unsafePasteIsRejectedUntilAllowed() = withEngine { engine ->
+        engine.feed("\u001b[?2004h".encodeToByteArray(), OutputOrigin.LIVE)
+        engine.drainEffects()
+        // The bracketed-paste end marker inside pasted text could inject commands.
+        val unsafe = "a\u001b[201~b"
+        assertEquals(false, engine.paste(unsafe))
+        assertTrue(engine.drainEffects().none { it is TerminalEffect.Input })
+        assertEquals(true, engine.paste(unsafe, allowUnsafe = true))
+        assertEquals(1, engine.drainEffects().count { it is TerminalEffect.Input })
+        assertEquals(true, engine.paste("safe"))
+        assertEquals(
+            listOf<TerminalEffect>(TerminalEffect.Input("\u001b[200~safe\u001b[201~".encodeToByteArray())),
+            engine.drainEffects(),
+        )
+    }
+
+    @Test fun heldFrameUntilBreakHold() = withEngine { engine ->
+        engine.feed("A\u001b[?2026hB".encodeToByteArray(), OutputOrigin.LIVE)
+        val held = engine.viewport(forceFull = true)
+        assertTrue(held.held)
+        assertEquals("A", held.rowText(0))
+        val live = engine.viewport(forceFull = true, breakHold = true)
+        assertFalse(live.held)
+        assertEquals("AB", live.rowText(0))
     }
 
     @Test fun closeIsIdempotent() {

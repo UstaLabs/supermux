@@ -25,6 +25,15 @@
 #define GHOSTTY_STATIC 1
 #include <ghostty/vt.h>
 
+/* Worst-case full frame: every cell at its maximum encoding (u32 text length
+ * + ST_MAX_CELL_TEXT + i32 width + 2 x u64 colours + 2 x i32), every row's
+ * index + count, the link budget, and the fixed fields (generation, size,
+ * counts, cursor, modes, scroll, selection, held: < 256 bytes). */
+_Static_assert((uint64_t)ST_MAX_CELLS * (32u + ST_MAX_CELL_TEXT) + (uint64_t)ST_MAX_DIMENSION * 8u +
+                       ST_MAX_LINK_BYTES + 256u <=
+                   ST_MAX_PAYLOAD,
+               "a worst-case frame must fit the codec payload");
+
 /* ================================================================== */
 /* Small freestanding helpers                                          */
 /* ================================================================== */
@@ -300,6 +309,7 @@ typedef struct {
   int64_t viewport_top;
   bool alt_screen, mouse_tracking, bracketed_paste;
   bool has_selection;
+  bool held; /* captured when a synchronized-output hold began */
   int64_t sel_start_row, sel_end_row;
   int32_t sel_start_col, sel_end_col;
   int32_t cursor_fallback_col, cursor_fallback_row; /* viewport coords, may be off-screen */
@@ -347,6 +357,7 @@ typedef struct st_engine {
   uint64_t full_epoch;      /* bumped by every event that requires a full frame */
   uint64_t full_done_epoch; /* epoch covered by an acknowledged full frame */
   uint64_t ser_epoch;
+  uint64_t rs_epoch;        /* full_epoch when the render state was captured */
 
   bool held; /* synchronized-output hold active; render state frozen */
 
@@ -359,13 +370,21 @@ typedef struct st_engine {
   uint32_t scratch2_cap;
 } st_engine;
 
+/* Handle table. A slot holds the engine pointer and, separately, the handle
+ * currently issued for it. Lookups compare the handle ATOMICALLY before ever
+ * dereferencing the engine, so a stale handle (destroyed, slot reused by
+ * another thread's terminal) is rejected without touching memory another
+ * thread may be freeing. Only a use racing the destroy of the SAME handle is
+ * undefined (documented: callers serialize per handle). */
 static _Atomic uintptr_t g_slots[ST_MAX_TERMINALS];
+static _Atomic uint32_t g_slot_handle[ST_MAX_TERMINALS];
 static _Atomic uint32_t g_slot_gen[ST_MAX_TERMINALS];
 #define ST_SLOT_RESERVED ((uintptr_t)1)
 
 static st_engine *st_lookup(st_handle h) {
   if (h == 0) return NULL;
   uint32_t idx = h & ST_SLOT_MASK;
+  if (atomic_load_explicit(&g_slot_handle[idx], memory_order_acquire) != h) return NULL;
   uintptr_t p = atomic_load_explicit(&g_slots[idx], memory_order_acquire);
   if (p <= ST_SLOT_RESERVED) return NULL;
   st_engine *e = (st_engine *)p;
@@ -655,13 +674,19 @@ static bool st_cell_uri(st_engine *e, uint16_t x, uint16_t y, uint32_t *len, boo
   return true;
 }
 
-static void st_emit_link(st_engine *e, st_buf *links, uint16_t y, int32_t first, int32_t last,
+/* Links beyond the ST_MAX_LINK_BYTES frame budget are omitted (documented),
+ * so a frame always fits the payload. Returns whether the link was kept. */
+static bool st_emit_link(st_engine *e, st_buf *links, uint16_t y, int32_t first, int32_t last,
                          const uint8_t *uri, uint32_t uri_len) {
   ST_UNUSED(e);
+  if ((uint64_t)links->len + 16u + (st_utf8_valid(uri, uri_len) ? uri_len : 3u * (uint64_t)uri_len) >
+      ST_MAX_LINK_BYTES)
+    return false;
   st_put_i32(links, y);
   st_put_i32(links, first);
   st_put_i32(links, last);
   st_put_str(links, uri, uri_len);
+  return true;
 }
 
 /* OSC 8 spans on every viewport row: runs of cells with the same URI
@@ -698,8 +723,7 @@ static st_status st_compute_links(st_engine *e, st_buf *links, uint32_t *count) 
         continue;
       }
       if (first >= 0) {
-        st_emit_link(e, links, y, first, last, cur, cur_len);
-        (*count)++;
+        if (st_emit_link(e, links, y, first, last, cur, cur_len)) (*count)++;
         first = -1;
       }
       if (n > 0) {
@@ -712,10 +736,7 @@ static st_status st_compute_links(st_engine *e, st_buf *links, uint32_t *count) 
         first = last = x;
       }
     }
-    if (status == ST_OK && first >= 0) {
-      st_emit_link(e, links, y, first, last, cur, cur_len);
-      (*count)++;
-    }
+    if (status == ST_OK && first >= 0 && st_emit_link(e, links, y, first, last, cur, cur_len)) (*count)++;
   }
   st_mem_free(cur);
   if (status == ST_OK && links->err != ST_OK) status = links->err;
@@ -724,8 +745,9 @@ static st_status st_compute_links(st_engine *e, st_buf *links, uint32_t *count) 
 
 /* Everything the frame needs from the terminal (not the render state),
  * captured right after a render-state update. */
-static st_status st_capture_meta(st_engine *e) {
+static st_status st_capture_meta(st_engine *e, bool held) {
   st_snapshot *s = &e->snap;
+  s->held = held;
   uint16_t cols = 0, rows = 0;
   ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_COLS, &cols);
   ghostty_render_state_get(e->rs, GHOSTTY_RENDER_STATE_DATA_ROWS, &rows);
@@ -774,15 +796,16 @@ static st_status st_capture_meta(st_engine *e) {
 
 /* Update the render state from the terminal and capture the metadata. On
  * failure the frame state is uncertain: force the next frame full. */
-static st_status st_update(st_engine *e) {
+static st_status st_update(st_engine *e, bool held) {
   GhosttyResult r = ghostty_render_state_update(e->rs, e->term);
   e->rs_gen = e->gen;
+  e->rs_epoch = e->full_epoch;
   e->ser_valid = false;
   if (r != GHOSTTY_SUCCESS) {
     e->full_epoch++;
     return st_map_result(r);
   }
-  st_status s = st_capture_meta(e);
+  st_status s = st_capture_meta(e, held);
   if (s != ST_OK) e->full_epoch++;
   return s;
 }
@@ -791,7 +814,7 @@ static st_status st_update(st_engine *e) {
  * that fails the hold is ignored (always allowed) and frames stay live. */
 static void st_capture(st_engine *e) {
   e->gen++;
-  if (st_update(e) == ST_OK) {
+  if (st_update(e, true) == ST_OK) {
     e->held = true;
   } else {
     e->held = false;
@@ -917,8 +940,8 @@ static const st_key_map *st_find_key(uint32_t hid) {
 uint32_t st_abi_version(void) { return ST_ABI_VERSION; }
 
 static bool st_valid_size(uint32_t cols, uint32_t rows, uint32_t cw, uint32_t ch) {
-  return cols >= 1 && cols <= ST_MAX_DIMENSION && rows >= 1 && rows <= ST_MAX_DIMENSION && cw >= 1 &&
-         cw <= 0xFFFFu && ch >= 1 && ch <= 0xFFFFu;
+  return cols >= 1 && cols <= ST_MAX_DIMENSION && rows >= 1 && rows <= ST_MAX_DIMENSION &&
+         (uint64_t)cols * rows <= ST_MAX_CELLS && cw >= 1 && cw <= 0xFFFFu && ch >= 1 && ch <= 0xFFFFu;
 }
 
 static void st_engine_free(st_engine *e) {
@@ -1029,6 +1052,7 @@ st_status st_create(uint32_t abi_version, uint32_t columns, uint32_t rows, uint3
   e->handle = (g << ST_SLOT_BITS) | idx;
   e->magic = ST_ENGINE_MAGIC;
   atomic_store_explicit(&g_slots[idx], (uintptr_t)e, memory_order_release);
+  atomic_store_explicit(&g_slot_handle[idx], e->handle, memory_order_release);
   *out_handle = e->handle;
   return ST_OK;
 }
@@ -1036,9 +1060,12 @@ st_status st_create(uint32_t abi_version, uint32_t columns, uint32_t rows, uint3
 st_status st_destroy(st_handle handle) {
   st_engine *e = st_lookup(handle);
   if (!e) return ST_ERR_INVALID_HANDLE;
-  uintptr_t expected = (uintptr_t)e;
-  if (!atomic_compare_exchange_strong(&g_slots[handle & ST_SLOT_MASK], &expected, 0))
-    return ST_ERR_INVALID_HANDLE;
+  uint32_t idx = handle & ST_SLOT_MASK;
+  uint32_t expected = handle;
+  /* Retire the handle first: from here on lookups of it fail without
+   * dereferencing; then release the slot for reuse and free. */
+  if (!atomic_compare_exchange_strong(&g_slot_handle[idx], &expected, 0u)) return ST_ERR_INVALID_HANDLE;
+  atomic_store_explicit(&g_slots[idx], 0, memory_order_release);
   st_engine_free(e);
   return ST_OK;
 }
@@ -1353,6 +1380,17 @@ static st_status st_put_cell(st_engine *e, st_buf *w) {
     }
     if (r != GHOSTTY_SUCCESS) return st_map_result(r);
     text_len = gb.len;
+    if (text_len > ST_MAX_CELL_TEXT) {
+      /* Pathological cluster (e.g. dozens of combining marks): keep the
+       * longest prefix that ends on a code point boundary. */
+      text_len = ST_MAX_CELL_TEXT;
+      while (text_len > 0 && (e->scratch[text_len] & 0xC0) == 0x80) text_len--;
+    }
+    if (!st_utf8_valid(e->scratch, text_len)) {
+      static const uint8_t repl[3] = {0xEF, 0xBF, 0xBD};
+      st_copy(e->scratch, repl, 3);
+      text_len = 3;
+    }
   }
 
   GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
@@ -1447,6 +1485,7 @@ static st_status st_serialize(st_engine *e, bool full, st_buf *w) {
     st_put_i64(w, s->sel_end_row);
     st_put_i32(w, s->sel_end_col);
   }
+  st_put_bool(w, s->held);
   st_env_finish(w, ST_KIND_VIEWPORT);
   return w->err;
 }
@@ -1466,7 +1505,7 @@ st_status st_read_viewport(st_handle handle, uint32_t flags, uint8_t **out_buf, 
     e->gen++;
   }
   if (!e->held) {
-    st_status s = st_update(e);
+    st_status s = st_update(e, false);
     if (s != ST_OK) return s;
   }
 
@@ -1490,7 +1529,7 @@ st_status st_read_viewport(st_handle handle, uint32_t flags, uint8_t **out_buf, 
   e->ser_gen = e->rs_gen;
   e->ser_valid = true;
   e->ser_full = full;
-  e->ser_epoch = e->full_epoch;
+  e->ser_epoch = e->rs_epoch;
   if (out_frame_flags) *out_frame_flags = e->held ? ST_FRAME_HELD : 0u;
   return st_env_take(&w, out_buf, out_len);
 }

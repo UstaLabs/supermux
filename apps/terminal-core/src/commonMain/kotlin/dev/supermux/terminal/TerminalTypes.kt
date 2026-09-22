@@ -5,9 +5,27 @@ package dev.supermux.terminal
 // binding and every fixture. Integer-coded fields (flags, shapes, actions, key codes, colours) use
 // the package-owned constants in TerminalConstants.kt — never Ghostty enum ordinals.
 
-/** Grid size in cells plus the cell size in pixels (used for pixel-based mouse encoding / reports). */
+/**
+ * Grid size in cells plus the cell size in pixels (used for pixel-based mouse encoding / reports).
+ * Columns and rows are 1..[MAX_DIMENSION] and `columns * rows` is at most [MAX_CELLS]: the engine
+ * refuses larger grids up front because a worst-case frame of them would not fit the 8 MiB codec
+ * payload (native `ST_MAX_CELLS`).
+ */
 data class TerminalSize(val columns: Int, val rows: Int, val cellWidthPx: Int, val cellHeightPx: Int) {
-    init { require(columns > 0 && rows > 0 && cellWidthPx > 0 && cellHeightPx > 0) }
+    init {
+        require(columns in 1..MAX_DIMENSION && rows in 1..MAX_DIMENSION) { "size ${columns}x$rows out of range" }
+        require(columns.toLong() * rows <= MAX_CELLS) { "${columns}x$rows exceeds $MAX_CELLS cells" }
+        require(cellWidthPx > 0 && cellHeightPx > 0)
+    }
+
+    companion object {
+        /** Maximum columns or rows (native `ST_MAX_DIMENSION`). */
+        const val MAX_DIMENSION: Int = 4096
+        /** Maximum `columns * rows` (native `ST_MAX_CELLS`). */
+        const val MAX_CELLS: Int = 100_000
+        /** Maximum UTF-8 bytes of one cell's text on the wire; longer clusters are cut (native `ST_MAX_CELL_TEXT`). */
+        const val MAX_CELL_TEXT_BYTES: Int = 32
+    }
 }
 
 /**
@@ -63,12 +81,16 @@ data class TerminalLink(val row: Int, val firstColumn: Int, val lastColumn: Int,
  * - [rows]: all rows when [full], otherwise only the rows changed since the last acknowledged generation.
  * - [historyRows]: scrollback rows above the active screen; [viewportTop] is the absolute row
  *   (0 = oldest history row) shown at the top of the viewport, the same space as [TerminalPoint.row].
+ * - [held]: this is the frame captured when the program began synchronized output (mode 2026) and
+ *   the hold is still active; the owner keeps showing it and, after its timeout (~1 s), asks for
+ *   `viewport(breakHold = true)`.
  */
 data class TerminalViewport(
     val generation: Long, val size: TerminalSize, val rows: List<TerminalRow>,
     val cursor: TerminalCursor, val modes: TerminalModes,
     val historyRows: Long, val viewportTop: Long, val full: Boolean,
     val links: List<TerminalLink>, val selection: TerminalSelection?,
+    val held: Boolean,
 )
 
 /**

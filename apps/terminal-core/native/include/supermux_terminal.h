@@ -20,10 +20,14 @@
  * - Every function that can fail returns an st_status (0 = ST_OK, negative =
  *   error). Output parameters are written only on ST_OK.
  *
- * Threading: one handle must only be used by one thread at a time (callers
- * serialize per terminal). Different handles may be used concurrently;
- * st_create/st_destroy are safe to call concurrently for different
- * terminals. The engine never calls back into the embedder.
+ * Threading: the process-wide handle table is safe for DIFFERENT handles on
+ * different threads (st_create, st_destroy and every other call may run
+ * concurrently as long as each involves a different handle). Calls on the
+ * SAME handle must be externally serialized by the caller -- including
+ * st_destroy against any concurrent use of that handle: a use racing its
+ * destroy is undefined (the table check is not a lock). Bindings therefore
+ * keep a per-engine lock plus a closed flag and never call into a handle
+ * after closing it. The engine never calls back into the embedder.
  *
  * Codec envelope (all integers little-endian):
  *
@@ -88,6 +92,15 @@ typedef int32_t st_status;
 #define ST_MAX_TERMINALS 1024u
 /** Maximum columns / rows (codec limit). */
 #define ST_MAX_DIMENSION 4096u
+/** Maximum columns x rows. Together with ST_MAX_CELL_TEXT and
+ *  ST_MAX_LINK_BYTES this guarantees a worst-case full frame fits in
+ *  ST_MAX_PAYLOAD, so any accepted size can always be rendered. */
+#define ST_MAX_CELLS 100000u
+/** Maximum UTF-8 bytes of one cell's text on the wire; a longer grapheme
+ *  cluster (e.g. dozens of combining marks) is cut at a code point boundary. */
+#define ST_MAX_CELL_TEXT 32u
+/** Budget for the encoded links of one frame; links beyond it are omitted. */
+#define ST_MAX_LINK_BYTES (1024u * 1024u)
 /** Maximum codec payload in bytes (8 MiB). */
 #define ST_MAX_PAYLOAD (8u * 1024u * 1024u)
 /** Envelope header size in bytes. */
@@ -138,7 +151,7 @@ ST_API uint32_t st_abi_version(void);
  * Create a terminal.
  *
  * @param abi_version    must equal ST_ABI_VERSION, else ST_ERR_ABI_MISMATCH
- * @param columns, rows  1..ST_MAX_DIMENSION
+ * @param columns, rows  1..ST_MAX_DIMENSION each, columns*rows <= ST_MAX_CELLS
  * @param cell_width_px, cell_height_px  1..65535; used for pixel-based mouse
  *                       encoding and XTWINOPS/in-band size reports
  * @param history_lines  scrollback line limit (0 = no scrollback)
@@ -146,8 +159,12 @@ ST_API uint32_t st_abi_version(void);
  *                       Both are enforced by evicting whole Ghostty pages,
  *                       oldest first, the first limit reached winning; see
  *                       README "History budgets" for the measured bounds.
- * @param allocator      optional; must outlive the terminal AND every buffer
- *                       returned for it. The struct itself is copied.
+ * @param allocator      TEST-ONLY hook (failure injection, accounting):
+ *                       production bindings pass NULL (Ghostty's default
+ *                       allocator). If given, it must outlive the terminal
+ *                       AND every buffer returned for it; the struct itself
+ *                       is copied. Terminal pages never use it (Ghostty
+ *                       takes them from the OS page allocator).
  * @param out_handle     receives the handle on ST_OK
  */
 ST_API st_status st_create(uint32_t abi_version, uint32_t columns, uint32_t rows,
@@ -177,7 +194,8 @@ ST_API st_status st_feed(st_handle handle, const uint8_t *data, uint32_t len, ui
 /** Full reset (RIS). Keeps size, colours and history limits. */
 ST_API st_status st_reset(st_handle handle);
 
-/** Resize (reflows the primary screen). Same ranges as st_create. */
+/** Resize (reflows the primary screen). Same ranges as st_create
+ *  (ST_ERR_INVALID_ARGUMENT otherwise, terminal unchanged). */
 ST_API st_status st_resize(st_handle handle, uint32_t columns, uint32_t rows,
                            uint32_t cell_width_px, uint32_t cell_height_px);
 
@@ -247,9 +265,10 @@ ST_API st_status st_focus(st_handle handle, uint32_t focused);
  * full frame is required (first frame, resize, reset, colours, scroll,
  * unacknowledged full frame, any uncertainty), in which case `full` is set.
  * While a synchronized-output hold (mode 2026) is active the frame captured
- * when the hold began is returned and *out_frame_flags has ST_FRAME_HELD;
- * the owner must pass ST_READ_BREAK_HOLD once its hold timeout (~1 s) expires.
- * out_frame_flags may be NULL.
+ * when the hold began is returned, its `held` field (the last viewport
+ * field) is 1 and *out_frame_flags has ST_FRAME_HELD; the owner must pass
+ * ST_READ_BREAK_HOLD once its hold timeout (~1 s) expires. out_frame_flags
+ * may be NULL. A frame never exceeds ST_MAX_PAYLOAD for any accepted size.
  */
 ST_API st_status st_read_viewport(st_handle handle, uint32_t flags,
                                   uint8_t **out_buf, uint32_t *out_len,

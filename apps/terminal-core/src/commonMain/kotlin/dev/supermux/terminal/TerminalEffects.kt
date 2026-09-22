@@ -7,8 +7,10 @@ package dev.supermux.terminal
  * - [Input]: bytes produced by local input ([TerminalEngine.key], [TerminalEngine.mouse],
  *   [TerminalEngine.paste], [TerminalEngine.focus]) — send to the pty.
  * - [Title]: OSC 0/2 window title. [Bell]: BEL (LIVE only).
- * - [ClipboardRequest]: OSC 52 (LIVE only); `write=true` carries the text to copy (null = clear),
- *   `write=false` asks to read the clipboard (the embedder decides whether to answer).
+ * - [ClipboardRequest]: OSC 52 (LIVE only); `write=true` carries the text to copy (null = clear).
+ *   `write=false` is INFORMATIONAL: remote clipboard reads (OSC 52 "?") must be answered
+ *   synchronously inside the engine, which always denies them (the program receives an empty
+ *   clipboard, queued as a [Response]); the embedder cannot answer a read.
  */
 sealed interface TerminalEffect {
     data class Response(val bytes: ByteArray) : TerminalEffect {
