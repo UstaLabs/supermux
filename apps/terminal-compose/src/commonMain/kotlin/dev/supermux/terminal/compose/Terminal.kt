@@ -272,11 +272,13 @@ fun Terminal(
                 )
                 // INSIDE the scrollable on purpose: the pointer node sees the main pass first and
                 // consumes what the program asked for before the scrollable can scroll on it. This
-                // ordering is load-bearing under application mouse mode, where `scrollable` stays
-                // ENABLED and only the descendant's consumption of the Scroll event in Compose's
-                // Main pass keeps the local history from moving as well — `mouseWheelUnderMouseMode\
-                // DoesNotScrollHistory` in TerminalInputTest is what catches a Compose upgrade that
-                // changes that ordering.
+                // REGRESSION GUARD. Under application mouse mode `scrollable` above stays ENABLED
+                // (disabling it would take Shift+wheel away with it), so the ONLY thing stopping the
+                // local history from moving as well is this descendant consuming the Scroll event in
+                // Compose's Main pass, before the scrollable's own node sees it. That ordering is a
+                // Compose implementation detail: `anApplicationWheelIsEncodedByTheEngineAndNever
+                // ScrollsHistory` (InputPolicyTest) asserts the anchor does not move and is what
+                // catches a Compose upgrade that changes it.
                 .terminalInput(input)
                 // A new frame invalidates the semantics and the draw, never the whole composable.
                 .terminalSemantics(
