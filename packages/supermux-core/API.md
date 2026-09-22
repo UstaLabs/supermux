@@ -163,7 +163,7 @@ createHostProvider({ create: () => Host })
 
 ## Environment
 
-`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` / `CursorEnvironmentSpec` is required; `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object.
+`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` / `CursorEnvironmentSpec` is required (`requireSpec` throws `TypeError('<field> is required')` for a missing field, including explicit-null fields `instructions`, `provider`, `sharedRuntime`, and `credentials.apiKey`). `sessionId` / `sessionName` are not environment-spec fields — the broker puts them into the mux-shim server env itself. `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object. MCP `name` must match `/^[A-Za-z0-9_-]+$/`.
 
 ```ts
 prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise<PreparedEnvironment>

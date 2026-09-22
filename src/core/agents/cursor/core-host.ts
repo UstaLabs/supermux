@@ -107,8 +107,6 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
       const prepared = await prepareCursorEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        sessionId: extra.sessionId,
-        sessionName: extra.sessionName,
         mcpServers: [muxShimServer("cursor", extra.sessionId, extra.sessionName)],
         skillsPaths: [],
         instructions: cursorInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),

@@ -1,4 +1,5 @@
 import { afterEach, expect, test, setDefaultTimeout } from 'bun:test'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -255,7 +256,8 @@ test('journal cap drops oldest and reports firstSeq', async () => {
   const { conn, stateDirectory, sessionId } = await open('cap', {}, limits({ journalMaxBytes: 220 }))
   for (let i = 0; i < 12; i++) {
     conn.write(JSON.stringify({ cmd: 'echo', n: i }))
-    await collect(conn, 1)
+    const frames = await collect(conn, 1)
+    if (frames[0]) conn.ack(frames[0].seq)
   }
   const st = await statusOf(stateDirectory, sessionId)
   expect(st.firstSeq).toBeGreaterThan(1)
@@ -270,7 +272,8 @@ test('journal cap hysteresis rewrites far fewer times than frames appended', asy
   const n = 40
   for (let i = 0; i < n; i++) {
     conn.write(JSON.stringify({ cmd: 'echo', n: i }))
-    await collect(conn, 1)
+    const frames = await collect(conn, 1)
+    if (frames[0]) conn.ack(frames[0].seq)
   }
   const st = await statusOf(stateDirectory, sessionId)
   expect(st.firstSeq).toBeGreaterThan(1)
@@ -496,5 +499,93 @@ createInterface({input:process.stdin}).on('line', line => {
     if (String(step.value.line).includes('answered')) { answered = true; break }
   }
   expect(answered).toBe(true)
+  await shutdownAndAssert(again, stateDirectory, sessionId)
+})
+
+function pidsForSession(sessionDir: string): number[] {
+  const needle = `SUPERMUX_KEEPER_SESSION_DIR=${sessionDir}`
+  const pids: number[] = []
+  for (const ent of readdirSync('/proc')) {
+    if (!/^\d+$/.test(ent)) continue
+    try {
+      const env = readFileSync(`/proc/${ent}/environ`, 'utf8')
+      if (env.split('\0').includes(needle)) pids.push(Number(ent))
+    } catch { /* gone */ }
+  }
+  return pids
+}
+
+test('spawned keeper is reaped if status.json never appears', async () => {
+  const stateDirectory = await dir()
+  const sessionId = 'nostatus'
+  const sessionDir = join(stateDirectory, 'keepers', sessionId)
+  const pending = connectKeeper({
+    stateDirectory,
+    sessionId,
+    spec: {
+      command: process.execPath, args: [fixture], cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '', SUPERMUX_KEEPER_SKIP_STATUS: '1' },
+      frameShape: 'jsonrpc', captureStderr: false,
+    },
+    limits: limits({ connectTimeoutMs: 400, shutdownTimeoutMs: 200 }),
+    cursor: 0,
+  })
+  let pids: number[] = []
+  const start = Date.now()
+  while (Date.now() - start < 2000) {
+    pids = pidsForSession(sessionDir)
+    if (pids.length) break
+    await new Promise(r => setTimeout(r, 20))
+  }
+  await expect(pending).rejects.toThrow()
+  expect(pids.length).toBeGreaterThan(0)
+  for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow()
+  expect(existsSync(join(sessionDir, 'keeper.sock'))).toBe(false)
+})
+
+test('session dir is 0700 and journal/status files are 0600', async () => {
+  const { conn, stateDirectory, sessionId } = await open('modes')
+  const sessionDir = join(stateDirectory, 'keepers', sessionId)
+  expect(statSync(sessionDir).mode & 0o777).toBe(0o700)
+  for (const name of ['journal.ndjson', 'status.json', 'token']) {
+    expect(statSync(join(sessionDir, name)).mode & 0o777).toBe(0o600)
+  }
+  await shutdownAndAssert(conn, stateDirectory, sessionId)
+})
+
+test('journal cap never drops unacked frames; replay is complete then file shrinks after ack', async () => {
+  const { conn, stateDirectory, sessionId } = await open('unacked-cap', {}, limits({ journalMaxBytes: 220 }))
+  const n = 16
+  for (let i = 0; i < n; i++) {
+    conn.write(JSON.stringify({ cmd: 'echo', n: i }))
+    await collect(conn, 1)
+  }
+  const before = (await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'))).byteLength
+  expect(before).toBeGreaterThan(220)
+  await conn.detach()
+  live[live.length - 1]!.conn = undefined
+  const again = await connectKeeper({
+    stateDirectory,
+    sessionId,
+    spec: { command: process.execPath, args: [fixture], cwd: process.cwd(), env: { PATH: process.env.PATH ?? '' }, frameShape: 'jsonrpc', captureStderr: false },
+    limits: limits({ journalMaxBytes: 220 }),
+    cursor: 'acked',
+  })
+  live.push({ conn: again, dir: stateDirectory, sessionId })
+  const replayed = await collect(again, n, 4000)
+  expect(replayed.length).toBe(n)
+  for (let i = 0; i < n; i++) {
+    expect(JSON.parse(replayed[i]!.line).echoed).toBe(i)
+    if (i > 0) expect(replayed[i]!.seq).toBeGreaterThan(replayed[i - 1]!.seq)
+  }
+  again.ack(replayed[replayed.length - 1]!.seq)
+  for (let i = 0; i < 8; i++) {
+    again.write(JSON.stringify({ cmd: 'echo', n: 100 + i }))
+    const extra = await collect(again, 1)
+    if (extra[0]) again.ack(extra[0].seq)
+  }
+  await waitStatus(stateDirectory, sessionId, s => s.journalRewrites > 0)
+  const after = (await readFile(join(stateDirectory, 'keepers', sessionId, 'journal.ndjson'))).byteLength
+  expect(after).toBeLessThan(before)
   await shutdownAndAssert(again, stateDirectory, sessionId)
 })

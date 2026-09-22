@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test"
-import { mkdtempSync, rmSync, readFileSync, existsSync, statSync } from "fs"
+import { mkdtempSync, rmSync, readFileSync, existsSync, statSync, writeFileSync, symlinkSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 import { prepareOpenCodeEnvironment } from "../src/environment/index.js"
@@ -77,8 +77,6 @@ function expectedConfig(instructionsPath: string): string {
 
 function spec(over: Partial<OpenCodeEnvironmentSpec> & Pick<OpenCodeEnvironmentSpec, "home" | "workdir" | "configHome">): OpenCodeEnvironmentSpec {
   return {
-    sessionId: "sess-1",
-    sessionName: "cool-session",
     mcpServers: [MUX],
     skillsPaths: ["/plugins/extra/skills"],
     pluginPaths: ["/plugins/superpowers"],
@@ -144,4 +142,40 @@ test("registers mux MCP with session id as MUX_SESSION_ID", async () => {
   expect(cfg.mcp.mux.command).toEqual(["bun", "run", "/opt/mux/shim.ts"])
   expect(cfg.mcp.mux.environment.MUX_SESSION_ID).toBe("sess-1")
   expect(cfg.mcp.mux.environment.MUX_AGENT_KIND).toBe("opencode")
+})
+
+test("refuses to write AGENTS.md through a symlink; target is untouched", async () => {
+  const sessionHome = home()
+  const configHome = join(sessionHome, "config")
+  const victim = join(sessionHome, "victim")
+  writeFileSync(victim, "keep-me")
+  symlinkSync(victim, join(sessionHome, "AGENTS.md"))
+  await expect(prepareOpenCodeEnvironment(spec({
+    home: sessionHome,
+    workdir: join(sessionHome, "wd"),
+    configHome,
+    instructions: "pwned",
+  }))).rejects.toThrow(/refusing to write through symlink/)
+  expect(readFileSync(victim, "utf8")).toBe("keep-me")
+})
+
+test("injected MCP name throws TypeError and writes nothing", async () => {
+  const sessionHome = home()
+  const configHome = join(sessionHome, "config")
+  await expect(prepareOpenCodeEnvironment(spec({
+    home: sessionHome,
+    workdir: join(sessionHome, "wd"),
+    configHome,
+    mcpServers: [{ name: "foo.bar", command: "true", args: [], env: {} }],
+  }))).rejects.toThrow(/mcpServers\[0\]\.name/)
+  expect(existsSync(join(configHome, "opencode", "opencode.json"))).toBe(false)
+})
+
+test("requireSpec TypeError names each missing field including provider", async () => {
+  const sessionHome = home()
+  const full: any = spec({ home: sessionHome, workdir: join(sessionHome, "wd"), configHome: join(sessionHome, "config") })
+  for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "configHome", "provider", "pluginPaths"]) {
+    const s = { ...full }; delete s[field]
+    await expect(prepareOpenCodeEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
+  }
 })

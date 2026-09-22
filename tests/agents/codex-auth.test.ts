@@ -21,8 +21,6 @@ function prepare(opts: { apiKey: string | null; userHome: string; sessionHome: s
   return prepareCodexEnvironment({
     home: opts.sessionHome,
     workdir: opts.sessionHome,
-    sessionId: "s",
-    sessionName: "s",
     mcpServers: [],
     skillsPaths: [],
     instructions: null,

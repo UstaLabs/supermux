@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import {
   mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync,
-  lstatSync, readlinkSync,
+  lstatSync, readlinkSync, symlinkSync,
 } from "fs"
 import { join, win32 } from "path"
 import { tmpdir } from "os"
@@ -61,8 +61,6 @@ describe("prepareCursorEnvironment", () => {
     return {
       home: join(dir, "session"),
       workdir: join(dir, "wd"),
-      sessionId: "zoom",
-      sessionName: "zoom",
       mcpServers: [MUX_SHIM],
       skillsPaths: [],
       instructions: null,
@@ -228,6 +226,53 @@ describe("prepareCursorEnvironment", () => {
     await prepareCursorEnvironment(spec({ instructions: "body" }))
     const exclude = readFileSync(join(dir, "wd", ".git", "info", "exclude"), "utf8")
     expect(exclude).toContain(".cursor/rules/mux.mdc")
+  })
+
+  test("refuses to write mux.mdc through a symlink; target is untouched", async () => {
+    mkdirSync(join(dir, "wd", ".cursor", "rules"), { recursive: true })
+    const victim = join(dir, "victim")
+    writeFileSync(victim, "keep-me")
+    symlinkSync(victim, join(dir, "wd", ".cursor", "rules", "mux.mdc"))
+    await expect(prepareCursorEnvironment(spec({ instructions: "pwned" }))).rejects.toThrow(/refusing to write through symlink/)
+    expect(readFileSync(victim, "utf8")).toBe("keep-me")
+  })
+
+  test("dest symlink to canonical auth is unlinked; canonical unchanged; session copy is a regular file", async () => {
+    const userCursor = join(dir, "user", ".cursor")
+    const userConfig = join(dir, "user", ".config")
+    mkdirSync(join(userConfig, "cursor"), { recursive: true })
+    mkdirSync(userCursor, { recursive: true })
+    const canonical = join(userConfig, "cursor", "auth.json")
+    writeFileSync(canonical, cursorAuth(1_000_000, "canonical"))
+    writeFileSync(join(userCursor, "cli-config.json"), "{}")
+    const sessionAuth = join(dir, "session", ".config", "cursor", "auth.json")
+    mkdirSync(join(dir, "session", ".config", "cursor"), { recursive: true })
+    symlinkSync(canonical, sessionAuth)
+    await prepareCursorEnvironment(spec({
+      credentials: { apiKey: null, userCursorDir: userCursor, userConfigDir: userConfig },
+    }))
+    expect(readFileSync(canonical, "utf8")).toBe(cursorAuth(1_000_000, "canonical"))
+    expect(lstatSync(sessionAuth).isSymbolicLink()).toBe(false)
+    expect(statSync(sessionAuth).isFile()).toBe(true)
+  })
+
+  test("injected MCP name throws TypeError and writes nothing", async () => {
+    await expect(prepareCursorEnvironment(spec({
+      mcpServers: [{ name: "foo.bar", command: "true", args: [], env: {} }],
+    }))).rejects.toThrow(/mcpServers\[0\]\.name/)
+    expect(existsSync(join(dir, "session", ".cursor", "mcp.json"))).toBe(false)
+  })
+
+  test("requireSpec TypeError names each missing field", async () => {
+    const full: any = spec()
+    for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "sharedRuntime", "platform", "credentials"]) {
+      const s = { ...full }; delete s[field]
+      await expect(prepareCursorEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
+    }
+    await expect(prepareCursorEnvironment({
+      ...full,
+      credentials: { userCursorDir: "x", userConfigDir: "y" },
+    } as any)).rejects.toThrow(/credentials.apiKey is required/)
   })
 
   test("is a no-op for git exclude when the workspace is not a git repo", async () => {

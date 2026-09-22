@@ -89,6 +89,22 @@ async function reap(dir: string, status: KeeperStatus | undefined, statusPath: s
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
 
+async function waitPidDead(pid: number, timeoutMs: number) {
+  const start = Date.now()
+  while (alive(pid) && Date.now() - start < timeoutMs) await sleep(20)
+}
+
+async function reapSpawned(pid: number, sockPath: string, statusPath: string, shutdownTimeoutMs: number) {
+  try { process.kill(pid, 'SIGTERM') } catch { /* */ }
+  await waitPidDead(pid, shutdownTimeoutMs)
+  if (alive(pid)) {
+    try { process.kill(pid, 'SIGKILL') } catch { /* */ }
+    await waitPidDead(pid, shutdownTimeoutMs + 2000)
+  }
+  try { await unlink(sockPath) } catch { /* */ }
+  try { await unlink(statusPath) } catch { /* */ }
+}
+
 async function waitForSocket(sockPath: string, timeoutMs: number) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
@@ -124,6 +140,8 @@ async function connectLocked(options: {
   const statusPath = join(dir, 'status.json')
   const tokenPath = join(dir, 'token')
 
+  let spawnedPid: number | undefined
+  let spawnedChild: ReturnType<typeof spawn> | undefined
   let status = await readStatus(statusPath)
   if (status && alive(status.keeperPid) && !existsSync(sockPath)) {
     // Socket gone but pid alive: the keeper is finishing (it unlinks the socket before exit).
@@ -159,21 +177,32 @@ async function connectLocked(options: {
         [KEEPER_ENV.limits]: JSON.stringify(options.limits),
         [KEEPER_ENV.frameShape]: options.spec.frameShape,
         [KEEPER_ENV.captureStderr]: String(options.spec.captureStderr),
+        ...(options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS
+          ? { SUPERMUX_KEEPER_SKIP_STATUS: options.spec.env.SUPERMUX_KEEPER_SKIP_STATUS }
+          : {}),
       },
     })
-    child.unref()
-    await waitForSocket(sockPath, options.limits.connectTimeoutMs)
-    // The keeper creates the socket before it writes status.json; wait for the status
-    // of THIS keeper so shutdown()/reuse decisions never act on a stale predecessor's file.
-    const started = Date.now()
-    for (;;) {
-      status = await readStatus(statusPath)
-      if (status && status.keeperPid === child.pid) break
-      if (Date.now() - started > options.limits.connectTimeoutMs) throw new Error('keeper status did not appear')
-      await sleep(20)
+    spawnedPid = child.pid
+    spawnedChild = child
+    if (!spawnedPid) throw new Error('keeper spawn produced no pid')
+    try {
+      await waitForSocket(sockPath, options.limits.connectTimeoutMs)
+      // The keeper creates the socket before it writes status.json; wait for the status
+      // of THIS keeper so shutdown()/reuse decisions never act on a stale predecessor's file.
+      const started = Date.now()
+      for (;;) {
+        status = await readStatus(statusPath)
+        if (status && status.keeperPid === spawnedPid) break
+        if (Date.now() - started > options.limits.connectTimeoutMs) throw new Error('keeper status did not appear')
+        await sleep(20)
+      }
+    } catch (err) {
+      await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
+      throw err
     }
   }
 
+  try {
   const token = (await readFile(tokenPath, 'utf8')).trim()
   const sock = await connectSock(sockPath)
 
@@ -252,7 +281,15 @@ async function connectLocked(options: {
 
   send({ type: 'hello', token, cursor: options.cursor })
   const t = setTimeout(() => { sock.destroy(new Error('welcome timeout')) }, options.limits.connectTimeoutMs)
-  try { await welcomeP } finally { clearTimeout(t) }
+  try {
+    await welcomeP
+  } catch (err) {
+    if (spawnedPid) {
+      try { sock.destroy() } catch { /* */ }
+      await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
+    }
+    throw err
+  } finally { clearTimeout(t) }
 
   const frames: AsyncIterable<KeeperFrameEvent> = {
     [Symbol.asyncIterator]() {
@@ -267,7 +304,7 @@ async function connectLocked(options: {
     },
   }
 
-  return {
+  const conn: KeeperConnection = {
     welcome,
     frames,
     write(line: string) {
@@ -302,4 +339,13 @@ async function connectLocked(options: {
     },
     onFrame(cb) { frameCbs.push(cb) },
   }
+  spawnedChild?.unref()
+  return conn
+  } catch (err) {
+    if (spawnedPid) {
+      await reapSpawned(spawnedPid, sockPath, statusPath, options.limits.shutdownTimeoutMs)
+    }
+    throw err
+  }
 }
+

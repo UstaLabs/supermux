@@ -1,7 +1,9 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { codexCredentialFreshness, promoteIfNewer } from "./credentials.js"
+import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { CodexEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
+import { copyFileReplace, writeFileNoFollow } from "./write.js"
 
 function ensureHome(home: string): void {
   mkdirSync(home, { recursive: true, mode: 0o700 })
@@ -30,6 +32,14 @@ ${envLines}
 }
 
 export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promise<PreparedEnvironment> {
+  requireSpec(spec, [
+    ...ENVIRONMENT_FIELDS,
+    "credentials",
+    "credentials.apiKey",
+    "credentials.canonicalHome",
+    "nativeMemory",
+  ])
+  validateMcpServerNames(spec.mcpServers)
   ensureHome(spec.home)
   const files: string[] = []
 
@@ -51,8 +61,7 @@ export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promi
       freshness: codexCredentialFreshness,
     })
     if (existsSync(userAuth)) {
-      copyFileSync(userAuth, sessionAuth)
-      chmodSync(sessionAuth, 0o600)
+      copyFileReplace(userAuth, sessionAuth)
       files.push(sessionAuth)
       credentials = "copy"
     } else {
@@ -70,7 +79,7 @@ export async function prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promi
 
   if (spec.instructions !== null) {
     const dest = join(spec.home, "AGENTS.md")
-    writeFileSync(dest, spec.instructions, { encoding: "utf8", mode: 0o600 })
+    writeFileNoFollow(dest, spec.instructions, 0o600)
     chmodSync(dest, 0o600)
     files.push(dest)
   }

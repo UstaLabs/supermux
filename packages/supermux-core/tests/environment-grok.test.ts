@@ -1,11 +1,13 @@
 import { test, expect } from "bun:test"
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "fs"
 import { join } from "path"
@@ -63,8 +65,6 @@ MUX_SOCKETS_DIR = "/run/mux/sockets"
 
 function grokSpec(over: Partial<GrokEnvironmentSpec> & Pick<GrokEnvironmentSpec, "home" | "workdir" | "credentials">): GrokEnvironmentSpec {
   return {
-    sessionId: "sess-1",
-    sessionName: "cool-session",
     mcpServers: [MUX_SHIM],
     skillsPaths: [],
     instructions: null,
@@ -281,4 +281,64 @@ test("config rewrite is idempotent", async () => {
   await prepareGrokEnvironment(spec)
   expect(readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")).toBe(a)
   expect(statSync(join(sessionHome, ".grok", "config.toml")).mode & 0o777).toBe(0o600)
+})
+
+test("refuses to write AGENTS.md through a symlink; target is untouched", async () => {
+  const sessionHome = home()
+  const workdir = home()
+  const victim = join(sessionHome, "victim")
+  writeFileSync(victim, "keep-me")
+  symlinkSync(victim, join(workdir, "AGENTS.md"))
+  await expect(prepareGrokEnvironment(grokSpec({
+    home: sessionHome,
+    workdir,
+    credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
+    instructions: "pwned",
+  }))).rejects.toThrow(/refusing to write through symlink/)
+  expect(readFileSync(victim, "utf8")).toBe("keep-me")
+})
+
+test("chmodSync makes a pre-existing 0644 config.toml 0600", async () => {
+  const sessionHome = home()
+  mkdirSync(join(sessionHome, ".grok"), { recursive: true })
+  const configPath = join(sessionHome, ".grok", "config.toml")
+  writeFileSync(configPath, "stale = true\n", { mode: 0o644 })
+  chmodSync(configPath, 0o644)
+  await prepareGrokEnvironment(grokSpec({
+    home: sessionHome,
+    workdir: sessionHome,
+    credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
+  }))
+  expect(statSync(configPath).mode & 0o777).toBe(0o600)
+})
+
+test("injected MCP name throws TypeError and writes nothing", async () => {
+  const sessionHome = home()
+  await expect(prepareGrokEnvironment(grokSpec({
+    home: sessionHome,
+    workdir: sessionHome,
+    credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
+    mcpServers: [{ name: 'x]\\ncommand = "pwned"', command: "true", args: [], env: {} }],
+  }))).rejects.toThrow(TypeError)
+  await expect(prepareGrokEnvironment(grokSpec({
+    home: sessionHome,
+    workdir: sessionHome,
+    credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
+    mcpServers: [{ name: "foo.bar", command: "true", args: [], env: {} }],
+  }))).rejects.toThrow(/mcpServers\[0\]\.name/)
+  expect(existsSync(join(sessionHome, ".grok", "config.toml"))).toBe(false)
+})
+
+test("requireSpec TypeError names each missing field", async () => {
+  const sessionHome = home()
+  const full = grokSpec({
+    home: sessionHome,
+    workdir: sessionHome,
+    credentials: { canonicalAuthPath: join(sessionHome, "missing.json") },
+  }) as any
+  for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "autoUpdate", "importClaudeConfig", "platform", "credentials"]) {
+    const s = { ...full }; delete s[field]
+    await expect(prepareGrokEnvironment(s)).rejects.toThrow(TypeError)
+    await expect(prepareGrokEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
+  }
 })

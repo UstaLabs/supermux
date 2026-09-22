@@ -35,8 +35,6 @@ function resolvers() {
     codex: () => prepareCodexEnvironment({
       home: sessionHome,
       workdir: sessionHome,
-      sessionId: "s",
-      sessionName: "s",
       mcpServers: [],
       skillsPaths: [],
       instructions: null,
@@ -46,8 +44,6 @@ function resolvers() {
     cursor: () => prepareCursorEnvironment({
       home: sessionHome,
       workdir: sessionHome,
-      sessionId: "s",
-      sessionName: "s",
       mcpServers: [],
       skillsPaths: [],
       instructions: null,
@@ -59,8 +55,6 @@ function resolvers() {
     grok: () => prepareGrokEnvironment({
       home: sessionHome,
       workdir: sessionHome,
-      sessionId: "s",
-      sessionName: "s",
       mcpServers: [],
       skillsPaths: [],
       instructions: null,

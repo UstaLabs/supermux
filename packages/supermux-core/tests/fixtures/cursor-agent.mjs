@@ -30,6 +30,12 @@ if (argv.includes('create-chat')) {
     // Real cursor-agent in a fresh HOME: id first, exit much later.
     process.stdout.write(CREATE_ID + '\n')
     setInterval(() => {}, 1 << 30)
+  } else if (process.env.MODE === 'create-crlf') {
+    process.stdout.write(CREATE_ID + '\r\n')
+    setInterval(() => {}, 1 << 30)
+  } else if (process.env.MODE === 'create-noise') {
+    process.stdout.write('noise\n' + CREATE_ID + '\n')
+    process.exit(0)
   } else if (process.env.MODE === 'create-invalid') {
     process.stdout.write('not-a-uuid\n')
     process.exit(0)

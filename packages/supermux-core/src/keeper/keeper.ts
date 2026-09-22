@@ -7,7 +7,7 @@
  * lines are never dropped).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -76,13 +76,21 @@ async function main() {
   const captureStderr = captureStderrRaw === 'true'
   if (!Array.isArray(args) || args.some(a => typeof a !== 'string')) throw new TypeError('invalid args')
 
+  mkdirSync(sessionDir, { recursive: true, mode: 0o700 })
+  chmodSync(sessionDir, 0o700)
+
   const sockPath = join(sessionDir, 'keeper.sock')
   const journalPath = join(sessionDir, 'journal.ndjson')
   const statusPath = join(sessionDir, 'status.json')
   const tokenPath = join(sessionDir, 'token')
+  const skipStatus = process.env.SUPERMUX_KEEPER_SKIP_STATUS === '1'
 
-  writeFileSync(tokenPath, token, { mode: 0o600 })
-  chmodSync(tokenPath, 0o600)
+  function writeSecure(path: string, body: string, flag?: string) {
+    writeFileSync(path, body, flag ? { mode: 0o600, flag } : { mode: 0o600 })
+    chmodSync(path, 0o600)
+  }
+
+  writeSecure(tokenPath, token)
 
   let lastSeq = 0
   let firstSeq = 1
@@ -95,7 +103,7 @@ async function main() {
   if (existsSync(journalPath)) {
     try { renameSync(journalPath, journalPath + '.prev') } catch { /* best effort */ }
   }
-  writeFileSync(journalPath, '')
+  writeSecure(journalPath, '')
 
   const startedAt = Date.now()
   let meta: Record<string, unknown> = {}
@@ -126,7 +134,7 @@ async function main() {
     const target = Math.floor(limits.journalMaxBytes * 0.75)
     let bytes = journal.reduce((n, e) => n + Buffer.byteLength(JSON.stringify(e) + '\n'), 0)
     while (bytes > target && journal.length) {
-      const idx = journal.findIndex(e => !keep.has(e.seq))
+      const idx = journal.findIndex(e => e.seq <= ackedSeq && !keep.has(e.seq))
       if (idx < 0) break
       const [removed] = journal.splice(idx, 1)
       bytes -= Buffer.byteLength(JSON.stringify(removed) + '\n')
@@ -135,8 +143,9 @@ async function main() {
     const body = journal.map(e => JSON.stringify(e) + '\n').join('')
     journalBytes = Buffer.byteLength(body)
     const tmp = journalPath + '.tmp'
-    writeFileSync(tmp, body)
+    writeSecure(tmp, body)
     renameSync(tmp, journalPath)
+    chmodSync(journalPath, 0o600)
     journalRewrites += 1
   }
 
@@ -144,12 +153,13 @@ async function main() {
     journal.push(entry)
     const line = JSON.stringify(entry) + '\n'
     journalBytes += Buffer.byteLength(line)
-    writeFileSync(journalPath, line, { flag: 'a' })
+    writeSecure(journalPath, line, 'a')
     if (journalBytes > limits.journalMaxBytes) rewriteJournal()
     else firstSeq = journal[0]?.seq ?? lastSeq + 1
   }
 
   function flushStatus() {
+    if (skipStatus) return
     if (statusTimer) { clearTimeout(statusTimer); statusTimer = undefined }
     const status: KeeperStatus & { journalRewrites: number } = {
       keeperPid: process.pid,
@@ -165,8 +175,9 @@ async function main() {
     if (agentExited !== undefined) status.agentExited = agentExited
     if (statusError) status.error = statusError
     const tmp = statusPath + '.tmp'
-    writeFileSync(tmp, JSON.stringify(status) + '\n')
+    writeSecure(tmp, JSON.stringify(status) + '\n')
     renameSync(tmp, statusPath)
+    chmodSync(statusPath, 0o600)
     lastFlushedKeys = {
       agentPid: status.agentPid,
       agentExited,

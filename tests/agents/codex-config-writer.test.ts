@@ -13,8 +13,6 @@ describe("prepareCodexEnvironment config", () => {
     await prepareCodexEnvironment({
       home: dir,
       workdir: dir,
-      sessionId: "zoom",
-      sessionName: "zoom",
       mcpServers: [{
         name: "mux-shim",
         command: "bun",

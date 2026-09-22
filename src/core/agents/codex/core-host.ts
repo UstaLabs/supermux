@@ -110,8 +110,6 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
       const prepared = await prepareCodexEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        sessionId: extra.sessionId,
-        sessionName: extra.sessionName,
         mcpServers: [muxShimServer("codex", extra.sessionId, extra.sessionName)],
         skillsPaths: [],
         instructions: codexInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),

@@ -113,7 +113,6 @@ class HostImpl implements Host {
   private closing = false
   private closed = false
   private closeTail?: Promise<void>
-  private closeAgents?: CloseMode
 
   constructor(options: HostOptions) {
     if (!options.stateDirectory) throw new CoreError("invalid_options", "stateDirectory is required")
@@ -154,7 +153,6 @@ class HostImpl implements Host {
     const agents = requireAgentsCloseMode(options)
     if (this.closed && !this.closeTail) return Promise.resolve()
     this.closing = true
-    this.closeAgents = agents
     if (this.closeTail) return this.closeTail
     this.closeTail = this.shutdown(agents).then(
       () => {

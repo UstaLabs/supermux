@@ -92,8 +92,6 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
       const prepared = await prepareGrokEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        sessionId: extra.sessionId,
-        sessionName: extra.sessionName,
         mcpServers: [muxShimServer("grok", extra.sessionId, extra.sessionName)],
         skillsPaths: grokConfigEntries({ sessionName: extra.sessionName }).skillsPaths,
         instructions: grokInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),

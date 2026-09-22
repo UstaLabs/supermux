@@ -3,8 +3,6 @@ export type McpServerSpec = { name: string; command: string; args: string[]; env
 export type EnvironmentSpec = {
   home: string
   workdir: string
-  sessionId: string
-  sessionName: string
   mcpServers: McpServerSpec[]
   skillsPaths: string[]
   instructions: string | null

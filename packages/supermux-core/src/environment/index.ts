@@ -7,6 +7,7 @@ export type {
   McpServerSpec,
   PreparedEnvironment,
 } from "./types.js"
+export { requireSpec } from "./spec.js"
 export { prepareGrokEnvironment } from "./grok.js"
 export { prepareCodexEnvironment } from "./codex.js"
 export { prepareOpenCodeEnvironment } from "./opencode.js"

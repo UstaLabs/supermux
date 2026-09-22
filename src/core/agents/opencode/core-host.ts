@@ -100,8 +100,6 @@ export function createOpenCodeCoreHost(options: OpenCodeCoreHostOptions): OpenCo
       const prepared = await prepareOpenCodeEnvironment({
         home: extra.sessionHome,
         workdir: extra.workdir,
-        sessionId: extra.sessionId,
-        sessionName: extra.sessionName,
         mcpServers: [muxShimServer("opencode", extra.sessionId, extra.sessionName)],
         skillsPaths,
         pluginPaths,

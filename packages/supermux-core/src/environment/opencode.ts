@@ -1,6 +1,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { OpenCodeEnvironmentSpec, PreparedEnvironment } from "./types.js"
+import { writeFileNoFollow } from "./write.js"
 
 function ensureHome(home: string): void {
   mkdirSync(home, { recursive: true, mode: 0o700 })
@@ -28,6 +30,13 @@ function renderOpenCodeConfig(spec: OpenCodeEnvironmentSpec, instructionsPath: s
 }
 
 export async function prepareOpenCodeEnvironment(spec: OpenCodeEnvironmentSpec): Promise<PreparedEnvironment> {
+  requireSpec(spec, [
+    ...ENVIRONMENT_FIELDS,
+    "configHome",
+    "provider",
+    "pluginPaths",
+  ])
+  validateMcpServerNames(spec.mcpServers)
   ensureHome(spec.home)
   mkdirSync(spec.configHome, { recursive: true, mode: 0o700 })
   const files: string[] = []
@@ -35,7 +44,7 @@ export async function prepareOpenCodeEnvironment(spec: OpenCodeEnvironmentSpec):
   let instructionsPath: string | undefined
   if (spec.instructions !== null) {
     const dest = join(spec.home, "AGENTS.md")
-    writeFileSync(dest, spec.instructions, { encoding: "utf8", mode: 0o600 })
+    writeFileNoFollow(dest, spec.instructions, 0o600)
     chmodSync(dest, 0o600)
     files.push(dest)
     instructionsPath = dest

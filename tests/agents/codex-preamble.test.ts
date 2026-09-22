@@ -15,8 +15,6 @@ describe("codexInstructions + prepareCodexEnvironment", () => {
     await prepareCodexEnvironment({
       home: dir,
       workdir: "/srv/app",
-      sessionId: "alpha",
-      sessionName: "alpha",
       mcpServers: [],
       skillsPaths: [],
       instructions: body,

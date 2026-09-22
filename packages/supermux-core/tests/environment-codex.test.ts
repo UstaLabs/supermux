@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "fs"
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync, symlinkSync, lstatSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
 import { prepareCodexEnvironment } from "../src/environment/index.js"
@@ -50,8 +50,6 @@ describe("prepareCodexEnvironment", () => {
     return {
       home: join(dir, "session"),
       workdir: join(dir, "wd"),
-      sessionId: "zoom",
-      sessionName: "zoom",
       mcpServers: [MUX_SHIM],
       skillsPaths: [],
       instructions: null,
@@ -121,6 +119,44 @@ describe("prepareCodexEnvironment", () => {
     expect(prepared.files).toContain(dest)
     expect(readFileSync(dest, "utf8")).toBe("hello-codex")
     expect(statSync(dest).mode & 0o777).toBe(0o600)
+  })
+
+  test("refuses to write AGENTS.md through a symlink; target is untouched", async () => {
+    const victim = join(dir, "victim")
+    writeFileSync(victim, "keep-me")
+    mkdirSync(join(dir, "session"), { recursive: true })
+    symlinkSync(victim, join(dir, "session", "AGENTS.md"))
+    await expect(prepareCodexEnvironment(spec({ instructions: "pwned" }))).rejects.toThrow(/refusing to write through symlink/)
+    expect(readFileSync(victim, "utf8")).toBe("keep-me")
+  })
+
+  test("dest symlink to canonical auth is unlinked; canonical unchanged; session copy is a regular file", async () => {
+    const canonicalHome = join(dir, "canonical")
+    mkdirSync(canonicalHome, { recursive: true })
+    mkdirSync(join(dir, "session"), { recursive: true })
+    const canonical = join(canonicalHome, "auth.json")
+    writeFileSync(canonical, authJson(2000))
+    symlinkSync(canonical, join(dir, "session", "auth.json"))
+    await prepareCodexEnvironment(spec({ credentials: { apiKey: null, canonicalHome } }))
+    expect(readFileSync(canonical, "utf8")).toBe(authJson(2000))
+    expect(lstatSync(join(dir, "session", "auth.json")).isSymbolicLink()).toBe(false)
+    expect(statSync(join(dir, "session", "auth.json")).isFile()).toBe(true)
+  })
+
+  test("injected MCP name throws TypeError and writes nothing", async () => {
+    await expect(prepareCodexEnvironment(spec({
+      mcpServers: [{ name: 'x]\\ncommand = "pwned"', command: "true", args: [], env: {} }],
+    }))).rejects.toThrow(/mcpServers\[0\]\.name/)
+    expect(existsSync(join(dir, "session", "config.toml"))).toBe(false)
+  })
+
+  test("requireSpec TypeError names each missing field", async () => {
+    const full: any = spec()
+    for (const field of ["home", "workdir", "mcpServers", "skillsPaths", "instructions", "nativeMemory", "credentials"]) {
+      const s = { ...full }; delete s[field]
+      await expect(prepareCodexEnvironment(s)).rejects.toThrow(new RegExp(`${field} is required`))
+    }
+    await expect(prepareCodexEnvironment({ ...full, credentials: { canonicalHome: join(dir, "c") } } as any)).rejects.toThrow(/credentials.apiKey is required/)
   })
 
   test("files lists exactly what was written for apiKey + instructions", async () => {

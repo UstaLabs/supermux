@@ -81,6 +81,12 @@ export function cursor(options: CursorOptions): AgentDriver {
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('Cursor command is required')
   if (!Array.isArray(options.args) || options.args.some(value => typeof value !== 'string')) throw new TypeError('Cursor args is required')
   if (typeof options.inheritEnv !== 'boolean') throw new TypeError('Cursor inheritEnv is required')
+  if (options.inheritEnv === false) {
+    const env = options.env ?? {}
+    if (!env.CURSOR_CONFIG_DIR && !env.XDG_CONFIG_HOME && !env.HOME) {
+      throw new TypeError('Cursor env.HOME is required when inheritEnv is false')
+    }
+  }
   if (options.sandbox !== 'enabled' && options.sandbox !== 'disabled') throw new TypeError('Cursor sandbox is required')
   if (typeof options.trust !== 'boolean') throw new TypeError('Cursor trust is required')
   if (typeof options.force !== 'boolean') throw new TypeError('Cursor force is required')
@@ -151,8 +157,9 @@ export function cursor(options: CursorOptions): AgentDriver {
           command, args: [...options.args, 'create-chat'], env, cwd: context.cwd,
           shutdownTimeoutMs, maxFrameBytes, json: false,
         }, text => {
-          const first = String(text).trim().split('\n')[0] ?? ''
-          if (UUID.test(first)) printed.resolve(first)
+          for (const line of String(text).split(/\r?\n/).map(s => s.trim())) {
+            if (UUID.test(line)) { printed.resolve(line); break }
+          }
         }, error => { fail(error) })
         setupChild = child
         const exited = child.wait().then(() => {
@@ -232,9 +239,11 @@ export function cursor(options: CursorOptions): AgentDriver {
           a.gotResult = true
           child.acceptCompletion()
           void (async () => {
+            let raceTimer: ReturnType<typeof setTimeout> | undefined
+            try {
             await Promise.race([
               child.wait(),
-              new Promise<void>(resolve => setTimeout(resolve, shutdownTimeoutMs)),
+              new Promise<void>(resolve => { raceTimer = setTimeout(resolve, shutdownTimeoutMs) }),
             ])
             if (a.interrupted) { finish(a, { stopReason: 'cancelled' }); return }
             if (fatal) { finish(a, fatal); return }
@@ -255,6 +264,9 @@ export function cursor(options: CursorOptions): AgentDriver {
               return
             }
             finish(a, { stopReason: 'end_turn' })
+            } finally {
+              if (raceTimer) clearTimeout(raceTimer)
+            }
           })().catch(error => finish(a, error instanceof Error ? error : new Error(String(error))))
         }, error => {
           if (a.interrupted) finish(a, { stopReason: 'cancelled' })

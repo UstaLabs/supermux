@@ -1,7 +1,9 @@
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, type Stats } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { grokCredentialExpiry, promoteCredential } from "./credentials.js"
+import { ENVIRONMENT_FIELDS, requireSpec, validateMcpServerNames } from "./spec.js"
 import type { GrokEnvironmentSpec, McpServerSpec, PreparedEnvironment } from "./types.js"
+import { lstatSafe, writeFileNoFollow } from "./write.js"
 
 function tomlStr(v: string): string {
   return JSON.stringify(v)
@@ -47,9 +49,11 @@ ${envBlock}`
 }
 
 function writeGrokInstructions(workdir: string, body: string): string {
-  const target = existsSync(join(workdir, "AGENTS.md")) ? "AGENTS.override.md" : "AGENTS.md"
+  const agents = join(workdir, "AGENTS.md")
+  const st = lstatSafe(agents)
+  const target = st && !st.isSymbolicLink() ? "AGENTS.override.md" : "AGENTS.md"
   const path = join(workdir, target)
-  writeFileSync(path, body, { encoding: "utf8", mode: 0o644 })
+  writeFileNoFollow(path, body, 0o644)
   excludeFromGit(workdir, target)
   return path
 }
@@ -63,14 +67,6 @@ function excludeFromGit(workdir: string, rel: string): void {
   appendFileSync(excludePath, (current.endsWith("\n") || current === "" ? "" : "\n") + rel + "\n", "utf8")
 }
 
-function lstatSafe(path: string): Stats | undefined {
-  try {
-    return lstatSync(path)
-  } catch {
-    return undefined
-  }
-}
-
 function grokEnv(home: string, authPath: string, platform: NodeJS.Platform): Record<string, string> {
   return {
     HOME: home,
@@ -80,6 +76,15 @@ function grokEnv(home: string, authPath: string, platform: NodeJS.Platform): Rec
 }
 
 export async function prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise<PreparedEnvironment> {
+  requireSpec(spec, [
+    ...ENVIRONMENT_FIELDS,
+    "credentials",
+    "credentials.canonicalAuthPath",
+    "autoUpdate",
+    "importClaudeConfig",
+    "platform",
+  ])
+  validateMcpServerNames(spec.mcpServers)
   ensureHome(spec.home)
   const sessionGrokDir = join(spec.home, ".grok")
   mkdirSync(sessionGrokDir, { recursive: true, mode: 0o700 })
@@ -129,7 +134,8 @@ function finishGrok(
   const grokDir = join(spec.home, ".grok")
   mkdirSync(grokDir, { recursive: true, mode: 0o700 })
   const configPath = join(grokDir, "config.toml")
-  writeFileSync(configPath, renderGrokConfig(spec), { encoding: "utf8", mode: 0o600 })
+  writeFileNoFollow(configPath, renderGrokConfig(spec), 0o600)
+  chmodSync(configPath, 0o600)
   files.push(configPath)
   if (spec.instructions !== null) {
     files.push(writeGrokInstructions(spec.workdir, spec.instructions))

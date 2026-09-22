@@ -15,9 +15,10 @@ const ctx = (extra: Partial<DriverContext> = {}): DriverContext => ({
   requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }), requestAnswers: async () => ({ outcome: 'cancelled' as const }), ...extra,
 })
 const driver = (env: Record<string, string> = {}, extra: Record<string, unknown> = {}) => cursor({
-  id: 'cursor', command: process.execPath, args: [fixture], env, inheritEnv: false,
+  id: 'cursor', command: process.execPath, args: [fixture], inheritEnv: false,
   sandbox: 'enabled', trust: true, force: false, approveMcps: false, mode: 'ask',
   setupTimeoutMs: 5000, shutdownTimeoutMs: 2000, maxFrameBytes: 16 * 1024 * 1024, ...extra,
+  env: { HOME: tmpdir(), ...env, ...((extra as { env?: Record<string, string> }).env ?? {}) },
 })
 const input = (text: string) => [{ type: 'text' as const, text }]
 
@@ -180,6 +181,7 @@ test('missing executable rejects open without hanging or unhandled rejection', a
       id: 'cursor',
       command: '/definitely-missing-supermux-cursor',
       args: [],
+      env: { HOME: tmpdir() },
       inheritEnv: false,
       sandbox: 'enabled',
       trust: true,
@@ -197,8 +199,34 @@ test('missing executable rejects open without hanging or unhandled rejection', a
   }
 })
 
+test('create-chat accepts CRLF UUID then linger, and UUID after noise', async () => {
+  const crlfStarted = Date.now()
+  const crlf = await driver({ MODE: 'create-crlf' }, { setupTimeoutMs: 5_000 }).open(ctx())
+  try {
+    expect(crlf.agentSessionId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    expect(Date.now() - crlfStarted).toBeLessThan(4_000)
+  } finally { await crlf.close({ mode: "shutdown" }) }
+  const noise = await driver({ MODE: 'create-noise' }).open(ctx())
+  try {
+    expect(noise.agentSessionId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+  } finally { await noise.close({ mode: "shutdown" }) }
+})
+
+test('inheritEnv false without HOME / CURSOR_CONFIG_DIR / XDG_CONFIG_HOME throws', () => {
+  expect(() => cursor({
+    id: 'cursor', command: process.execPath, args: [fixture], inheritEnv: false,
+    sandbox: 'enabled', trust: true, force: false, approveMcps: false,
+    setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1,
+  })).toThrow(TypeError)
+  expect(() => cursor({
+    id: 'cursor', command: process.execPath, args: [fixture], inheritEnv: false,
+    sandbox: 'enabled', trust: true, force: false, approveMcps: false,
+    setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1,
+  })).toThrow('Cursor env.HOME is required when inheritEnv is false')
+})
+
 test('cursor() TypeError names each missing required field', () => {
-  const full: any = { id: 'cursor', command: 'cursor-agent', args: [], inheritEnv: false, sandbox: 'enabled', trust: true, force: false, approveMcps: false, setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1 }
+  const full: any = { id: 'cursor', command: 'cursor-agent', args: [], env: { HOME: '/tmp' }, inheritEnv: false, sandbox: 'enabled', trust: true, force: false, approveMcps: false, setupTimeoutMs: 1, shutdownTimeoutMs: 1, maxFrameBytes: 1 }
   for (const field of ['id', 'command', 'args', 'inheritEnv', 'sandbox', 'trust', 'force', 'approveMcps', 'setupTimeoutMs', 'shutdownTimeoutMs', 'maxFrameBytes']) {
     const opts = { ...full }; delete opts[field]
     expect(() => cursor(opts)).toThrow(TypeError)
