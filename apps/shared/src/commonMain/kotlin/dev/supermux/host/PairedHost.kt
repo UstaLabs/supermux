@@ -12,6 +12,9 @@ data class PairedHost(
     val directUrl: String? = null,
     val relayUrl: String? = null,
     val token: String,
+    /** The transport carries the credential itself — the browser's HttpOnly cookie — so a blank
+     *  [token] still dials. Metadata, not a credential: nothing here can authenticate anything. */
+    val ambientAuth: Boolean = false,
     val platform: String? = null,
     val version: String? = null,
     val lastSeenAt: Long = 0L,

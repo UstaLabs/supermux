@@ -19,6 +19,15 @@ export type WorkspaceDeps = {
   /** scope is "w:<workspaceId>" for a workspace terminal, or the session name/id for an agent one. */
   closeTerminal: (scope: string, terminalId: string) => Promise<void>
   stopDisplay: (displayId: string) => Promise<void>
+  /**
+   * Registers the workspace's effective location with the project catalog. Runs
+   * inside createForSession's transaction, before the workspace insert: a throw
+   * aborts the insert, so a failed registration never leaves an orphan workspace.
+   * `internal` mirrors the session's registry.internal flag — the caller must
+   * no-op for an internal session (its workspace is created regardless, but it
+   * must never gain a project; see src/main.ts).
+   */
+  ensureProject?: (w: { workdir: string; repo_root?: string; internal: boolean }) => void
 }
 
 export type CreateForSessionInput = {
@@ -29,6 +38,8 @@ export type CreateForSessionInput = {
   base_branch?: string
   branch?: string
   sort_order?: number
+  /** Broker-internal session (e.g. an rpc-worker). Forwarded to ensureProject. */
+  internal?: boolean
 }
 
 export class WorkspaceService {
@@ -40,25 +51,38 @@ export class WorkspaceService {
 
   /** Spec §9.1 steps 3–5. Called from the session spawn path. */
   createForSession(input: CreateForSessionInput): WorkspaceRecord {
-    const ws = this.store.create({
-      name: input.name,
-      workdir: input.workdir,
-      repo_root: input.repo_root,
-      base_branch: input.base_branch,
-      branch: input.branch,
-      primary_session_id: input.sessionId,
-      sort_order: input.sort_order,
-    })
-    this.store.addView(ws.id, { kind: "chat", state: { sessionId: input.sessionId } })
-    this.linkSession(input.sessionId, ws.id)
-    return this.store.getById(ws.id)!
+    const run = () => {
+      this.deps.ensureProject?.({ workdir: input.workdir, repo_root: input.repo_root, internal: !!input.internal })
+      const ws = this.store.create({
+        name: input.name,
+        workdir: input.workdir,
+        repo_root: input.repo_root,
+        base_branch: input.base_branch,
+        branch: input.branch,
+        primary_session_id: input.sessionId,
+        sort_order: input.sort_order,
+      })
+      this.store.addView(ws.id, { kind: "chat", state: { sessionId: input.sessionId } })
+      this.linkSession(input.sessionId, ws.id)
+      return this.store.getById(ws.id)!
+    }
+    return this.db ? this.db.transaction(run)() : run()
   }
 
   /**
    * Spec §9.2 "Chat". A second agent joins an existing workspace. The primary
    * session pointer does NOT move — the workspace keeps the name it already has.
    */
-  addChatSession(workspaceId: string, sessionId: string): ViewRecord {
+  addChatSession(workspaceId: string, sessionId: string, pendingViewId?: string): ViewRecord {
+    // The "+ → Chat" tab already exists as a pending chat (no sessionId). Bind that
+    // tab rather than adding a second one beside it.
+    const pending = pendingViewId ? this.store.getView(pendingViewId) : undefined
+    if (pending && pending.workspace_id === workspaceId && pending.kind === "chat"
+        && !(pending.state as { sessionId?: string } | null)?.sessionId) {
+      this.store.setViewState(pending.id, { sessionId })
+      this.linkSession(sessionId, workspaceId)
+      return this.store.getView(pending.id)!
+    }
     const view = this.store.addView(workspaceId, { kind: "chat", state: { sessionId } })
     this.linkSession(sessionId, workspaceId)
     return view

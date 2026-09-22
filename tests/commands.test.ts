@@ -157,44 +157,43 @@ test("unknown command returns help-ish error", async () => {
   expect(r1.text).toMatch(/unknown command/i)
 })
 
+// `fetchUsage` is stubbed: the live fetcher talks to four provider APIs over the
+// network, which is both slow (past this test's timeout) and non-deterministic.
 test("/usage returns formatted usage text", async () => {
-  const fake: UsageResponse = {
-    claude: {
-      fiveHour: { used: 44, resetsAt: new Date(Date.now() + 2.5 * 3_600_000).toISOString() },
-      sevenDay: { used: 4, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
-      sevenDaySonnet: { used: 1, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
-      sevenDayFable: { used: 9, resetsAt: new Date(Date.now() + 7 * 24 * 3_600_000).toISOString() },
-      extraUsage: { enabled: true, monthlyLimit: 5000, usedCredits: 27, currency: "usd" },
+  ctx.fetchUsage = async () => ({
+    claude: null,
+    codex: {
+      plan: "plus",
+      windows: [{ id: "primary", used: 43, resetsAt: null, resetsAtIso: null, label: "5-hour window", windowSeconds: 18_000 }],
+      models: [{ id: "gpt-6-astra", label: "GPT-6 Astra", available: false, availableAt: null, availableAtIso: null, creditsWouldEnable: true }],
+      credits: null,
+      limitReached: false,
+      resetCredits: 0,
     },
-    codex: null,
-    cursor: {
-      totalPercentUsed: 85,
-      totalSpendCents: 1200,
-      includedCents: 2000,
-      limitCents: 5000,
-      spendAvailable: true,
-      billingCycleStart: String(Date.now() - 10 * 24 * 3_600_000),
-      billingCycleEnd: String(Date.now() + 33 * 24 * 3_600_000),
-    },
+    cursor: null,
     opencode: null,
-    grok: null,
-    errors: {},
-  }
-  let fetchCount = 0
-  const ctxWithUsage: CommandCtx = {
-    ...ctx,
-    fetchUsage: async () => {
-      fetchCount++
-      return fake
+    grok: {
+      plan: "GrokPro",
+      percentUsed: 70,
+      used: 3,
+      monthlyLimit: 0,
+      onDemandCap: 0,
+      onDemandUsed: 0,
+      prepaidBalance: 0,
+      periodType: "weekly",
+      products: [],
+      billingPeriodStart: "",
+      billingPeriodEnd: "",
     },
-  }
-  const r1 = await handleSlash({ command: "usage", rest: "" }, ctxWithUsage)
-  expect(fetchCount).toBe(1)
-  expect(r1.text).toContain("Claude")
-  expect(r1.text).toContain("44% used")
-  expect(r1.text).toContain("Cursor")
-  expect(r1.text).toContain("85% used")
-  expect(r1.text).toContain("$27")
+    errors: {},
+  })
+
+  const r1 = await handleSlash({ command: "usage", rest: "" }, ctx)
+  expect(r1.text).toContain("Codex (plus)")
+  expect(r1.text).toContain("5-hour window: 43% used")
+  expect(r1.text).toContain("GPT-6 Astra: locked · credits would unlock")
+  expect(r1.text).toContain("Grok (GrokPro)")
+  expect(r1.text).toContain("Weekly: 70% used")
 })
 
 test("/show prints recent log entries", async () => {

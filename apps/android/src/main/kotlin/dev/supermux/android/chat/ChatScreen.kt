@@ -1,10 +1,8 @@
 package dev.supermux.android.chat
 
-import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -51,10 +49,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import dev.supermux.ui.widgets.DropdownMenu
+import dev.supermux.ui.widgets.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -104,25 +102,27 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import java.io.File
 import dev.supermux.android.R
-import dev.supermux.android.theme.MonoFontFamily
-import dev.supermux.android.theme.Radii
+import dev.supermux.ui.platform.LocalPlatform
+import dev.supermux.ui.theme.MonoFontFamily
+import dev.supermux.ui.theme.Radii
 import dev.supermux.ui.ChatDetailLevel
 import dev.supermux.util.formatDuration
 import dev.supermux.util.proxyDisplayUrl
 import dev.supermux.util.proxyUrl
-import dev.supermux.android.display.DisplayPanel
-import dev.supermux.android.ui.keepAlivePanel
-import dev.supermux.android.editor.EditorPanel
-import dev.supermux.android.editor.PendingEditorOpen
+import dev.supermux.ui.display.DisplayPanel
+import dev.supermux.ui.widgets.keepAlivePanel
+import dev.supermux.ui.editor.EditorPanel
+import dev.supermux.ui.editor.EditorPanelActions
+import dev.supermux.ui.editor.EditorPanelState
+import dev.supermux.ui.editor.PendingEditorOpen
 import dev.supermux.session.inferHomeDir
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.toWorkdirRelativePath
-import dev.supermux.android.terminal.TerminalPanel
-import dev.supermux.android.terminal.ScratchTerminalPanel
-import dev.supermux.android.session.SessionAvatar
-import dev.supermux.android.theme.HapticKind
-import dev.supermux.android.theme.Space
-import dev.supermux.android.theme.rememberHaptics
+import dev.supermux.ui.terminal.TerminalTabs
+import dev.supermux.ui.session.SessionAvatar
+import dev.supermux.ui.theme.HapticKind
+import dev.supermux.ui.theme.Space
+import dev.supermux.ui.theme.rememberHaptics
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.GitBadgeKind
@@ -131,6 +131,17 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.gitBadge
+import dev.supermux.state.ContinueHandoff
+import dev.supermux.ui.chat.ChatActions
+import dev.supermux.ui.chat.ChatPanel
+import dev.supermux.ui.chat.ChatState
+import dev.supermux.ui.chat.ComposerActions
+import dev.supermux.ui.chat.ContinueConversationFlow
+import dev.supermux.ui.chat.ContinueMenuItem
+import dev.supermux.ui.chat.FinishBindings
+import dev.supermux.ui.chat.FinishHeaderButton
+import dev.supermux.ui.chat.rememberContinueSheetState
+import dev.supermux.ui.prefs.LocalUiPrefs
 
 enum class SessionPanel { Chat, Native, Editor, Terminal, Display }
 
@@ -146,7 +157,7 @@ fun ChatScreen(
     onBack: () -> Unit,
     onSendWith: (text: String, attachments: List<String>) -> Unit,
     onUpload: suspend (source: ChunkSource, name: String, mime: String, kind: String?, onProgress: (Long, Long) -> Unit) -> String?,
-    transcribeAudio: suspend (bytes: ByteArray, filename: String) -> String? = { _, _ -> null },
+    transcribeAudio: suspend (bytes: ByteArray, filename: String, mime: String) -> String? = { _, _, _ -> null },
     transcribeDraft: suspend (draft: String) -> String? = { null },
     loadGlossary: suspend () -> List<String> = { emptyList() },
     onRename: (String) -> Unit = {},
@@ -155,8 +166,10 @@ fun ChatScreen(
     sessionLinks: List<dev.supermux.net.ProxyDto> = emptyList(),
     vmModels: suspend (String) -> ModelsResponse? = { null },
     vmReasoning: suspend (String) -> ReasoningResponse? = { null },
-    onPickModel: (String) -> Unit = {},
-    onPickEffort: (String) -> Unit = {},
+    // Suspend + Boolean: the shared ChatPanel only rewrites the shown catalog `current` when the
+    // broker ACCEPTED the switch, so a rejected pick must report false rather than a blind true.
+    onPickModel: suspend (String) -> Boolean = { false },
+    onPickEffort: suspend (String) -> Boolean = { false },
     commands: List<SlashCommand> = emptyList(),
     commandsResolved: Boolean = false,
     // Interrupt the running agent (transcript Stop capsule + /stop slash control). §8/§1.
@@ -165,7 +178,7 @@ fun ChatScreen(
     loadDraft: suspend (String) -> String = { "" },
     saveDraft: (String, String) -> Unit = { _, _ -> },
     loadBytes: suspend (String) -> ByteArray? = { null },
-    fsList: suspend (String) -> List<dev.supermux.net.FsEntry> = { emptyList() },
+    fsList: suspend (String) -> Result<List<dev.supermux.net.FsEntry>> = { Result.success(emptyList()) },
     fsRead: suspend (String) -> Result<String> = { Result.success("") },
     fsWrite: suspend (String, String) -> Boolean = { _, _ -> false },
     fsSearch: suspend (String) -> List<dev.supermux.net.FsSearchResult> = { emptyList() },
@@ -176,11 +189,11 @@ fun ChatScreen(
     reviewResolve: suspend (String) -> Boolean = { false },
     reviewSubmit: suspend () -> dev.supermux.net.ReviewSubmitResult? = { null },
     // Editor LSP + live file-watch — app-wide flows + session-bound senders.
-    fsChanges: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.FsChanged> =
+    fsChanges: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.FsChanged> =
         kotlinx.coroutines.flow.MutableSharedFlow(),
     lspStatus: kotlinx.coroutines.flow.StateFlow<Map<String, dev.supermux.proto.ServerFrame.LspStatus>> =
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
-    lspRpc: kotlinx.coroutines.flow.SharedFlow<dev.supermux.proto.ServerFrame.LspRpcIn> =
+    lspRpc: kotlinx.coroutines.flow.Flow<dev.supermux.proto.ServerFrame.LspRpcIn> =
         kotlinx.coroutines.flow.MutableSharedFlow(),
     editorOpen: (String) -> Unit = {},
     editorClose: (String) -> Unit = {},
@@ -193,29 +206,24 @@ fun ChatScreen(
     closeTerminal: suspend (String) -> Unit = {},
     // Native tab — terminal bound to the agent PTY with kind="agent"; iOS parity, claude-only.
     connectAgentTerminal: (() -> dev.supermux.net.TerminalClient)? = null,
-    listDisplays: (suspend () -> List<dev.supermux.net.DisplayStream>)? = null,
-    connectScrcpy: ((String) -> dev.supermux.net.ScrcpyClient)? = null,
-    connectVnc: ((String) -> dev.supermux.net.VncClient)? = null,
-    displays: kotlinx.coroutines.flow.StateFlow<List<dev.supermux.net.DisplayStream>> =
-        kotlinx.coroutines.flow.MutableStateFlow(emptyList()),
-    onStartDisplay: suspend () -> Unit = {},
+    /** Cluster G4: the whole Display seam in one holder; null = this shell has no display transport. */
+    displayActions: dev.supermux.ui.display.DisplayActions? = null,
     onOpenDisplays: () -> Unit = {},
-    consumePendingFirst: (String) -> dev.supermux.android.AppViewModel.PendingFirstMessage? = { null },
+    consumePendingFirst: (String) -> dev.supermux.state.HostStore.PendingFirstMessage? = { null },
     onContinue: (suspend (ContinueHandoff) -> String?)? = null,
     loadContinueAgents: suspend () -> List<String> = { emptyList() },
     loadContinueModels: suspend (String) -> List<dev.supermux.net.ModelInfo> = { emptyList() },
     loadContinueReasoning: suspend (String, String?) -> ReasoningResponse? = { _, _ -> null },
     onContinued: (String) -> Unit = {},
-    editorPrefs: dev.supermux.android.editor.EditorPrefs? = null,
     onEditorConsumesBackChange: (Boolean) -> Unit = {},
     // Finish flow — null/empty defaults keep the existing call (and ArchivedChatScreen) compiling.
     finishJob: dev.supermux.proto.FinishJobDto? = null,                                  // finishJobs[session.id]
-    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.finishReadiness(id)
+    onFinishReadiness: suspend () -> dev.supermux.net.FinishReadiness? = { null },        // vm.fleet.finishReadiness(id)
     onFinish: (action: String, skipVerify: Boolean?, commitFirst: Boolean?, commitMessage: String?, onKickoff: (Boolean) -> Unit) -> Unit = { _, _, _, _, cb -> cb(false) },
-    onClearFinishJob: () -> Unit = {},                                                    // vm.clearFinishJob(id)
-    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.verifySuggest(id)
-    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.verifySave(id, content)
-    onSendToAgent: (String) -> Unit = {},                                                 // vm.sendMessage(id, text)
+    onClearFinishJob: () -> Unit = {},                                                    // vm.fleet.clearFinishJob(id)
+    onVerifySuggest: suspend () -> dev.supermux.net.VerifySuggestResult? = { null },      // vm.fleet.verifySuggest(id)
+    onVerifySave: suspend (String) -> dev.supermux.net.VerifySaveResult? = { null },      // vm.fleet.verifySave(id, content)
+    onSendToAgent: (String) -> Unit = {},                                                 // vm.fleet.sendMessage(id, text)
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
 ) {
@@ -275,7 +283,7 @@ fun ChatScreen(
                 SessionAvatar(
                     name = session.name,
                     agent = session.agent,
-                    modifier = Modifier.size(30.dp),
+                    size = 30.dp,
                     sessionId = session.id,
                     sharedScope = sharedScope,
                     animScope = animScope,
@@ -389,43 +397,26 @@ fun ChatScreen(
                     }
                 }
 
-                // Finish — only for worktree-backed sessions (iOS gates on session.session_branch).
-                if (session.session_branch != null) {
-                    var showFinishSheet by remember(session.id) { mutableStateOf(false) }
-                    // Acked startedAt survives rotation/process-death so a result stays "seen".
-                    var ackedStartedAt by rememberSaveable(session.id) { mutableStateOf(0.0) }
-                    val isUnacked = finishJob != null &&
-                        finishJob.status != "running" &&
-                        finishJob.startedAt != ackedStartedAt
-                    FinishButton(
-                        finishJob = finishJob,
-                        isUnacked = isUnacked,
-                        onClick = {
-                            ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt
-                            showFinishSheet = true
-                        },
-                    )
-                    if (showFinishSheet) {
-                        FinishSheet(
-                            session = session,
-                            finishJob = finishJob,
-                            onReadiness = onFinishReadiness,
-                            onFinish = onFinish,
-                            onClearJob = onClearFinishJob,
-                            onVerifySuggest = onVerifySuggest,
-                            onVerifySave = onVerifySave,
-                            onSendToAgent = onSendToAgent,
-                            onAck = { ackedStartedAt = finishJob?.startedAt ?: ackedStartedAt },
-                            onDismiss = { showFinishSheet = false },
-                        )
-                    }
-                }
+                // Finish — only for worktree-backed sessions (the shared flow gates on
+                // session.session_branch itself, and owns the unacked-dot bookkeeping).
+                FinishHeaderButton(
+                    session = session,
+                    bindings = FinishBindings(
+                        job = finishJob,
+                        readiness = onFinishReadiness,
+                        finish = onFinish,
+                        clearJob = onClearFinishJob,
+                        verifySuggest = onVerifySuggest,
+                        verifySave = onVerifySave,
+                        sendToAgent = onSendToAgent,
+                    ),
+                )
 
                 // Overflow menu (⋮): Detail + rename / mute / displays / kill
                 Box {
-                    val overflowContext = LocalContext.current
-                    ChatDetailPrefs.ensureLoaded(overflowContext)
-                    val chatDetailLevel by ChatDetailPrefs.level.collectAsState()
+                    val uiPrefs = LocalUiPrefs.current
+                    val prefsScope = rememberCoroutineScope()
+                    val chatDetailLevel by uiPrefs.chatDetailLevel.collectAsState(ChatDetailLevel.MEDIUM)
                     var detailSubmenu by remember { mutableStateOf(false) }
                     Icon(
                         painter = painterResource(R.drawable.ic_more_vert),
@@ -558,7 +549,7 @@ fun ChatScreen(
                                 },
                                 enabled = true,
                                 onClick = {
-                                    ChatDetailPrefs.set(overflowContext, level)
+                                    prefsScope.launch { uiPrefs.putChatDetailLevel(level) }
                                     detailSubmenu = false
                                     headerMenuExpanded = false
                                 },
@@ -623,30 +614,46 @@ fun ChatScreen(
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (SessionPanel.Chat in shownPanels) {
+                var chatDraft by remember(session.id) { mutableStateOf("") }
                 ChatPanel(
                     session = session,
-                    messages = messages,
-                    activity = activity,
-                    agent = agent,
-                    bgTasks = bgTasks,
-                    sending = sending,
-                    activePanel = activePanel,
-                    onSendWith = onSendWith,
-                    onInterrupt = onInterrupt,
-                    commands = commands,
-                    commandsResolved = commandsResolved,
-                    onUpload = onUpload,
-                    loadBytes = loadBytes,
-                    transcribeAudio = transcribeAudio,
-                    transcribeDraft = transcribeDraft,
-                    loadGlossary = loadGlossary,
-                    vmModels = vmModels,
-                    vmReasoning = vmReasoning,
-                    onPickModel = onPickModel,
-                    onPickEffort = onPickEffort,
-                    loadDraft = loadDraft,
-                    saveDraft = saveDraft,
-                    consumePendingFirst = consumePendingFirst,
+                    state = ChatState(
+                        messages = messages,
+                        activity = activity,
+                        agent = agent,
+                        bgTasks = bgTasks,
+                        sending = sending,
+                        commands = commands,
+                        commandsResolved = commandsResolved,
+                    ),
+                    actions = remember(session.id) {
+                        ChatActions(
+                            send = onSendWith,
+                            interrupt = onInterrupt,
+                            upload = onUpload,
+                            transcribeAudio = transcribeAudio,
+                            loadBytes = loadBytes,
+                            composer = ComposerActions(
+                                loadDraft = { loadDraft(it) },
+                                saveDraft = { id, t -> saveDraft(id, t) },
+                                consumePendingFirst = { id ->
+                                    consumePendingFirst(id)?.let { it.text to it.attachments }
+                                },
+                                transcribeDraft = transcribeDraft,
+                                loadGlossary = loadGlossary,
+                            ),
+                            loadModels = { vmModels(session.id) },
+                            loadReasoning = { vmReasoning(session.id) },
+                            pickModel = { onPickModel(it) },
+                            pickReasoning = { onPickEffort(it) },
+                        )
+                    },
+                    draft = chatDraft,
+                    onDraftChange = { chatDraft = it },
+                    // This screen owns the identity header above, so the panel draws none — its
+                    // live status moves into the transcript's own working/sending/waiting rows.
+                    showHeader = false,
+                    active = activePanel == SessionPanel.Chat,
                     onOpenFile = onOpenFile,
                     onRequestRename = {
                         renameText = session.name
@@ -661,7 +668,8 @@ fun ChatScreen(
                 val cat = connectAgentTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Native)) {
                     if (cat != null) {
-                        TerminalPanel(
+                        // Cluster G1: through `Platform.terminalView()`, not termlib by name.
+                        LocalPlatform.current.terminalView().TerminalView(
                             connect = cat,
                             modifier = Modifier.fillMaxSize(),
                             active = activePanel == SessionPanel.Native,
@@ -677,30 +685,33 @@ fun ChatScreen(
             }
             if (SessionPanel.Editor in shownPanels) {
                 EditorPanel(
-                    sessionId = session.id,
-                    workdir = session.workdir,
-                    fsList = fsList,
-                    fsRead = fsRead,
-                    fsWrite = fsWrite,
-                    fsSearch = fsSearch,
-                    fsDiff = fsDiff,
-                    fsRefs = fsRefs,
-                    reviewAddComment = reviewAddComment,
-                    reviewResolve = reviewResolve,
-                    reviewSubmit = reviewSubmit,
-                    fsChanges = fsChanges,
-                    lspStatus = lspStatus,
-                    lspRpc = lspRpc,
-                    editorOpen = editorOpen,
-                    editorClose = editorClose,
-                    lspStatusQuery = lspStatusQuery,
-                    lspOpen = lspOpen,
-                    lspRpcOut = lspRpcOut,
-                    lspClose = lspClose,
+                    state = EditorPanelState(
+                        sessionId = session.id,
+                        workdir = session.workdir,
+                        fsChanges = fsChanges,
+                        lspStatus = lspStatus,
+                        lspRpc = lspRpc,
+                    ),
+                    actions = EditorPanelActions(
+                        fsList = fsList,
+                        fsRead = fsRead,
+                        fsWrite = fsWrite,
+                        fsSearch = fsSearch,
+                        fsDiff = fsDiff,
+                        fsRefs = fsRefs,
+                        reviewAddComment = reviewAddComment,
+                        reviewResolve = reviewResolve,
+                        reviewSubmit = reviewSubmit,
+                        editorOpen = editorOpen,
+                        editorClose = editorClose,
+                        lspStatusQuery = lspStatusQuery,
+                        lspOpen = lspOpen,
+                        lspRpcOut = lspRpcOut,
+                        lspClose = lspClose,
+                    ),
                     onConsumesBackChange = onEditorConsumesBackChange,
                     pendingOpen = pendingEditorOpen,
                     onPendingOpenConsumed = { pendingEditorOpen = null },
-                    editorPrefs = editorPrefs,
                     modifier = Modifier.keepAlivePanel(activePanel == SessionPanel.Editor),
                 )
             }
@@ -708,7 +719,9 @@ fun ChatScreen(
                 val ct = connectTerminal
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Terminal)) {
                     if (ct != null) {
-                        ScratchTerminalPanel(
+                        // Cluster G3: the shared strip (`:ui` terminal/TerminalTabs) — one tab UI
+                        // for every client, with the accessory key bar under Touch.
+                        TerminalTabs(
                             sessionId = session.id,
                             connect = ct,
                             listTerminals = listTerminals,
@@ -724,18 +737,12 @@ fun ChatScreen(
                 }
             }
             if (SessionPanel.Display in shownPanels) {
-                val ld = listDisplays
-                val cScrcpy = connectScrcpy
-                val cVnc = connectVnc
+                val da = displayActions
                 Box(Modifier.keepAlivePanel(activePanel == SessionPanel.Display)) {
-                    if (ld != null && cScrcpy != null && cVnc != null) {
+                    if (da != null) {
                         DisplayPanel(
                             sessionName = session.name,
-                            displays = displays,
-                            listDisplays = ld,
-                            connectScrcpy = cScrcpy,
-                            connectVnc = cVnc,
-                            onStartDisplay = onStartDisplay,
+                            actions = da,
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
@@ -778,7 +785,7 @@ fun ChatScreen(
     }
 
     if (showContinueSheet.value && onContinue != null) {
-        ContinueConversationSheet(
+        ContinueConversationFlow(
             session = session,
             onContinue = onContinue,
             onContinued = onContinued,
@@ -798,7 +805,7 @@ fun ChatScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        haptic(HapticKind.Heavy)
+                        haptic.perform(HapticKind.Heavy)
                         showKillDialog = false
                         onKill()
                     },

@@ -38,7 +38,7 @@ object DevConfig {
      *
      * This is NOT the production pairing path — the MainActivity gate + onboarding flow own
      * that now. On release builds, or when [DEBUG_TOKEN] is empty, this is a no-op and the
-     * gate shows [dev.supermux.android.pairing.OnboardingScreen].
+     * gate shows the shared [dev.supermux.ui.intro.OnboardingFlow].
      */
     fun seedDebugPairingIfEmpty(context: Context) {
         if (DEBUG_TOKEN.isEmpty()) return

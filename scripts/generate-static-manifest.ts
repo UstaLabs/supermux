@@ -1,7 +1,8 @@
 // scripts/generate-static-manifest.ts
 // Overwrites src/channels/web/static-manifest.generated.ts with imports for
-// every file under src/channels/web/static (the built PWA). Run AFTER the
-// web-app build, BEFORE bun build --compile. Idempotent; never committed.
+// every file under src/channels/web/static (the staged Kotlin/Wasm web client).
+// Run AFTER `cd apps && ./gradlew :web:stageForBroker`, BEFORE bun build
+// --compile. Idempotent; never committed.
 import { readdirSync, statSync, writeFileSync, existsSync } from "fs"
 import { join, relative, resolve } from "path"
 
@@ -10,7 +11,7 @@ const root = join(repoRoot, "src/channels/web/static")
 const outFile = join(repoRoot, "src/channels/web/static-manifest.generated.ts")
 
 if (!existsSync(join(root, "index.html"))) {
-  console.error(`generate-static-manifest: ${root}/index.html missing — build the PWA first (cd src/web-app && bun run build)`)
+  console.error(`generate-static-manifest: ${root}/index.html missing — build the web client first (cd apps && ./gradlew :web:stageForBroker)`)
   process.exit(1)
 }
 

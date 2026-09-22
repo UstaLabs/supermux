@@ -10,7 +10,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import dev.supermux.android.MainActivity
 import dev.supermux.android.push.SupermuxMessagingService
-import java.util.Locale
+import dev.supermux.ui.update.formatUpdateBytes
+import dev.supermux.ui.update.formatUpdateProgress
 
 /**
  * Status-bar notifications for APK self-update: indeterminate/percent progress while
@@ -156,13 +157,8 @@ object AppUpdateNotifier {
         )
     }
 
-    internal fun formatBytes(bytes: Long): String {
-        if (bytes < 1024) return "$bytes B"
-        val kb = bytes / 1024.0
-        if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb)
-        val mb = kb / 1024.0
-        return String.format(Locale.US, "%.1f MB", mb)
-    }
+    /** Cluster G5: the shared screen shows the same byte count, so the wording lives in `:ui`. */
+    internal fun formatBytes(bytes: Long): String = formatUpdateBytes(bytes)
 
     /** 0–100 when length known; null when indeterminate. */
     internal fun progressPercent(bytesReceived: Long, contentLength: Long?): Int? {
@@ -170,15 +166,11 @@ object AppUpdateNotifier {
         return ((bytesReceived * 100) / contentLength).toInt().coerceIn(0, 100)
     }
 
-    /** In-app button label while an APK download is in flight. */
-    fun formatDownloadProgress(bytesReceived: Long, contentLength: Long?): String {
-        val pct = progressPercent(bytesReceived, contentLength)
-        return if (pct != null) {
-            "Downloading $pct%…"
-        } else if (bytesReceived > 0) {
-            "Downloading ${formatBytes(bytesReceived)}…"
-        } else {
-            "Downloading…"
-        }
-    }
+    /**
+     * In-app button label while an APK download is in flight. Cluster G5 moved the wording to the
+     * shared `formatUpdateProgress` (the shared CTA shows it); this stays as the notifier's name
+     * for it so the status bar and the button can never drift apart.
+     */
+    fun formatDownloadProgress(bytesReceived: Long, contentLength: Long?): String =
+        formatUpdateProgress(bytesReceived, contentLength)
 }

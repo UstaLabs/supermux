@@ -4,8 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Mirrors the web reference suite (src/web-app/src/lib/terminal-keys.test.ts) so
- * the native key-bar sequences stay in lockstep with the PWA's.
+ * Mirrors the retired Vue PWA's terminal-keys reference suite
+ * (retired Vue PWA; see git history before 2026-09-12); this suite is now the spec
+ * for the native key-bar sequences.
  *
  * Expected values are built from char codes (esc/ctl helpers) rather than raw
  * control bytes or \u escapes, so the source stays plain ASCII and readable.

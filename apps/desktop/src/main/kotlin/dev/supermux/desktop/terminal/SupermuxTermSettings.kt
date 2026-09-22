@@ -56,7 +56,7 @@ class SupermuxTermSettings(
 
     // ── Mouse reporting: DELIBERATELY LEFT AT THE DEFAULT (`enableMouseReporting()` == true) ──
     //
-    // Do NOT add a custom wheel→tmux bridge to DesktopTerminalPanel, and do NOT override
+    // Do NOT add a custom wheel→tmux bridge to JediTermTerminalView, and do NOT override
     // `enableMouseReporting()` — JediTerm 3.73 already does the whole job natively, unlike the
     // touch-only terminal libs (SwiftTerm-iOS, ConnectBot termlib) that forced Android/iOS to
     // build the shared `dev.supermux.net.TerminalScroll` bridge. Task 4 established this
@@ -97,6 +97,10 @@ class SupermuxTermSettings(
         val DARK_TERMINAL_BG: Int = 0xFF050605.toInt()
         val DARK_TERMINAL_FG: Int = 0xFFD8DED3.toInt()
 
+        // The ONLY font still bundled in this module's resources: JediTerm needs a java.awt.Font
+        // synchronously from the classpath, which the Compose-resource families in :ui (loaded
+        // inside composition) cannot provide. The Compose UI reads its Geist Mono from
+        // dev.supermux.ui.theme.GeistMonoFontFamily; this file is the same TTF for the terminal.
         private const val FONT_RESOURCE = "/fonts/geist_mono_regular.ttf"
 
         /** Geist Mono, loaded once for every settings instance (Font.createFont is not cheap).

@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
-import dev.supermux.desktop.ui.AlertDialog
+import dev.supermux.ui.widgets.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +28,8 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +37,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
@@ -45,42 +50,134 @@ import androidx.compose.ui.window.isTraySupported
 import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.supermux.desktop.auth.DesktopTokenStore
-import dev.supermux.desktop.chat.AssistantMessage
+import dev.supermux.ui.chat.MessageTts
 import dev.supermux.desktop.chat.decodeImageBytes
-import dev.supermux.desktop.chat.loadMarkdownImageBitmap
-import dev.supermux.desktop.chat.prunePasteCache
+import dev.supermux.ui.chat.AssistantMessage
+import dev.supermux.ui.chat.fetchImageBytesWithPolicy
+import dev.supermux.desktop.platform.prunePasteCache
 import dev.supermux.desktop.editor.isMacOs
 import dev.supermux.desktop.host.DesktopHostBootstrap
 import dev.supermux.desktop.host.DesktopHostStores
-import dev.supermux.desktop.host.FleetState
+import dev.supermux.desktop.settings.DesktopSettingsStore
+import dev.supermux.state.FleetStore
+import dev.supermux.state.HostStoreDeps
+import dev.supermux.state.cioHttpFactory
 import dev.supermux.desktop.host.HostWizard
-import dev.supermux.desktop.intro.FirstRunIntroOverlay
-import dev.supermux.desktop.intro.IntroStateStore
-import dev.supermux.desktop.notify.NotificationController
+import dev.supermux.ui.intro.FirstRunIntroOverlay
+import dev.supermux.ui.intro.INTRO_VERSION
+import dev.supermux.ui.intro.shouldShowIntro
+import dev.supermux.ui.prefs.seedIntroSeen
+import dev.supermux.desktop.notify.DesktopNotifications
 import dev.supermux.desktop.notify.TrayNotificationManager
-import dev.supermux.desktop.pairing.OnboardingScreen
-import dev.supermux.desktop.pairing.PairingState
-import dev.supermux.desktop.state.DesktopAppState
-import dev.supermux.desktop.theme.AppearanceMode
-import dev.supermux.desktop.theme.Space
-import dev.supermux.desktop.theme.SupermuxTheme
+import dev.supermux.desktop.shell.DesktopWindowHostController
+import dev.supermux.pairing.PairingState
+import dev.supermux.pairing.PairingTokenStore
+import dev.supermux.ui.intro.OnboardingScreen
+import dev.supermux.state.HostStore
+import dev.supermux.ui.theme.AppearanceMode
+import dev.supermux.ui.theme.Space
+import dev.supermux.desktop.theme.DesktopTheme
+import dev.supermux.ui.adaptive.InputMode
+import dev.supermux.ui.adaptive.LocalInputMode
+import dev.supermux.ui.adaptive.LocalPointerAvailable
+import dev.supermux.ui.adaptive.LocalWindowWidthClass
+import dev.supermux.ui.adaptive.widthClassForPx
 import dev.supermux.desktop.ui.LocalModalPresence
 import dev.supermux.desktop.ui.ModalPresence
-import dev.supermux.desktop.shell.AppShell
+import dev.supermux.ui.shell.SupermuxApp
+import dev.supermux.ui.shell.windows.tearOutTabLive
+import dev.supermux.ui.shell.windows.tearOutCanvasLive
+import dev.supermux.desktop.settings.DesktopSettingsExtra
+import dev.supermux.desktop.settings.DesktopSettingsSection
+import dev.supermux.ui.prefs.seedLauncher
+import dev.supermux.ui.prefs.seedCollapsedProjectPaths
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.foundation.layout.height
+import dev.supermux.ui.shell.windows.RegistryShellWindows
+import dev.supermux.desktop.shell.DesktopStripChrome
+import dev.supermux.desktop.shell.MacSidebarToggle
+import dev.supermux.desktop.shell.MacTitleBarHeight
+import dev.supermux.desktop.shell.macTitleBarDragRegion
+import dev.supermux.desktop.shell.PersistedUiState
+import dev.supermux.ui.prefs.seedShellState
+import dev.supermux.ui.prefs.ShellStateSeed
+import dev.supermux.ui.prefs.SIDEBAR_WIDTH_DEFAULT
+import dev.supermux.ui.session.SessionListMode
+import dev.supermux.ui.notify.NotificationController
 import dev.supermux.desktop.shell.DetachedWorkspaceWindow
 import dev.supermux.desktop.shell.LocalMacTrafficLightsInset
-import dev.supermux.desktop.shell.extraWindowTitle
+import dev.supermux.ui.shell.windows.extraWindowTitle
 import dev.supermux.desktop.shell.LocalMacWindowChrome
 import dev.supermux.desktop.shell.MacTrafficLightsWidth
 import dev.supermux.desktop.shell.rememberMacWindowChrome
 import dev.supermux.desktop.shell.ShellStateStore
-import dev.supermux.desktop.shell.ShellUiState
-import dev.supermux.desktop.shell.WindowBounds
-import dev.supermux.desktop.shell.tearOutCanvasLive
-import dev.supermux.desktop.shell.tearOutGroupLive
+import dev.supermux.ui.shell.ShellUiState
+import dev.supermux.ui.shell.windows.WindowBounds
+import dev.supermux.ui.shell.windows.tearOutGroupLive
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.groupIdOf
 import java.io.File
+import dev.supermux.ui.prefs.UiPrefs
+import dev.supermux.ui.prefs.seedAppearance
+import dev.supermux.proto.ServerFrame
+import dev.supermux.state.WalkthroughSeam
+import dev.supermux.ui.editor.WalkthroughState
+import dev.supermux.desktop.platform.SharedDesktopTts
+
+/** The desktop half of the walkthrough seam: `:shared`'s [WalkthroughSeam] over `:ui`'s
+ *  [WalkthroughState]. Five lines, kept beside the DI that installs it (see the `HostStore`
+ *  construction below) rather than in `:ui`, because the store's generic parameter is chosen
+ *  per app. */
+object DesktopWalkthroughSeam : WalkthroughSeam<WalkthroughState> {
+    override fun create(sessionId: String) = WalkthroughState(sessionId)
+    override fun apply(state: WalkthroughState, frame: ServerFrame) = state.applyServerFrame(frame)
+}
+
+private val desktopDeps: HostStoreDeps by lazy {
+    HostStoreDeps(
+        httpFactory = cioHttpFactory(),
+        settings = DesktopSettingsStore(DesktopHostStores.defaultDir().resolve("settings.json")),
+    )
+}
+
+/** Editor + chat-detail + APPEARANCE preferences, on the same store as drafts / launcher prefs. */
+private val desktopUiPrefs: UiPrefs by lazy { UiPrefs(desktopDeps.settings) }
+
+/**
+ * [DesktopTokenStore] as the shared [PairingTokenStore] the `:shared` `PairingState` writes
+ * through (cluster G6). The four members line up one-to-one; the interface exists only because
+ * Android's store is a different type with the same shape.
+ */
+private fun DesktopTokenStore.asPairingStore(): PairingTokenStore = object : PairingTokenStore {
+    override fun load(): String? = this@asPairingStore.load()
+    override fun save(token: String) = this@asPairingStore.save(token)
+    override fun loadBaseUrl(): String? = this@asPairingStore.loadBaseUrl()
+    override fun saveBaseUrl(url: String) = this@asPairingStore.saveBaseUrl(url)
+}
+
+/**
+ * Desktop's legacy `intro-seen` marker file (contents = the intro version), read ONCE so
+ * `UiPrefs.seedIntroSeen` can drain it into `SettingsKeys.INTRO_SEEN`. Nothing else reads the
+ * file again; a missing/garbage marker is simply "never seen".
+ */
+private fun legacyIntroSeenVersion(): Int? =
+    runCatching {
+        java.nio.file.Files.readString(
+            DesktopTokenStore.defaultPath().parent.resolve("intro-seen"),
+        ).trim().toIntOrNull()
+    }.getOrNull()
+
+private val desktopBindTts: (
+    resolveEngine: suspend () -> String,
+    speakRemoteStream: suspend (String, (ByteArray) -> Unit) -> Unit,
+) -> Unit = { resolve, speak ->
+    MessageTts.resolveEngine = resolve
+    MessageTts.speakRemoteStream = speak
+}
 
 // Headless-verification env hooks (ALL off by default; for Xvfb runs with no input injection).
 // Catalogued here for discoverability — some are read at their use-site rather than in main():
@@ -222,7 +319,7 @@ fun main() {
     // It stays because it is the half of the problem that IS solved, at no cost
     // measured on Metal, and because the remaining half is about input routing
     // rather than painting. The moment input is sorted, the terminal can stop
-    // hiding by flipping one argument in DesktopTerminalPanel — read the note
+    // hiding by flipping one argument in JediTermTerminalView — read the note
     // there first.
     //
     // Compose 1.11.1 gates blending on the render API — Direct3D and Metal only,
@@ -292,18 +389,152 @@ fun main() {
         var pairedUi by remember { mutableStateOf<ShellUiState?>(null) }
         val uiStore = remember { ShellStateStore() }
         val persistedUi = remember { uiStore.load() }
-        val ui = remember {
-            ShellUiState().apply {
-                persistedUi.layout?.let { restore(it) }
-                selectedId = persistedUi.selectedId
-                appearance = persistedUi.appearance
-                    ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() }
-                    ?: AppearanceMode.DARK
-                pendingWindowHosts = persistedUi.windows
+        // Appearance is NOT in ui-state.json any more (cluster E7): it lives in the shared settings
+        // store under `SettingsKeys.APPEARANCE`, which is also what the shared Appearance screen
+        // writes — so the sidebar's theme toggle and Settings are one value, not two.
+        // `ui.appearance` stays the in-memory copy every composable reads.
+        //
+        // Seeded SYNCHRONOUSLY here, before the first composition: `ShellUiState.appearance`
+        // defaults to DARK, so resolving the stored value in an effect would show a LIGHT user one
+        // dark frame on every launch. `DesktopSettingsStore` already holds its map in an eager
+        // `StateFlow`, so this `runBlocking` never actually waits on IO; the one-time write it can
+        // do is the ui-state.json migration.
+        val seededAppearance = remember {
+            runBlocking {
+                desktopUiPrefs.seedAppearance(
+                    default = AppearanceMode.DARK,
+                    legacy = persistedUi.appearance
+                        ?.let { raw -> runCatching { AppearanceMode.valueOf(raw) }.getOrNull() },
+                )
             }
         }
+        val seededTextScale = remember { runBlocking { desktopUiPrefs.textScale.first() } }
+        // The extra OS windows, and the shared shell's view of them (cluster G8).
+        val desktopWindows = remember { RegistryShellWindows() }
+        // Cluster G8: the sidebar chrome + the selection moved out of `ui-state.json` into the
+        // shared settings store (`SettingsKeys.SHELL_*`), which is what Android reads too. The old
+        // file is drained ONCE here and then only carries the window bounds. Synchronous for the
+        // same reason the appearance seed above is: an asynchronous read would paint the first
+        // frames with the sidebar at the wrong width and no session selected.
+        val shellSeed = remember {
+            runCatching {
+                runBlocking {
+                    desktopUiPrefs.seedShellState(
+                        legacySidebarCollapsed = persistedUi.layout?.sidebarCollapsed,
+                        legacySidebarWidthDp = persistedUi.layout?.sidebarWidthDp,
+                        legacySelectedSession = persistedUi.selectedId,
+                    )
+                }
+            }.onFailure { println("[Main] shell-state seed failed (keeping ui-state.json): $it") }
+        }
+        // A THROWN seed leaves the legacy file as the only copy, so fall back to its values in
+        // memory and keep writing them through (see the `ui-state.json` writer below).
+        val seededShell = shellSeed.getOrElse {
+            ShellStateSeed(
+                sidebarCollapsed = persistedUi.layout?.sidebarCollapsed ?: false,
+                sidebarWidthDp = persistedUi.layout?.sidebarWidthDp ?: SIDEBAR_WIDTH_DEFAULT,
+                selectedSession = persistedUi.selectedId,
+            )
+        }
+        // The launcher pair and the collapsed project groups (cluster F1), drained from this host's
+        // old files before anything reads them — the seed must win the race against the launcher's
+        // first `loadPrefs()` and the sidebar's first frame.
+        val launcherStoreForSeed = remember { dev.supermux.desktop.session.LauncherStore() }
+        val collapsedSeed = remember {
+            runBlocking {
+                runCatching {
+                    desktopUiPrefs.seedLauncher(
+                        launcherStoreForSeed.loadPrefs(),
+                        launcherStoreForSeed.loadDraft(),
+                    )
+                }
+                runCatching {
+                    desktopUiPrefs.seedCollapsedProjectPaths(
+                        persistedUi.layout?.collapsedProjectPaths?.toSet().orEmpty(),
+                    )
+                }
+            }
+        }
+        val seededCollapsedPaths = collapsedSeed.getOrElse {
+            persistedUi.layout?.collapsedProjectPaths?.toSet().orEmpty()
+        }
+        /** True once BOTH one-way drains actually landed — see the writer below. */
+        val legacyDrained = remember { shellSeed.isSuccess && collapsedSeed.isSuccess }
+        val ui = remember {
+            ShellUiState().apply {
+                windows = desktopWindows
+                sidebarCollapsed = seededShell.sidebarCollapsed
+                setSidebarWidth(seededShell.sidebarWidthDp.dp)
+                selectedId = seededShell.selectedSession
+                collapsedProjectPaths = seededCollapsedPaths
+                appearance = seededAppearance
+            }
+        }
+        LaunchedEffect(Unit) { desktopWindows.pending = persistedUi.windows }
+        // Debounced `ui-state.json` write — the DETACHED WINDOW BOUNDS only; every other field it
+        // used to carry now lives in the shared settings store (see `seedShellState` above), which
+        // the shell itself writes.
+        //
+        // ...UNLESS a drain THREW, in which case this file is still the only copy of the user's
+        // sidebar, selection and collapsed groups: carry those fields forward UNTOUCHED rather than
+        // erasing them on the first window move. Same rule cluster F1 used for the collapsed paths.
+        LaunchedEffect(uiStore, legacyDrained) {
+            snapshotFlow { desktopWindows.persistedExtras() }
+                .collectLatest { extras ->
+                    delay(500)
+                    withContext(Dispatchers.IO) {
+                        uiStore.save(
+                            if (legacyDrained) {
+                                PersistedUiState(windows = extras)
+                            } else {
+                                persistedUi.copy(windows = extras)
+                            },
+                        )
+                    }
+                }
+        }
+        // Releasing an extra window's claim is bound HERE, not in `AppShell`: the windows are owned
+        // by this scope and can outlive a composed shell (unpair with a detached window still open).
+        DisposableEffect(ui) {
+            DesktopWindowHostController.bindRelease { hostId -> desktopWindows.registry.unclaim(hostId) }
+            onDispose { }
+        }
+        // Tearing a pane out needs the LIVE `panesBind` (only this scope holds it), so the window
+        // owner binds the verbs into the `Platform.windows` seam. Was `AppShell`'s job until G8
+        // moved the shell into `:ui`, which knows no `panesBind` of its own to tear from.
+        DisposableEffect(ui) {
+            DesktopWindowHostController.bindTearOut(
+                tearOutTab = { viewId ->
+                    val bind = ui.panesBind ?: return@bindTearOut
+                    val layoutSync = bind.ws.layoutSync
+                    tearOutTabLive(
+                        desktopWindows.registry, layoutSync.tree, viewId, bind.current.id,
+                    ) { next ->
+                        layoutSync.edit { next }
+                        layoutSync.tree
+                    }
+                    Unit
+                },
+                tearOutCanvas = {
+                    val bind = ui.panesBind ?: return@bindTearOut
+                    tearOutCanvasLive(desktopWindows.registry, bind.current.id)
+                    Unit
+                },
+            )
+            onDispose { DesktopWindowHostController.unbindTearOut() }
+        }
+
+        // ...and mirrored from here on, so a change made in Settings repaints the shell.
+        LaunchedEffect(Unit) {
+            desktopUiPrefs.appearance(AppearanceMode.DARK).collect { ui.appearance = it }
+        }
+        val appTextScale by desktopUiPrefs.textScale.collectAsState(seededTextScale)
+        val themeScope = rememberCoroutineScope()
+        // Cluster G1: the tray manager is installed INTO the `Platform.notifications` seam, so the
+        // shell's notification controller and any shared caller raise the same toast.
         val notificationController = remember {
-            NotificationController(TrayNotificationManager(trayState))
+            DesktopNotifications.install(TrayNotificationManager(trayState))
+            NotificationController(DesktopNotifications)
         }
 
         if (isTraySupported) {
@@ -367,7 +598,6 @@ fun main() {
             // Paired once the fleet holds a host (legacy single-host users were migrated to
             // PairedHost[0] above; onboarding seeds it via the same migration on success).
             var paired by remember { mutableStateOf(hostStore.list().isNotEmpty()) }
-            val launcherStore = remember { dev.supermux.desktop.session.LauncherStore() }
             // M5-3: publish this pairing's ShellUiState up to the tray icon's onAction
             // handler (declared above, outside Window) so a click can select the last-notified
             // session. Cleared on dispose (unpair / window teardown) so a stale ui never lingers.
@@ -391,10 +621,8 @@ fun main() {
                             ui.openLauncher()
                         }
                         Item("Move workspace to New Window") {
-                            val bind = ui.panesBind
-                            if (bind != null) {
-                                tearOutCanvasLive(ui.windowHosts, bind.current.id)
-                            }
+                            // Through the seam (cluster G1); AppShell binds the live registry into it.
+                            DesktopWindowHostController.tearOutCanvas()
                         }
                         Item("Move group to New Window") {
                             val bind = ui.panesBind
@@ -403,12 +631,15 @@ fun main() {
                                 val viewId = collectActiveViewIds(tree).firstOrNull()
                                 val gid = viewId?.let { groupIdOf(tree, it) }
                                 if (gid != null) {
-                                    tearOutGroupLive(ui.windowHosts, tree, gid, bind.current.id)
+                                    tearOutGroupLive(desktopWindows.registry, tree, gid, bind.current.id)
                                 }
                             }
                         }
                         Item("Archived…") {
                             ui.openArchived()
+                        }
+                        Item("Displays…") {
+                            ui.openDisplays()
                         }
                         Item("Usage…") {
                             ui.openUsage()
@@ -457,7 +688,8 @@ fun main() {
             // can show a terminal next to the pane the dialog came from.
             val modalPresence = remember { ModalPresence() }
             CompositionLocalProvider(LocalModalPresence provides modalPresence) {
-            SupermuxTheme(appearance = ui.appearance) {
+            ProvideDesktopAdaptiveLocals {
+            DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
               // Edge-to-edge fill. On macOS the traffic lights float over the top-left; AppShell
               // places the sidebar toggle next to them and pads only the sidebar body under that
               // band — no full-window dead strip across the title bar.
@@ -492,7 +724,9 @@ fun main() {
                             onConnectInstead = { connectInstead = true },
                         )
                     } else {
-                        val pairing = remember { PairingState(store, scope) }
+                        val pairing = remember {
+                            PairingState(store.asPairingStore(), scope, httpFactory = { cioHttpFactory()(null) })
+                        }
                         DisposableEffect(Unit) { onDispose { pairing.close() } }
                         OnboardingScreen(pairing, onPaired = {
                             // Onboarding persisted the legacy (baseUrl, token) into DesktopTokenStore;
@@ -504,11 +738,26 @@ fun main() {
                 } else {
                     val scope = rememberCoroutineScope()
                     // The multi-host fleet: one connection per paired host, merged into AppShell.
-                    val fleet = remember { FleetState(hostStore, scope) }
+                    val fleet = remember {
+                        FleetStore(
+                            hostStore,
+                            scope,
+                            desktopDeps,
+                            appFactory = { url, token, onConn ->
+                                HostStore(
+                                    url, token, scope, desktopDeps,
+                                    onConnectionChange = onConn,
+                                    walkthroughSeam = DesktopWalkthroughSeam,
+                                    bindTts = desktopBindTts,
+                                )
+                            },
+                            localHostDisplayName = { DesktopHostBootstrap.defaultHostName() },
+                        )
+                    }
                     DisposableEffect(Unit) { onDispose { fleet.close() } }
                     // The active host's app backs the single-host headless hooks below and is
                     // AppShell's fallback; AppShell itself routes through `fleet`. Non-null
-                    // because `paired` ⟹ the store holds a host ⟹ FleetState opened its connection.
+                    // because `paired` ⟹ the store holds a host ⟹ FleetStore opened its connection.
                     val app = remember(fleet) { fleet.activeApp() } ?: return@Box
 
                     // Headless-verification hook (no input injection on CI boxes): SM_SMOKE_SEND=
@@ -761,10 +1010,10 @@ fun main() {
                     // SM_LAUNCH_PAUSE_MS holds it open first, for a screenshot of the composer card /
                     // a restored draft) exercises the real spawn→first-message→uploads path:
                     // createSessionWithFirstMessage(workdir, agent, model=null, reasoning=null, message,
-                    // staged, worktree=false, baseBranch=null) → select the new session → sendMessage
-                    // with consumeFirstUploads → close the overlay. PIPE-delimited (not colon) so the
+                    // staged, worktree=false, baseBranch=null) — the broker delivers the first turn —
+                    // → select the new session → close the overlay. PIPE-delimited (not colon) so the
                     // message may contain colons/spaces; an optional 4th field stages one real file
-                    // (FileChunkSource) that uploads post-spawn. A BLANK message opens the launcher
+                    // (FileChunkSource) that uploads before the spawn. A BLANK message opens the launcher
                     // without submitting (draft/prefs screenshot mode). This SPAWNS a real session —
                     // point it at a throwaway temp workdir, never a real project. Off by default.
                     val launchTest = System.getenv("SM_LAUNCH_TEST")?.takeIf { it.isNotBlank() }
@@ -799,7 +1048,7 @@ fun main() {
                                 }
                                 val mime = runCatching { java.nio.file.Files.probeContentType(file.toPath()) }
                                     .getOrNull() ?: "application/octet-stream"
-                                listOf(dev.supermux.desktop.session.StagedUpload(
+                                listOf(dev.supermux.state.StagedUpload(
                                     dev.supermux.desktop.upload.FileChunkSource(file), file.name, mime,
                                 ))
                             } ?: emptyList()
@@ -815,12 +1064,11 @@ fun main() {
                             )
                             if (id == null) {
                                 println("[launch] createSessionWithFirstMessage returned null (invalid workdir / spawn failed)")
-                                ui.launcherOpen = false
+                                ui.closeLauncher()
                                 return@LaunchedEffect
                             }
                             ui.selectedId = id
-                            app.sendMessage(id, message, app.consumeFirstUploads(id))
-                            ui.launcherOpen = false
+                            ui.closeLauncher()
                             println("[launch] spawned session $id in '$workdir' (agent=$agent, staged=${staged.size}); first message sent")
                         }
                     }
@@ -835,7 +1083,7 @@ fun main() {
                     // per the M4c live-verification ground rules), so the inline `git_op_result`
                     // label can be screenshot too. There is NO `:push`/`:publish` suffix — those
                     // mutate a real remote, so this hook cannot ever auto-fire them (see
-                    // GitMenuForceOp's KDoc in SessionHeaderMenus.kt). Harmless in production (unset
+                    // GitMenuForceOp's KDoc in ui/shell/SessionHeaderMenus.kt). Harmless in production (unset
                     // by default).
                     val gitMenuTest = System.getenv("SM_GIT_MENU")?.takeIf { it.isNotBlank() }
                     if (gitMenuTest != null) {
@@ -843,12 +1091,12 @@ fun main() {
                             val parts = gitMenuTest.split(":", limit = 2)
                             val name = parts[0]
                             val op = when (parts.getOrNull(1)?.trim()?.lowercase()) {
-                                "fetch" -> dev.supermux.desktop.shell.GitMenuForceOp.FETCH
-                                "pull" -> dev.supermux.desktop.shell.GitMenuForceOp.PULL
-                                null, "" -> dev.supermux.desktop.shell.GitMenuForceOp.OPEN
+                                "fetch" -> dev.supermux.ui.shell.GitMenuForceOp.FETCH
+                                "pull" -> dev.supermux.ui.shell.GitMenuForceOp.PULL
+                                null, "" -> dev.supermux.ui.shell.GitMenuForceOp.OPEN
                                 else -> {
                                     println("[gitmenu] unknown SM_GIT_MENU suffix '${parts[1]}' — falling back to open-only")
-                                    dev.supermux.desktop.shell.GitMenuForceOp.OPEN
+                                    dev.supermux.ui.shell.GitMenuForceOp.OPEN
                                 }
                             }
                             // Wait (≤30s) for the snapshot to carry the named session.
@@ -897,7 +1145,7 @@ fun main() {
                     // Headless chat-attach-verification hook (M4d): SM_CHAT_ATTACH=
                     // "<session-name>|<file-path>|<text>" resolves the named session after the first
                     // snapshot, SELECTS it, and hands (filePath, text) to the matching ChatPanel via
-                    // ShellUiState.externalAttach — DesktopComposer's LaunchedEffect(externalAttach)
+                    // ShellUiState.externalAttach — the shared Composer's LaunchedEffect(externalAttach)
                     // then stages the file through the SAME stageFiles() funnel the Attach dialog and
                     // drag-drop use (so the chip uploads through the real uploadResumable seam), polls
                     // until that chip reaches a terminal state, and — on Done — sends through the SAME
@@ -930,7 +1178,21 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.externalAttach = t.id to dev.supermux.desktop.chat.ComposerExternalAttach(filePath, text)
+                            // Resolve the path HERE: `:ui`'s composer takes an upload-ready
+                            // PickedFile (no java.io.File in commonMain), and a path that is not a
+                            // file becomes a null request the composer consumes without staging.
+                            val attachFile = java.io.File(filePath).takeIf { it.isFile }
+                            ui.externalAttach = t.id to dev.supermux.ui.chat.ComposerExternalAttach(
+                                file = attachFile?.let {
+                                    dev.supermux.ui.platform.PickedFile(
+                                        name = it.name,
+                                        mime = dev.supermux.desktop.platform.probeMime(it),
+                                        source = dev.supermux.desktop.upload.FileChunkSource(it),
+                                    )
+                                },
+                                text = text,
+                            )
+                            if (attachFile == null) println("[chatattach] path is not a file: $filePath")
                             println("[chatattach] requested attach '$filePath' + send for ${t.name} (${t.id})")
                         }
                     }
@@ -938,7 +1200,7 @@ fun main() {
                     // Headless dictation-verification hook (M5-1): SM_DICTATE=
                     // "<session-name>|<wav-path>" resolves the named session after the first
                     // snapshot, SELECTS it, and hands <wav-path> to the matching ChatPanel via
-                    // ShellUiState.externalDictate — DesktopComposer's LaunchedEffect(externalDictate)
+                    // ShellUiState.externalDictate — the shared Composer's LaunchedEffect(externalDictate)
                     // reads the WAV bytes off disk and feeds them through the SAME onTranscribeAudio
                     // seam the mic button uses (app.transcribeAudio(session.id, bytes, filename) -> a
                     // REAL POST to the broker's whisper endpoint), then appends the cleaned text to
@@ -968,7 +1230,13 @@ fun main() {
                                 return@LaunchedEffect
                             }
                             ui.selectedId = t.id
-                            ui.externalDictate = t.id to dev.supermux.desktop.chat.ComposerExternalDictate(wavPath)
+                            // Read the WAV here — `:ui` has no file system.
+                            val wavFile = java.io.File(wavPath).takeIf { it.isFile }
+                            ui.externalDictate = t.id to dev.supermux.ui.chat.ComposerExternalDictate(
+                                bytes = wavFile?.readBytes(),
+                                filename = wavFile?.name ?: "dictation.wav",
+                            )
+                            if (wavFile == null) println("[dictate] path is not a file: $wavPath")
                             println("[dictate] requested transcribe '$wavPath' for ${t.name} (${t.id})")
                         }
                     }
@@ -1092,7 +1360,7 @@ fun main() {
                     if (settingsHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Agents)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Agents)
                             println("[settings] opened the Settings hub (Agents)")
                             // Prove the screen loads REAL data from the live broker, not just the shell.
                             val statuses = app.agentStatuses()
@@ -1109,7 +1377,7 @@ fun main() {
                     if (devicesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Devices)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Devices)
                             println("[devices] opened the Settings hub (Devices)")
                             val devices = app.devices()
                             println(
@@ -1128,7 +1396,7 @@ fun main() {
                     if (gitHostingHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.GitHosting)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.GitHosting)
                             println("[git-hosting] opened the Settings hub (Git hosting)")
                             val forges = app.forgesLoad()
                             val conns = forges?.connections.orEmpty()
@@ -1148,7 +1416,7 @@ fun main() {
                     if (proxiesHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Proxies)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Proxies)
                             println("[proxies] opened the Settings hub (Proxies)")
                             val proxies = app.proxiesForSettings()
                             println(
@@ -1168,7 +1436,7 @@ fun main() {
                     if (systemHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.System)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.System)
                             println("[system] opened the Settings hub (System)")
                             val st = app.updateStatus()
                             println(
@@ -1187,7 +1455,7 @@ fun main() {
                     if (assistantHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Assistant)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Assistant)
                             println("[assistant] opened the Settings hub (Assistant)")
                             val pair = app.assistantLoad()
                             val curator = app.curatorSettings()
@@ -1206,7 +1474,7 @@ fun main() {
                     if (voiceHook) {
                         LaunchedEffect(app) {
                             delay(3_000)
-                            ui.openSettings(dev.supermux.desktop.shell.SettingsSection.Voice)
+                            ui.openSettings(dev.supermux.ui.nav.SettingsSection.Voice)
                             println("[voice] opened the Settings hub (Voice)")
                             val cfg = app.appConfig()
                             val glossary = app.fetchGlossary()
@@ -1332,20 +1600,71 @@ fun main() {
                             macChrome?.trafficLightsInset ?: MacTrafficLightsWidth
                         ),
                     ) {
-                        AppShell(
-                            app,
-                            ui,
-                            uiStore,
-                            launcherStore,
-                            notificationController,
+                        SupermuxApp(
                             fleet = fleet,
+                            ui = ui,
+                            notify = notificationController,
+                            appForeground = LocalWindowInfo.current.isWindowFocused,
+                            // Desktop's sidebar lists WORKSPACES; Android's lists the fleet's
+                            // sessions. The one genuine per-host choice left in the shell.
+                            sessionListMode = SessionListMode.Workspaces,
+                            homeFallback = System.getProperty("user.home").orEmpty(),
+                            stripChrome = DesktopStripChrome,
+                            // macOS: no full-window dead strip under the transparent title bar.
+                            // Detail content runs to the top edge; only the sidebar body is padded
+                            // under the traffic-light band.
+                            sidebarTopPad = if (isMacOs()) MacTitleBarHeight else 0.dp,
+                            sidebarChrome = { sidebarWidth, collapsed ->
+                                if (isMacOs() && !collapsed) {
+                                    // Native window-drag handle: the empty sidebar band under the
+                                    // traffic lights. Layout-only Box (draws nothing, no pointer
+                                    // input); the toggle punches itself out.
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopStart)
+                                            .width(sidebarWidth)
+                                            .height(MacTitleBarHeight)
+                                            .macTitleBarDragRegion("sidebar-band"),
+                                    )
+                                    MacSidebarToggle(
+                                        onCollapse = { ui.sidebarCollapsed = true },
+                                        modifier = Modifier.align(Alignment.TopStart).zIndex(30f),
+                                    )
+                                }
+                            },
+                            // Desktop reopens on the session it was last showing.
+                            persistSelection = true,
+                            // Dispose CAN BE the window closing, which cancels the shell's scope
+                            // before a launched write runs. This one blocks until the draft is on
+                            // disk — and swallows a failure (disk full, prefs locked mid-shutdown):
+                            // a dying window must not throw out of onDispose over a lost draft.
+                            onLauncherDraftFlush = { draft ->
+                                runCatching { runBlocking { desktopUiPrefs.putLauncherDraft(draft) } }
+                                Unit
+                            },
+                            autoSelect = System.getenv("SM_AUTOSELECT") == "1",
+                            autoSelectName = System.getenv("SM_SMOKE_SEND")
+                                ?.substringBefore(':')?.takeIf { it.isNotBlank() },
+                            defaultDeviceName = remember {
+                                runCatching { java.net.InetAddress.getLocalHost().hostName }
+                                    .getOrNull()?.ifBlank { null } ?: "Desktop host"
+                            },
+                            settingsExtra = { extra, scope -> DesktopSettingsExtra(extra, scope) },
+                            settingsSection = { section, scope ->
+                                DesktopSettingsSection(section, scope, fleet.activeApp() ?: app)
+                            },
                             appearance = ui.appearance,
+                            // The toggle writes the SAME stored value the Appearance screen does
+                            // (the collector above mirrors it back onto `ui.appearance`), so the
+                            // two never drift apart.
                             onToggleTheme = {
-                                ui.appearance = if (ui.appearance == AppearanceMode.DARK) {
+                                val next = if (ui.appearance == AppearanceMode.DARK) {
                                     AppearanceMode.LIGHT
                                 } else {
                                     AppearanceMode.DARK
                                 }
+                                ui.appearance = next
+                                themeScope.launch { desktopUiPrefs.putAppearance(next) }
                             },
                         )
                     }
@@ -1375,27 +1694,48 @@ fun main() {
                 }
               }
             }
+            } // ProvideDesktopAdaptiveLocals
 
             // First-run intro cinematic ("mux boot": boot log → 2×2 agent-pane split → particle
             // converge → the logo mark draws itself → fade into the app). Emitted LAST inside
             // SupermuxTheme so it stacks above the already-composed wizard/shell — the exit
             // fade is a real reveal, not a cut. Shown once ever; SM_INTRO/SM_INTRO_FREEZE hooks
             // in the catalog at the top of this file.
-            val introStore = remember { IntroStateStore() }
+            //
+            // The seen flag now lives on `SettingsKeys.INTRO_SEEN` (cluster G6). It is seeded
+            // from the legacy `intro-seen` marker file and read SYNCHRONOUSLY, before the first
+            // frame — an async read would start the cinematic over an app someone has used for
+            // months, one frame before the stored value landed. `DesktopSettingsStore` holds its
+            // map in an eager StateFlow, so this never actually waits on IO.
+            val introSeen = remember {
+                runBlocking { desktopUiPrefs.seedIntroSeen(legacyIntroSeenVersion(), INTRO_VERSION) }
+            }
             var introVisible by remember {
                 mutableStateOf(
-                    IntroStateStore.shouldShow(
+                    shouldShowIntro(
                         envIntro = System.getenv("SM_INTRO"),
                         envPairToken = System.getenv("SM_PAIR_TOKEN"),
-                        store = introStore,
+                        seen = introSeen,
                     ),
                 )
             }
             if (introVisible) {
-                FirstRunIntroOverlay(onFinished = {
-                    introVisible = false
-                    if (System.getenv("SM_INTRO") != "1") runCatching { introStore.markSeen() }
-                })
+                FirstRunIntroOverlay(
+                    onFinished = {
+                        introVisible = false
+                        // A forced (SM_INTRO=1) run never consumes a real user's one viewing.
+                        // Written SYNCHRONOUSLY, exactly as the marker file was: launching it on
+                        // a scope inside this `if` would race the overlay leaving composition
+                        // (the scope is cancelled the moment `introVisible` flips). Neither
+                        // `DesktopSettingsStore.putString` nor the old `Files.writeString`
+                        // actually suspends, so this is the same one small write in the same
+                        // place.
+                        if (System.getenv("SM_INTRO") != "1") {
+                            runCatching { runBlocking { desktopUiPrefs.putIntroSeen(INTRO_VERSION) } }
+                        }
+                    },
+                    freezeAt = System.getenv("SM_INTRO_FREEZE")?.toFloatOrNull(),
+                )
             }
 
             // Headless inline-image layout verification (SM_MD_IMAGE) — see catalogue above.
@@ -1408,7 +1748,7 @@ fun main() {
         // Extra claimed layout windows. Close unclaims only — never exitApplication.
         // Each extra uses the bind for ITS workspace so switching sessions does not
         // dispose pop-outs of another workspace.
-        for (host in ui.windowHosts.extras()) {
+        for (host in desktopWindows.registry.extras()) {
             // Always compose the Window while the claim exists. Gating on panesBindFor
             // skipped a frame on workspace switch, Compose disposed the Window, and
             // onCloseRequest unclaimed it — the pop-out stayed gone.
@@ -1424,7 +1764,7 @@ fun main() {
                         extraState.position to extraState.size
                     }.collect { (pos, size) ->
                         if (pos is WindowPosition.Absolute) {
-                            ui.windowHosts.updateBounds(
+                            desktopWindows.registry.updateBounds(
                                 host.id,
                                 WindowBounds(
                                     x = pos.x.value,
@@ -1437,21 +1777,24 @@ fun main() {
                     }
                 }
                 Window(
-                    onCloseRequest = { ui.windowHosts.unclaim(host.id) },
+                    onCloseRequest = { DesktopWindowHostController.release(host.id) },
                     title = extraBind?.let {
                         extraWindowTitle(
                             it.current.name,
-                            ui.windowHosts.layoutFor(host, it.ws.layoutSync.tree),
+                            ui.windows.layoutFor(host.id, it.ws.layoutSync.tree),
                             it.ws.viewsById,
+                            it.sessionNames,
                         )
                     } ?: "supermux",
                     state = extraState,
                 ) {
                     val extraModal = remember { ModalPresence() }
                     CompositionLocalProvider(LocalModalPresence provides extraModal) {
-                        SupermuxTheme(appearance = ui.appearance) {
-                            if (extraBind != null) {
-                                DetachedWorkspaceWindow(host, extraBind, ui)
+                        ProvideDesktopAdaptiveLocals {
+                            DesktopTheme(appearance = ui.appearance, textScale = appTextScale, uiPrefs = desktopUiPrefs) {
+                                if (extraBind != null) {
+                                    DetachedWorkspaceWindow(host, extraBind, ui)
+                                }
                             }
                         }
                     }
@@ -1463,7 +1806,12 @@ fun main() {
     } finally {
         // No-op if the editor never started. Runs after every Compose window/interoperability child
         // has been disposed, but before JVM shutdown, so Chromium helper processes exit cleanly.
+        dev.supermux.desktop.editor.DesktopEditorEngineFactory.shared.dispose()
         dev.supermux.desktop.editor.JcefRuntime.dispose()
+        // Read-aloud is a process singleton (see SharedDesktopTts) and owns a child `say`/`ffplay`
+        // process; release it here so a quit mid-sentence does not outlive the window.
+        runCatching { MessageTts.stop(SharedDesktopTts) }
+        runCatching { SharedDesktopTts.shutdown() }
     }
 }
 
@@ -1495,7 +1843,7 @@ private fun MdImageVerifyOverlay(source: String) {
     val md = "![md-image-verify]($displayUrl)"
     val loadImage: suspend (String) -> ImageBitmap? = when {
         localBytes != null -> ({ decodeImageBytes(localBytes) })
-        isHttps -> ({ loadMarkdownImageBitmap(it) })
+        isHttps -> ({ url -> fetchImageBytesWithPolicy(url)?.let { decodeImageBytes(it) } })
         else -> ({ null })
     }
     LaunchedEffect(source) {
@@ -1536,4 +1884,23 @@ private fun MdImageVerifyOverlay(source: String) {
             )
         }
     }
+}
+
+/**
+ * Per-window adaptive locals (task A3). Desktop is always [InputMode.Pointer]; the width class
+ * comes from the window's own container size in dp and follows resizes — `containerSize` is
+ * window-scoped state, so a detached window classifies itself independently of the main one. The
+ * first frame reports width 0; `widthClassForPx` maps that to `Expanded` so the phone layout never
+ * flashes before the window is measured.
+ */
+@Composable
+private fun ProvideDesktopAdaptiveLocals(content: @Composable () -> Unit) {
+    val density = LocalDensity.current.density
+    val widthPx = LocalWindowInfo.current.containerSize.width
+    CompositionLocalProvider(
+        LocalWindowWidthClass provides widthClassForPx(widthPx, density),
+        LocalInputMode provides InputMode.Pointer,
+        LocalPointerAvailable provides true,
+        content = content,
+    )
 }

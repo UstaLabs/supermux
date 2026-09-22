@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
+import dev.supermux.ui.editor.DiffRegionSurface
+import dev.supermux.ui.editor.engine.DiffRegionRange
 
 /**
  * Live, test-source-only smoke for the complete editor path: bundled JBR/JCEF, file:// extraction,
@@ -32,6 +34,7 @@ fun main() {
         var shuttingDown by remember { mutableStateOf(false) }
         var editorReady by remember { mutableStateOf(false) }
         val jcefState by JcefRuntime.state.collectAsState()
+        val engines = DesktopEditorEngineFactory.shared
 
         LaunchedEffect(editorReady) {
             if (editorReady) {
@@ -66,7 +69,7 @@ fun main() {
 
             MaterialTheme {
                 DiffRegionSurface(
-                    jcefState = jcefState,
+                    factory = engines,
                     content = "fun main() {\n  println(\"before\")\n  println(\"after\")\n}\n",
                     path = "Smoke.kt",
                     ranges = listOf(DiffRegionRange(2, 3, "change")),

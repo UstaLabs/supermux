@@ -1,6 +1,7 @@
 package dev.supermux.desktop.host
 
 import androidx.compose.foundation.Image
+import dev.supermux.ui.widgets.qrBitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column

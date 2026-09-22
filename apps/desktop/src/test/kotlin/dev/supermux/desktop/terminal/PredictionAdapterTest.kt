@@ -9,7 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Exercises the desktop [PredictionAdapter] against a REAL headless JediTerm model + [MuxTtyConnector]
+ * Exercises the desktop [JediTermPredictionAdapter] against a REAL headless JediTerm model + [MuxTtyConnector]
  * (see [TermTestHarness]): every op is rendered by injecting ANSI escapes into the connector's FIFO,
  * which a real [com.jediterm.terminal.emulator.JediEmulator] drains and parses into the buffer — the
  * same path production uses. These tests own the adapter's op→escape translation and the JediTerm
@@ -24,7 +24,7 @@ import kotlin.test.assertEquals
 class PredictionAdapterTest {
 
     private val h = TermTestHarness()
-    private val adapter get() = PredictionAdapter(h.terminal, h.buffer, h.connector)
+    private val adapter get() = JediTermPredictionAdapter(h.terminal, h.buffer, h.connector)
 
     @AfterTest fun tearDown() = h.close()
 

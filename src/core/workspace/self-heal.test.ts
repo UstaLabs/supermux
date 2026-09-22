@@ -60,3 +60,28 @@ test("archived sessions are not healed", () => {
   insertSession(db, "s1", "old", "/w", "archived")
   expect(healSessionsWithoutWorkspace(db, ws)).toEqual([])
 })
+
+test("each healed row is passed to ensureProject", () => {
+  const { db, ws } = seed()
+  insertSession(db, "s1", "orphan", "/w")
+  db.run("UPDATE sessions SET repo_root = '/repo' WHERE id = 's1'")
+  const seen: Array<{ workdir: string; repo_root?: string; internal: boolean }> = []
+
+  healSessionsWithoutWorkspace(db, ws, (w) => { seen.push(w) })
+
+  expect(seen).toEqual([{ workdir: "/w", repo_root: "/repo", internal: false }])
+})
+
+test("an internal orphan is still healed with a workspace, but flagged internal to ensureProject", () => {
+  const { db, ws } = seed()
+  insertSession(db, "s1", "rpc-worker", "/w")
+  db.run("UPDATE sessions SET internal = 1 WHERE id = 's1'")
+  const seen: Array<{ workdir: string; repo_root?: string; internal: boolean }> = []
+
+  const healed = healSessionsWithoutWorkspace(db, ws, (w) => { seen.push(w) })
+
+  expect(healed).toEqual(["s1"])
+  expect(seen).toEqual([{ workdir: "/w", repo_root: undefined, internal: true }])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's1'").get() as any
+  expect(ws.getById(link.workspace_id)).toBeDefined()
+})

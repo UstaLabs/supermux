@@ -53,8 +53,12 @@ printf '#!/bin/sh\ncase "$1" in -V) echo "tmux 3.4";; esac\nexit 0\n' > "$FIXTUR
 chmod +x "$FIXTURE_DIR/stubbin/claude" "$FIXTURE_DIR/stubbin/tmux"
 
 cd "$REPO_ROOT"
+# Stage the Kotlin/Wasm web client into src/channels/web/static. Needs a JDK
+# 17+; cold it is minutes, warm it is seconds (Gradle up-to-date checks).
+# MUX_TEST_SKIP_WEB_BUILD=1 skips it for runs that never fetch the web shell
+# (the native-client Maestro lanes).
 if [ "${MUX_TEST_SKIP_WEB_BUILD:-0}" != "1" ]; then
-  (cd src/web-app && bun run build)
+  ( cd apps && ./gradlew :web:stageForBroker --console=plain )
 fi
 
 PORT="$(bun -e 'const listener=Bun.listen({hostname:"127.0.0.1",port:0,socket:{data(){}}}); console.log(listener.port); listener.stop(true)')"

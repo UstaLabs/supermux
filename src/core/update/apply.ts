@@ -2,7 +2,7 @@
 //
 // Two layers:
 //   • applyUpdate(manifest)  — pure-ish, fully testable. Takes a manifest
-//     EXPLICITLY and applies channels.stable as-is. It does NOT fetch
+//     EXPLICITLY and applies the build's channel (see channelFor) as-is. It does NOT fetch
 //     versions.json — the caller decides which manifest to trust.
 //   • resolveAndApply(url)   — the caller-facing helper for the CLI/API. It
 //     ALWAYS re-fetches a fresh versions.json itself (10s timeout) and never
@@ -48,7 +48,7 @@
 //   acquire is retried once.
 import { chmodSync, closeSync, existsSync, linkSync, openSync, renameSync, statSync, unlinkSync } from "fs"
 import { dirname, join } from "path"
-import { isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
+import { channelFor, isUpdateAvailable, parseVersionsJson, type VersionsJson } from "./versions"
 import type { FetchLike } from "./checker"
 
 const TMP_NAME = `.supermux-update.${process.pid}.tmp`
@@ -173,7 +173,7 @@ function releaseSwapLock(fd: number, dir: string): void {
 }
 
 /**
- * Apply an update from an EXPLICIT manifest. Downloads channels.stable's asset
+ * Apply an update from an EXPLICIT manifest. Downloads the build's channel asset
  * for this arch, sha256-verifies the bytes on disk, then atomically swaps it in
  * (keeping the old binary at execPath+".prev"). The manifest is applied as-is;
  * coherence (does `latest` match a real asset?) is the caller's job to ensure by
@@ -181,6 +181,9 @@ function releaseSwapLock(fd: number, dir: string): void {
  */
 export async function applyUpdate(opts: {
   manifest: VersionsJson
+  // The running build's version: picks the channel (a prerelease build applies
+  // channels.alpha). Omitted → channels.stable.
+  currentVersion?: string
   execPathOverride?: string // tests ONLY; default process.execPath
   archAssetKey?: string // default from process.arch map; tests override
   fetchImpl?: FetchLike
@@ -206,7 +209,7 @@ export async function applyUpdate(opts: {
     assetKey = mapped
   }
 
-  const channel = opts.manifest.channels.stable
+  const channel = channelFor(opts.manifest, opts.currentVersion ?? "")
   const asset = channel.assets[assetKey]
   if (!asset) {
     return { ok: false, error: { kind: "asset-missing", key: assetKey } }
@@ -377,7 +380,7 @@ export async function applyUpdate(opts: {
 
 /**
  * Caller-facing apply for CLI/API. ALWAYS re-fetches a fresh versions.json (never
- * a cached/stale checker manifest), then applies channels.stable from that fresh
+ * a cached/stale checker manifest), then applies the build's channel from that fresh
  * truth. newVersion always reflects the FETCHED manifest, not any caller belief.
  */
 export async function resolveAndApply(opts: {
@@ -426,14 +429,15 @@ export async function resolveAndApply(opts: {
   //    NOTE: `already-current` also covers the remote version being OLDER than
   //    current (isUpdateAvailable is strictly remote > current). We never auto-
   //    apply a downgrade here; a deliberate downgrade goes through rollback().
-  const stable = manifest.channels.stable
-  if (!isUpdateAvailable(opts.currentVersion, stable.version)) {
+  const channel = channelFor(manifest, opts.currentVersion)
+  if (!isUpdateAvailable(opts.currentVersion, channel.version)) {
     return { ok: false, error: { kind: "already-current" } }
   }
 
   // 3. Apply the fresh manifest. onState forwards downloading/swapping.
   return applyUpdate({
     manifest,
+    currentVersion: opts.currentVersion,
     execPathOverride: opts.execPathOverride,
     archAssetKey: opts.archAssetKey,
     fetchImpl,

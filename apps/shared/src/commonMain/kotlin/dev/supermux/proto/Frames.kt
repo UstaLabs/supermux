@@ -216,6 +216,16 @@ fun ViewDto.stateString(key: String): String? =
 fun ViewDto.chatSessionId(): String? =
     if (kind == "chat") stateString("sessionId") else null
 
+/**
+ * The composer text typed into a PENDING chat tab (no session yet). It lives in the tab's own state
+ * so it syncs across devices and dies with the tab: the broker replaces the state with
+ * `{sessionId}` when it binds the tab, and closing the tab drops the row.
+ */
+fun ViewDto.pendingChatDraft(): String =
+    if (kind == "chat" && chatSessionId() == null) stateString(PENDING_CHAT_DRAFT_KEY).orEmpty() else ""
+
+const val PENDING_CHAT_DRAFT_KEY = "draftText"
+
 @Serializable
 data class WorkspaceDto(
     val id: String,
@@ -233,6 +243,29 @@ data class WorkspaceDto(
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("archived_at") val archivedAt: String? = null,
     val views: List<ViewDto> = emptyList(),
+    /**
+     * The persistent project this workspace's `repo_root ?: workdir` resolves to. Omitted by the
+     * broker when unresolved, and always absent from a broker older than persistent projects.
+     */
+    @SerialName("project_id") val projectId: String? = null,
+)
+
+/** One filesystem location a persistent project claims (broker-normalized absolute path). */
+@Serializable
+data class ProjectLocationDto(val id: String, val path: String)
+
+/**
+ * A persistent, broker-local project: user-owned name, optional image, manual order and one or
+ * more locations. Workspace membership is still computed from paths — see [WorkspaceDto.projectId].
+ */
+@Serializable
+data class ProjectDto(
+    val id: String,
+    val name: String,
+    @SerialName("image_id") val imageId: String? = null,
+    @SerialName("sort_order") val sortOrder: Int = 0,
+    @SerialName("created_at") val createdAt: String = "",
+    val locations: List<ProjectLocationDto> = emptyList(),
 )
 
 @Serializable
@@ -256,6 +289,28 @@ sealed interface ServerFrame {
         val workspaces: List<WorkspaceDto> = emptyList(),
         /** Archived workspaces for the desktop sidebar fold. Empty on older brokers. */
         val archivedWorkspaces: List<WorkspaceDto> = emptyList(),
+        /**
+         * Has the broker been through first-run setup? Sent on every snapshot
+         * (`src/channels/web/index.ts`); a broker too old to send it reads as `false`.
+         * Hosts that own a setup surface (the browser) gate the first-run wizard on it —
+         * see `HostStore.onboarded`, which distinguishes "no snapshot yet" as null.
+         */
+        val onboarded: Boolean = false,
+        /** Persistent project catalog. Empty from a broker older than persistent projects. */
+        val projects: List<ProjectDto> = emptyList(),
+        /** workspaceId → projectId for active AND archived workspaces. Empty on older brokers. */
+        val projectMembership: Map<String, String> = emptyMap(),
+    ) : ServerFrame
+
+    /**
+     * The project catalog or membership changed (any catalog mutation, or a workspace resolved
+     * to a different project). Full replacement of both: a workspace absent from
+     * [projectMembership] is unresolved.
+     */
+    @Serializable @SerialName("projects_changed")
+    data class ProjectsChanged(
+        val projects: List<ProjectDto> = emptyList(),
+        val projectMembership: Map<String, String> = emptyMap(),
     ) : ServerFrame
 
     @Serializable @SerialName("session_added")

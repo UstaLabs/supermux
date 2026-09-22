@@ -149,6 +149,9 @@ export function codexUsageFromRateLimits(rl: any, prev?: CodexUsage | null): Cod
   return {
     plan: String(plan),
     windows: [primary, secondary].filter((w): w is CodexUsageWindow => w != null),
+    // The CLI's own rate-limit telemetry carries no per-model gates, so keep the
+    // ones the last live fetch found instead of blanking the card's model rows.
+    models: prev?.models ?? [],
     credits,
     limitReached: limitReachedFrom(body),
     resetCredits,

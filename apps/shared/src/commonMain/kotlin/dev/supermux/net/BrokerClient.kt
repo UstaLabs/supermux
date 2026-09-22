@@ -5,7 +5,6 @@ import dev.supermux.proto.ServerFrame
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.client.request.header
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CancellationException
@@ -56,7 +55,7 @@ class BrokerClient(
                 val wsUrl = wsBaseUrl(baseUrl)
                 http.webSocket(
                     urlString = "$wsUrl/ws",
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { bearer(token) },
                 ) {
                     attempt = 0
                     println("[BrokerClient] connected")

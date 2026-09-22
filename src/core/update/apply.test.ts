@@ -677,6 +677,55 @@ describe("resolveAndApply — fresh fetch + stale-manifest guard", () => {
 
 // ── restartViaLaunchd / restartService: false-path (not service-managed) ──────
 
+describe("resolveAndApply — release channels", () => {
+  const VERSIONS_URL = "https://supermux.test/versions.json"
+  const stableUrl = "https://dl.test/stable"
+  const alphaUrl = "https://dl.test/alpha"
+
+  // stable 0.11.36 plus an alpha train ahead of it, each with its own binary.
+  function serveBothChannels(): FetchLike {
+    const manifest = manifestFor({ version: "0.11.36", assetUrl: stableUrl, sha256: sha256Hex("STABLE") })
+    const alpha = manifestFor({ version: "0.12.0-alpha.3", assetUrl: alphaUrl, sha256: sha256Hex("ALPHA") })
+    const body = JSON.stringify({
+      ...manifest,
+      channels: { ...manifest.channels, alpha: alpha.channels.stable },
+    })
+    return serveBytes({
+      [VERSIONS_URL]: { body },
+      [stableUrl]: { body: "STABLE" },
+      [alphaUrl]: { body: "ALPHA" },
+    })
+  }
+
+  test("a stable build never applies the alpha", async () => {
+    writeFileSync(fakeExec, "OLD-CURRENT")
+    const result = await resolveAndApply({
+      url: VERSIONS_URL,
+      currentVersion: "0.11.36",
+      execPathOverride: fakeExec,
+      archAssetKey: "linux-x64",
+      fetchImpl: serveBothChannels(),
+    })
+    expect(result).toEqual({ ok: false, error: { kind: "already-current" } })
+    expect(await readFileText(fakeExec)).toBe("OLD-CURRENT")
+  })
+
+  test("an alpha build applies the alpha channel's binary", async () => {
+    writeFileSync(fakeExec, "OLD-CURRENT")
+    const result = await resolveAndApply({
+      url: VERSIONS_URL,
+      currentVersion: "0.12.0-alpha.1",
+      execPathOverride: fakeExec,
+      archAssetKey: "linux-x64",
+      fetchImpl: serveBothChannels(),
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.newVersion).toBe("0.12.0-alpha.3")
+    expect(await readFileText(fakeExec)).toBe("ALPHA")
+  })
+})
+
 describe("restartViaLaunchd", () => {
   const saved = process.env.XPC_SERVICE_NAME
   afterEach(() => {

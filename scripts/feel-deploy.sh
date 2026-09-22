@@ -20,7 +20,7 @@
 #   swap    — preview-broker live-port swap (disruptive; needs detached unit)
 #
 # Clients:
-#   --android / --ios / --mac / --web
+#   --android / --ios / --web
 #   (default if none: --android when a device is present, else resolve-only)
 set -euo pipefail
 
@@ -44,7 +44,6 @@ QUERY=""
 BACKEND=auto
 DO_ANDROID=0
 DO_IOS=0
-DO_MAC=0
 DO_WEB=0
 RESOLVE_ONLY=0
 STOP_SHADOW=0
@@ -62,9 +61,8 @@ while [[ $# -gt 0 ]]; do
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --android) DO_ANDROID=1; shift ;;
     --ios) DO_IOS=1; shift ;;
-    --mac) DO_MAC=1; shift ;;
     --web) DO_WEB=1; shift ;;
-    --all-clients) DO_ANDROID=1; DO_IOS=1; DO_MAC=1; shift ;;
+    --all-clients) DO_ANDROID=1; DO_IOS=1; shift ;;
     --resolve-only) RESOLVE_ONLY=1; shift ;;
     --stop-shadow) STOP_SHADOW=1; shift ;;
     --connect) CONNECT="${2:-}"; shift 2 ;;
@@ -124,7 +122,6 @@ fi
 has_backend=0
 has_android=0
 has_ios=0
-has_mac=0
 has_web=0
 if git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   # Prefer merge-base with base branch tip if available
@@ -144,26 +141,25 @@ if git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     case "$f" in
-      src/web-app/*|src/channels/web/static/*) has_web=1 ;;
+      apps/web/*|apps/ui/*|apps/shared/*|src/channels/web/static/*) has_web=1 ;;
       src/*) has_backend=1 ;;
-      apps/android/*|apps/shared/*) has_android=1; has_ios=1; has_mac=1 ;;
-      apps/iosApp/*) has_ios=1; has_mac=1 ;;
-      apps/desktop/*) has_mac=1 ;;
-      apps/shared/*) has_android=1; has_ios=1; has_mac=1 ;;
+      apps/android/*|apps/shared/*) has_android=1; has_ios=1 ;;
+      apps/iosApp/*) has_ios=1 ;;
+      apps/shared/*) has_android=1; has_ios=1 ;;
     esac
   done <<<"$files"
 fi
-log "change map: backend=$has_backend android=$has_android ios=$has_ios mac=$has_mac web=$has_web"
+log "change map: backend=$has_backend android=$has_android ios=$has_ios web=$has_web"
 
 # default clients
-if [[ $DO_ANDROID -eq 0 && $DO_IOS -eq 0 && $DO_MAC -eq 0 && $DO_WEB -eq 0 ]]; then
+if [[ $DO_ANDROID -eq 0 && $DO_IOS -eq 0 && $DO_WEB -eq 0 ]]; then
   if command -v adb >/dev/null && adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{ok=1} END{exit !ok}'; then
     DO_ANDROID=1
     log "default target: android (device attached)"
   else
     log "no client flags and no adb device — resolving only"
     echo "workdir=$workdir branch=$branch"
-    echo "hint: re-run with --android / --ios / --mac and optionally --backend shadow"
+    echo "hint: re-run with --android / --ios and optionally --backend shadow"
     exit 0
   fi
 fi
@@ -220,11 +216,21 @@ if [[ $DO_ANDROID -eq 1 ]]; then
 fi
 
 if [[ $DO_WEB -eq 1 ]]; then
-  log "building web static in worktree"
-  if [[ ! -d "$workdir/src/web-app/node_modules" && -d "$MAIN_ROOT/src/web-app/node_modules" ]]; then
-    ln -sfn "$MAIN_ROOT/src/web-app/node_modules" "$workdir/src/web-app/node_modules"
+  log "staging Kotlin/Wasm web client in worktree"
+  # A cold worktree would re-download the whole Gradle + Kotlin/Wasm toolchain
+  # and re-run the yarn install that backs the wasm test/dist plumbing. Share
+  # both with the main checkout, exactly like the old node_modules symlink did:
+  #   • GRADLE_USER_HOME — the dependency cache (default ~/.gradle, already
+  #     shared unless the caller overrode it; make that explicit).
+  #   • apps/build/wasm/node_modules — the Kotlin/Wasm npm tree, symlinked when
+  #     the worktree has none of its own.
+  export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+  if [[ ! -e "$workdir/apps/build/wasm/node_modules" && -d "$MAIN_ROOT/apps/build/wasm/node_modules" ]]; then
+    mkdir -p "$workdir/apps/build/wasm"
+    ln -sfn "$MAIN_ROOT/apps/build/wasm/node_modules" "$workdir/apps/build/wasm/node_modules"
   fi
-  ( cd "$workdir/src/web-app" && bun ./node_modules/vite/bin/vite.js build ) \
+  command -v java >/dev/null || die "web build needs a JDK 17+ on PATH for :web:stageForBroker"
+  ( cd "$workdir/apps" && ./gradlew :web:stageForBroker --console=plain ) \
     || die "web build failed"
   if [[ "$BACKEND" == "none" ]]; then
     log "web static built in worktree — for LIVE serve, also build in $MAIN_ROOT or use --backend shadow/swap"
@@ -247,25 +253,6 @@ if [[ $DO_IOS -eq 1 ]]; then
     || die "iOS build failed on mac"
   log "iOS build OK. Install with: ssh mac 'xcrun devicectl device install app --device <id> $REMOTE_DIR/apps/iosApp/build/dd/Build/Products/Debug-iphoneos/Supermux.app'"
   log "Or re-run with a connected phone UDID once wireless CoreDevice is up."
-fi
-
-if [[ $DO_MAC -eq 1 ]]; then
-  log "macOS app: using mac-app-run style sync from worktree"
-  if [[ -x "$MAIN_ROOT/scripts/mac-app-run.sh" ]]; then
-    # mac-app-run always tars the CWD root — run from worktree by temporarily
-    # pointing it via env override if we add one; for now rsync + remote build.
-    REMOTE_DIR="~/supermux-feel-mac"
-    tar -C "$workdir" --exclude .git --exclude 'apps/shared/build' --exclude 'apps/iosApp/build' \
-        --exclude node_modules -czf - . \
-      | ssh mac "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR && tar -xzf - -C $REMOTE_DIR"
-    ssh mac "source ~/ios-build-env.sh 2>/dev/null; cd $REMOTE_DIR/apps/iosApp && xcodegen generate && \
-      xcodebuild -scheme SupermuxMac -destination 'platform=macOS,arch=arm64' \
-        -derivedDataPath build/dd-mac CODE_SIGNING_ALLOWED=NO build && \
-      codesign --force --sign - --deep build/dd-mac/Build/Products/Debug/Supermux.app && \
-      pkill -x Supermux 2>/dev/null || true; open build/dd-mac/Build/Products/Debug/Supermux.app"
-  else
-    die "mac-app-run.sh missing"
-  fi
 fi
 
 log "FEEL DEPLOY DONE"

@@ -1,26 +1,17 @@
 import SwiftUI
-import Shared
+// The iOS app links ONE Kotlin framework, SupermuxKit, which re-exports :shared; linking Shared as
+// well would embed the :shared klib twice — two Kotlin runtimes, two copies of every object.
+import SupermuxKit
 
 @main
 struct SupermuxApp: App {
-    // UIKit/AppKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
+    // UIKit AppDelegate (push/APNs) adapted into the SwiftUI lifecycle. The delegate
     // requests notification authorization + registers for remote notifications on
     // launch (if paired), and orchestrates relay/broker push registration.
-    #if os(iOS)
     @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
-    #else
-    @NSApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
-    #endif
-    @State private var paired: Bool
-    @AppStorage("appearance") private var appearance = "system"
-    #if os(macOS)
-    @StateObject private var macHost: MacHostCoordinator
-    @State private var macManualPairing = false
-    @State private var macSetupChecked: Bool
-    @State private var macNeedsOnboarding = false
-    @State private var macOpenNewSessionAfterOnboarding = false
-    @State private var introVisible: Bool
-    #endif
+    // Drives `IosAppState.foreground`, which the shared shell reads to suppress viewing presence
+    // (and so keep pushes coming) while the app is in the background.
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // Crash guard FIRST, before any networking: ktor-darwin surfaces WS/connection
@@ -35,235 +26,65 @@ struct SupermuxApp: App {
         if let t = env["SM_PAIR_TOKEN"], let b = env["SM_PAIR_BASE"], !t.isEmpty, !b.isEmpty {
             BrokerConfig.pair(PairToken(baseURL: b, token: t))
         }
-        // Multi-host storage (spec §3.2): run the one-time single-host → PairedHost[0] migration at
-        // launch, AFTER any debug/env auto-pair above so a freshly-seeded token migrates too
-        // (mirrors Android's MainActivity ordering). Existing paired users land in the shared
-        // multi-host `PairedHostStore` with ZERO re-pairing; the live connection still runs from
-        // BrokerConfig for now (the fleet-list UI that reads the store is a later task).
-        #if os(macOS)
-        let persistHostState = MacHostPolicy.shouldPersist()
-        if persistHostState { HostStore.migrateFromLegacyIfNeeded() }
-        let initiallyPaired = persistHostState && BrokerConfig.isPaired
-        // Headless interaction checks can exercise the real onboarding hierarchy without
-        // clearing the developer's pairing or changing production state. Inert unless set.
-        let forceOnboarding = env["SM_FORCE_ONBOARDING"] == "1"
-        _paired = State(initialValue: initiallyPaired)
-        _macSetupChecked = State(initialValue: forceOnboarding || !initiallyPaired)
-        _macNeedsOnboarding = State(initialValue: forceOnboarding && initiallyPaired)
-        // First-run intro cinematic — once ever, never in seeded dev runs (see IntroPolicy).
-        _introVisible = State(initialValue: IntroPolicy.shouldShow())
-        #else
-        HostStore.migrateFromLegacyIfNeeded()
-        _paired = State(initialValue: BrokerConfig.isPaired)
-        #endif
-        #if os(macOS)
-        let nativeHost = MacHostCoordinator.live()
-        _macHost = StateObject(wrappedValue: nativeHost)
-        // Hosting is an application lifecycle responsibility, not a window lifecycle task.
-        // macOS may restore zero windows after a prior close; the local broker must still start.
-        if MacHostPolicy.shouldAutostart() {
-            Task { @MainActor in await nativeHost.start() }
-        }
-        // Headless feel-test eyes (SM_SNAPSHOT=1) — see DebugSnapshot.swift.
-        DebugSnapshot.startIfEnabled()
-        #endif
-        #if os(iOS)
+        // No `HostStore.migrateFromLegacyIfNeeded()` here: the Kotlin root owns the ONE
+        // `PairedHostStore` in the process (`IosHostStores`) and runs the single-host → PairedHost[0]
+        // migration itself at construction, AFTER the env seed above (which writes the LEGACY pairing,
+        // exactly what Kotlin's migration then folds in). Doing it here as well would build a SECOND
+        // store over the same Keychain items — two in-memory copies of the fleet, each overwriting
+        // the other's saves.
         // Start the WatchConnectivity channel so a paired Apple Watch gets the broker
         // credentials (pushed on activation + whenever they change below).
         PhoneWatchProvisioner.shared.activate()
-        #endif
     }
 
     var body: some Scene {
-        WindowGroup {
-            Group {
-                // XCUITest / feel-test: real SessionStatusRail UI without pairing or broker.
-                // Launch with SM_UITEST_RAIL_FIXTURE=1 (see SupermuxMacUITests/SessionListRailUITests).
-                if ProcessInfo.processInfo.environment["SM_UITEST_RAIL_FIXTURE"] == "1" {
-                    SessionListRailUIFixtureView()
-                } else if paired, let base = BrokerConfig.baseURL {
-                    #if os(macOS)
-                    if !macSetupChecked {
-                        ProgressView("Checking setup…")
-                            .controlSize(.large)
-                            .task { await checkMacOnboarding() }
-                    } else if macNeedsOnboarding {
-                        macWizard
-                    } else {
-                        pairedRoot(base: base)
-                    }
-                    #else
-                    pairedRoot(base: base)
-                    #endif
-                } else {
-                    #if os(macOS)
-                    if macManualPairing {
-                        PairingView { _ in
-                            paired = true
-                            macSetupChecked = true
-                            macNeedsOnboarding = false
-                            PushManager.shared.registerIfPaired()
-                        }
-                    } else {
-                        macWizard
-                    }
-                    #else
-                    OnboardingView { _ in
-                        paired = true
-                        PhoneWatchProvisioner.shared.pushCurrent()
-                        PushManager.shared.registerIfPaired()
-                    }
-                    #endif
+        // The Compose shell: the MAIN scene, whose content is the shared `SupermuxApp` root inside
+        // a navigation controller (see ComposeRootView). Deliberately absent, compared with the
+        // SwiftUI shell this replaced:
+        //  - `.preferredColorScheme` — Compose owns appearance now, reading `appearance:mode` from
+        //    the shared settings store. Leaving it would let SwiftUI force a scheme the Compose
+        //    theme disagrees with, and the two would fight on every change.
+        //  - the pairing gate — `MainViewController` runs the shared intro/pairing flow itself, so
+        //    Swift no longer decides what "paired" means.
+        WindowGroup(id: SceneWindows.mainGroupId) {
+            ComposeRootView()
+                // Compose draws to the very edges and pads for the safe areas itself, through
+                // `WindowInsets.safeDrawing` in the shared shell.
+                .ignoresSafeArea()
+                // How Kotlin opens the extra windows below (`SceneWindows`).
+                .modifier(ExtraWindowOpener())
+                .onOpenURL { url in
+                    // Handing over the raw string rather than parsing here: `PairUrl.parse` is
+                    // shared code and already handles both `supermux://pair?...` and a pasted
+                    // https link, with the stored base URL as the fallback.
+                    IosAppState.shared.setOpenedUrl(url: url.absoluteString)
                 }
-            }
-            .onOpenURL { url in
-                // Deep-link pairing: supermux://pair?t=TOKEN&base=https%3A%2F%2Fhost
-                // (also lets the test harness inject a token via `simctl openurl`).
-                if let p = deepLinkPair(url)
-                    ?? PairToken.parse(url.absoluteString, fallbackBaseURL: BrokerConfig.baseURL) {
-                    BrokerConfig.pair(p)
-                    paired = true
-                    #if os(macOS)
-                    macSetupChecked = true
-                    macNeedsOnboarding = false
-                    #endif
-                    #if os(iOS)
-                    PhoneWatchProvisioner.shared.pushCurrent()
-                    #endif
-                    PushManager.shared.registerIfPaired()
+                .onChange(of: scenePhase) { _, phase in
+                    // `!= .background`, deliberately not `== .active`. This drives viewing
+                    // presence (spec §11): while it is false the broker treats the user as away
+                    // and keeps sending pushes for the chat on screen. Android's equivalent is
+                    // ON_START/ON_STOP — VISIBILITY, which does not end when a system overlay
+                    // steals focus — and iOS's `.inactive` is exactly that set of moments:
+                    // Notification Center or Control Center pulled down, an incoming call banner,
+                    // the app switcher on its way up, plus the instant of every transition. Using
+                    // `.active` would report "not looking" while the user is plainly reading the
+                    // chat, and the broker would push a notification for a message on screen.
+                    IosAppState.shared.setForeground(value: phase != .background)
                 }
-            }
-            .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
-            #if os(macOS)
-            // The Mac is always the wide multi-pane workspace (`isRegularWidth` is a constant),
-            // so there's no compact fallback — floor the window so the panes can't be crushed.
-            .frame(minWidth: 1100, minHeight: 700)
-            // First-run intro cinematic ("The Manifesto", Intro/ManifestoIntroView.swift): covers
-            // the wizard/workspace as an overlay so the exit fade is a real reveal, not a cut.
-            .overlay {
-                if introVisible {
-                    ManifestoIntroView(onFinished: {
-                        introVisible = false
-                        IntroPolicy.markSeen()
-                    })
-                }
-            }
-            #endif
         }
-        // Menu-bar commands + default size on the main window (separate `#if` from the second
-        // scene below: one `#if` can't both append postfix modifiers here AND introduce a
-        // sibling `WindowGroup` — the parser reads the whole block as a postfix chain).
-        #if os(macOS)
-        .commands {
-            // File ▸ New Session (⌘N). Replaces the default "New" item; posts a notification
-            // that RootView routes to the launcher (menu commands can't reach a view binding).
-            // No SidebarCommands(): the mac shell is a NavigationStack with a CUSTOM sidebar
-            // toggled by ⌘B (WorkspaceShortcuts), so the standard Toggle Sidebar item —
-            // which needs a NavigationSplitView to act on — would be a dead menu entry.
-            CommandGroup(replacing: .newItem) {
-                Button("New Session") {
-                    NotificationCenter.default.post(name: .smNewSession, object: nil)
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                Divider()
-                Button("Pair New Device…") {
-                    NotificationCenter.default.post(name: .smPairNewDevice, object: nil)
-                }
-            }
-            TextEditingCommands()
-        }
-        .defaultSize(width: 1440, height: 900)
-        #endif
 
-        // A detached window per opened session (⌃-click a row ▸ Open in New Window). Each
-        // window owns its own BrokerSession — the web-tab model, where every window is an
-        // independent broker client (the broker fans out to N clients).
-        #if os(macOS)
-        WindowGroup(id: "session", for: String.self) { $sessionId in
-            if let sessionId {
-                SessionWindow(sessionId: sessionId)
-            }
+        // iPad: a pane moved out of the main window ("Move to New Window") into a window of its
+        // own. The value is the window's claim — which views it shows — so iPadOS restores the
+        // window with it. See `IosWindows.kt`. An iPhone never opens one (one window per app).
+        WindowGroup(id: SceneWindows.groupId, for: String.self) { $claim in
+            ExtraWindowView(claim: $claim)
+                .ignoresSafeArea()
+                // Installed here too: a launch can restore ONLY an extra window, and its "Open
+                // supermux" must still reach `openWindow`.
+                .modifier(ExtraWindowOpener())
         }
-        .defaultSize(width: 1000, height: 760)
-
-        // The native Settings window (adds Supermux ▸ Settings… + ⌘, automatically).
-        Settings {
-            MacSettingsWindow()
-        }
-        #endif
-    }
-
-    @ViewBuilder
-    private func pairedRoot(base: String) -> some View {
-        // RootView owns the multi-host `Fleet` (built from `HostStore.shared`); the
-        // primary host's URL keys the view identity so a re-pair to a different broker
-        // rebuilds the fleet. Added hosts don't change `base`, so the fleet stays live.
-        RootView(startWithNewSession: shouldStartWithNewSession, onUnpair: {
-            BrokerConfig.unpair()
-            HostStore.forgetAll()
-            paired = false
-        })
-        .id(base)
-        #if os(macOS)
-        .task {
-            macOpenNewSessionAfterOnboarding = false
-            if MacHostPolicy.shouldAutostart(), macHost.state == .idle { await macHost.start() }
-        }
-        #endif
-    }
-
-    #if os(macOS)
-    private var macWizard: some View {
-        MacHostWizard(
-            coordinator: macHost,
-            onContinue: {
-                macOpenNewSessionAfterOnboarding = true
-                paired = BrokerConfig.isPaired
-                macSetupChecked = true
-                macNeedsOnboarding = false
-            },
-            onConnectManually: { macManualPairing = true }
-        )
-    }
-
-    /// A local pair is persisted as soon as the host is prepared so onboarding REST calls
-    /// can authenticate. Ask the broker whether setup actually finished before showing RootView;
-    /// this resumes a wizard that was interrupted after Welcome instead of silently skipping it.
-    private func checkMacOnboarding() async {
-        guard let base = BrokerConfig.baseURL, let token = BrokerConfig.token else {
-            macNeedsOnboarding = true
-            macSetupChecked = true
-            return
-        }
-        let broker = BrokerSession(baseURL: base, token: token)
-        for _ in 0..<20 {
-            if let config = await broker.config() {
-                macNeedsOnboarding = !config.onboarded
-                macSetupChecked = true
-                return
-            }
-            try? await Task.sleep(nanoseconds: 500_000_000)
-        }
-        // Preserve access for an already-paired but temporarily offline host. RootView will
-        // reconnect normally; we only force onboarding when the broker confirms it is pending.
-        macNeedsOnboarding = false
-        macSetupChecked = true
-    }
-    #endif
-
-    private var shouldStartWithNewSession: Bool {
-        #if os(macOS)
-        macOpenNewSessionAfterOnboarding
-        #else
-        false
-        #endif
+        // Pair links and other URLs belong to the main window, never to an extra one.
+        .handlesExternalEvents(matching: [])
     }
 }
 
-private func deepLinkPair(_ url: URL) -> PairToken? {
-    guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
-          let t = c.queryItems?.first(where: { $0.name == "t" })?.value, !t.isEmpty,
-          let base = c.queryItems?.first(where: { $0.name == "base" })?.value, !base.isEmpty
-    else { return nil }
-    return PairToken(baseURL: base, token: t)
-}

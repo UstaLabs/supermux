@@ -18,7 +18,9 @@ const PREVIEW_MAX = 120
 
 /** Derive the watch's extra row fields from the agent state, the session's last log
  *  entry, and its server-side read pointer. Pure; unit-tested. `unread` uses the same
- *  string-timestamp comparison as the web unread store (src/web-app/src/stores/unread.ts). */
+ *  string-timestamp comparison as the retired Vue PWA's unread store
+ *  (retired Vue PWA; see git history before 2026-09-12) and as shared Kotlin's `Unread.kt`:
+ *  ISO timestamps compare as strings because the broker always emits UTC `…Z` form. */
 export function watchRowExtras(
   state: { phase?: string; tool?: string; waiting?: boolean; bgOpen?: number } | undefined,
   last: { ts?: string; direction?: string; text?: string } | undefined,

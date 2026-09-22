@@ -28,8 +28,8 @@ const ChannelSchema = z.object({
   publishedAt: z.string(),
   notesUrl: z.string(),
   // record over arbitrary string keys (linux-x64 / linux-arm64 today, more later;
-  // also android / desktop-linux / desktop-windows / desktop-macos /
-  // compose-desktop-macos for client installers)
+  // also android / desktop-linux / desktop-windows / compose-desktop-macos for
+  // client installers)
   assets: z.record(z.string(), AssetSchema),
   // Per-client marketing versions (independent of the broker/release tag). Optional for
   // backward-compat with older versions.json that only listed broker assets.
@@ -40,6 +40,9 @@ export const VersionsJsonSchema = z.object({
   schemaVersion: z.number(),
   channels: z.object({
     stable: ChannelSchema,
+    // Opt-in prerelease train (vX.Y.Z-alpha.N tags). Optional: absent until the first alpha
+    // ships. Builds released before this field existed strip it on parse and never see it.
+    alpha: ChannelSchema.optional(),
   }),
 })
 
@@ -111,7 +114,7 @@ function compareNumericCore(a: number[], b: number[]): -1 | 0 | 1 {
  * Compare two version strings.
  *  - Numeric dotted cores compared segment-wise (missing trailing segs = 0).
  *  - A `-prerelease` suffix ranks BELOW the same release (0.2.0-rc.1 < 0.2.0).
- *  - Two prereleases of the same core compare lexicographically as a tiebreak.
+ *  - Two prereleases of the same core compare by semver identifier rules (alpha.2 < alpha.10).
  *  - Unparseable / "dev" ranks lowest of all (and two unparseables are equal).
  */
 export function compareVersions(a: string, b: string): -1 | 0 | 1 {
@@ -130,10 +133,49 @@ export function compareVersions(a: string, b: string): -1 | 0 | 1 {
   if (pa.prerelease === null && pb.prerelease === null) return 0
   if (pa.prerelease === null) return 1 // a is the release, b is prerelease → a > b
   if (pb.prerelease === null) return -1 // a is prerelease, b is release → a < b
-  // Both prereleases: lexicographic tiebreak.
-  if (pa.prerelease < pb.prerelease) return -1
-  if (pa.prerelease > pb.prerelease) return 1
-  return 0
+  return comparePrerelease(pa.prerelease, pb.prerelease)
+}
+
+/**
+ * semver §11: dot-separated identifiers, numeric ones compared as numbers (alpha.2 <
+ * alpha.10), numeric below alphanumeric, and a shorter list below a longer one it prefixes.
+ */
+function comparePrerelease(a: string, b: string): -1 | 0 | 1 {
+  const as = a.split(".")
+  const bs = b.split(".")
+  const len = Math.min(as.length, bs.length)
+  for (let i = 0; i < len; i++) {
+    const x = as[i]!
+    const y = bs[i]!
+    const xNumeric = /^[0-9]+$/.test(x)
+    const yNumeric = /^[0-9]+$/.test(y)
+    if (xNumeric && yNumeric) {
+      const d = Number(x) - Number(y)
+      if (d !== 0) return d < 0 ? -1 : 1
+    } else if (xNumeric !== yNumeric) {
+      return xNumeric ? -1 : 1
+    } else if (x !== y) {
+      return x < y ? -1 : 1
+    }
+  }
+  if (as.length === bs.length) return 0
+  return as.length < bs.length ? -1 : 1
+}
+
+/** Does `version` carry a prerelease suffix (0.12.0-alpha.1)? False for "dev"/unparseable. */
+export function isPrerelease(version: string): boolean {
+  const parsed = parseVersion(version)
+  return parsed !== null && parsed.prerelease !== null
+}
+
+/**
+ * The channel a build follows, decided by its OWN version: a prerelease build follows
+ * channels.alpha, everything else follows channels.stable. Opting in to the alpha is
+ * installing an alpha build; a stable build can never be offered one.
+ */
+export function channelFor(manifest: VersionsJson, currentVersion: string): VersionChannel {
+  if (isPrerelease(currentVersion) && manifest.channels.alpha) return manifest.channels.alpha
+  return manifest.channels.stable
 }
 
 /**

@@ -21,9 +21,14 @@
 #   2. A `shared` (KMP) change fans out to every client that consumes it.
 #
 # Deliberately NOT here — they belong in a PR-only / nightly workflow:
-#   Android emulator, iOS simulator, packaged-app install smoke, and the heavier
-#   Playwright journeys. The core PWA journey is cheap and hermetic, so it runs
-#   below against scripts/test-broker.sh.
+#   Android emulator, iOS simulator, packaged-app install smoke.
+#
+# The one exception to "no expensive lanes": the browser journey. Since the web
+# client became a Kotlin/Wasm Compose app, scripts/test-broker.sh stages it with
+# Gradle (~10 min cold, seconds warm), so the `ui` lane is no longer cheap — it
+# carries a JDK + the Gradle cache. It stays because it is the ONLY thing that
+# exercises the real web client at all, and it is gated on a `ts` OR `web` diff
+# so unrelated pushes don't pay for it.
 name: ci
 
 on:
@@ -50,6 +55,7 @@ jobs:
       android: ${{ steps.f.outputs.android }}
       desktop: ${{ steps.f.outputs.desktop }}
       ios: ${{ steps.f.outputs.ios }}
+      web: ${{ steps.f.outputs.web }}
       wire: ${{ steps.f.outputs.wire }}
     steps:
       - uses: actions/checkout@v4
@@ -72,18 +78,34 @@ jobs:
               - 'apps/gradle/**'
             android:
               - 'apps/android/**'
+            # The browser client: :ui compiled to Kotlin/Wasm and staged into
+            # src/channels/web/static. `apps/ui` and `apps/shared` are most of
+            # what it compiles, and `apps/gradle` pins the toolchain, so any of
+            # the four can change what the browser journey actually runs.
+            web:
+              - 'apps/web/**'
+              - 'apps/ui/**'
+              - 'apps/shared/**'
+              - 'apps/gradle/**'
             desktop:
               - 'apps/desktop/**'
               - 'apps/ui/**'
             ios:
               - 'apps/iosApp/**'
+              # The Kotlin half of the iOS app, which this lane could not see before. `apps/ios` is
+              # the SupermuxKit framework module and ALL of `apps/ui` links into it — commonMain
+              # most of all, not just the iOS actuals — so a change to either can break the iOS
+              # build without touching a single Swift file. (`apps/shared` already reaches this
+              # lane through the `wire` filter below.)
+              - 'apps/ios/**'
+              - 'apps/ui/**'
             # The protocol seam. Any touch here runs every lane — see rule 1.
             wire:
               - 'src/shared/**'
               - 'apps/shared/src/commonMain/kotlin/dev/supermux/proto/**'
               - '.github/workflows/ci.yml'
 
-  # ── TypeScript: broker, channels, shim, relay, CLI, and the PWA's logic ─────
+  # ── TypeScript: broker, channels, shim, relay, CLI ─────────────────────────
   ts:
     needs: changes
     if: >-
@@ -94,15 +116,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      # Both manifests: 441 test files span the broker AND src/web-app, and a
-      # missing node_modules turns ~100 of them into "Cannot find package"
-      # failures rather than an honest red.
-      # --frozen-lockfile on both: a floating root install made CI non-reproducible
-      # (a different vue-tsc/typescript resolution failed the PWA build on a file
-      # that compiles clean locally), so bun.lock is committed at the root now too.
+      # --frozen-lockfile: a floating install made CI non-reproducible (a
+      # different typescript resolution failing a file that compiles clean
+      # locally), so bun.lock is committed at the root.
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: src/web-app
 
       # --isolate gives each test file a fresh global. Without it, the
       # process-global `mock.module` in tests/spawn-opencode.test.ts leaks into
@@ -120,22 +137,13 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # Separate from the broker typecheck above, and separate from the ui lane's
-      # build: vue-tsc shells out to `node`, so on a machine without node it exits
-      # 127 and `bun run build` reports success having checked nothing. That is how
-      # 11 real PWA type errors reached dev. Node is guaranteed on a runner, so this
-      # step is the one place the PWA is actually type-checked.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Typecheck PWA
-        run: ./node_modules/.bin/vue-tsc --noEmit
-        working-directory: src/web-app
-
       # Core package: tsc + dist build, then Node 22 smoke of the built dist via
       # examples/custom-driver.mjs (self-import of this workspace's dist, not a
       # packed tarball consumer). bun test --isolate already discovers
       # packages/supermux-core/tests — do not add a second core test run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Typecheck core package
         run: bun run typecheck:core
       - name: Build core package
@@ -144,20 +152,28 @@ jobs:
         run: node examples/custom-driver.mjs
         working-directory: packages/supermux-core
 
-  # ── PWA journey: real browser + broker + shim, all on throwaway state ──────
+  # ── Browser journey: real browser + broker + shim, all on throwaway state ──
+  # NOT a cheap lane: `bun run test:ui` → scripts/test-broker.sh → Gradle
+  # `:web:stageForBroker`, which compiles the Kotlin/Wasm Compose client. That is
+  # ~10 min cold and seconds warm, so the JDK + Gradle cache below are
+  # load-bearing, and the `if` gates it on a web OR ts diff.
   ui:
     needs: changes
     if: >-
       github.event_name == 'pull_request' ||
       needs.changes.outputs.ts == 'true' ||
+      needs.changes.outputs.web == 'true' ||
       needs.changes.outputs.wire == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: src/web-app
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
       - name: Ensure a Playwright browser is available
         run: command -v google-chrome >/dev/null 2>&1 || bunx playwright install --with-deps chromium
       - name: Core browser journey
@@ -194,6 +210,15 @@ jobs:
       # Caching is load-bearing, not an optimization: a cold run of these tasks
       # measured 4m23s locally, which is too slow for a push lane.
       - uses: gradle/actions/setup-gradle@v4
+      # compileSdk 37 (forced by Compose Multiplatform 1.12's androidx AAR metadata). android-37.0
+      # is only published on the sdkmanager BETA channel today, hence --channel=1.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
 
       # Skiko (Compose Desktop's renderer) needs an X display even for the
       # "headless" in-process UI tests — without one, SessionDetailTest dies with
@@ -204,6 +229,18 @@ jobs:
 
       # :shared and :desktop always run together — :desktop depends on :shared,
       # so splitting them buys nothing and pays the Gradle startup cost twice.
+      # BLOCKING since cluster G8: the screens are in :ui (0 duplicate basenames / 0 conceptual
+      # twins), so a new split screen is a build failure rather than a warning nobody reads.
+      - name: KMP sharing guardrail
+        run: bash scripts/check-no-duplicate-kt.sh
+
+      # Cluster H6 made Compose the only iOS shell, and the native macOS SwiftUI app that kept the
+      # old screens alive was retired after it. Nothing in Xcode stops a SwiftUI screen being
+      # re-added under the iOS target's source directory and silently compiled into the phone app
+      # again — this does.
+      - name: iOS shell cutover guardrail
+        run: bash scripts/check-ios-shell-cutover.sh
+
       - name: Shared + desktop (JVM, incl. Compose Desktop UI tests)
         working-directory: apps
         run: xvfb-run -a ./gradlew :shared:jvmTest :ui:jvmTest :desktop:test --build-cache --console=plain
@@ -258,6 +295,15 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
+      # compileSdk 37 (forced by Compose Multiplatform 1.12's androidx AAR metadata). android-37.0
+      # is only published on the sdkmanager BETA channel today, hence --channel=1.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The action's default ("tools platform-tools") fails on current runners: the
+          # sdkmanager it installs has no `tools` package any more.
+          packages: platform-tools
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
       - run: bun install --frozen-lockfile
 
       # The runner user is not in the kvm group by default. Without hardware
@@ -348,13 +394,31 @@ jobs:
         working-directory: apps/iosApp
         run: |
           set -o pipefail
+          # No `-sdk`: it would force the EMBEDDED watchOS app and the two extensions onto the
+          # iOS simulator SDK, and the watch app then compiles its watch-only AppIcon for iPhone
+          # ("did not have any applicable content") and fails the build.
+          #
+          # Ad-hoc signing (`CODE_SIGN_IDENTITY=-`) rather than CODE_SIGNING_ALLOWED=NO: the app
+          # declares an App Group, and an unsigned build has no entitlements, so it CRASHES at
+          # launch when the container URL comes back nil. Ad-hoc keeps the entitlement without
+          # needing an identity a fork does not have.
+          #
+          # The two -skip flags: SwiftTerm ships a build-tool plugin from 1.20.0, and xcodebuild
+          # otherwise refuses to run it without interactive validation.
           xcodebuild \
             -scheme Supermux \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
             -derivedDataPath build/dd-ios-test \
             -resultBundlePath build/ios-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             test
 
       - name: Upload xcresult

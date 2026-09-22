@@ -6,7 +6,7 @@ dist/
 *.pid
 .worktrees/
 
-# Web PWA build output (cd src/web-app && bun run build)
+# Web client build output (cd apps && ./gradlew :web:stageForBroker)
 src/channels/web/static/
 
 # Internal planning/spec docs (kept local, never published)
@@ -17,10 +17,6 @@ docs/superpowers/
 # A committed apps/android/google-services.json.example is the template to copy from.
 apps/android/google-services.json
 
-# Native macOS direct-host helpers are staged release artifacts, never source.
-apps/iosApp/Supermux/HostResources/supermux-broker
-apps/iosApp/Supermux/HostResources/frpc
-apps/iosApp/Supermux/HostResources/tmux
 __pycache__/
 
 # graphify knowledge graph. graphify-out/ IS committed on purpose — the graph is

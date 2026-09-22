@@ -1,0 +1,50 @@
+{
+  "name": "supermux-cm6-bundle",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone build for the committed CodeMirror 6 bundle used by the Android WebView editor.",
+  "scripts": {
+    "build": "bun build cm6-entry.mjs --outfile ../src/main/assets/editor/cm6.js --target browser --format iife --minify"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "6.20.2",
+    "@codemirror/commands": "6.10.3",
+    "@codemirror/lang-cpp": "6.0.3",
+    "@codemirror/lang-css": "6.3.1",
+    "@codemirror/lang-go": "6.0.1",
+    "@codemirror/lang-html": "6.4.11",
+    "@codemirror/lang-java": "6.0.2",
+    "@codemirror/lang-javascript": "6.2.5",
+    "@codemirror/lang-json": "6.0.2",
+    "@codemirror/lang-markdown": "6.5.0",
+    "@codemirror/lang-php": "6.0.2",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/lang-rust": "6.0.2",
+    "@codemirror/lang-sql": "6.10.0",
+    "@codemirror/lang-vue": "0.1.3",
+    "@codemirror/lang-wast": "6.0.2",
+    "@codemirror/lang-xml": "6.1.0",
+    "@codemirror/lang-yaml": "6.1.3",
+    "@codemirror/language": "6.12.3",
+    "@codemirror/legacy-modes": "6.5.3",
+    "@codemirror/lint": "6.9.6",
+    "@codemirror/lsp-client": "6.2.4",
+    "@codemirror/search": "6.7.0",
+    "@codemirror/state": "6.6.0",
+    "@codemirror/theme-one-dark": "6.1.3",
+    "@codemirror/view": "6.43.0"
+  },
+  "overrides": {
+    "@lezer/css": "1.3.3",
+    "@lezer/java": "1.1.3",
+    "@lezer/markdown": "1.6.3",
+    "@lezer/php": "1.0.5",
+    "@lezer/python": "1.1.18",
+    "crelt": "1.0.6",
+    "@marijn/find-cluster-break": "1.0.2",
+    "vscode-languageserver-protocol": "3.17.5",
+    "vscode-languageserver-types": "3.17.5",
+    "vscode-jsonrpc": "8.2.0"
+  }
+}

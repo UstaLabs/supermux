@@ -3,8 +3,9 @@ package dev.supermux.session
 import dev.supermux.proto.SessionInfo
 
 /**
- * Web parity for the New Session launcher's default project selection
- * (`src/web-app/src/lib/default-project.ts` + `recent-projects.ts`).
+ * Web parity for the New Session launcher's default project selection, ported from the
+ * retired Vue PWA's default-project + recent-projects helpers
+ * (retired Vue PWA; see git history before 2026-09-12).
  *
  * Before the user engages we follow the most-recently-used project (by session
  * activity). Once they pick a path or start composing, the selection freezes so

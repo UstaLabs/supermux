@@ -1,0 +1,181 @@
+// The one collapsed sessions rail.
+//
+//   - Glyphs come from compose.materialIconsExtended (ic_chevron_right → Icons.Filled.ChevronRight,
+//     ic_plus → Icons.Filled.Add), which both apps already ship.
+//   - The status-bar inset is consumed unconditionally. The rail is drawn edge-to-edge wherever
+//     the platform HAS a status bar — a phone AND a tablet/unfolded foldable, which is in fact
+//     the only place Android renders it — so gating it on a width class would put the chevron
+//     under the system bar on exactly the devices that show it. Desktop reports an empty inset,
+//     so this is a no-op there. [statusBarInset] exists to make the inset testable.
+//   - `pointerHoverIcon(PointerIcon.Hand)` on the tappable avatars is a mouse affordance and a
+//     no-op on touch.
+//   - No collapse chip on the rail itself. Collapse is a title-bar toggle (macOS, expanded only) /
+//     View ▸ Show Sidebar / Ctrl+B on desktop and the sidebar divider's chip on Android; expanding
+//     when collapsed is this rail's chevron.
+package dev.supermux.ui.shell
+
+import dev.supermux.ui.TestIds
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import dev.supermux.ui.session.SessionAvatar
+import dev.supermux.ui.session.SessionStatusRail
+import dev.supermux.ui.theme.Space
+import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.SessionInfo
+import dev.supermux.session.sessionListShowsUnread
+import dev.supermux.session.sessionsByUserOrder
+
+/**
+ * Slim (~64dp) collapsed sidebar shown in place of the session list when the shell's sidebar is
+ * collapsed. Top: an expand chevron ([onExpand]) and a "+"
+ * new-session button ([onNewSession]); below, a vertical scrollable column of session
+ * [SessionAvatar]s. Tapping one calls [onSelect]; the active session is ringed. Each avatar carries
+ * its [SessionStatusRail] status at the bottom-end corner (working spinner / unread green / git).
+ *
+ * @param statusBarInset the inset the rail's top padding consumes. Defaults to the real status
+ *   bar (empty on desktop); a test injects a synthetic one to prove the rail sits below it.
+ */
+@Composable
+fun SessionsRail(
+    sessions: List<SessionInfo>,
+    selectedId: String?,
+    agentState: Map<String, AgentStatus?>,
+    onSelect: (String) -> Unit,
+    onExpand: () -> Unit,
+    onNewSession: () -> Unit,
+    lastBySession: Map<String, LogEntry?> = emptyMap(),
+    lastRead: Map<String, String> = emptyMap(),
+    statusBarInset: WindowInsets = WindowInsets.statusBars,
+    modifier: Modifier = Modifier,
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        modifier
+            .fillMaxHeight()
+            .width(64.dp)
+            .background(cs.surfaceContainerHigh)
+            .windowInsetsPadding(statusBarInset)
+            .padding(vertical = Space.sm),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        IconButton(onClick = onExpand, modifier = Modifier.testTag("rail_expand")) {
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = "Expand sidebar",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        IconButton(onClick = onNewSession, modifier = Modifier.testTag(TestIds.NEW_SESSION)) {
+            Icon(
+                imageVector = Icons.Filled.Add,
+                contentDescription = "New session",
+                tint = cs.primary,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Box(Modifier.width(28.dp).height(1.dp).background(cs.outlineVariant))
+        Column(
+            Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            Spacer(Modifier.height(Space.xs))
+            // sortOrder only — match the expanded list; messages must not reshuffle avatars.
+            sessionsByUserOrder(sessions).forEach { s ->
+                val working = agentState[s.id]?.working == true
+                val unread = sessionListShowsUnread(
+                    active = s.id == selectedId,
+                    working = working,
+                    lastMessageTs = lastBySession[s.id]?.ts,
+                    lastReadAt = lastRead[s.id],
+                )
+                RailSessionItem(
+                    session = s,
+                    selected = s.id == selectedId,
+                    working = working,
+                    unread = unread,
+                    onClick = { onSelect(s.id) },
+                )
+            }
+            Spacer(Modifier.height(Space.sm))
+        }
+    }
+}
+
+/** A single tappable avatar in the rail, ringed when [selected], with a corner status dot. */
+@Composable
+private fun RailSessionItem(
+    session: SessionInfo,
+    selected: Boolean,
+    working: Boolean,
+    unread: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(shape)
+            .background(if (selected) cs.surfaceContainerHighest else Color.Transparent)
+            .then(if (selected) Modifier.border(2.dp, cs.primary, shape) else Modifier)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onClick)
+            .testTag("rail_session_${session.id}"),
+        contentAlignment = Alignment.Center,
+    ) {
+        SessionAvatar(
+            name = session.name,
+            agent = session.agent,
+            size = 36.dp,
+            sessionId = session.id,
+        )
+        // Status (working spinner / unread green / git), badged over the avatar's bottom-end.
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .clip(CircleShape)
+                .background(cs.surfaceContainerHigh)
+                .padding(1.dp),
+        ) {
+            SessionStatusRail(git = session.git, working = working, unread = unread)
+        }
+    }
+}

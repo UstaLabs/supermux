@@ -9,10 +9,26 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readRemaining
+import io.ktor.utils.io.writer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
+import kotlinx.io.readByteArray
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+
+/**
+ * The multipart body as text — the only way to see a PART's own headers, which is where the
+ * recorded container's content-type has to land. Latin-1, because the audio bytes are not UTF-8.
+ */
+private suspend fun multipartText(req: HttpRequestData): String {
+    val content = req.body as OutgoingContent.WriteChannelContent
+    val channel = CoroutineScope(Dispatchers.Unconfined).writer { content.writeTo(channel) }.channel
+    return channel.readRemaining().readByteArray()
+        .joinToString("") { (it.toInt() and 0xFF).toChar().toString() }
+}
 
 /**
  * Covers the voice-dictation BrokerApi methods (transcribeDraft/transcribeAudio/
@@ -44,6 +60,27 @@ class BrokerApiVoiceTest {
             is OutgoingContent.ByteArrayContent -> c.bytes().decodeToString()
             else -> error("unexpected body type: ${c::class.simpleName}")
         }
+
+    @Test fun transcribe_audio_part_carries_the_recorded_container_mime() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"text":"spoken"}""", sink = reqs)
+
+        api.transcribeAudio("s1", byteArrayOf(1, 2, 3), "dictation.webm", "audio/webm;codecs=opus")
+
+        val text = multipartText(reqs.single())
+        assertTrue("audio/webm;codecs=opus" in text, text)
+        assertTrue("""name="audio"""" in text, text)
+        assertTrue("""filename="dictation.webm"""" in text, text)
+    }
+
+    @Test fun transcribe_audio_part_defaults_to_mp4_when_no_mime_is_passed() = runTest {
+        val reqs = mutableListOf<HttpRequestData>()
+        val api = captured(body = """{"text":"spoken"}""", sink = reqs)
+
+        api.transcribeAudio("s1", byteArrayOf(1, 2, 3), "voice.m4a")
+
+        assertTrue("audio/mp4" in multipartText(reqs.single()), "no default mime in the part")
+    }
 
     @Test fun transcribe_draft_posts_json_to_session_path() = runTest {
         val reqs = mutableListOf<HttpRequestData>()

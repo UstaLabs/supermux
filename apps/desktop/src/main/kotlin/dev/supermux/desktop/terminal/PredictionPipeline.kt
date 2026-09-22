@@ -6,7 +6,7 @@ import dev.supermux.net.PredictionEngine
 import dev.supermux.net.decodeInput
 
 /**
- * Bundles the predictive-echo engine + [PredictionAdapter] + keystroke→echo RTT clock for one
+ * Bundles the predictive-echo engine + [JediTermPredictionAdapter] + keystroke→echo RTT clock for one
  * terminal, so the connector's pre-send input tap and the output collector can reach an
  * engine/adapter built AFTER the widget exists. Faithful port of Android's `PredictionPipeline`
  * (TerminalPanel.kt:307-372); the platform swaps are the [attach] signature (widget + connector
@@ -42,7 +42,7 @@ class PredictionPipeline(
     private val lock = Any()
 
     private var engine: PredictionEngine? = null
-    private var adapter: PredictionAdapter? = null
+    private var adapter: JediTermPredictionAdapter? = null
 
     // nowMs of the last keystroke still awaiting its echo (0 = none). Bootstraps the latency gate
     // from a real keystroke->echo RTT, INDEPENDENTLY of the prediction path — without it the gate
@@ -51,15 +51,15 @@ class PredictionPipeline(
     private var lastKeyAt = 0L
 
     /** Build the engine + adapter once the widget exists (mirror Android/iOS `attach`). The adapter
-     *  reads cursor/cells through JediTerm's PUBLIC model, so it is always [PredictionAdapter.available]
+     *  reads cursor/cells through JediTerm's PUBLIC model, so it is always [JediTermPredictionAdapter.available]
      *  — but we keep Android's `if (!available)` shape so the two ports stay line-for-line comparable. */
     fun attach(widget: JediTermWidget, connector: MuxTtyConnector) {
-        attachAdapter(PredictionAdapter(widget.terminal, widget.terminalTextBuffer, connector))
+        attachAdapter(JediTermPredictionAdapter(widget.terminal, widget.terminalTextBuffer, connector))
     }
 
     /** Seam shared by [attach] and tests (which pass a throwing/spy adapter). Keeps the engine null
      *  when the adapter is unavailable (dead branch on desktop, live on Android). */
-    internal fun attachAdapter(a: PredictionAdapter) {
+    internal fun attachAdapter(a: JediTermPredictionAdapter) {
         synchronized(lock) {
             lastKeyAt = 0L
             if (!a.available) {

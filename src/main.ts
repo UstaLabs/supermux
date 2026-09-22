@@ -13,6 +13,9 @@ import { handleSlash } from "./core/commands"
 import { Registry, type ProxyEntry } from "./core/session-manager/registry"
 import { WorkspaceService } from "./core/workspace/service"
 import { workspaceDto, viewDto } from "./core/workspace/dto"
+import type { WorkspaceRecord } from "./core/workspace/types"
+import { ProjectService } from "./core/project/service"
+import { ProjectImages } from "./core/project/images"
 import { propagateSessionRename } from "./core/workspace/name"
 import { makeReadAdvancer } from "./core/session-manager/read-status"
 import { ProxyLivenessMonitor, type ProxyStatus } from "./core/proxy/liveness"
@@ -156,7 +159,7 @@ import { LoginManager } from "./core/agents/login/manager"
 import { loginSpawnCommands } from "./core/agents/login/spawn-command"
 import { claudeCliIsAuthenticated } from "./core/agents/claude/auth"
 import { getRepoInfo } from "./core/git/repo-info"
-import { createWorktree, ensureWorktreeAt, type WorktreeHandle } from "./core/worktree/manager"
+import { createWorktree, ensureWorktreeAt, worktreesRoot, type WorktreeHandle } from "./core/worktree/manager"
 import { startFinishJob, getFinishJob, clearFinishJob, type FinishJob, type FinishJobOpts, type FinishAction } from "./core/worktree/finish-job"
 import { computeReadiness, type FinishReadiness } from "./core/worktree/readiness"
 import { suggestVerify } from "./core/worktree/verify-suggest"
@@ -257,7 +260,31 @@ const registry = new Registry(db)
 // A heal logs at warn — it means a crash between the session insert and the
 // workspace insert, not a normal path. Called once at startup, never from the
 // Registry constructor.
-registry.healWorkspaces()
+// Persistent projects (spec 2026-09-21). Membership is computed from paths on
+// every read; only registration and the catalog mutations write.
+const projectService = new ProjectService(registry.projects, {
+  home: home(),
+  managedWorktreesRoot: worktreesRoot(),
+  images: new ProjectImages(join(STATE_DIR, "project-images")),
+})
+registry.healWorkspaces((w) => {
+  // An internal session (e.g. an rpc-worker) still gets its workspace healed —
+  // that's a normal, hidden shape — but must never gain a project: its
+  // workspace is filtered out of every user-facing listing (listWorkspaces
+  // below), so a project for it would be an invisible/empty group.
+  if (w.internal) return
+  try { projectService.ensureLocation(w) }
+  catch (err) { log.error("project_register_failed", { workdir: w.workdir, err: String(err) }) }
+})
+// After the heal, so healed rows are registered even if the heal callback failed.
+// Registers every location left unknown by legacy creation paths (and the first-run
+// backfill). Normal reads never reconcile.
+try {
+  const created = projectService.reconcile(registry.db)
+  if (created.length) log.info("projects_reconciled", { created: created.length })
+} catch (err) {
+  log.error("projects_reconcile_failed", { err: String(err) })
+}
 const reviewStore = new ReviewStore(db)
 const walkthroughStore = new WalkthroughStore(db)
 const settings = new SettingsStore(db)
@@ -1125,9 +1152,32 @@ const workspaceService = new WorkspaceService(
     stopDisplay: async (id) => {
       await displayManager.stop(id)
     },
+    // Inside createForSession's transaction: a throw aborts the workspace insert.
+    // Internal sessions (rpc-workers) never register a project — see the
+    // matching comment on healWorkspaces above.
+    ensureProject: (w) => {
+      if (w.internal) return
+      if (projectService.ensureLocation(w)?.created) projectCatalogDirty = true
+    },
   },
   registry.db,
 )
+
+/**
+ * Set when a workspace creation registered a NEW project. The creator checks it
+ * after the transaction commits and broadcasts projects_changed, so a rolled-back
+ * creation never announces a project that does not exist.
+ */
+let projectCatalogDirty = false
+
+/**
+ * projects_changed: every project plus active AND archived membership. The frame is
+ * built by the web channel from the listProjectCatalog/getProjectMembership opts, so
+ * this and the catalog routes can never disagree on its shape.
+ */
+function broadcastProjects(): void {
+  webChannel?.broadcastProjects()
+}
 
 /**
  * Archive a workspace once nothing live remains in it.
@@ -1154,9 +1204,22 @@ function archiveWorkspaceIfEmpty(workspaceId: string): void {
   webChannel?.broadcastToAll({ type: "workspace_removed", id: workspaceId })
 }
 
+/** Ids of every session marked internal (e.g. an rpc-worker). Workspaces and
+ * projects owned by one of these are hidden from every user-facing listing. */
+const internalSessionIds = (): Set<string> =>
+  new Set(
+    (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
+      .map((r) => r.id),
+  )
+/** A workspace is user-visible unless its primary session is internal. */
+const isVisibleWorkspace = (w: { primary_session_id?: string | null }, internal: Set<string>) =>
+  !w.primary_session_id || !internal.has(w.primary_session_id)
+
+const toWsDto = (w: WorkspaceRecord) =>
+  workspaceDto(w, registry.workspaces.listViews(w.id), projectService.resolve(w))
 const wsDto = (id: string) => {
   const w = registry.workspaces.getById(id)
-  return w ? workspaceDto(w, registry.workspaces.listViews(id)) : undefined
+  return w ? toWsDto(w) : undefined
 }
 const fsWatcher = new FsWatcher()
 
@@ -1543,10 +1606,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
           joinWorkspaceId = undefined
         }
         if (joinWorkspaceId) {
-          workspaceService.addChatSession(joinWorkspaceId, entry.id)
+          workspaceService.addChatSession(joinWorkspaceId, entry.id, args.viewId?.trim() || undefined)
           const dto = wsDto(joinWorkspaceId)
           if (dto) webChannel?.broadcastToAll({ type: "workspace_changed", workspace: dto })
         } else {
+          projectCatalogDirty = false
           const ws = workspaceService.createForSession({
             sessionId: entry.id,
             name: entry.name,
@@ -1555,11 +1619,11 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             base_branch: entry.base_branch || undefined,
             branch: entry.session_branch || undefined,
             sort_order: entry.sort_order,
+            internal: entry.internal,
           })
-          webChannel?.broadcastToAll({
-            type: "workspace_added",
-            workspace: workspaceDto(ws, registry.workspaces.listViews(ws.id)),
-          })
+          // Catalog first, so the client knows the project the workspace points at.
+          if (projectCatalogDirty) { projectCatalogDirty = false; broadcastProjects() }
+          webChannel?.broadcastToAll({ type: "workspace_added", workspace: toWsDto(ws) })
         }
       }
       await refreshTelegramMenu()
@@ -1590,8 +1654,23 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         // Continue / spawn first turn: deliver AFTER session_added so the
         // client already has the row when message_append lands. spawnSession
         // has already waited for a persistent agent to connect.
+        // The launcher's first turn may carry files (uploaded before the spawn);
+        // those go through the same log+deliver tail as a WS `send`.
         const first = args.firstMessage?.trim()
-        if (first) {
+        if (args.firstAttachments?.length) {
+          const messageId = `spawn-${Date.now()}`
+          await routeWebInbound({
+            channel: "web",
+            chat_id: "web",
+            message_id: messageId,
+            user: args.device ?? "web",
+            user_id: args.device ?? "web",
+            ts: new Date().toISOString(),
+            text: first,
+            target_session_id: entry.id,
+            attachments: args.firstAttachments,
+          })
+        } else if (first) {
           const delivered = await deliverUserMessage(entry.id, first)
           if (!delivered.ok) {
             log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
@@ -1792,19 +1871,22 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       // does via registry.listVisible() (`filter(s => !s.internal)`). Without this
       // the rpc-worker sessions — invisible in the session sidebar since forever —
       // reappear as workspace rows, which is what the user hit.
-      const internal = new Set(
-        (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
-          .map((r) => r.id),
-      )
+      const internal = internalSessionIds()
       return registry.workspaces
         .list()
-        .filter((w) => !w.primary_session_id || !internal.has(w.primary_session_id))
-        .map((w) => workspaceDto(w, registry.workspaces.listViews(w.id)))
+        .filter((w) => isVisibleWorkspace(w, internal))
+        .map(toWsDto)
     },
     getWorkspace: (id) => wsDto(id),
     createWorkspace: async (args) => {
-      const ws = registry.workspaces.create({ name: args.name ?? "Workspace", workdir: args.workdir })
-      return workspaceDto(ws, [])
+      // One transaction: a failed registration leaves no workspace behind.
+      const { ws, created } = registry.db.transaction(() => {
+        const reg = projectService.ensureLocation({ workdir: args.workdir })
+        return { ws: registry.workspaces.create({ name: args.name ?? "Workspace", workdir: args.workdir }), created: !!reg?.created }
+      })()
+      // The route broadcasts workspace_added after this returns; the catalog goes first.
+      if (created) broadcastProjects()
+      return toWsDto(ws)
     },
     patchWorkspace: (id, patch) => {
       // byUser: true is deliberate — a rename on this HTTP route came from a
@@ -1824,17 +1906,33 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return dto
     },
     listArchivedWorkspaces: () => {
-      const internal = new Set(
-        (registry.db.query("SELECT id FROM sessions WHERE internal = 1").all() as Array<{ id: string }>)
-          .map((r) => r.id),
-      )
+      const internal = internalSessionIds()
       return registry.workspaces
         .list({ includeArchived: true })
         .filter((w) => w.status === "archived")
-        .filter((w) => !w.primary_session_id || !internal.has(w.primary_session_id))
-        .map((w) => workspaceDto(w, registry.workspaces.listViews(w.id)))
+        .filter((w) => isVisibleWorkspace(w, internal))
+        .map(toWsDto)
     },
     reorderWorkspaces: (orderedIds) => registry.workspaces.reorder(orderedIds),
+    // Project catalog. The routes broadcast projects_changed after each mutation.
+    listProjectCatalog: () => projectService.list(),
+    // Membership input excludes internal workspaces for consistency — they're
+    // not sent to clients anyway (see listWorkspaces/listArchivedWorkspaces
+    // above), and a resolved membership entry for one would be dead data.
+    getProjectMembership: () => {
+      const internal = internalSessionIds()
+      return projectService.membership(
+        registry.workspaces.list({ includeArchived: true }).filter((w) => isVisibleWorkspace(w, internal)),
+      )
+    },
+    createProject: (name) => projectService.create(name),
+    renameProject: (id, name) => projectService.rename(id, name),
+    reorderProjects: (ids) => projectService.reorder(ids),
+    addProjectLocation: (id, path) => projectService.addLocation(id, path),
+    moveProjectLocation: (locationId, projectId) => projectService.moveLocation(locationId, projectId),
+    setProjectImage: (id, bytes, mime) => projectService.setImage(id, bytes, mime),
+    clearProjectImage: (id) => projectService.clearImage(id),
+    projectImageFile: (id) => projectService.imageFile(id),
     addWorkspaceView: (workspaceId, args) => {
       const v = registry.workspaces.addView(workspaceId, {
         id: args.id, kind: args.kind as any, state: args.state as any, title: args.title, groupId: args.groupId,
@@ -1846,6 +1944,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       return v ? viewDto(v) : undefined
     },
     patchWorkspaceView: (viewId, patch) => {
+      // A bound chat tab never goes back to pending: a late launcher-draft PATCH
+      // ({draft}) racing the spawn that bound it must not wipe its sessionId.
+      const before = registry.workspaces.getView(viewId)
+      if (patch.state !== undefined && before?.kind === "chat"
+          && (before.state as { sessionId?: string } | null)?.sessionId
+          && !(patch.state as { sessionId?: string } | null)?.sessionId) {
+        throw new Error("chat view is already bound to a session")
+      }
       if (patch.title !== undefined) registry.workspaces.setViewTitle(viewId, patch.title)
       if (patch.state !== undefined) registry.workspaces.setViewState(viewId, patch.state as any)
       const v = registry.workspaces.getView(viewId)
@@ -2777,6 +2883,40 @@ messageLog.on("reaction", (sessionId, entry_id, emoji, ts) => {
 // "remove" and "rename" listeners removed — we no longer broadcast remove on kill,
 // and messages reference UUIDs so renaming doesn't affect them
 
+/**
+ * Log + deliver one web turn to a live session — the tail of the WS `send` path,
+ * shared with the spawn's broker-owned first message so both record and route a
+ * turn (text AND attachments) identically.
+ */
+function routeWebInbound(msg: InboundMessage): Promise<void> {
+  return handleWebInbound(msg, {
+    messageLog,
+    hasSession: (id) => !!registry.get(id),
+    // The app sent to a session the broker does not have — it was killed or
+    // archived while that client was away. There is no session to hang a
+    // message on, so this stays a log line. The app is what must not send
+    // into a session it no longer has.
+    replyNoSuchSession: async (chat_id, sessionId) => {
+      log.warn("web_inbound_no_session", { chat_id, sessionId })
+    },
+    deliver: async (sid, text, meta) => {
+      const sessionEntry = registry.get(sid)
+      const sessionId = sessionEntry?.id ?? sid
+      log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      try {
+        const r = await deliverInbound(sessionId, text, meta)
+        if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
+      } catch (err: any) {
+        const msgText = err?.message ?? String(err)
+        log.error("web_inbound_adapter_failed", { sid, err: msgText })
+        // Safety net for agents that throw from send() without emitting `error`
+        // (or when that event is missed) — show the real message to the user.
+        void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
+      }
+    },
+  })
+}
+
 // Wire web inbound → routing → shim
 if (webChannel) {
   webChannel.on("inbound", async (msg) => {
@@ -2866,32 +3006,7 @@ if (webChannel) {
       }
       inbound = { ...msg, target_session_id: started.id }
     }
-    handleWebInbound(inbound, {
-      messageLog,
-      hasSession: (id) => !!registry.get(id),
-      // The app sent to a session the broker does not have — it was killed or
-      // archived while that client was away. There is no session to hang a
-      // message on, so this stays a log line. The app is what must not send
-      // into a session it no longer has.
-      replyNoSuchSession: async (chat_id, sessionId) => {
-        log.warn("web_inbound_no_session", { chat_id, sessionId })
-      },
-      deliver: async (sid, text, meta) => {
-        const sessionEntry = registry.get(sid)
-        const sessionId = sessionEntry?.id ?? sid
-        log.info("web_inbound_routing", { sid, agent: sessionEntry?.agent ?? "claude" })
-        try {
-          const r = await deliverInbound(sessionId, text, meta)
-          if (!r.ok) log.warn("web_inbound_adapter_missing", { sid, agent: sessionEntry?.agent ?? "claude" })
-        } catch (err: any) {
-          const msgText = err?.message ?? String(err)
-          log.error("web_inbound_adapter_failed", { sid, err: msgText })
-          // Safety net for agents that throw from send() without emitting `error`
-          // (or when that event is missed) — show the real message to the user.
-          void notifyAgentError(sessionId, sessionEntry?.name ?? sid, "error", msgText)
-        }
-      },
-    })
+    void routeWebInbound(inbound)
   })
 }
 

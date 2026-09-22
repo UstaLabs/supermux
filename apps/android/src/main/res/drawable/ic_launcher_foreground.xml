@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Supermux launcher icon foreground: the MuxLogo glyph (three stacked chevron paths)
-  ported faithfully from src/web-app/src/components/MuxLogo.vue.
+  ported faithfully from the retired Vue PWA's MuxLogo component
+  (retired Vue PWA; see git history before 2026-09-12).
   Original SVG viewBox 0 0 1015 1015 with transform translate(165,70) translate(0,875) scale(0.1,-0.1)
   mapped to this 108x108 viewport.
 

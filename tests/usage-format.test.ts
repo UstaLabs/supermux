@@ -19,6 +19,7 @@ function makeCodex(): CodexUsage {
       { id: "primary", used: 2, resetsAt: Math.floor((Date.now() + 4 * 3_600_000 + 2 * 60_000) / 1000), label: "5-hour window", windowSeconds: 18000 },
       { id: "secondary", used: 73, resetsAt: Math.floor((Date.now() + 6 * 24 * 3_600_000) / 1000), label: "7-day window", windowSeconds: 604800 },
     ],
+    models: [],
     credits: { hasCredits: true, balance: "15.00" },
     limitReached: false,
     resetCredits: 0,
@@ -31,6 +32,7 @@ const codexFixture = (resetCredits: number): CodexUsage => ({
     { id: "primary", used: 10, resetsAt: null, label: "5-hour window", windowSeconds: 18000 },
     { id: "secondary", used: 5, resetsAt: null, label: "7-day window", windowSeconds: 604800 },
   ],
+  models: [],
   credits: null,
   limitReached: false,
   resetCredits,
@@ -142,6 +144,8 @@ test("formatUsageTelegram renders Grok credits", () => {
       onDemandCap: 0,
       onDemandUsed: 0,
       prepaidBalance: 0,
+      periodType: "monthly",
+      products: [],
       billingPeriodStart: new Date(Date.now() - 10 * 24 * 3_600_000).toISOString(),
       billingPeriodEnd: new Date(Date.now() + 20 * 24 * 3_600_000).toISOString(),
     },
@@ -151,4 +155,59 @@ test("formatUsageTelegram renders Grok credits", () => {
   expect(out).toContain("Grok (SuperGrokPro)")
   expect(out).toContain("13% used")
   expect(out).toContain("18750 / 150000")
+})
+
+test("formatUsageTelegram reports a locked Codex model and stays quiet about available ones", () => {
+  const codex: CodexUsage = {
+    ...codexFixture(0),
+    models: [
+      {
+        id: "gpt-6-astra",
+        label: "GPT-6 Astra",
+        available: false,
+        availableAt: Math.floor((Date.now() + 3 * 3_600_000) / 1000),
+        availableAtIso: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+        creditsWouldEnable: true,
+      },
+      {
+        id: "gpt-6-codex",
+        label: "GPT-6 Codex",
+        available: true,
+        availableAt: null,
+        availableAtIso: null,
+        creditsWouldEnable: false,
+      },
+    ],
+  }
+  const out = formatUsageTelegram({ claude: null, codex, cursor: null, opencode: null,
+    grok: null, errors: {} })
+  expect(out).toContain("GPT-6 Astra: locked · back in 3h")
+  expect(out).not.toContain("GPT-6 Codex")
+})
+
+test("formatUsageTelegram labels the Grok window weekly under unified billing", () => {
+  const out = formatUsageTelegram({
+    claude: null,
+    codex: null,
+    cursor: null,
+    opencode: null,
+    grok: {
+      plan: "GrokPro",
+      percentUsed: 70,
+      used: 3,
+      monthlyLimit: 0,
+      onDemandCap: 0,
+      onDemandUsed: 0,
+      prepaidBalance: 0,
+      periodType: "weekly",
+      products: [{ product: "GrokBuild", percentUsed: 70 }],
+      billingPeriodStart: new Date(Date.now() - 2 * 24 * 3_600_000).toISOString(),
+      billingPeriodEnd: new Date(Date.now() + 5 * 24 * 3_600_000).toISOString(),
+    },
+    errors: {},
+  })
+  expect(out).toContain("Grok (GrokPro)")
+  expect(out).toContain("Weekly: 70% used")
+  // monthlyLimit 0 under unified billing — no meaningless "3 / 0" credits row.
+  expect(out).not.toContain("Credits:")
 })

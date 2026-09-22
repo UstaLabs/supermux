@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.head
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
@@ -23,6 +24,7 @@ import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -72,6 +74,18 @@ data class PairClaimResult(
     val deviceToken: String = "",
     val name: String = "",
 )
+
+/** POST /pair/claim body with no secret — trust-on-first-connect from a browser. */
+@Serializable
+data class SecretlessClaimBody(val name: String)
+
+/**
+ * `POST /pair/claim` WITHOUT a secret (src/channels/web/index.ts:1741) — a different shape from
+ * [PairClaimResult]: no host, no bearer (the broker answers with a session cookie instead).
+ * `paired=false` + [error] is what a broker that already has a device says, via 403.
+ */
+@Serializable
+data class SecretlessClaimResult(val paired: Boolean = false, val name: String = "", val error: String? = null)
 
 @Serializable
 data class AppConfigDto(
@@ -180,6 +194,16 @@ data class SpawnRequest(
      * Phase 1b; the client simply had no field to send it in.
      */
     val workspaceId: String? = null,
+    /**
+     * The pending chat tab (a chat view with no sessionId yet) in [workspaceId] that this session
+     * fills. The broker binds that tab instead of adding a second chat view beside it.
+     */
+    val viewId: String? = null,
+    /**
+     * Already-uploaded file_ids that ride with [firstMessage]: the launcher uploads its staged
+     * files BEFORE the spawn so the broker owns the whole first turn (text + files).
+     */
+    val firstAttachments: List<String>? = null,
     /** Composer body when [userStatus] is draft (broker camelCase on POST body). */
     val draftPayload: DraftPayloadDto? = null,
     /**
@@ -255,6 +279,26 @@ data class MoveViewBody(
 
 @Serializable
 data class ReorderWorkspacesBody(val orderedIds: List<String>)
+
+/** GET /project-catalog */
+@Serializable
+data class ProjectCatalogResponse(val projects: List<ProjectDto> = emptyList())
+
+@Serializable
+data class ProjectNameBody(val name: String)
+
+@Serializable
+data class ReorderProjectsBody(val orderedIds: List<String>)
+
+@Serializable
+data class ProjectLocationBody(val path: String)
+
+@Serializable
+data class MoveProjectLocationBody(val projectId: String)
+
+/** The 409 body of POST /project-catalog/:id/locations. */
+@Serializable
+private data class ProjectLocationConflictBody(val error: String? = null, val projectId: String? = null)
 
 @Serializable
 data class SpawnResponse(
@@ -369,10 +413,26 @@ data class CodexWindow(
 @Serializable
 data class CodexCredits(val hasCredits: Boolean = false, val balance: String = "")
 
+/**
+ * A per-model gate from the payload's `model_usage` map (this is what shipped with the
+ * Astra models). Independent of the 5h/7d windows: a model can be locked while both
+ * windows still have room. [availableAt] is epoch SECONDS, like [CodexWindow.resetsAt].
+ */
+@Serializable
+data class CodexModelUsage(
+    val id: String = "",
+    val label: String = "",
+    val available: Boolean = false,
+    val availableAt: Double? = null,
+    val creditsWouldEnable: Boolean = false,
+)
+
 @Serializable
 data class CodexUsage(
     val plan: String = "",
     val windows: List<CodexWindow> = emptyList(),
+    /** Per-model gates; empty on a broker that predates `model_usage`. */
+    val models: List<CodexModelUsage> = emptyList(),
     val credits: CodexCredits? = null,
     val limitReached: Boolean = false,
     val resetCredits: Int = 0,
@@ -400,7 +460,15 @@ data class OpenCodeUsage(
     val cacheWriteTokens: Long = 0,
 )
 
-/** SuperGrok subscription credit pool from cli-chat-proxy `/billing`. */
+/** One row of Grok's `productUsage` breakdown (e.g. GrokBuild) under unified billing. */
+@Serializable
+data class GrokProductUsage(val product: String = "", val percentUsed: Double = 0.0)
+
+/**
+ * SuperGrok subscription credit pool from cli-chat-proxy `/billing`. Unified billing moved
+ * the quota to a WEEKLY window, so [periodType] names the cadence of the period below —
+ * "weekly" | "monthly" | "unknown", and "monthly" on a broker that predates the field.
+ */
 @Serializable
 data class GrokUsage(
     val plan: String = "",
@@ -410,6 +478,8 @@ data class GrokUsage(
     val onDemandCap: Double = 0.0,
     val onDemandUsed: Double = 0.0,
     val prepaidBalance: Double = 0.0,
+    val periodType: String = "monthly",
+    val products: List<GrokProductUsage> = emptyList(),
     val billingPeriodStart: String? = null,
     val billingPeriodEnd: String? = null,
 )
@@ -421,7 +491,10 @@ data class UsageResponse(
     val cursor: CursorUsage? = null,
     val opencode: OpenCodeUsage? = null,
     val grok: GrokUsage? = null,
-    val errors: Map<String, String> = emptyMap(),
+    /** Per-provider failure text. Values are nullable: the broker records a null for a provider
+     *  it could not reach without a message, and a null map VALUE is not something
+     *  `coerceInputValues` can rescue (it only defaults properties). */
+    val errors: Map<String, String?> = emptyMap(),
     /** ISO timestamp of when each provider's data was last obtained. Absent on older brokers. */
     val fetchedAt: Map<String, String?> = emptyMap(),
     /** live | agent | local | cache — where each provider's current data came from. */
@@ -949,6 +1022,13 @@ data class RunUpdateResult(
 
 class FsException(val status: Int, message: String) : Exception(message)
 
+/**
+ * POST /project-catalog/:id/locations answered 409: the path already belongs to [projectId].
+ * The UI offers to move that location instead (PATCH /project-catalog/locations/:locationId).
+ */
+class ProjectLocationConflict(val projectId: String) :
+    Exception("Location already belongs to project $projectId")
+
 // ─── Private request bodies ───────────────────────────────────────────────────
 
 @Serializable
@@ -1103,6 +1183,19 @@ private data class RegisterPushDeviceBody(
     val pubkey: String,
 )
 
+/** GET /push/vapid-public-key → `{publicKey}` (503 with no body field when unconfigured). */
+@Serializable
+private data class VapidKeyResponse(val publicKey: String? = null)
+
+/** The `keys` object of a W3C `PushSubscription.toJSON()`. */
+@Serializable
+private data class WebPushKeys(val p256dh: String, val auth: String)
+
+/** POST /push/subscribe body. Field ORDER is the wire shape the broker validates by name;
+ *  keep `endpoint` first and `keys` nested, never flattened. */
+@Serializable
+private data class WebPushSubscribeBody(val endpoint: String, val keys: WebPushKeys)
+
 /** POST /usage/refresh body. [force] is always encoded (the Kotlin default is true; the
  *  broker treats an omitted force as false). [providers] is omitted when null. */
 @Serializable
@@ -1150,12 +1243,27 @@ class BrokerApi(
 
     // explicitNulls=false: partial PATCH bodies (e.g. review-comment resolve) must OMIT unset
     // optional fields, not send them as JSON null — an explicit null would overwrite stored data.
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    //
+    // coerceInputValues=true (cluster E6): an explicit `null` on a non-nullable field falls back to
+    // that field's DEFAULT instead of throwing — the per-field leniency Android's hand-written
+    // usage parser had, and which the typed decode has to keep now that it replaced it (a broker
+    // sending `"plan": null` must not blank the entire Usage screen). It does not loosen type
+    // mismatches, and — the limit worth knowing — it can only rescue a property that HAS a
+    // default. Plenty of DTOs here deliberately declare none for the fields that IDENTIFY the row
+    // (`DeviceDto.name`, `ArchivedDto.id`/`name`, `ProxyDto.domain`, `DiffFile.path`, …, from
+    // `:120` onwards), because a record without them means nothing; an explicit null on one of
+    // those still fails that decode, which is the behaviour we want.
+    private val json = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        coerceInputValues = true
+    }
     internal var spawnTimeoutMillis: Long = 50_000
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private fun bearerHeader() = "Bearer $token"
+    /** This client's bearer, or nothing at all when the token is blank — see [bearer]. */
+    private fun HttpRequestBuilder.authHeader() = bearer(token)
 
     /**
      * Read [resp] into [T] WITHOUT ever aborting the app on failure.
@@ -1189,7 +1297,7 @@ class BrokerApi(
     }
 
     private suspend inline fun <reified T> getJson(url: String): T =
-        decode(http.get(url) { header("Authorization", bearerHeader()) })
+        decode(http.get(url) { authHeader() })
 
     /**
      * Fire-and-forget JSON mutations (POST/PUT/PATCH with no decoded body). Non-2xx MUST throw
@@ -1211,7 +1319,7 @@ class BrokerApi(
 
     private suspend inline fun <reified B> postJson(url: String, body: B) {
         ensureMutationSuccess(http.post(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1219,7 +1327,7 @@ class BrokerApi(
 
     private suspend inline fun <reified B> putJson(url: String, body: B) {
         ensureMutationSuccess(http.put(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1227,7 +1335,7 @@ class BrokerApi(
 
     private suspend inline fun <reified B> patchJson(url: String, body: B) {
         ensureMutationSuccess(http.patch(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1236,7 +1344,7 @@ class BrokerApi(
     /** POST a JSON body and decode the JSON response (for endpoints that return data). */
     private suspend inline fun <reified B, reified T> postReturningJson(url: String, body: B): T =
         decode(http.post(url) {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1308,6 +1416,37 @@ class BrokerApi(
     suspend fun pairClaim(claimSecret: String, deviceName: String): PairClaimResult =
         postReturningJson("$httpBase/pair/claim", PairClaimBody(claimSecret, deviceName))
 
+    /** POST /logout — expire the browser's `cmux_token` cookie. Native hosts never call it. */
+    suspend fun logout() {
+        http.post("$httpBase/logout") { authHeader() }
+    }
+
+    /**
+     * POST /pair/claim with NO claim secret — trust-on-first-connect on a brand-new broker. The
+     * broker answers `{paired:true,name}` and sets the session cookie; once any device exists (or
+     * onboarding finished) it answers 403 with `{error}`. Unlike every other call here a non-2xx
+     * is NOT a failure — "someone already owns this broker" is the answer the browser bootstrap
+     * asked for — so this one decodes the body itself instead of going through [decode].
+     */
+    suspend fun claimSecretless(deviceName: String): SecretlessClaimResult {
+        val res = http.post("$httpBase/pair/claim") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(SecretlessClaimBody(deviceName)))
+        }
+        val text = try {
+            res.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            println("[BrokerApi] secretless claim body unreadable: ${e.message?.take(160)}")
+            ""
+        }
+        return runCatching { json.decodeFromString<SecretlessClaimResult>(text) }
+            .getOrElse { SecretlessClaimResult(paired = false, error = "HTTP ${res.status.value}") }
+            .let { if (!res.status.isSuccess() && it.error == null) it.copy(paired = false, error = "HTTP ${res.status.value}") else it }
+    }
+
     /** GET /sessions/<id>/models */
     suspend fun models(id: String): ModelsResponse =
         getJson("$httpBase/sessions/$id/models")
@@ -1366,14 +1505,14 @@ class BrokerApi(
     /** DELETE /sessions/<id> */
     suspend fun kill(id: String) {
         http.delete("$httpBase/sessions/$id") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
     /** PATCH /sessions/reorder — renumber sort_order for a whole section (ordered ids). */
     suspend fun reorderSessions(orderedIds: List<String>) {
         http.patch("$httpBase/sessions/reorder") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(ReorderSessionsBody(orderedIds)))
         }
@@ -1386,7 +1525,7 @@ class BrokerApi(
     /** POST /workspaces */
     suspend fun createWorkspace(body: CreateWorkspaceBody): WorkspaceDto =
         decode(http.post("$httpBase/workspaces") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1394,7 +1533,7 @@ class BrokerApi(
     /** PATCH /workspaces/{id} — name, layout, or active view. */
     suspend fun patchWorkspace(id: String, body: PatchWorkspaceBody): WorkspaceDto =
         decode(http.patch("$httpBase/workspaces/$id") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1402,7 +1541,7 @@ class BrokerApi(
     /** DELETE /workspaces/{id} — archives it and its chat sessions. */
     suspend fun archiveWorkspace(id: String) {
         ensureMutationSuccess(http.delete("$httpBase/workspaces/$id") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1413,22 +1552,104 @@ class BrokerApi(
     /** POST /workspaces/{id}/restore — unarchives the workspace and resumes its chats. */
     suspend fun restoreWorkspace(id: String): WorkspaceDto =
         decode(http.post("$httpBase/workspaces/$id/restore") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
 
     /** PATCH /workspaces/reorder */
     suspend fun reorderWorkspaces(orderedIds: List<String>) {
         ensureMutationSuccess(http.patch("$httpBase/workspaces/reorder") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(ReorderWorkspacesBody(orderedIds)))
         })
     }
 
+    // ── Persistent project catalog ─────────────────────────────────────────────
+    // `GET /projects` stays the path-only listing; the persistent catalog lives under
+    // /project-catalog. Every mutation is also broadcast as a `projects_changed` frame.
+
+    /** GET /project-catalog */
+    suspend fun listProjectCatalog(): List<ProjectDto> =
+        getJson<ProjectCatalogResponse>("$httpBase/project-catalog").projects
+
+    /** POST /project-catalog — a new, location-less project. */
+    suspend fun createProject(name: String): ProjectDto =
+        postReturningJson("$httpBase/project-catalog", ProjectNameBody(name))
+
+    /** PATCH /project-catalog/{id} */
+    suspend fun renameProject(id: String, name: String): ProjectDto =
+        decode(http.patch("$httpBase/project-catalog/${urlEncode(id)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ProjectNameBody(name)))
+        })
+
+    /** PATCH /project-catalog/reorder — [orderedIds] index = new sort_order. */
+    suspend fun reorderProjects(orderedIds: List<String>) {
+        patchJson("$httpBase/project-catalog/reorder", ReorderProjectsBody(orderedIds))
+    }
+
+    /**
+     * POST /project-catalog/{id}/locations.
+     *
+     * @throws ProjectLocationConflict when the path already belongs to another project (409).
+     */
+    @Throws(ProjectLocationConflict::class, CancellationException::class)
+    suspend fun addProjectLocation(id: String, path: String): ProjectDto {
+        val resp = http.post("$httpBase/project-catalog/${urlEncode(id)}/locations") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ProjectLocationBody(path)))
+        }
+        if (resp.status.value == 409) {
+            val owner = runCatching {
+                json.decodeFromString<ProjectLocationConflictBody>(resp.bodyAsText()).projectId
+            }.getOrNull()
+            if (owner != null) throw ProjectLocationConflict(owner)
+        }
+        return decode(resp)
+    }
+
+    /** PATCH /project-catalog/locations/{locationId} — returns the TARGET project. */
+    suspend fun moveProjectLocation(locationId: String, projectId: String): ProjectDto =
+        decode(http.patch("$httpBase/project-catalog/locations/${urlEncode(locationId)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(MoveProjectLocationBody(projectId)))
+        })
+
+    /** PUT /project-catalog/{id}/image — raw bytes; [mime] is image/png|jpeg|webp|gif, ≤ 5 MB. */
+    suspend fun setProjectImage(id: String, bytes: ByteArray, mime: String): ProjectDto =
+        decode(http.put("$httpBase/project-catalog/${urlEncode(id)}/image") {
+            authHeader()
+            contentType(ContentType.parse(mime))
+            setBody(bytes)
+        })
+
+    /** DELETE /project-catalog/{id}/image */
+    suspend fun clearProjectImage(id: String): ProjectDto =
+        decode(http.delete("$httpBase/project-catalog/${urlEncode(id)}/image") {
+            authHeader()
+        })
+
+    /**
+     * GET /project-catalog/{id}/image. The `v` query is the current [ProjectDto.imageId], so a
+     * changed image is a new URL and busts any image cache. The endpoint is authenticated —
+     * load it with this client's bearer.
+     */
+    fun projectImageUrl(id: String, imageId: String): String =
+        "$httpBase/project-catalog/${urlEncode(id)}/image?v=${urlEncode(imageId)}"
+
+    /** GET [projectImageUrl] with this client's bearer — raw image bytes, null on non-2xx. */
+    suspend fun projectImageBytes(id: String, imageId: String): ByteArray? {
+        val resp = http.get(projectImageUrl(id, imageId)) { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
+    }
+
     /** POST /workspaces/{id}/views */
     suspend fun addView(workspaceId: String, body: AddViewBody): ViewDto =
         decode(http.post("$httpBase/workspaces/$workspaceId/views") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1436,7 +1657,7 @@ class BrokerApi(
     /** PATCH /workspaces/{wid}/views/{vid} */
     suspend fun patchView(workspaceId: String, viewId: String, body: PatchViewBody): ViewDto =
         decode(http.patch("$httpBase/workspaces/$workspaceId/views/$viewId") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1450,14 +1671,14 @@ class BrokerApi(
      */
     suspend fun closeView(workspaceId: String, viewId: String) {
         ensureMutationSuccess(http.delete("$httpBase/workspaces/$workspaceId/views/$viewId") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
     /** POST /views/{id}/move */
     suspend fun moveView(viewId: String, body: MoveViewBody) {
         ensureMutationSuccess(http.post("$httpBase/views/$viewId/move") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(body))
         })
@@ -1466,7 +1687,7 @@ class BrokerApi(
     /** POST /sessions */
     suspend fun spawn(req: SpawnRequest): SpawnResponse = withTimeout(spawnTimeoutMillis) {
         decode(http.post("$httpBase/sessions") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(req))
         })
@@ -1527,7 +1748,7 @@ class BrokerApi(
         onChunk: (ByteArray) -> Unit,
     ) {
         val resp = http.post("$httpBase/speak") {
-            header("Authorization", bearerHeader())
+            authHeader()
             header(HttpHeaders.Accept, "application/x-ndjson")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(SpeakBody(text = text, engine = engine, lang = lang)))
@@ -1572,7 +1793,7 @@ class BrokerApi(
      * an intentionally blank soul — critical so a failed load never becomes a blank Save.
      */
     suspend fun getSoul(): String {
-        val resp = http.get("$httpBase/settings/soul") { header("Authorization", bearerHeader()) }
+        val resp = http.get("$httpBase/settings/soul") { authHeader() }
         if (resp.status.isSuccess()) return resp.bodyAsText()
         val text = try {
             resp.bodyAsText()
@@ -1588,7 +1809,7 @@ class BrokerApi(
     /** PUT /settings/soul (text/plain body) → true on success. */
     suspend fun putSoul(text: String): Boolean {
         val resp = http.put("$httpBase/settings/soul") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Text.Plain)
             setBody(text)
         }
@@ -1604,7 +1825,7 @@ class BrokerApi(
     /** POST /agents/<kind>/install → start (or resume) the broker-owned install job. */
     suspend fun startAgentInstall(kind: String): AgentInstallJob {
         val response = http.post("$httpBase/agents/${urlEncode(kind)}/install") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(EmptyBody()))
         }
@@ -1635,7 +1856,7 @@ class BrokerApi(
     /** POST /agents/<kind>/login/cancel — abort an in-progress login. */
     suspend fun cancelAgentLogin(kind: String) {
         http.post("$httpBase/agents/${urlEncode(kind)}/login/cancel") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -1668,7 +1889,7 @@ class BrokerApi(
      *  Partial: only the named server's `enabled` is changed. */
     suspend fun setLspEnabled(id: String, enabled: Boolean): EditorSettingsResponse =
         decode(http.put("$httpBase/settings/editor") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(LspTogglePatch(LspEnablePatch(mapOf(id to LspServerEnable(enabled))))))
         })
@@ -1695,7 +1916,7 @@ class BrokerApi(
     /** DELETE /settings/editor/lsp/custom/<id> → { ok, error?, lsp? }. */
     suspend fun removeCustomEditorLsp(id: String): LspMutationResult =
         decode(http.delete("$httpBase/settings/editor/lsp/custom/${urlEncode(id)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
 
     // ── System: restart + update status ────────────────────────────────────────
@@ -1707,7 +1928,7 @@ class BrokerApi(
      */
     suspend fun restartBroker() {
         ensureMutationSuccess(
-            http.post("$httpBase/system/restart") { header("Authorization", bearerHeader()) },
+            http.post("$httpBase/system/restart") { authHeader() },
         )
     }
 
@@ -1722,7 +1943,7 @@ class BrokerApi(
      * client Recheck buttons so they don't only re-read a stale cache.
      */
     suspend fun checkUpdate(): UpdateStatus {
-        val resp = http.post("$httpBase/api/update/check") { header("Authorization", bearerHeader()) }
+        val resp = http.post("$httpBase/api/update/check") { authHeader() }
         return decode(resp)
     }
 
@@ -1734,7 +1955,7 @@ class BrokerApi(
      *  Empty / uninformative non-2xx bodies (e.g. `500 {}`) get a synthetic `error` so
      *  clients never treat "nothing happened" as success. */
     suspend fun runUpdate(): RunUpdateResult {
-        val resp = http.post("$httpBase/api/update/run") { header("Authorization", bearerHeader()) }
+        val resp = http.post("$httpBase/api/update/run") { authHeader() }
         val text = resp.bodyAsText()
         val decoded = try {
             json.decodeFromString<RunUpdateResult>(text)
@@ -1759,7 +1980,7 @@ class BrokerApi(
     /** PUT /settings/curator → updated {config, nextRun} */
     suspend fun saveCuratorSettings(config: CuratorConfig): CuratorSettingsResponse =
         decode(http.put("$httpBase/settings/curator") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(config))
         })
@@ -1767,15 +1988,9 @@ class BrokerApi(
     /** POST /settings/curator/run-now — non-2xx throws (same contract as postJson/putJson). */
     suspend fun runCuratorNow() {
         ensureMutationSuccess(http.post("$httpBase/settings/curator/run-now") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
-
-    /** GET /usage → raw JSON string */
-    suspend fun usageRaw(): String =
-        http.get("$httpBase/usage") {
-            header("Authorization", bearerHeader())
-        }.bodyAsText()
 
     /** GET /usage → typed per-provider usage (Claude / Codex / Cursor / opencode / grok) */
     suspend fun usage(): UsageResponse = getJson("$httpBase/usage")
@@ -1796,7 +2011,7 @@ class BrokerApi(
     /** POST /devices {name} → { url, name }: a one-time pairing URL for the device */
     suspend fun addDevice(name: String): AddDeviceResponse =
         decode(http.post("$httpBase/devices") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(AddDeviceBody(name)))
         })
@@ -1804,7 +2019,7 @@ class BrokerApi(
     /** DELETE /devices/<urlencoded name> — non-2xx throws (same contract as postJson/putJson). */
     suspend fun revokeDevice(name: String) {
         ensureMutationSuccess(http.delete("$httpBase/devices/${urlEncode(name)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1815,14 +2030,14 @@ class BrokerApi(
     /** POST /sessions/<id>/resume */
     suspend fun resume(id: String) {
         http.post("$httpBase/sessions/$id/resume") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
     /** POST /sessions/<id>/interrupt — soft-stop the running agent */
     suspend fun interrupt(id: String) {
         http.post("$httpBase/sessions/$id/interrupt") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -1832,7 +2047,7 @@ class BrokerApi(
 
     private suspend fun gitOp(id: String, op: String): GitOpResult =
         decode(http.post("$httpBase/sessions/$id/git/$op") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     suspend fun gitFetch(id: String): GitOpResult = gitOp(id, "fetch")
     suspend fun gitPublish(id: String): GitOpResult = gitOp(id, "publish")
@@ -1859,7 +2074,7 @@ class BrokerApi(
         prRequiresGreen: Boolean? = null,
     ): FinishResult =
         decode(http.post("$httpBase/sessions/$id/finish") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(FinishBody(
                 action, skipVerify, commitFirst, commitMessage, prTitle, prBody, draft, prRequiresGreen,
@@ -1881,7 +2096,7 @@ class BrokerApi(
     /** POST /sessions/<id>/message — post a message to the agent (e.g. a "Send to agent" fix request). */
     suspend fun sendMessage(id: String, text: String) {
         http.post("$httpBase/sessions/$id/message") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(MessageBody(text)))
         }
@@ -1901,7 +2116,7 @@ class BrokerApi(
     /** POST /proxies {sessionName, port, domain?} */
     suspend fun createProxy(sessionName: String, port: Int, domain: String? = null): CreateProxyResponse =
         decode(http.post("$httpBase/proxies") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(CreateProxyBody(sessionName, port, domain)))
         })
@@ -1913,7 +2128,7 @@ class BrokerApi(
     /** DELETE /proxies/<domain> — non-2xx throws (same contract as [revokeDevice]/postJson). */
     suspend fun removeProxy(domain: String) {
         ensureMutationSuccess(http.delete("$httpBase/proxies/${urlEncode(domain)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         })
     }
 
@@ -1939,7 +2154,7 @@ class BrokerApi(
         kind: String? = null,
     ): UploadResponse {
         val resp = http.post("$httpBase/upload") {
-            header(HttpHeaders.Authorization, "Bearer $token")
+            authHeader()
             header("X-Mux-Session", session)
             header("X-Mux-Mime", mime)
             header("X-Mux-Filename", percentEncode(filename))
@@ -1994,7 +2209,7 @@ class BrokerApi(
     ): UploadResponse {
         // 1) init
         val init: InitResponse = decode(http.post("$httpBase/upload/init") {
-            header(HttpHeaders.Authorization, bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(InitRequest(session, mime, filename, kind, total)))
         })
@@ -2010,7 +2225,7 @@ class BrokerApi(
             val chunk = source.read(offset, len)
             try {
                 val resp = http.patch("$httpBase/upload/$uploadId") {
-                    header(HttpHeaders.Authorization, bearerHeader())
+                    authHeader()
                     header("Upload-Offset", offset.toString())
                     contentType(ContentType.Application.OctetStream)
                     setBody(chunk)
@@ -2045,7 +2260,7 @@ class BrokerApi(
      *  upload is unknown (never created, or already finalized/GC'd). */
     private suspend fun headUpload(uploadId: String): Long? {
         val resp = http.head("$httpBase/upload/$uploadId") {
-            header(HttpHeaders.Authorization, bearerHeader())
+            authHeader()
         }
         return if (resp.status.value == 200) resp.headers["Upload-Offset"]?.toLongOrNull() else null
     }
@@ -2053,7 +2268,7 @@ class BrokerApi(
     /** GET /files/<urlencoded file_id> — raw bytes of a stored attachment. */
     suspend fun fileBytes(fileId: String): ByteArray? {
         val resp = http.get("$httpBase/files/${urlEncode(fileId)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
         return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
@@ -2074,7 +2289,7 @@ class BrokerApi(
         sessionId: String?, bytes: ByteArray, filename: String, mime: String = "audio/mp4",
     ): TranscribeResponse {
         val resp = http.post(transcribePath(sessionId)) {
-            header(HttpHeaders.Authorization, "Bearer $token")
+            authHeader()
             setBody(MultiPartFormDataContent(formData {
                 append("audio", bytes, Headers.build {
                     append(HttpHeaders.ContentType, mime)
@@ -2098,7 +2313,7 @@ class BrokerApi(
     /** PUT /config/voice-glossary { glossary } → the persisted list. */
     suspend fun updateGlossary(terms: List<String>): List<String> =
         decode<GlossaryResponse>(http.put("$httpBase/config/voice-glossary") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(GlossaryBody(terms)))
         }).glossary
@@ -2114,7 +2329,7 @@ class BrokerApi(
     /** POST /paths/validate {path} → {ok, path?, error?}. Resolves ~ and checks existence. */
     suspend fun validatePath(path: String): PathValidation =
         decode(http.post("$httpBase/paths/validate") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(PathBody(path)))
         })
@@ -2161,7 +2376,7 @@ class BrokerApi(
     /** DELETE /forge/connections/<id> — disconnect a forge account. */
     suspend fun removeForge(id: String) {
         http.delete("$httpBase/forge/connections/${urlEncode(id)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -2174,7 +2389,7 @@ class BrokerApi(
     /** GET /sessions/<id>/fs/read?path=<rel> → file text. Throws FsException on non-2xx (413 too large / 415 binary). */
     suspend fun fsRead(sessionId: String, path: String): String {
         val resp = http.get("$httpBase/sessions/$sessionId/fs/read?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
         if (!resp.status.isSuccess()) {
             val body = resp.bodyAsText()
@@ -2186,7 +2401,7 @@ class BrokerApi(
     /** PUT /sessions/<id>/fs/write?path=<rel> (text/plain body) → true on success. */
     suspend fun fsWrite(sessionId: String, path: String, content: String): Boolean {
         val resp = http.put("$httpBase/sessions/$sessionId/fs/write?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Text.Plain)
             setBody(content)
         }
@@ -2219,7 +2434,7 @@ class BrokerApi(
     /** GET /workspaces/<id>/fs/read?path=<rel> */
     suspend fun workspaceFsRead(workspaceId: String, path: String): String {
         val resp = http.get("$httpBase/workspaces/$workspaceId/fs/read?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
         if (!resp.status.isSuccess()) {
             val body = resp.bodyAsText()
@@ -2231,7 +2446,7 @@ class BrokerApi(
     /** PUT /workspaces/<id>/fs/write?path=<rel> (text/plain body) */
     suspend fun workspaceFsWrite(workspaceId: String, path: String, content: String): Boolean {
         val resp = http.put("$httpBase/workspaces/$workspaceId/fs/write?path=${urlEncode(path)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Text.Plain)
             setBody(content)
         }
@@ -2261,7 +2476,7 @@ class BrokerApi(
     /** PATCH /sessions/<id>/review/comments/<commentId> {status?,body?,resolvedBy?} → true on success (response ignored). */
     suspend fun reviewUpdateComment(sessionId: String, commentId: String, patch: UpdateCommentBody): Boolean {
         val resp = http.patch("$httpBase/sessions/$sessionId/review/comments/${urlEncode(commentId)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(patch))
         }
@@ -2281,7 +2496,7 @@ class BrokerApi(
     /** POST /displays {sessionName, provider?, device?, width?, height?} → the started stream. */
     suspend fun startDisplay(sessionName: String, provider: String? = null, device: String? = null, width: Int? = null, height: Int? = null): DisplayStream =
         decode(http.post("$httpBase/displays") {
-            header("Authorization", bearerHeader())
+            authHeader()
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(StartDisplayBody(sessionName, provider, device, width, height)))
         })
@@ -2289,7 +2504,7 @@ class BrokerApi(
     /** DELETE /displays/<id> */
     suspend fun stopDisplay(id: String) {
         http.delete("$httpBase/displays/${urlEncode(id)}") {
-            header("Authorization", bearerHeader())
+            authHeader()
         }
     }
 
@@ -2328,6 +2543,80 @@ class BrokerApi(
             RegisterPushRelayBody(platform, pushToken),
         )
         return resp.routingToken?.takeIf { it.isNotBlank() }
+    }
+
+    // ── Web Push (browser, VAPID) ─────────────────────────────────────────────
+    //
+    // The browser host subscribes through the standard W3C Push API and hands the
+    // resulting endpoint + keys to the broker. All three calls are QUIET: a non-2xx
+    // is an answer ("not configured", "not authorised"), never an exception — the
+    // registrar that drives them runs inside a Compose composition and must not throw.
+    //
+    // On the browser the token is blank and `authHeader()` sends nothing; the
+    // HttpOnly `cmux_token` cookie is what the broker's `requireAuth` reads.
+
+    /**
+     * GET /push/vapid-public-key → the base64url VAPID application server key, or null when
+     * the broker has no push keys (503), the body has no `publicKey`, or the call failed.
+     */
+    suspend fun pushVapidPublicKey(): String? {
+        val resp = try {
+            http.get("$httpBase/push/vapid-public-key") { authHeader() }
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            println("[BrokerApi] vapid key fetch failed: ${e.message?.take(160)}")
+            return null
+        }
+        if (!resp.status.isSuccess()) return null
+        val text = try {
+            resp.bodyAsText()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (e: Throwable) {
+            return null
+        }
+        return runCatching { json.decodeFromString<VapidKeyResponse>(text).publicKey }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * POST /push/subscribe `{"endpoint":…,"keys":{"p256dh":…,"auth":…}}` — idempotent upsert
+     * keyed by the calling device.
+     *
+     * TRI-STATE on purpose, unlike [pushUnsubscribe]:
+     *  - `true`  — the broker stored it.
+     *  - `false` — the broker ANSWERED and refused (401/404/503). It will never push to this
+     *              subscription, so the caller should drop it locally and re-subscribe later.
+     *  - `null`  — the call never completed (offline, DNS, a suspended tab). The subscription is
+     *              still perfectly good and the next launch reconciles it; a caller that treated
+     *              this as a refusal would throw away a working subscription on a network blip.
+     *
+     * That third case is exactly what the browser registrar needs, and it is why this method does
+     * not follow the `Boolean` shape of its neighbours.
+     */
+    suspend fun pushSubscribe(endpoint: String, p256dh: String, auth: String): Boolean? = try {
+        http.post("$httpBase/push/subscribe") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(WebPushSubscribeBody(endpoint, WebPushKeys(p256dh, auth))))
+        }.status.isSuccess()
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Throwable) {
+        println("[BrokerApi] push subscribe did not complete: ${e.message?.take(160)}")
+        null
+    }
+
+    /** DELETE /push/subscribe — drop this device's browser subscription. */
+    suspend fun pushUnsubscribe(): Boolean = try {
+        http.delete("$httpBase/push/subscribe") { authHeader() }.status.isSuccess()
+    } catch (c: CancellationException) {
+        throw c
+    } catch (e: Throwable) {
+        println("[BrokerApi] push unsubscribe failed: ${e.message?.take(160)}")
+        false
     }
 
     @OptIn(ExperimentalEncodingApi::class)

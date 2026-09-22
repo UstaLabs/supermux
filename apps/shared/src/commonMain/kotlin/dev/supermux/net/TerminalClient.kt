@@ -3,7 +3,6 @@ package dev.supermux.net
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.client.request.header
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readBytes
 import io.ktor.websocket.readText
@@ -99,7 +98,7 @@ class TerminalClient(
                 _status.value = TerminalStatus.CONNECTING
                 http.webSocket(
                     urlString = termWsUrl(baseUrl, sessionId, kind, terminalId, workspaceId),
-                    request = { header("Authorization", "Bearer $token") },
+                    request = { bearer(token) },
                 ) {
                     attempt = 0
                     liveSession = this

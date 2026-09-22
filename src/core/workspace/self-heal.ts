@@ -12,6 +12,7 @@ type OrphanRow = {
   base_branch: string | null
   session_branch: string | null
   sort_order: number
+  internal: number
 }
 
 /**
@@ -25,10 +26,21 @@ type OrphanRow = {
  *
  * A heal is a DEFECT SIGNAL, not a normal path. It logs at warn on purpose.
  * Returns the session ids that were healed.
+ *
+ * `ensureProject`, when given, registers each healed row's location with the
+ * project catalog (startup reconciliation would pick it up anyway; this keeps a
+ * heal self-contained). `internal` is passed through so the caller can no-op
+ * for a broker-internal session (e.g. an rpc-worker) — its workspace is still
+ * healed (hidden workspaces are a normal, supported shape), but it must never
+ * gain a project.
  */
-export function healSessionsWithoutWorkspace(db: Db, store: WorkspaceStore): string[] {
+export function healSessionsWithoutWorkspace(
+  db: Db,
+  store: WorkspaceStore,
+  ensureProject?: (w: { workdir: string; repo_root?: string; internal: boolean }) => void,
+): string[] {
   const orphans = db.query(`
-    SELECT s.id, s.name, s.workdir, s.repo_root, s.base_branch, s.session_branch, s.sort_order
+    SELECT s.id, s.name, s.workdir, s.repo_root, s.base_branch, s.session_branch, s.sort_order, s.internal
       FROM sessions s
      WHERE s.status IN ('active', 'suspended')
        AND (s.workspace_id IS NULL
@@ -37,6 +49,7 @@ export function healSessionsWithoutWorkspace(db: Db, store: WorkspaceStore): str
 
   const healed: string[] = []
   for (const s of orphans) {
+    ensureProject?.({ workdir: s.workdir, repo_root: s.repo_root ?? undefined, internal: s.internal === 1 })
     const ws = store.create({
       name: s.name,
       workdir: s.workdir,

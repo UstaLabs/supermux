@@ -4,8 +4,9 @@ package dev.supermux.net
 // available levels come from the broker (GET /reasoning-levels?agent=&model=,
 // BrokerApi.getReasoningLevels) so there's one source of truth across agents
 // (Claude static, Codex per-model, Cursor/OpenCode none). These only decide what
-// to show and which level a new session defaults to. Mirrors the web helpers in
-// src/web-app/src/lib/reasoning-levels.ts so all clients behave identically.
+// to show and which level a new session defaults to. Mirrors the reasoning-level
+// helpers of the retired Vue PWA (retired Vue PWA; see git history before 2026-09-12)
+// so all clients behave identically.
 
 /** Show the control only when there's a real choice to make (>1 level). */
 fun showReasoningPicker(levels: List<ReasoningLevel>): Boolean = levels.size > 1

@@ -14,6 +14,7 @@ import { tmpdir } from "os"
 import { join } from "path"
 import { Database } from "bun:sqlite"
 import { browserLaunchOptions, uiFixture } from "./fixture-env"
+import { waitReady } from "./compose-dom"
 
 declare const window: object
 declare const Notification: { permission: string } | undefined
@@ -23,7 +24,7 @@ declare const navigator: {
   }
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   if (process.env.MUX_RUN_UI_SMOKE !== "1") {
     console.log("skipping UI smoke; run through scripts/test-broker.sh")
     return
@@ -40,11 +41,12 @@ async function main(): Promise<void> {
   const profileDir = mkdtempSync(join(tmpdir(), "cmux-push-test-profile-"))
   let ctx: BrowserContext | null = null
   try {
-    ctx = await chromium.launchPersistentContext(profileDir, {
-      ...browserLaunchOptions(),
-      permissions: ["notifications"],
-    })
-    await ctx.grantPermissions(["notifications"], { origin: fixture.baseUrl })
+    // Deliberately NO notifications permission yet: the banner renders only while
+    // `Notification.permission` is still "default" (granted → already on, denied →
+    // the prompt is spent), so pre-granting it hides the very thing under test.
+    // The grant happens below, after the banner is on screen and before Enable is
+    // tapped — which is exactly the state a real user is in.
+    ctx = await chromium.launchPersistentContext(profileDir, browserLaunchOptions())
     const page = await ctx.newPage()
     page.on("console", (m) => console.log(`[console.${m.type()}] ${m.text()}`))
     page.on("pageerror", (e) => console.log(`[pageerror] ${e.message}`))
@@ -66,8 +68,11 @@ async function main(): Promise<void> {
       }
     })
 
-    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "networkidle" })
-    await page.locator('[data-testid="session-list"]').waitFor({ state: "visible", timeout: 10_000 })
+    await page.goto(`${fixture.baseUrl}/pair?t=${encodeURIComponent(fixture.token)}`, { waitUntil: "domcontentloaded" })
+    // The wasm bundle boots in ~6 s and then syncs its accessibility mirror on a
+    // ~100 ms debounce, so wait for the home list (either shape) rather than a
+    // fixed timeout.
+    await waitReady(page)
 
     // Probe Push API surface so DONE_WITH_CONCERNS reporting has detail.
     const apiSurface = await page.evaluate(async () => {
@@ -90,19 +95,27 @@ async function main(): Promise<void> {
     })
     console.log("API surface:", JSON.stringify(apiSurface))
 
-    // Banner is at the top of session list. Find the Enable button by its label.
-    const enableBtn = page.locator("text=Enable").first()
-    await enableBtn.waitFor({ state: "visible", timeout: 5_000 })
+    // The banner sits above the home list. Compose publishes `Text` as the mirror
+    // element's innerText, so the label is findable — but it must be TAPPED via
+    // dispatchEvent: the canvas over the mirror intercepts real pointer events
+    // and `click()` times out. See tests/ui/compose-dom.ts.
+    // `exact` matters: the banner's own copy is "Enable notifications for agent
+    // replies", and the button is the one whose text is exactly "Enable".
+    const enableBtn = page.getByText("Enable", { exact: true }).first()
+    await enableBtn.waitFor({ state: "attached", timeout: 30_000 })
     console.log("OK banner visible")
 
-    await enableBtn.click()
-    console.log("Enable clicked; waiting for subscription POST...")
+    // Grant now, so the permission dialog Enable opens resolves itself.
+    await ctx.grantPermissions(["notifications"], { origin: fixture.baseUrl })
+    await enableBtn.dispatchEvent("click")
+    console.log("Enable tapped; waiting for subscription POST...")
 
-    // Wait up to 8s for the row to land in sqlite
+    // Wait up to 40 s for the row to land in sqlite: the subscribe call goes out
+    // to FCM, which regularly takes longer than the 8 s the Vue-era spec allowed.
     const dbPath = join(stateDir, "db.sqlite3")
     const db = new Database(dbPath, { readonly: true })
     let found = false
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 80; i++) {
       const row = db.prepare("SELECT device FROM push_subscriptions WHERE device = ?").get(fixture.deviceName)
       if (row) { found = true; break }
       await new Promise((r) => setTimeout(r, 500))
@@ -121,10 +134,12 @@ async function main(): Promise<void> {
     rmSync(profileDir, { recursive: true, force: true })
   }
 
-  console.log("\n=== TEST PASSED ===")
+  console.log("PUSH UI PASS: banner → Enable → subscription stored")
 }
 
-main().catch((e) => {
-  console.error("TEST FAILED:", e instanceof Error ? e.stack ?? e.message : String(e))
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((e) => {
+    console.error("PUSH UI FAILED:", e instanceof Error ? e.stack ?? e.message : String(e))
+    process.exit(1)
+  })
+}

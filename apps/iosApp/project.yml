@@ -1,16 +1,18 @@
 # XcodeGen project for the supermux iOS client.
 #   xcodegen generate  (the .xcodeproj is gitignored)
-# Kotlin framework: the app target's pre-build phase runs
-# `./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode` (apps/ is the gradle root),
-# which builds Shared.framework into shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-# and embeds+signs it into Supermux.app/Frameworks (JetBrains direct-integration flow).
+# Kotlin frameworks: each app target's pre-build phase runs
+# `./gradlew --no-daemon :<module>:embedAndSignAppleFrameworkForXcode` (apps/ is the gradle root),
+# which builds the framework into <module>/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME) and
+# embeds+signs it into the .app's Frameworks/ (JetBrains direct-integration flow).
+#
+# The iOS app builds `:ios` → SupermuxKit.framework, which re-exports :ui and :shared and is the
+# ONE Kotlin framework it links. The watch app still builds `:shared` → Shared.
 name: Supermux
 options:
   bundleIdPrefix: dev.supermux
   deploymentTarget:
     iOS: "26.0"
     watchOS: "10.0"
-    macOS: "26.0"
   createIntermediateGroups: true
 
 settings:
@@ -36,20 +38,29 @@ settings:
       "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
 packages:
+  # PINNED, not a range. The terminal host depends on SwiftTerm behaviour that a minor bump can
+  # silently change — `TerminalView`'s 0-height early return is load-bearing for the keep-alive
+  # hide (a 0xH layout must not resize the remote pty), and the `send`/feed byte paths are the
+  # hot bridge. `from:` also has nothing to pin it in git: the `Package.resolved` that records the
+  # actual revision lives inside the GENERATED `Supermux.xcodeproj`, which is not tracked, so a
+  # fresh checkout on another Mac would resolve whatever is newest. `exactVersion` is the only
+  # pin that survives `xcodegen generate`. 1.20.0 is what H5 built and verified against.
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
-    from: "1.13.0"
+    exactVersion: "1.20.0"
 
 targets:
   Supermux:
     type: application
     platform: iOS
     sources:
+      # This directory holds ONLY what the Compose shell still needs from Swift: the app
+      # delegate + bridge, push, speech/audio, the QR scanner, the pairing env seed, the
+      # SwiftTerm host, and the watch provisioner. The SwiftUI shell it used to hold is gone
+      # (Compose is the only shell on every platform; the native macOS app was retired).
       - path: Supermux
         excludes:
           - "EditorWeb/**"
-          - "Host/**"
-          - "HostResources/**"
       # Bundled CodeMirror 6 editor assets (index.html + cm6.js) as a folder
       # reference so the directory structure is preserved in the .app bundle
       # (Bundle.main … subdirectory: "EditorWeb"). Loaded by the WKWebView editor.
@@ -86,6 +97,15 @@ targets:
             CFBundleURLSchemes:
               - supermux
         UILaunchScreen: {}
+        # iPad: panes can move to windows of their own (a second WindowGroup, see IosWindows.kt).
+        # SwiftUI's App lifecycle supplies the scene delegate; only the flag is ours.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        # Required by Compose Multiplatform's iOS runtime, which refuses to start without it
+        # (`PlistSanityCheck`). Without the key CoreAnimation caps an app at 60 fps on a ProMotion
+        # iPhone, so every scroll in the shared shell would run at half the display's rate — the
+        # runtime treats that as a misconfiguration rather than a preference, and throws at launch.
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -111,11 +131,16 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Supermux/Supermux.entitlements
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+          - $(SRCROOT)/../ios/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
+        # The phone app links exactly ONE Kotlin framework. SupermuxKit re-exports :shared (and
+        # :ui), so every symbol Shared used to provide is still here — but linking Shared AS WELL
+        # would embed the :shared klib twice: two Kotlin runtimes, two copies of every object, and
+        # state that silently does not agree with itself. The watch app is a separate binary and
+        # keeps its own Shared.framework; so do the notification extensions.
         OTHER_LDFLAGS:
           - $(inherited)
           - -framework
-          - Shared
+          - SupermuxKit
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@executable_path/Frameworks"
@@ -125,7 +150,7 @@ targets:
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
     preBuildScripts:
-      - name: Build Kotlin Shared.framework (embed and sign)
+      - name: Build Kotlin SupermuxKit.framework (embed and sign)
         basedOnDependencyAnalysis: false
         script: |
           set -e
@@ -137,7 +162,16 @@ targets:
           # --no-daemon: the embed step runs codesign; a detached Gradle daemon
           # loses the calling session's keychain access (errSecInternalComponent)
           # when signing headlessly over SSH. Running in-session keeps codesign working.
-          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
+          #
+          # This task also copies :ui's compose-resources (the Geist fonts) into the app bundle —
+          # which is why the `:ios` module applies the org.jetbrains.compose plugin even though it
+          # declares no resources of its own. Without the plugin there is no such hook, the fonts
+          # never reach the bundle, and every screen falls back to the system face SILENTLY.
+          #
+          # :ios:syncEditorWeb refreshes Supermux/EditorWeb from apps/android/src/main/assets/editor
+          # (the ONE source of truth for the CodeMirror bundle — desktop copies from there too).
+          # It runs BEFORE the resources phase, so the .app can never ship a stale cm6.js again.
+          ./gradlew --no-daemon :ios:syncEditorWeb :ios:embedAndSignAppleFrameworkForXcode
 
   SupermuxWatch:
     type: application
@@ -204,7 +238,7 @@ targets:
 
   SupermuxNotifContent:
     # Notification Content Extension: draws the custom expanded (long-press) view — a mini
-    # transcript of the chat's recent messages. iOS-only (macOS has no content extensions).
+    # transcript of the chat's recent messages.
     # Reads everything from the notification userInfo the NSE sets (no App Group / network).
     type: app-extension
     platform: iOS
@@ -234,129 +268,6 @@ targets:
           CODE_SIGN_IDENTITY: "Apple Distribution"
           "CODE_SIGN_IDENTITY[sdk=iphoneos*]": "Apple Distribution"
 
-  SupermuxMac:
-    type: application
-    platform: macOS
-    sources:
-      - path: Supermux
-        excludes:
-          - "EditorWeb/**"
-          - "Watch/**"            # WatchConnectivity does not exist on macOS
-          - "HostResources/**"
-      - path: Supermux/EditorWeb
-        type: folder
-        buildPhase: resources
-      - path: Supermux/HostResources
-        type: folder
-        buildPhase: resources
-    dependencies:
-      - package: SwiftTerm
-      - target: SupermuxMacPushNSE
-        embed: true
-    info:
-      path: Supermux/InfoMac.plist
-      properties:
-        CFBundleDisplayName: supermux
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        LSApplicationCategoryType: public.app-category.developer-tools
-        CFBundleURLTypes:
-          - CFBundleURLName: dev.supermux.connect
-            CFBundleURLSchemes:
-              - supermux
-        NSMicrophoneUsageDescription: supermux records voice messages you send to your agents.
-        NSSpeechRecognitionUsageDescription: supermux uses on-device speech recognition to turn your voice into editable text.
-        NSLocalNetworkUsageDescription: Supermux connects to the broker server running on your own computer when you reach it by its LAN address (for example 192.168.1.50). It does not scan or collect information about other devices on your network.
-        ITSAppUsesNonExemptEncryption: false
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app
-        PRODUCT_NAME: Supermux
-        PRODUCT_MODULE_NAME: Supermux
-        MACOSX_DEPLOYMENT_TARGET: "15.0"
-        ARCHS: arm64
-        EXCLUDED_ARCHS: x86_64
-        ENABLE_HARDENED_RUNTIME: "YES"
-        # Brand the SYSTEM accent (sidebar selection, focus rings, default buttons) teal on
-        # the Mac — AppKit's List/NSTableView selection follows the app accent color asset,
-        # not SwiftUI `.tint`. Mac-only setting: iOS keeps its explicit `.tint(Theme.teal)`.
-        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        CODE_SIGN_ENTITLEMENTS: Supermux/SupermuxMac.entitlements
-        FRAMEWORK_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-        OTHER_LDFLAGS:
-          - $(inherited)
-          - -framework
-          - Shared
-        LD_RUNPATH_SEARCH_PATHS:
-          - $(inherited)
-          - "@executable_path/../Frameworks"
-      configs:
-        Release:
-          # Native hosting requires an unsandboxed direct distribution. The Mac App Store
-          # lane is intentionally disabled; release archives use Developer ID + notarization.
-          CODE_SIGN_STYLE: Manual
-          CODE_SIGN_IDENTITY: "Developer ID Application"
-    preBuildScripts:
-      - name: Build Kotlin Shared.framework (embed and sign)
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          if [ -f "$HOME/ios-build-env.sh" ]; then
-            . "$HOME/ios-build-env.sh"
-          fi
-          export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home)}"
-          cd "$SRCROOT/.."
-          ./gradlew --no-daemon :shared:embedAndSignAppleFrameworkForXcode
-    postBuildScripts:
-      - name: Sign bundled native host helpers
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] || exit 0
-          [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ] || exit 0
-          HOST_RESOURCES="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/HostResources"
-          for helper in supermux-broker frpc tmux; do
-            [ -f "$HOST_RESOURCES/$helper" ] || continue
-            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime "$HOST_RESOURCES/$helper"
-          done
-
-  SupermuxMacPushNSE:
-    # macOS twin of SupermuxPushNSE: same principal class, same shared crypto
-    # sources (CryptoKit is cross-platform), its own platform + entitlements.
-    type: app-extension
-    platform: macOS
-    sources:
-      - path: SupermuxPushNSE/NotificationService.swift
-      - path: Supermux/Push/PushCrypto.swift
-      - path: Supermux/Push/PushKeypair.swift
-      - path: Supermux/Push/PushGroupState.swift
-    info:
-      path: SupermuxPushNSE/InfoMac.plist
-      properties:
-        CFBundleDisplayName: SupermuxMacPushNSE
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.usernotifications.service
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.supermux.app.mac-push-nse
-        MACOSX_DEPLOYMENT_TARGET: "15.0"
-        ARCHS: arm64
-        EXCLUDED_ARCHS: x86_64
-        ENABLE_HARDENED_RUNTIME: "YES"
-        CODE_SIGN_ENTITLEMENTS: SupermuxPushNSE/SupermuxMacPushNSE.entitlements
-        APPLICATION_EXTENSION_API_ONLY: "YES"
-      configs:
-        Release:
-          CODE_SIGN_STYLE: Manual
-          CODE_SIGN_IDENTITY: "Developer ID Application"
-
   SupermuxTests:
     type: bundle.unit-test
     platform: iOS
@@ -367,69 +278,10 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
+        # Compiled INTO the app's module, so they resolve the same `import SupermuxKit`.
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-
-  SupermuxMacTests:
-    # Mac twin of SupermuxTests: same suite, same @testable import Supermux (SupermuxMac's
-    # module name is also "Supermux" — see its PRODUCT_MODULE_NAME), minus the files below.
-    type: bundle.unit-test
-    platform: macOS
-    sources:
-      - path: SupermuxTests
-        excludes:
-          # Depend on Watch-only wire types (RelayEnvelope, BrokerTransport/BrokerRoute,
-          # WatchSessionStatus's sessionStatus/isWorking/GitLite) or the phone-side relay
-          # handler (BrokerRelay) built from them. All of these are compiled into the iOS
-          # `Supermux` target only via its three standalone SupermuxWatch/Watch/*.swift
-          # source entries — SupermuxMac's sources never add them (and separately excludes
-          # `Watch/**` from Supermux/ — WatchConnectivity doesn't exist on macOS), so these
-          # symbols don't exist in the SupermuxMac module for the tests to link against.
-          - "WatchSessionStatusTests.swift"
-          - "RelayEnvelopeTests.swift"
-          - "BrokerRelayTests.swift"
-          - "RoutingTransportTests.swift"
-    dependencies:
-      - target: SupermuxMac
-    settings:
-      base:
-        GENERATE_INFOPLIST_FILE: "YES"
-        MACOSX_DEPLOYMENT_TARGET: "15.0"
-        ARCHS: arm64
-        EXCLUDED_ARCHS: x86_64
-        # XcodeGen guesses TEST_HOST from the dependency's TARGET name ("SupermuxMac"), but that
-        # target overrides PRODUCT_NAME to "Supermux" (so @testable import Supermux / the shared
-        # module name work) — the real built app is Supermux.app, not SupermuxMac.app. Without
-        # this override xcodebuild fails immediately with "Could not find test host" because the
-        # guessed path can never exist.
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Supermux.app/Contents/MacOS/Supermux"
-        BUNDLE_LOADER: "$(TEST_HOST)"
-        FRAMEWORK_SEARCH_PATHS:
-          - $(inherited)
-          - $(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
-
-  SupermuxMacUITests:
-    # XCUITest smoke: drives the built SupermuxMac.app as a separate host process
-    # (not injected like SupermuxMacTests) — TEST_TARGET_NAME identifies the app
-    # target to launch. Verified empirically (Task 16): this is the XcodeGen TARGET
-    # name ("SupermuxMac", the key below/above), NOT the PRODUCT_NAME override
-    # ("Supermux") that SupermuxMacTests' TEST_HOST override exists to work around —
-    # XcodeGen resolves TEST_TARGET_NAME against the project's target list and wires
-    # the pbxproj TestTargetID reference itself, so no analogous override is needed here.
-    type: bundle.ui-testing
-    platform: macOS
-    sources:
-      - path: SupermuxMacUITests
-    dependencies:
-      - target: SupermuxMac
-    settings:
-      base:
-        GENERATE_INFOPLIST_FILE: "YES"
-        MACOSX_DEPLOYMENT_TARGET: "15.0"
-        ARCHS: arm64
-        EXCLUDED_ARCHS: x86_64
-        TEST_TARGET_NAME: SupermuxMac
+          - $(SRCROOT)/../ios/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)
 
 schemes:
   SupermuxWatch:
@@ -447,21 +299,6 @@ schemes:
       config: Debug
       targets:
         - SupermuxTests
-    run:
-      config: Debug
-    archive:
-      config: Release
-  SupermuxMac:
-    build:
-      targets:
-        SupermuxMac: all
-        SupermuxMacTests: [test]
-        SupermuxMacUITests: [test]
-    test:
-      config: Debug
-      targets:
-        - SupermuxMacTests
-        - SupermuxMacUITests
     run:
       config: Debug
     archive:

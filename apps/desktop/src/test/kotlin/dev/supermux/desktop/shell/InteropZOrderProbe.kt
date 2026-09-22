@@ -7,8 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import dev.supermux.desktop.ui.AlertDialog
-import dev.supermux.desktop.ui.DropdownMenu
+import dev.supermux.ui.widgets.AlertDialog
+import dev.supermux.ui.widgets.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,6 +28,8 @@ import androidx.compose.ui.window.application
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.supermux.desktop.ui.HeavyweightModalShield
 import dev.supermux.desktop.ui.LocalModalPresence
+import dev.supermux.desktop.ui.ModalPresenceHost
+import dev.supermux.ui.widgets.LocalModalHost
 import dev.supermux.desktop.ui.ModalPresence
 import java.awt.Font
 import javax.swing.JTextArea
@@ -52,7 +54,13 @@ fun main() {
     application {
         Window(onCloseRequest = ::exitApplication, title = "interop-z-order-probe") {
             val presence = remember { ModalPresence() }
-            CompositionLocalProvider(LocalModalPresence provides presence) {
+            // The shared surfaces announce themselves through LocalModalHost, so the probe must
+            // install desktop's host too — without it the dialog/menu never retains the presence
+            // and this measures the UN-shielded case.
+            CompositionLocalProvider(
+                LocalModalPresence provides presence,
+                LocalModalHost provides ModalPresenceHost,
+            ) {
             MaterialTheme {
                 Box(Modifier.fillMaxSize().background(Color(0xFF101418))) {
                     Column(Modifier.fillMaxSize()) {

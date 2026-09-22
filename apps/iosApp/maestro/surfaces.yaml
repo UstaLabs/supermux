@@ -1,0 +1,120 @@
+# The two NATIVE surfaces on an iPhone, under COMPOSE_SHELL (cluster H5): the SwiftTerm terminal
+# hosted by `UIKitView`, and the `WKWebView` CodeMirror editor.
+#
+# Run:  maestro --udid <iphone-sim-udid> -e SESSION="<a session's title>" \
+#          test apps/iosApp/maestro/surfaces.yaml
+#
+# PRECONDITION: paired against a reachable broker, SESSION names a session it is showing, and that
+# session's workdir is a real checkout (the flow opens a file from it). Like `parity-phone.yaml` and
+# unlike `compose-shell-smoke.yaml` this flow does NOT clearState — run the smoke LAST, always.
+#
+# WHAT CAN AND CANNOT BE ASSERTED HERE, because it decides every assertion below:
+#
+#  • The terminal GRID is not in the accessibility tree. SwiftTerm exposes no text, so no flow can
+#    read a prompt or command output. What IS exposed is the SHARED `TerminalKeyBar` — Esc/Tab/
+#    Ctrl/Alt — which only draws inside `TerminalPane`, under Touch, for the ACTIVE pane. So "the
+#    key bar is visible" is exactly "a live terminal surface is mounted and foreground", and its
+#    disappearance is exactly "that pane is no longer active". That is what this flow asserts on.
+#  • The editor is a `WKWebView`; its content is not in the tree either. The tab title is, and the
+#    surface only mounts the host once cm6 has first-painted (`ready`), so reaching an editor tab
+#    at all is the proof that the bundle loaded and `cmInit` ran.
+#  • Neither the terminal running a command nor the editor rendering a diff region can be asserted
+#    by this toolchain. They are screenshot proofs; see the H5 execution log (`h5-*.png`).
+#
+# Terminal tabs are named by a generated id (`t428714`), so they are matched by the regex `t[0-9]+`
+# — Maestro treats `tapOn`/`assertVisible` text as a regex.
+#
+# The tab strip SCROLLS, so `+` ("Add view") is pushed off the right edge once a workspace has a few
+# tabs. `scrollUntilVisible` does NOT help: it swipes the middle of the screen, which scrolls the
+# transcript underneath. The strip is dragged by an explicit `swipe` along its own y band instead.
+# The flow also CLOSES the two views it opened, so a second run starts where the first did.
+appId: dev.supermux.app
+env:
+  SESSION: "Greenmate Sprint 4 Planning"
+  FILE: "README.md"
+---
+- launchApp
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+
+- assertVisible: "Group by project"
+- tapOn: "${SESSION}"
+- extendedWaitUntil:
+    visible: "Chat"
+    timeout: 10000
+
+# ── The terminal.
+#
+# Before H5 this pane drew "This client has no terminal" — `Platform.terminalView()` was the
+# Unavailable factory. The key bar appearing is the whole chain: the shared `TerminalTabs` asked
+# the platform for a surface, the Swift vendor built a SwiftTerm view, `UIKitView` hosted it, and
+# `TerminalPane` drew the shared bar around it.
+- swipe:
+    start: 80%, 12%
+    end: 20%, 12%
+- tapOn: "Add view"
+- tapOn: "Terminal"
+- assertVisible: "Esc"
+- assertVisible: "Ctrl"
+- assertVisible: "Alt"
+
+# Arming a bar modifier must not disturb the pane. (That an armed Ctrl actually re-encodes the next
+# keystroke is `TerminalKeySinkModifiersTest` in `:ui`, plus the `^C` screenshot in the H5 log —
+# there is no way to observe a control code through this tree.)
+- tapOn: "Ctrl"
+- assertVisible: "Esc"
+
+# ── The editor.
+#
+# Opening a file switches to an editor tab, which only exists once cm6 has first-painted.
+- swipe:
+    start: 80%, 12%
+    end: 20%, 12%
+- tapOn: "Add view"
+- tapOn: "Files"
+- assertVisible: "Search files…"
+- assertNotVisible: "Esc"          # the terminal pane is kept alive, but no longer the active one
+- tapOn: "${FILE}"
+- assertVisible: "Close ${FILE}"
+
+# ── Keep-alive: the hidden terminal is still there, and still connected.
+#
+# `KeepAlivePanel` lays a hidden pane out at 0×0 on iOS (alpha does not hide a UIKit interop view),
+# so this is also the regression guard for the pane coming back at a real size: the key bar returns
+# only if the surface re-mounted its view and `TerminalPane` re-drew around it. That the SCROLLBACK
+# survived is the screenshot proof in the log.
+- tapOn: "t[0-9]+"
+- assertVisible: "Esc"
+- assertVisible: "Ctrl"
+
+# ── Backgrounding, then coming back.
+#
+# A phone relaunches onto the session LIST (persistSelection is false — `parity-phone.yaml` asserts
+# the same thing), so the workspace is re-entered by hand. Both views must still be there: the
+# terminal tab is scrolled back into view below, which is simultaneously the wait, the proof it
+# survived, and the start of the cleanup.
+- pressKey: Home
+- launchApp
+- assertVisible: "Group by project"
+- tapOn: "${SESSION}"
+
+# ── Leave the workspace as it was found: close the terminal (which confirms, because closing one
+# stops the remote pty) and then the editor tab.
+- swipe:
+    start: 80%, 12%
+    end: 20%, 12%
+- tapOn: "Close t[0-9]+"
+- tapOn: "Close"
+- swipe:
+    start: 80%, 12%
+    end: 20%, 12%
+- tapOn: "Close ${FILE}"
+- assertNotVisible: "Close ${FILE}"
+- swipe:
+    start: 80%, 12%
+    end: 20%, 12%
+- tapOn: "Close Files"
+- assertNotVisible: "Close Files"

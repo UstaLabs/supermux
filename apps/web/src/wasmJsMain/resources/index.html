@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Every asset reference in this page and in the bundle (Compose's `assets/…` resource tree
+       included) is RELATIVE, and this is a single-page app the broker serves at any depth: without
+       a base, `/settings/voice` asks for `/settings/assets/app-*.js` and gets the SPA fallback
+       instead of the bundle, so a deep link or a reload on any nested route loads nothing. -->
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0b0b0b">
+  <title>Supermux</title>
+  <!-- PWA shell. These four files are committed under `apps/web/pwa/` and staged to the ROOT of
+       the served tree by `stageForBroker` (outside assets/, so they keep their names and the
+       broker's no-cache rule). -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="favicon.ico">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <!-- The standardised spelling of the same thing; Chrome warns when only the apple- one is
+       present, and both are needed because iOS still reads only its own. -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <!-- Standalone on iOS draws under the status bar (the page is already viewport-fit=cover),
+       so the bar must be translucent or its opaque strip double-pads the top inset. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- xterm.js's own stylesheet (cell metrics, the viewport/screen stacking, selection layers).
+       Staged to the root by `stageForBroker` straight out of KGP's node_modules — webpack bundles
+       the JS but not the CSS, and the terminal renders as overlapping garbage without it. -->
+  <link rel="stylesheet" href="xterm.css">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0b0b0b; color: #e6e6e6;
+      font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+    #splash { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 12px; font-size: 14px; letter-spacing: .02em; }
+    #splash .bar { width: 160px; height: 3px; background: #222; border-radius: 2px; overflow: hidden; }
+    #splash .bar i { display: block; height: 100%; width: 30%; background: #2dd4bf;
+      animation: slide 1.2s ease-in-out infinite; }
+    @keyframes slide { 0% { transform: translateX(-100%);} 100% { transform: translateX(400%);} }
+    canvas { outline: none; }
+  </style>
+</head>
+<body>
+  <div id="splash"><div>Supermux</div><div class="bar"><i></i></div></div>
+  <script>
+    if ("serviceWorker" in navigator) {
+      // Register early — before the 6 MB wasm bundle — so push works even on a slow first load.
+      navigator.serviceWorker.register("/sw.js").catch(function () {});
+      // A new worker took control after an update: reload once so the page runs the new bundle.
+      var had = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener("controllerchange", function () { if (had) location.reload(); });
+    }
+  </script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -85,6 +85,15 @@ function fmtCodex(c: CodexUsage): string {
     lines.push(`  ${window.label}: ${pct(window.used)}${reset ? ` · resets ${reset}` : ""}`)
   }
 
+  // Per-model gates: only the LOCKED ones are worth a line here — an available
+  // model is the normal state and the card already lists every model in full.
+  for (const model of c.models ?? []) {
+    if (model.available) continue
+    const back = model.availableAtIso ? resetLabel(new Date(model.availableAtIso).getTime()) : ""
+    const hint = back ? ` · back ${back}` : model.creditsWouldEnable ? " · credits would unlock" : ""
+    lines.push(`  ${model.label}: locked${hint}`)
+  }
+
   if (c.credits?.hasCredits) {
     lines.push(`  Credits: ${c.credits.balance} credits`)
   }
@@ -120,7 +129,9 @@ function fmtOpenCode(c: OpenCodeUsage): string {
 function fmtGrok(c: GrokUsage): string {
   const lines: string[] = [`Grok (${c.plan})`]
   const rst = c.billingPeriodEnd ? resetLabel(new Date(c.billingPeriodEnd).getTime()) : ""
-  lines.push(`  ${pct(c.percentUsed)}${rst ? ` · resets ${rst}` : ""}`)
+  // xAI's unified billing bills a weekly window; older accounts stay monthly.
+  const cadence = c.periodType === "weekly" ? "Weekly: " : c.periodType === "monthly" ? "Monthly: " : ""
+  lines.push(`  ${cadence}${pct(c.percentUsed)}${rst ? ` · resets ${rst}` : ""}`)
   if (c.monthlyLimit > 0) {
     lines.push(`  Credits: ${Math.round(c.used)} / ${Math.round(c.monthlyLimit)}`)
   }

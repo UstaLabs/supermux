@@ -7,7 +7,8 @@ import dev.supermux.net.RemoteRepo
 data class ProjectOption(val path: String, val label: String)
 
 /**
- * One option in the project picker omnibox. Mirrors src/web-app/src/lib/forge-omnibox.ts:
+ * One option in the project picker omnibox. Mirrors the retired Vue PWA's forge omnibox
+ * (retired Vue PWA; see git history before 2026-09-12):
  *  - [Local]  an existing known project workdir
  *  - [Cloud]  a remote repo on a connected forge (offer to clone)
  *  - [Create] create a brand-new repo, locally or on a forge

@@ -48,6 +48,22 @@ import org.cef.handler.CefRequestHandlerAdapter
 import java.awt.Component
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
+import dev.supermux.ui.editor.engine.BridgeEvent
+import dev.supermux.ui.editor.engine.DiffRegionComposer
+import dev.supermux.ui.editor.engine.DiffRegionRange
+import dev.supermux.ui.editor.engine.DiffRegionThread
+import dev.supermux.ui.editor.engine.EditorCallbacks
+import dev.supermux.ui.editor.engine.EditorEngine
+import dev.supermux.ui.editor.engine.EditorPushPlanner
+import dev.supermux.ui.editor.engine.evalResultJs
+import dev.supermux.ui.editor.engine.initScript
+import dev.supermux.ui.editor.engine.lspConnectJs
+import dev.supermux.ui.editor.engine.lspDisconnectJs
+import dev.supermux.ui.editor.engine.lspMessageJs
+import dev.supermux.ui.editor.engine.parseBridgeEvent
+import dev.supermux.ui.editor.engine.parseLspOut
+import dev.supermux.ui.editor.engine.showDiffRegionJs
+import dev.supermux.ui.editor.SwingEditorEngine
 
 /**
  * Drives one CodeMirror browser. Construct, set the callbacks, then [load] once JCEF is
@@ -62,33 +78,19 @@ class DesktopEditorEngine(
     private val indexUrl: String,
     lineWrap: Boolean,
     fontSize: Int,
-) {
+) : SwingEditorEngine {
     /** cm6 first-paint gate. Flips true once onReady arrives; drives the pane's white-flash cover. */
     private val _ready = MutableStateFlow(false)
-    val ready: StateFlow<Boolean> = _ready.asStateFlow()
+    override val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
-    // Callbacks — settable (Compose updates them per recomposition, like Android's updateCallbacks).
+    /** A terminal per-engine failure (renderer gone / main-frame load error), as a human reason. */
+    private val _failed = MutableStateFlow<String?>(null)
+    override val failed: StateFlow<String?> = _failed.asStateFlow()
+
+    // Inbound bridge callbacks — settable as ONE record (Compose rebinds them per recomposition).
     // EDT-CONFINED BY CONVENTION: written from composition (the EDT) and invoked only on the EDT
     // (every CEF callback marshals via [onEdt] first) — no @Volatile/synchronization needed.
-    var onChange: (String) -> Unit = {}
-    var onSave: () -> Unit = {}
-    var onReady: () -> Unit = {}
-    var onFontSize: (Int) -> Unit = {}
-    /** Outbound LSP JSON-RPC from cm6's `LSPClient`, parsed to (serverId, message). */
-    var onLspOut: (serverId: String, message: String) -> Unit = { _, _ -> }
-    var onDiffLineClick: (Int) -> Unit = {}
-    var onDiffExpand: (String) -> Unit = {}
-    var onDiffPage: (String) -> Unit = {}
-
-    // ── In-editor walkthrough comments (the CodeMirror block widgets) ────────
-    /** The composer submitted a root comment on a 1-indexed new-side line. */
-    var onCommentSubmit: (line: Int, text: String) -> Unit = { _, _ -> }
-    /** A reply typed into a thread widget. */
-    var onReplySubmit: (threadId: String, text: String) -> Unit = { _, _ -> }
-    /** "Resolve" pressed on an open thread widget. */
-    var onResolveThread: (threadId: String) -> Unit = {}
-    /** Composer draft persistence; line == 0 means the composer closed. */
-    var onComposerState: (line: Int, text: String) -> Unit = { _, _ -> }
+    override var callbacks: EditorCallbacks = EditorCallbacks()
 
     private val planner = EditorPushPlanner(lineWrap, fontSize)
 
@@ -100,7 +102,7 @@ class DesktopEditorEngine(
     private var pendingDiffRegion: DiffRegionRequest? = null
 
     /** The AWT child to embed in a SwingPanel; null until [load]. */
-    fun uiComponent(): Component? = browser?.uiComponent
+    override fun uiComponent(): Component? = browser?.uiComponent
 
     /**
      * Create the client + router + browser and start loading the bundle. No-op if already loaded or
@@ -108,7 +110,7 @@ class DesktopEditorEngine(
      * state and only call load when ready). The router + load/display handlers are attached to the
      * client BEFORE createBrowser so the query function exists and onLoadEnd fires for this page.
      */
-    fun load() {
+    override fun load() {
         if (browser != null) return
         val c = JcefRuntime.newClient() ?: run {
             println("[DesktopEditorEngine] load() skipped — JCEF not ready")
@@ -128,25 +130,25 @@ class DesktopEditorEngine(
     // ── Kotlin → JS (called from the EDT/Compose) ────────────────────────────
 
     /** Push a document. [path] drives the language mode; content-only echoes skip via the planner. */
-    fun setDocument(path: String, content: String, scrollTop: Int = 0) =
+    override fun setDocument(path: String, content: String, scrollTop: Int) =
         emit(planner.setDocument(content, path, scrollTop))
 
     /** Reveal a 1-indexed [line] (optional [endLine]); queued until [ready] if cm6 hasn't painted. */
-    fun revealLine(line: Int, endLine: Int? = null) = emit(planner.revealLine(line, endLine))
+    override fun revealLine(line: Int, endLine: Int?) = emit(planner.revealLine(line, endLine))
 
-    fun setFontSize(px: Int) = emit(planner.setFontSize(px))
-    fun setLineWrap(on: Boolean) = emit(planner.setLineWrap(on))
-    fun setScrollTop(px: Int) = emit(planner.setScrollTop(px))
+    override fun setFontSize(px: Int) = emit(planner.setFontSize(px))
+    override fun setLineWrap(on: Boolean) = emit(planner.setLineWrap(on))
+    override fun setScrollTop(px: Int) = emit(planner.setScrollTop(px))
 
     /** Switch CodeMirror into the read-only walkthrough renderer. Calls before onReady are queued. */
-    fun showDiffRegion(
+    override fun showDiffRegion(
         path: String,
         content: String,
         ranges: List<DiffRegionRange>,
         language: String,
-        restoreScrollTop: Int? = null,
-        threads: List<DiffRegionThread> = emptyList(),
-        composer: DiffRegionComposer? = null,
+        restoreScrollTop: Int?,
+        threads: List<DiffRegionThread>,
+        composer: DiffRegionComposer?,
     ) {
         pendingDiffRegion = DiffRegionRequest(path, content, ranges, language, restoreScrollTop, threads, composer)
         if (_ready.value) emitDiffRegion()
@@ -157,7 +159,7 @@ class DesktopEditorEngine(
      * own scroll preservation (and its expand-context, keyed on the unchanged slice signature) wins.
      * A no-op before [showDiffRegion] has established a region.
      */
-    fun updateDiffThreads(threads: List<DiffRegionThread>, composer: DiffRegionComposer?) {
+    override fun updateDiffThreads(threads: List<DiffRegionThread>, composer: DiffRegionComposer?) {
         val current = pendingDiffRegion ?: return
         pendingDiffRegion = current.copy(restoreScrollTop = null, threads = threads, composer = composer)
         if (_ready.value) emitDiffRegion()
@@ -168,12 +170,12 @@ class DesktopEditorEngine(
     /**
      * Read the live document through the message-router return channel. Fires with "" if unloaded.
      */
-    fun getContent(cb: (String) -> Unit) {
+    override fun getContent(cb: (String) -> Unit) {
         evaluateJavaScript("cmGetContent()", cb)
     }
 
     /** Read cm6's scroll offset (px). Same async shape as [getContent]. Fires with 0 if not loaded. */
-    fun getScrollTop(cb: (Int) -> Unit) {
+    override fun readScrollTop(cb: (Int) -> Unit) {
         evaluateJavaScript("cmGetScrollTop()") { value ->
             cb(value.trim().trim('"').toDoubleOrNull()?.toInt() ?: 0)
         }
@@ -184,19 +186,19 @@ class DesktopEditorEngine(
     /** Connect the cm6 LSP client for the active file (port of Android EditorEngine.kt:247-252).
      *  A no-op before the browser exists; cm6's own `window.cmLspConnect` guards against running
      *  before its init (cm6-entry.mjs), so it's safe to call even before [ready]. */
-    fun lspConnect(serverId: String, rootUri: String, fileUri: String, languageId: String) {
+    override fun lspConnect(serverId: String, rootUri: String, fileUri: String, languageId: String) {
         val b = browser ?: return
         b.executeJavaScript(lspConnectJs(serverId, rootUri, fileUri, languageId), b.url ?: "", 0)
     }
 
     /** Deliver an inbound JSON-RPC message string to the cm6 LSP client for [serverId]. */
-    fun lspMessage(serverId: String, message: String) {
+    override fun lspMessage(serverId: String, message: String) {
         val b = browser ?: return
         b.executeJavaScript(lspMessageJs(serverId, message), b.url ?: "", 0)
     }
 
     /** Tear down all cm6 LSP connections and revert to a plain editor. */
-    fun lspDisconnect() {
+    override fun lspDisconnect() {
         val b = browser ?: return
         b.executeJavaScript(lspDisconnectJs(), b.url ?: "", 0)
     }
@@ -207,7 +209,7 @@ class DesktopEditorEngine(
      * we're about to tear down), THEN detach + dispose the router, THEN dispose the client that
      * owned both. Idempotent — every field is nulled so a second call is a no-op.
      */
-    fun dispose() {
+    override fun dispose() {
         _ready.value = false
         browser?.close(true)
         router?.let { r -> client?.removeMessageRouter(r); r.dispose() }
@@ -325,33 +327,33 @@ class DesktopEditorEngine(
             // through Compose → setDocument, so our own text push is a no-op (planner.recordEcho).
             is BridgeEvent.Change -> {
                 planner.recordEcho(event.content)
-                onChange(event.content)
+                callbacks.onChange(event.content)
             }
-            BridgeEvent.Save -> onSave()
+            BridgeEvent.Save -> callbacks.onSave()
             BridgeEvent.Ready -> {
                 emit(planner.onReady()) // flush the queued document + pending reveal
+                _failed.value = null
                 _ready.value = true
                 emitDiffRegion()
-                onReady()
             }
             // The user zoom already applied in-page; keep our copy in sync + persist (no loop-back).
-            is BridgeEvent.FontSize -> onFontSize(planner.recordUserFontSize(event.px))
+            is BridgeEvent.FontSize -> callbacks.onFontSize(planner.recordUserFontSize(event.px))
             // Outbound LSP JSON-RPC — parse {serverId,message} and forward to the bridge (M4g-3).
             is BridgeEvent.LspOut -> {
                 val parsed = parseLspOut(event.payload)
                 if (parsed == null) {
                     println("[DesktopEditorEngine] ignoring malformed lspOut payload (${event.payload.take(200)})")
                 } else {
-                    onLspOut(parsed.first, parsed.second)
+                    callbacks.onLspOut(parsed.first, parsed.second)
                 }
             }
-            is BridgeEvent.DiffLineClick -> onDiffLineClick(event.line)
-            is BridgeEvent.DiffExpand -> onDiffExpand(event.direction)
-            is BridgeEvent.DiffPage -> onDiffPage(event.direction)
-            is BridgeEvent.CommentSubmit -> onCommentSubmit(event.line, event.text)
-            is BridgeEvent.ReplySubmit -> onReplySubmit(event.threadId, event.text)
-            is BridgeEvent.ResolveThread -> onResolveThread(event.threadId)
-            is BridgeEvent.ComposerState -> onComposerState(event.line, event.text)
+            is BridgeEvent.DiffLineClick -> callbacks.onDiffLineClick(event.line)
+            is BridgeEvent.DiffExpand -> callbacks.onDiffExpand(event.direction)
+            is BridgeEvent.DiffPage -> callbacks.onDiffPage(event.direction)
+            is BridgeEvent.CommentSubmit -> callbacks.onCommentSubmit(event.line, event.text)
+            is BridgeEvent.ReplySubmit -> callbacks.onReplySubmit(event.threadId, event.text)
+            is BridgeEvent.ResolveThread -> callbacks.onResolveThread(event.threadId)
+            is BridgeEvent.ComposerState -> callbacks.onComposerState(event.line, event.text)
             is BridgeEvent.EvalResult -> pendingEvaluations.remove(event.id)?.invoke(event.value)
         }
     }

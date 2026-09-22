@@ -27,7 +27,7 @@ export type CommandCtx = {
   /** Soft-interrupt a running session: stop the current turn, keep it alive. */
   interrupt?: (sessionId: string) => Promise<{ ok: boolean; reason?: string }>
   spawnPA?: (args: { name: string; agent?: AgentKind; model?: string; focus?: string }) => Promise<{ name: string; id?: string; workdir?: string; agent?: AgentKind; model?: string }>
-  /** Override /usage provider fetch. Defaults to fetchAllUsage. */
+  /** Live provider fetch behind `/usage`. Injectable so tests need no network. */
   fetchUsage?: () => Promise<UsageResponse>
 }
 
@@ -288,8 +288,7 @@ function cmdGrantOrch(rest: string, ctx: CommandCtx): SlashReply {
 }
 
 async function cmdUsage(ctx: CommandCtx): Promise<SlashReply> {
-  const fetchUsage = ctx.fetchUsage ?? fetchAllUsage
-  const data = await fetchUsage()
+  const data = await (ctx.fetchUsage ?? fetchAllUsage)()
   getUsageStore().applyResponse(data)
   return { text: formatUsageTelegram(data) }
 }

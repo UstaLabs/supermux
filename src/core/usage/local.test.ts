@@ -121,6 +121,7 @@ test("codexUsageFromRateLimits maps camelCase app-server and snake_case rollout 
   const prev: CodexUsage = {
     plan: "prev",
     windows: [],
+    models: [],
     credits: null,
     limitReached: false,
     resetCredits: 4,

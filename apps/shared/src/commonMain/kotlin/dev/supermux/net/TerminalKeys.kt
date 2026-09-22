@@ -2,10 +2,10 @@ package dev.supermux.net
 
 /**
  * Byte sequences for the mobile terminal key-accessory bar (Esc/Tab/Ctrl/Alt/
- * arrows the soft keyboard lacks). Shared-Kotlin port of the web reference
- * (src/web-app/src/lib/terminal-keys.ts) so the Android native terminal drives
- * the SAME, tested logic as the PWA — mirroring how TerminalScroll.kt ports the
- * touch-scroll math.
+ * arrows the soft keyboard lacks). Shared-Kotlin port of the retired Vue PWA's
+ * terminal-keys reference (retired Vue PWA; see git history before 2026-09-12)
+ * so the Android native terminal drives the SAME, tested logic — mirroring how
+ * TerminalScroll.kt ports the touch-scroll math.
  *
  * Pure logic (no Compose, no termlib): callers decide WHEN to build a sequence
  * (which button, which sticky modifier); this only answers WHAT bytes a key

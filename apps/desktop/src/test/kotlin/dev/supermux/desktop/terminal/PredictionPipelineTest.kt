@@ -22,9 +22,9 @@ class PredictionPipelineTest {
     private val h = TermTestHarness()
     @AfterTest fun tearDown() = h.close()
 
-    /** A [PredictionAdapter] whose render always throws, to drive the pipeline's fallback path. */
+    /** A [JediTermPredictionAdapter] whose render always throws, to drive the pipeline's fallback path. */
     private class ThrowingAdapter(h: TermTestHarness) :
-        PredictionAdapter(h.terminal, h.buffer, h.connector) {
+        JediTermPredictionAdapter(h.terminal, h.buffer, h.connector) {
         override fun render(ops: List<DisplayOp>) {
             throw RuntimeException("boom")
         }
@@ -41,7 +41,7 @@ class PredictionPipelineTest {
     @Test
     fun handle_output_when_attached_renders_through_engine_not_fallback() {
         val pipeline = PredictionPipeline()
-        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+        pipeline.attachAdapter(JediTermPredictionAdapter(h.terminal, h.buffer, h.connector))
 
         var fallbacks = 0
         pipeline.handleOutput("hi".toByteArray()) { fallbacks++ }
@@ -69,7 +69,7 @@ class PredictionPipelineTest {
     fun input_tap_stamps_last_key_at_and_output_consumes_it_as_latency() {
         var clock = 0L
         val pipeline = PredictionPipeline(nowMs = { clock })
-        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+        pipeline.attachAdapter(JediTermPredictionAdapter(h.terminal, h.buffer, h.connector))
 
         clock = 1000L
         pipeline.handleInput("a".toByteArray())
@@ -88,7 +88,7 @@ class PredictionPipelineTest {
     @Test
     fun teardown_routes_later_output_back_to_fallback() {
         val pipeline = PredictionPipeline()
-        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+        pipeline.attachAdapter(JediTermPredictionAdapter(h.terminal, h.buffer, h.connector))
         pipeline.teardown()
 
         var fallbacks = 0
@@ -116,7 +116,7 @@ class PredictionPipelineTest {
     fun concurrent_input_and_output_do_not_corrupt_the_pipeline() {
         val clock = AtomicLong(0)
         val pipeline = PredictionPipeline(nowMs = { clock.addAndGet(50) })
-        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+        pipeline.attachAdapter(JediTermPredictionAdapter(h.terminal, h.buffer, h.connector))
 
         val inputError = AtomicReference<Throwable?>(null)
         val outputError = AtomicReference<Throwable?>(null)
@@ -157,7 +157,7 @@ class PredictionPipelineTest {
         // stressed one may legitimately sit in cooldown/pending states that reposition the caret),
         // home + clear the screen, and check a passthrough renders at the expected cell.
         pipeline.teardown()
-        pipeline.attachAdapter(PredictionAdapter(h.terminal, h.buffer, h.connector))
+        pipeline.attachAdapter(JediTermPredictionAdapter(h.terminal, h.buffer, h.connector))
         h.connector.injectDisplayBytes("[2J[H".toByteArray())
         awaitCursorHome()
         var postFallbacks = 0

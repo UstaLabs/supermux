@@ -37,7 +37,7 @@ android {
     defaultConfig {
         applicationId = "dev.supermux.android"
         minSdk = libs.versions.androidMinSdk.get().toInt()
-        targetSdk = libs.versions.androidCompileSdk.get().toInt()
+        targetSdk = libs.versions.androidTargetSdk.get().toInt()
         versionCode = supermuxVersionCode
         versionName = supermuxVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -103,12 +103,15 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.animation)
     implementation(libs.compose.material3)
-    implementation(libs.reorderable)
     implementation("androidx.compose.material:material-icons-extended")
-    implementation(libs.compose.material3.windowsize)
     implementation(libs.androidx.activity.compose)
+    // Not used directly: a transitive dependency drags in a pre-1.3.0 androidx.fragment, whose
+    // FragmentActivity breaks the ActivityResult APIs (PushPermission) — lintVitalRelease treats
+    // that as fatal (InvalidFragmentVersionForActivityResult). Pin a current one.
+    implementation(libs.androidx.fragment)
     implementation(libs.androidx.core.splashscreen)
-    implementation(libs.androidx.navigation.compose)
+    // (Navigation 3 replaced navigation-compose in cluster G8: the shared `SupermuxApp` root
+    //  drives one `NavDisplay` back stack on BOTH hosts, and it arrives transitively from :ui.)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.datastore.preferences)
@@ -116,8 +119,6 @@ dependencies {
     implementation(libs.ktor.client.websockets)
     implementation(libs.termlib)
     implementation(libs.zxing.android.embedded)
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui)
     // Inline markdown images (async load + cache). ktor3 backend reuses our ktor stack.
     implementation(libs.coil.compose)
     implementation(libs.coil.network.ktor3)
@@ -126,6 +127,8 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     testImplementation(kotlin("test"))
     testImplementation(libs.coroutines.test)
+    // MockEngine: drive PairingHolder's probe client without a socket (PairingHolderTest).
+    testImplementation(libs.ktor.client.mock)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

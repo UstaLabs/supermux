@@ -27,3 +27,9 @@ include(":shared")
 include(":ui")
 include(":android")
 include(":desktop")
+// SupermuxKit.framework: the ONE Kotlin binary the iOS app links (it re-exports :ui and :shared).
+// iOS-only targets, so on this Linux host every one of its tasks is disabled and it costs nothing.
+include(":ios")
+// The browser client: :ui compiled to Kotlin/Wasm, staged into src/channels/web/static for the
+// broker to serve. Replaces the Vue PWA (see docs/superpowers/specs/2026-09-11-web-to-kmp-compose-design.md).
+include(":web")

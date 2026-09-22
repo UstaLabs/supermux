@@ -1,0 +1,107 @@
+package dev.supermux.ui.theme
+
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+/** Spacing tokens — 4-point grid. */
+object Space {
+    val xs = 4.dp
+    val sm = 8.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val xl = 24.dp
+    val xxl = 32.dp
+    /** Pairing / QR display size (scannable at arm's length on a desktop monitor). */
+    val qr = 200.dp
+}
+
+/** Icon and inline-control sizes. */
+object IconSize {
+    val sm = 14.dp
+    val md = 18.dp
+    val lg = 24.dp
+}
+
+/**
+ * Stroke widths — borders and progress indicators (not layout spacing).
+ * Prefer these over raw `1.dp` / `2.dp` so surfaces stay consistent.
+ *
+ * Merge note: two parity branches each grew this object. Unified here so every existing call site
+ * keeps its intended width — borders use [hairline] (1dp), progress indicators use [thin]/[md]
+ * (both 2dp; [md] is retained because the Devices spinner refers to it).
+ */
+object Stroke {
+    val hairline = 1.dp
+    val thin = 2.dp
+    val md = 2.dp
+}
+
+/** Corner-radius tokens. */
+object Radii {
+    val sm = 8.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val pill = 999.dp
+}
+
+/**
+ * Component-size tokens that sit outside the spacing grid (status dots, menu widths).
+ * Named so call sites never hardcode magic dimensions.
+ */
+object Size {
+    /** Online-status badge on forge connection rows. */
+    val statusDot = 8.dp
+    /** Project-picker / forge omnibox dropdown width. */
+    val omniboxWidth = 384.dp
+    /** Max height of the scrollable omnibox option list. */
+    val omniboxListMax = 360.dp
+    /** Same list inside the Compact bottom sheet — a phone has the height to spare. */
+    val omniboxSheetListMax = 420.dp
+}
+
+/**
+ * Component size tokens beyond the 4-point spacing grid (icons, strokes, media bounds).
+ * Prefer these over raw `N.dp` at call sites — same discipline as [Space]/[Radii].
+ */
+object Sizes {
+    /** Compact icon / circular-progress size (toolbars, chips, inline spinners). */
+    val iconSm = 18.dp
+    /** Hairline stroke for compact progress indicators and status rings. */
+    val hairline = 1.5.dp
+    /** Tap target for the inline video transport buttons. */
+    val iconButton = 32.dp
+    /** Play glyph on an inline video poster — large enough to read as the affordance. */
+    val videoPlayGlyph = 40.dp
+}
+
+/** Media layout tokens (inline images, previews). */
+object Media {
+    /**
+     * Max painted height for inline markdown / chat images. Loading placeholders should reserve
+     * the same height so the timeline does not reflow when the bitmap arrives.
+     */
+    val inlineImageMaxHeight = 280.dp
+
+    /** Max painted height for an inline video surface (poster, spinner and player all share it). */
+    val inlineVideoMaxHeight = 320.dp
+
+    /** Fraction of the message column an inline video poster/player occupies. */
+    const val inlineVideoWidthFraction = 0.7f
+}
+
+/**
+ * Subtle shadow for "calm depth" surfaces (cards, sheets).
+ * Elevation is intentionally low and both ambient/spot are dimmed so
+ * the shadow is present but never heavy.
+ */
+fun Modifier.softElevation(radius: Dp = Radii.md): Modifier = this.shadow(
+    elevation = 6.dp,
+    shape = RoundedCornerShape(radius),
+    ambientColor = Color.Black.copy(alpha = 0.4f),
+    spotColor = Color.Black.copy(alpha = 0.4f),
+    clip = false,
+)

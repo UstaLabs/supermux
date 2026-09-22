@@ -11,6 +11,5 @@
     "types": ["bun", "node"],
     "lib": ["ES2022"]
   },
-  "include": ["src", "tests"],
-  "exclude": ["src/web-app"]
+  "include": ["src", "tests"]
 }

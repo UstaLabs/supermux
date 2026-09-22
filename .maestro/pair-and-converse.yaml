@@ -83,7 +83,7 @@ appId: dev.supermux.android
     id: "composer-input"
 - inputText: "${PROMPT}"
 - tapOn:
-    id: "composer-submit"
+    id: "composer-send"
 
 # The prompt round-trips through broker → shim → fake agent and comes back.
 # Asserting the REPLY (not just the echo) is what proves the whole path works.

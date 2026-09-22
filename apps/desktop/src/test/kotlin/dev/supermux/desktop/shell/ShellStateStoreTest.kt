@@ -1,22 +1,20 @@
 package dev.supermux.desktop.shell
 
-import androidx.compose.ui.unit.dp
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.supermux.ui.shell.windows.PersistedWindowHost
 
 /**
- * Persistence proof for the desktop UI-state store: the sidebar snapshot + selected session survive
- * a save→load round-trip through ui-state.json (the same path AppShell debounce-writes and Main
- * hydrates on startup).
+ * Persistence proof for the desktop UI-state store.
  *
- * The snapshot used to carry the whole old shell layout (split fractions + per-session pane flags).
- * That went with SessionDetail — what is on screen inside the detail pane is now the workspace's
- * own tree, stored on the broker — so only the sidebar is still the client's to remember. The
- * last case pins the compatibility that matters: a ui-state.json written by the OLD shell must
- * still restore its sidebar rather than being thrown away as corrupt.
+ * Since cluster G8 this file carries ONE thing the client still owns alone: the DETACHED WINDOW
+ * bounds. The sidebar chrome and the selected session moved to the shared settings store
+ * (`SettingsKeys.SHELL_*`, through `UiPrefs` — see `UiPrefsTest.seedShellState…`), which Android
+ * reads too. Every legacy field stays DECODABLE so `Main.kt` can drain a pre-G8 file into that
+ * store exactly once — which is what the read-side cases below pin.
  */
 class ShellStateStoreTest {
     private fun tempStore(): ShellStateStore {
@@ -32,16 +30,16 @@ class ShellStateStoreTest {
     }
 
     @Test fun snapshotAndSelectionRoundTrip() {
+        // The write side is the WINDOWS only now; the legacy fields still round-trip so the
+        // one-way drain in `Main.kt` can read a file an older build wrote.
         val store = tempStore()
-        val ui = ShellUiState().apply {
-            sidebarCollapsed = true
-            setSidebarWidth(440.dp)
-            collapsedProjectPaths = setOf("/home/a/proj", "/tmp/other")
-        }
-
         store.save(
             PersistedUiState(
-                layout = ui.snapshot(),
+                layout = SidebarSnapshot(
+                    sidebarCollapsed = true,
+                    sidebarWidthDp = 440f,
+                    collapsedProjectPaths = listOf("/home/a/proj", "/tmp/other"),
+                ),
                 selectedId = "s1",
                 appearance = "LIGHT",
             ),
@@ -52,10 +50,25 @@ class ShellStateStoreTest {
         assertEquals("LIGHT", loaded.appearance)
         val snap = loaded.layout
         assertTrue(snap != null)
-        val restored = ShellUiState().apply { restore(snap) }
-        assertTrue(restored.sidebarCollapsed)
-        assertEquals(440.dp, restored.sidebarWidth)
-        assertEquals(setOf("/home/a/proj", "/tmp/other"), restored.collapsedProjectPaths)
+        assertTrue(snap.sidebarCollapsed)
+        assertEquals(440f, snap.sidebarWidthDp)
+        assertEquals(listOf("/home/a/proj", "/tmp/other"), snap.collapsedProjectPaths)
+    }
+
+    @Test fun anOldFileWithCollapsedPathsStillRestoresThemForTheOneWayMigration() {
+        // The field stays DECODABLE so AppShell can hand a pre-F1 ui-state.json's value to
+        // `UiPrefs.seedCollapsedProjectPaths` once. Only the write side went away.
+        val dir = Files.createTempDirectory("smx-ui-state")
+        val path = dir.resolve("ui-state.json")
+        Files.writeString(
+            path,
+            """{"layout":{"sidebarCollapsed":false,"sidebarWidthDp":320.0,""" +
+                """"collapsedProjectPaths":["/home/a/proj"]},"selectedId":null}""",
+        )
+        assertEquals(
+            listOf("/home/a/proj"),
+            ShellStateStore(path).load().layout?.collapsedProjectPaths,
+        )
     }
 
     @Test fun oldFileWithoutAppearanceOrCollapsedPathsStillLoads() {
@@ -68,8 +81,7 @@ class ShellStateStoreTest {
         val loaded = ShellStateStore(path).load()
         assertEquals("s1", loaded.selectedId)
         assertEquals(null, loaded.appearance)
-        val restored = ShellUiState().apply { loaded.layout?.let { restore(it) } }
-        assertTrue(restored.collapsedProjectPaths.isEmpty())
+        assertTrue(loaded.layout?.collapsedProjectPaths.orEmpty().isEmpty())
     }
 
     @Test fun aFileWrittenByTheOldShellStillRestoresItsSidebar() {
@@ -88,9 +100,8 @@ class ShellStateStoreTest {
         )
         val loaded = ShellStateStore(path).load()
         assertEquals("s1", loaded.selectedId)
-        val restored = ShellUiState().apply { loaded.layout?.let { restore(it) } }
-        assertTrue(restored.sidebarCollapsed)
-        assertEquals(400.dp, restored.sidebarWidth)
+        assertTrue(loaded.layout?.sidebarCollapsed == true)
+        assertEquals(400f, loaded.layout?.sidebarWidthDp)
     }
 
     @Test fun oldFileWithoutWindowsKeyLoadsEmptyWindows() {
@@ -152,13 +163,5 @@ class ShellStateStoreTest {
         assertEquals(480f, extra.height)
     }
 
-    @Test fun sidebarWidthClampsToRange() {
-        val ui = ShellUiState()
-        ui.setSidebarWidth(50.dp)
-        assertEquals(ShellUiState.SIDEBAR_MIN, ui.sidebarWidth)
-        ui.setSidebarWidth(999.dp)
-        assertEquals(ShellUiState.SIDEBAR_MAX, ui.sidebarWidth)
-        ui.setSidebarWidth(300.dp)
-        assertEquals(300.dp, ui.sidebarWidth)
-    }
+    // `sidebarWidthClampsToRange` moved to `:ui`'s `ShellUiStateTest` with the state it clamps.
 }

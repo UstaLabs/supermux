@@ -16,8 +16,9 @@ import kotlin.math.floor
  * ARE the confirm. Divergence erases all dim + replays the chunk + resyncs.
  * The Step-1 epoch gate (wait-for-first-confirmation) and prompt boundary carry over.
  *
- * Ported faithfully from src/web-app/src/lib/predictive-echo/engine.ts +
- * types.ts (Step 2 caret rewrite). The TypeScript source is the authoritative spec.
+ * Ported faithfully from the retired Vue PWA's predictive-echo engine + types
+ * (Step 2 caret rewrite) (retired Vue PWA; see git history before 2026-09-12).
+ * PredictiveEchoTest mirrors that suite test-for-test and is now the spec.
  */
 
 // ---------------------------------------------------------------------------

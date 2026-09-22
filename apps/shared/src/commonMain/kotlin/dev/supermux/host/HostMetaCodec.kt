@@ -14,8 +14,9 @@ import kotlinx.serialization.json.Json
  * lost/undecryptable token must cost at most one host (re-pair), never wipe the list.
  *
  * The "no token in the metadata blob" guarantee is STRUCTURALLY enforced here — [Meta] has no token
- * field, so [encodeMeta] cannot serialize one. Lives in commonMain so every native
- * [HostPersistence] reuses the exact same encoding (Android [dev.supermux.android.host], iOS Swift
+ * field, so [encodeMeta] cannot serialize one. (`ambientAuth` rides along because it is metadata —
+ * a flag saying the TRANSPORT carries the credential — and authenticates nothing by itself.) Lives in commonMain so every native
+ * [HostPersistence] reuses the exact same encoding (the Android + iOS Swift
  * `KeychainHostPersistence` via the Shared framework) — no per-platform reimplementation.
  */
 object HostMetaCodec {
@@ -30,6 +31,7 @@ object HostMetaCodec {
         val displayName: String,
         val directUrl: String? = null,
         val relayUrl: String? = null,
+        val ambientAuth: Boolean = false,
         val platform: String? = null,
         val version: String? = null,
         val lastSeenAt: Long = 0L,
@@ -41,7 +43,7 @@ object HostMetaCodec {
             hosts.map {
                 Meta(
                     recordId = it.recordId, hostId = it.hostId, displayName = it.displayName,
-                    directUrl = it.directUrl, relayUrl = it.relayUrl,
+                    directUrl = it.directUrl, relayUrl = it.relayUrl, ambientAuth = it.ambientAuth,
                     platform = it.platform, version = it.version, lastSeenAt = it.lastSeenAt,
                 )
             },
@@ -59,7 +61,7 @@ object HostMetaCodec {
         return metas.map { m ->
             PairedHost(
                 recordId = m.recordId, hostId = m.hostId, displayName = m.displayName,
-                directUrl = m.directUrl, relayUrl = m.relayUrl,
+                directUrl = m.directUrl, relayUrl = m.relayUrl, ambientAuth = m.ambientAuth,
                 token = token(m.recordId) ?: "",
                 platform = m.platform, version = m.version, lastSeenAt = m.lastSeenAt,
             )

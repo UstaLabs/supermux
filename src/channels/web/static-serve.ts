@@ -18,25 +18,52 @@ function guessMime(p: string): string {
   if (p.endsWith(".webmanifest")) return "application/manifest+json"
   if (p.endsWith(".ico"))  return "image/x-icon"
   if (p.endsWith(".woff2")) return "font/woff2"
+  if (p.endsWith(".wasm")) return "application/wasm"
+  if (p.endsWith(".mjs"))  return "application/javascript"
+  // The wasm bundle's composeResources ship platform fonts and misc text/xml
+  // resources alongside the app — see src/types/assets.d.ts for the matching
+  // module declarations.
+  if (p.endsWith(".ttf"))  return "font/ttf"
+  if (p.endsWith(".otf"))  return "font/otf"
+  if (p.endsWith(".woff")) return "font/woff"
+  if (p.endsWith(".xml"))  return "application/xml"
+  if (p.endsWith(".txt"))  return "text/plain; charset=utf-8"
   return "application/octet-stream"
 }
 
-const COMPRESSIBLE = /\.(html|js|css|json|svg|webmanifest)$/
-const gzipCache = new Map<string, { body: Buffer; mtime: number }>()
+const COMPRESSIBLE = /\.(html|js|mjs|css|json|svg|webmanifest|wasm|ttf|otf|xml|txt)$/
+const gzipCache = new Map<string, { body: Buffer; mtimeMs: number | undefined }>()
+let gzipCacheHits = 0
 
-function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined): { body: Buffer | Uint8Array; encoding?: string } {
+// TEST-ONLY: lets static-serve.test.ts assert cache growth/hits without
+// spying on Bun.gzipSync or reaching into module-private state.
+export function _gzipCacheStats(): { size: number; hits: number } {
+  return { size: gzipCache.size, hits: gzipCacheHits }
+}
+
+function maybeGzip(candidate: string, body: Buffer, acceptEncoding: string | undefined, mtimeMs?: number): { body: Buffer | Uint8Array; encoding?: string } {
   if (!acceptEncoding?.includes("gzip") || !COMPRESSIBLE.test(candidate)) return { body }
-  // Only cache content-addressed /assets/ files (hashed filenames change with
-  // content). Entry points (index.html, sw.js) are small and may change on
-  // live-deploy, so always re-compress them.
-  const cacheable = candidate.startsWith("/assets/")
+  // Cache content-addressed /assets/ files (hashed filenames change with
+  // content) and /editor/ (cm6.js is 1.3 MB and was re-gzipped per editor
+  // open otherwise — its filename isn't hashed, so we key on the path alone
+  // and compare mtimeMs on lookup: a redeployed file's stale entry is
+  // overwritten in place rather than orphaned under a new key (which would
+  // otherwise leak one stale ~400 KB entry per deploy). Embedded
+  // (compiled-binary) files have no mtime, so mtimeMs is undefined for them —
+  // stable as long as the embedded map itself doesn't change underneath us.
+  // Entry points (index.html, sw.js) are small and may change on live-deploy,
+  // so they stay out of this cache and are always re-compressed.
+  const cacheable = candidate.startsWith("/assets/") || candidate.startsWith("/editor/")
   if (cacheable) {
     const cached = gzipCache.get(candidate)
-    if (cached) return { body: cached.body, encoding: "gzip" }
+    if (cached && cached.mtimeMs === mtimeMs) {
+      gzipCacheHits++
+      return { body: cached.body, encoding: "gzip" }
+    }
   }
   const compressed = Bun.gzipSync(new Uint8Array(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength))
   if (compressed.byteLength < body.byteLength * 0.85) {
-    if (cacheable) gzipCache.set(candidate, { body: Buffer.from(compressed), mtime: Date.now() })
+    if (cacheable) gzipCache.set(candidate, { body: Buffer.from(compressed), mtimeMs })
     return { body: compressed, encoding: "gzip" }
   }
   return { body }
@@ -51,6 +78,14 @@ function cacheControlFor(candidate: string): string {
   return "no-cache, must-revalidate"
 }
 
+// Who may put this origin's pages in a frame: only this origin. The editor page (/editor/index.html)
+// hands `eval` to its parent through a postMessage bridge (apps/web/editor/editor-shim.js), and the
+// shim's own origin check is the inner half of that guard. This header is the outer half: a foreign
+// page cannot frame the editor at all, so it never gets to be the `window.parent` the shim talks to.
+// Applied to EVERY static response rather than just the editor page — the app shell has no business
+// being framed either, and one header on one helper cannot drift from a per-path list.
+const SECURITY_HEADERS: Record<string, string> = { "content-security-policy": "frame-ancestors 'self'" }
+
 export function serveStatic(opts: { staticDir: string | undefined; embedded: Record<string, string>; path: string; acceptEncoding?: string }): Response | null {
   const candidate = opts.path === "/" ? "/index.html" : opts.path
 
@@ -63,10 +98,11 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
 
   if (opts.staticDir) {
     const filePath = join(opts.staticDir, candidate)
-    if (existsSync(filePath) && statSync(filePath).isFile()) {
+    const stat = existsSync(filePath) ? statSync(filePath) : undefined
+    if (stat?.isFile()) {
       const raw = readFileSync(filePath)
-      const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
-      const headers: Record<string, string> = { "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
+      const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding, stat.mtimeMs)
+      const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(filePath), "cache-control": cacheControlFor(candidate) }
       if (encoding) headers["content-encoding"] = encoding
       return new Response(body, { headers })
     }
@@ -76,7 +112,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
   if (embeddedPath) {
     const raw = readFileSync(embeddedPath)
     const { body, encoding } = maybeGzip(candidate, raw, opts.acceptEncoding)
-    const headers: Record<string, string> = { "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
+    const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": guessMime(candidate), "cache-control": cacheControlFor(candidate) }
     if (encoding) headers["content-encoding"] = encoding
     return new Response(body, { headers })
   }
@@ -87,7 +123,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
     if (existsSync(idx)) {
       const raw = readFileSync(idx)
       const { body, encoding } = maybeGzip("/index.html", raw, opts.acceptEncoding)
-      const headers: Record<string, string> = { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
+      const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
       if (encoding) headers["content-encoding"] = encoding
       return new Response(body, { headers })
     }
@@ -96,7 +132,7 @@ export function serveStatic(opts: { staticDir: string | undefined; embedded: Rec
   if (embIdx) {
     const raw = readFileSync(embIdx)
     const { body, encoding } = maybeGzip("/index.html", raw, opts.acceptEncoding)
-    const headers: Record<string, string> = { "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
+    const headers: Record<string, string> = { ...SECURITY_HEADERS, "content-type": "text/html", "cache-control": "no-cache, must-revalidate" }
     if (encoding) headers["content-encoding"] = encoding
     return new Response(body, { headers })
   }

@@ -54,3 +54,13 @@ declare module "*.svg" { const path: string; export default path }
 declare module "*.ico" { const path: string; export default path }
 declare module "*.webmanifest" { const path: string; export default path }
 declare module "*.js" { const path: string; export default path }
+declare module "*.wasm" { const path: string; export default path }
+declare module "*.mjs" { const path: string; export default path }
+
+// The wasm bundle's composeResources emit platform fonts and misc text/xml
+// resources alongside the app's static assets.
+declare module "*.ttf" { const path: string; export default path }
+declare module "*.otf" { const path: string; export default path }
+declare module "*.woff" { const path: string; export default path }
+declare module "*.xml" { const path: string; export default path }
+declare module "*.txt" { const path: string; export default path }
