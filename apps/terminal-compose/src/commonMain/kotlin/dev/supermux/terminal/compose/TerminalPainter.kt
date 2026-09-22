@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import dev.supermux.terminal.CursorShape
+import dev.supermux.terminal.TerminalRow
 import dev.supermux.terminal.Underline
 import kotlin.math.abs
 import kotlin.math.max
@@ -36,8 +37,10 @@ import kotlin.math.round
  * line box, and clipping that is exactly the artefact this rule exists to avoid). Spacing is
  * geometry: nothing is ever padded with literal spaces.
  *
- * [scrollOffsetPx] shifts the whole grid up by that many pixels. It is the seam smooth scrolling
- * (Plan 2 Task 3) plugs into; at 0 the grid starts at the top of the canvas.
+ * [scrollOffsetPx] shifts the whole grid up by that many pixels — the sub-row displacement of
+ * smooth scrolling (see `ScrollController`); at 0 the grid starts at the top of the canvas. A
+ * NEGATIVE value shifts it down, which happens while the engine is still catching up with the
+ * anchor. Either way the exposed edge is filled by [drawOverscanRow], never left blank.
  */
 fun DrawScope.drawTerminalFrame(
     frame: TerminalFrame,
@@ -69,6 +72,44 @@ fun DrawScope.drawTerminalFrame(
             if (cursorEnabled) painter.cursor(this, frame)
         }
     }
+}
+
+/**
+ * ONE row of scrollback drawn outside the grid the engine published — the overscan that keeps a
+ * fractional [drawTerminalFrame] offset from tearing a blank strip into the screen.
+ *
+ * The engine hands out exactly the grid's rows, and asking it for one more would change the pty's
+ * window size, so [row] comes from a neighbouring frame the surface still remembers (`ScrollStrip`)
+ * and is drawn as a one-row frame of its own at [absoluteRow]. It carries no cursor — the cursor
+ * belongs to the real frame — but it keeps the frame's selection, which is in absolute coordinates
+ * and therefore still lands on the right columns of this row.
+ */
+fun DrawScope.drawOverscanRow(
+    frame: TerminalFrame,
+    row: TerminalRow,
+    absoluteRow: Long,
+    metrics: CellMetrics,
+    theme: TerminalTheme,
+    measurer: TextMeasurer,
+    cache: TextLayoutCache,
+    scrollOffsetPx: Float,
+) {
+    val single = frame.copy(
+        size = frame.size.copy(rows = 1),
+        rows = listOf(row.copy(index = 0)),
+        viewportTop = absoluteRow,
+        links = emptyList(),
+    )
+    drawTerminalFrame(
+        frame = single,
+        runs = TerminalRuns.build(single, theme),
+        metrics = metrics,
+        theme = theme,
+        measurer = measurer,
+        cache = cache,
+        scrollOffsetPx = scrollOffsetPx,
+        cursorEnabled = false,
+    )
 }
 
 /**

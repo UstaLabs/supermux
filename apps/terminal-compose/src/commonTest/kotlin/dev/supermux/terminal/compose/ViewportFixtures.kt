@@ -21,6 +21,9 @@ import dev.supermux.terminal.Underline
  */
 object ViewportFixtures {
 
+    /** The primary screen, no mouse reporting, no bracketed paste. */
+    val LIVE_MODES = TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false)
+
     val DEFAULT_STYLE = CellStyle(TerminalColor.DEFAULT, TerminalColor.DEFAULT, CellFlags.NONE, Underline.NONE)
 
     /** A row of [columns] cells holding [text], padded with blanks. Narrow cells only. */
@@ -37,6 +40,8 @@ object ViewportFixtures {
         cursor: TerminalCursor = TerminalCursor(0, 0, CursorShape.BLOCK, visible = true),
         selection: TerminalSelection? = null,
         viewportTop: Long = 0,
+        historyRows: Long = 0,
+        modes: TerminalModes = LIVE_MODES,
     ): TerminalViewport = viewport(
         generation = generation,
         size = size,
@@ -45,6 +50,8 @@ object ViewportFixtures {
         cursor = cursor,
         selection = selection,
         viewportTop = viewportTop,
+        historyRows = historyRows,
+        modes = modes,
     )
 
     /** A partial frame carrying only the rows in [lines] (index to text). */
@@ -69,15 +76,17 @@ object ViewportFixtures {
         cursor: TerminalCursor = TerminalCursor(0, 0, CursorShape.BLOCK, visible = true),
         selection: TerminalSelection? = null,
         viewportTop: Long = 0,
+        historyRows: Long = 0,
         links: List<TerminalLink> = emptyList(),
         held: Boolean = false,
+        modes: TerminalModes = LIVE_MODES,
     ): TerminalViewport = TerminalViewport(
         generation = generation,
         size = size,
         rows = rows,
         cursor = cursor,
-        modes = TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false),
-        historyRows = 0,
+        modes = modes,
+        historyRows = historyRows,
         viewportTop = viewportTop,
         full = full,
         links = links,
