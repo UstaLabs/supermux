@@ -17,8 +17,57 @@ function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
+const ITEM_TYPE_ALIAS: Record<string, string> = {
+  command_execution: "commandExecution",
+  file_change: "fileChange",
+  mcp_tool_call: "mcpToolCall",
+  dynamic_tool_call: "dynamicToolCall",
+  web_search: "webSearch",
+}
+
 function itemType(item: Record<string, unknown> | undefined): string | undefined {
-  return str(item?.type)
+  const raw = str(item?.type)
+  if (!raw) return
+  return ITEM_TYPE_ALIAS[raw] ?? raw
+}
+
+function descriptionOf(item: Record<string, unknown>, extra?: Record<string, unknown>): string | undefined {
+  return str(item.description) ?? str(extra?.description)
+}
+
+function changeKindOf(kind: unknown): string | undefined {
+  if (typeof kind === "string" && kind) return kind
+  const row = rec(kind)
+  return str(row?.type)
+}
+
+function textParts(value: unknown): string {
+  if (typeof value === "string") return value
+  if (!Array.isArray(value)) {
+    const row = rec(value)
+    if (!row) return ""
+    if (typeof row.text === "string") return row.text
+    if (Array.isArray(row.content)) return textParts(row.content)
+    return ""
+  }
+  const parts: string[] = []
+  for (const item of value) {
+    if (typeof item === "string") {
+      parts.push(item)
+      continue
+    }
+    const row = rec(item)
+    if (!row) continue
+    if ((row.type === "text" || row.type === "inputText") && typeof row.text === "string") parts.push(row.text)
+    else if (typeof row.text === "string") parts.push(row.text)
+  }
+  return parts.join("\n")
+}
+
+function jsonText(value: unknown): string {
+  if (value == null) return ""
+  if (typeof value === "string") return value
+  try { return JSON.stringify(value) ?? "" } catch { return String(value) }
 }
 
 function phaseFromStatus(status: unknown, started: boolean): ToolCallPhase {
@@ -138,6 +187,11 @@ export function createCodexNormalizer(): CodexNormalizer {
       return [{ kind: "plan", entries: [{ content: text, status: started ? "in_progress" : "completed" }] }]
     }
     if (type === "commandExecution") {
+      const desc = descriptionOf(item)
+      const aggregated = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput
+        : typeof item.aggregated_output === "string" ? item.aggregated_output
+        : undefined
+      const exitCode = num(item.exitCode) ?? num(item.exit_code)
       const tool: NormalizedBody = {
         kind: "tool-call",
         callId: id,
@@ -145,75 +199,112 @@ export function createCodexNormalizer(): CodexNormalizer {
         title: str(item.command),
         phase: toolPhaseItem(started, item),
         category: "execute",
-        input: { command: item.command, cwd: item.cwd },
+        input: {
+          command: item.command,
+          ...(item.cwd !== undefined ? { cwd: item.cwd } : {}),
+          ...(desc ? { description: desc } : {}),
+        },
+        ...(desc ? { description: desc } : {}),
       }
-      if (typeof item.aggregatedOutput === "string") tool.output = item.aggregatedOutput
-      if (typeof item.exitCode === "number") tool.exitCode = item.exitCode
+      if (aggregated !== undefined) tool.output = aggregated
+      if (exitCode !== undefined) tool.exitCode = exitCode
       return [tool]
     }
     if (type === "fileChange") {
       const changes = Array.isArray(item.changes) ? item.changes : []
+      const desc = descriptionOf(item)
       const tool: NormalizedBody = {
         kind: "tool-call",
         callId: id,
         tool: "fileChange",
         phase: toolPhaseItem(started, item),
         category: "edit",
-        output: changes,
+        input: {
+          ...(typeof item.path === "string" ? { path: item.path } : {}),
+          ...(typeof item.file === "string" ? { file: item.file } : {}),
+          ...(changes.length ? { changes } : {}),
+        },
+        ...(desc ? { description: desc } : {}),
       }
       const diffs: NormalizedBody[] = []
       for (const change of changes) {
         const row = rec(change)
-        if (!row || typeof row.path !== "string" || typeof row.diff !== "string") continue
+        if (!row || typeof row.path !== "string") continue
+        const diff = typeof row.diff === "string" ? row.diff
+          : typeof row.unified_diff === "string" ? row.unified_diff
+          : ""
+        const ck = changeKindOf(row.kind)
         diffs.push({
           kind: "file-diff",
           callId: id,
           path: row.path,
-          diff: row.diff,
-          ...(typeof row.kind === "string" ? { changeKind: row.kind } : {}),
+          diff,
+          ...(ck ? { changeKind: ck } : {}),
         })
       }
       return [tool, ...diffs]
     }
     if (type === "mcpToolCall") {
       const server = str(item.server) ?? ""
-      const toolName = str(item.tool) ?? ""
+      const toolName = str(item.tool) ?? str(item.toolName) ?? str(item.tool_name) ?? ""
       const phase = toolPhaseItem(started, item)
       const mcpPhase = started ? "started" as const : phase === "failed" ? "failed" as const : "completed" as const
+      const args = item.arguments ?? item.args
+      const result = item.result ?? item.error
+      const resultRow = rec(result)
+      const output = typeof result === "string" ? result
+        : textParts(resultRow?.content) || (resultRow?.structuredContent != null ? jsonText(resultRow.structuredContent) : "") || (result != null ? jsonText(result) : undefined)
+      const desc = descriptionOf(item, rec(args))
       const mcp: NormalizedBody = {
         kind: "mcp-tool",
         callId: id,
         server,
         tool: toolName,
         phase: mcpPhase,
-        arguments: item.arguments,
-        result: item.result ?? item.error,
+        arguments: args,
+        result,
       }
       const tool: NormalizedBody = {
         kind: "tool-call",
         callId: id,
-        tool: toolName || "mcp",
+        tool: "mcpToolCall",
         phase,
         category: "mcp",
-        input: item.arguments,
-        output: item.result ?? item.error,
+        input: { server, tool: toolName, toolName, arguments: args, args },
+        ...(output !== undefined && output !== "" ? { output } : result != null ? { output: result } : {}),
+        ...(desc ? { description: desc } : {}),
       }
       return [tool, mcp]
     }
     if (type === "dynamicToolCall") {
+      const args = item.arguments ?? item.args
+      const desc = descriptionOf(item, rec(args))
+      const content = item.contentItems ?? item.content_items
+      const output = textParts(content)
       return [{
         kind: "tool-call",
         callId: id,
         tool: str(item.tool) ?? "dynamic",
         phase: toolPhaseItem(started, item),
-        input: item.arguments,
-        output: item.contentItems,
+        category: "other",
+        input: args,
+        ...(output ? { output } : content != null ? { output: content } : {}),
+        ...(desc ? { description: desc } : {}),
       }]
     }
     if (type === "webSearch") {
       const phase = started ? "started" as const : "completed" as const
+      const desc = descriptionOf(item, rec(item.action))
       return [
-        { kind: "tool-call", callId: id, tool: "webSearch", phase: started ? "started" : "completed", category: "web-search", input: item.query },
+        {
+          kind: "tool-call",
+          callId: id,
+          tool: "webSearch",
+          phase: started ? "started" : "completed",
+          category: "web-search",
+          input: { query: item.query, action: item.action },
+          ...(desc ? { description: desc } : {}),
+        },
         { kind: "web-search", callId: id, phase, query: str(item.query), results: item.results },
       ]
     }
@@ -304,13 +395,17 @@ export function createCodexNormalizer(): CodexNormalizer {
       const out: NormalizedBody[] = []
       for (const change of changes) {
         const row = rec(change)
-        if (!row || typeof row.path !== "string" || typeof row.diff !== "string") continue
+        if (!row || typeof row.path !== "string") continue
+        const diff = typeof row.diff === "string" ? row.diff
+          : typeof row.unified_diff === "string" ? row.unified_diff
+          : ""
+        const ck = changeKindOf(row.kind)
         out.push({
           kind: "file-diff",
           callId: id,
           path: row.path,
-          diff: row.diff,
-          ...(typeof row.kind === "string" ? { changeKind: row.kind } : {}),
+          diff,
+          ...(ck ? { changeKind: ck } : {}),
         })
       }
       return out

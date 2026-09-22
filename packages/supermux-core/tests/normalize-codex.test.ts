@@ -55,6 +55,20 @@ describe("codex normalizer", () => {
     expect(n(native("item/commandExecution/outputDelta", { itemId: "c1", delta: "out\n" }))[0]).toMatchObject({ kind: "command-output", callId: "c1", stream: "merged", delta: "out\n" })
   })
 
+  test("commandExecution snake_case, description, aggregated_output, exit_code", () => {
+    const n = createCodexNormalizer()
+    const started = n(native("item/started", { item: { type: "command_execution", id: "c1", command: "npm test", description: "Verify green", status: "inProgress" } }))
+    expect(started[0]).toMatchObject({
+      kind: "tool-call",
+      tool: "commandExecution",
+      category: "execute",
+      description: "Verify green",
+      input: { command: "npm test", description: "Verify green" },
+    })
+    const done = n(native("item/completed", { item: { type: "command_execution", id: "c1", aggregated_output: "ok\n", exit_code: 0, status: "completed" } }))
+    expect(done[0]).toMatchObject({ kind: "tool-call", phase: "completed", output: "ok\n", exitCode: 0 })
+  })
+
   test("fileChange diffs", () => {
     const n = createCodexNormalizer()
     const out = n(native("item/completed", { item: { type: "fileChange", id: "f1", status: "completed", changes: [{ path: "a.ts", kind: "update", diff: "@@" }] } }))
@@ -62,11 +76,26 @@ describe("codex normalizer", () => {
     expect(out[1]).toMatchObject({ kind: "file-diff", path: "a.ts", diff: "@@", changeKind: "update" })
   })
 
+  test("fileChange kind object and changes on input", () => {
+    const n = createCodexNormalizer()
+    const changes = [{ path: "/w/src/a.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@" }]
+    const out = n(native("item/started", { item: { type: "fileChange", id: "f2", changes } }))
+    expect(out[0]).toMatchObject({ kind: "tool-call", category: "edit", input: { changes } })
+    expect(out[1]).toMatchObject({ kind: "file-diff", path: "/w/src/a.ts", changeKind: "update" })
+  })
+
   test("mcpToolCall and progress", () => {
     const n = createCodexNormalizer()
     const out = n(native("item/started", { item: { type: "mcpToolCall", id: "m", server: "s", tool: "t", status: "inProgress", arguments: { a: 1 } } }))
     expect(kinds(out)).toEqual(["tool-call", "mcp-tool"])
+    expect(out[0]).toMatchObject({ kind: "tool-call", tool: "mcpToolCall", category: "mcp", input: { server: "s", tool: "t", toolName: "t" } })
     expect(n(native("item/mcpToolCall/progress", { itemId: "m", message: "p" }))[0]).toMatchObject({ kind: "mcp-tool", phase: "progress" })
+  })
+
+  test("mcpToolCall completed text content", () => {
+    const n = createCodexNormalizer()
+    const out = n(native("item/completed", { item: { type: "mcpToolCall", id: "m", tool: "reply", result: { content: [{ type: "text", text: "sent\nok" }] } } }))
+    expect(out[0]).toMatchObject({ kind: "tool-call", output: "sent\nok" })
   })
 
   test("dynamicToolCall", () => {
@@ -78,6 +107,13 @@ describe("codex normalizer", () => {
     const n = createCodexNormalizer()
     const out = n(native("item/completed", { item: { type: "webSearch", id: "w", query: "q", results: [] } }))
     expect(kinds(out)).toEqual(["tool-call", "web-search"])
+  })
+
+  test("webSearch action queries on input", () => {
+    const n = createCodexNormalizer()
+    const action = { type: "search", query: null, queries: ["first query", "second query"] }
+    const out = n(native("item/started", { item: { type: "webSearch", id: "w", query: "first query ...", action } }))
+    expect(out[0]).toMatchObject({ kind: "tool-call", category: "web-search", input: { query: "first query ...", action } })
   })
 
   test("subAgentActivity and collabAgentToolCall as task", () => {

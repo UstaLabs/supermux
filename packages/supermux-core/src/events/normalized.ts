@@ -64,6 +64,8 @@ export type NormalizedBody =
       input?: unknown
       output?: unknown
       exitCode?: number
+      /** Agent-provided "why" label (Bash description, Grok rawInput.description, …). */
+      description?: string
     }
   | { kind: "command-output"; callId: string; stream: "stdout" | "stderr" | "merged"; delta: string }
   | { kind: "file-diff"; callId?: string; path: string; diff: string; changeKind?: string }

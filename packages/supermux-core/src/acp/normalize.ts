@@ -16,7 +16,24 @@ function contentText(content: unknown): string {
   if (!block) return typeof content === "string" ? content : ""
   if (typeof block.text === "string") return block.text
   if (block.type === "text" && typeof block.text === "string") return block.text
+  const nested = rec(block.content)
+  if (nested && typeof nested.text === "string") return nested.text
   return ""
+}
+
+function grokContentText(content: unknown): string {
+  if (!Array.isArray(content)) return contentText(content)
+  const out: string[] = []
+  for (const item of content) {
+    const t = contentText(item)
+    if (t) out.push(t)
+  }
+  return out.join("\n")
+}
+
+function argDescription(input: unknown): string | undefined {
+  const row = rec(input)
+  return str(row?.description) ?? str(row?.desc) ?? str(row?.explanation)
 }
 
 function category(kind: unknown): ToolCategory | undefined {
@@ -121,20 +138,25 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
       const callId = str(value.toolCallId) ?? "tool"
       // tool_call_update frames usually omit the name: keep the one announced by the matching
       // tool_call so started/completed events describe the same tool (bounded map).
-      const announced = str(value.name)
+      const announced = str(value.name) ?? (kind === "tool_call" ? str(value.title) : undefined)
       if (announced) {
         if (toolNames.size >= 256) toolNames.delete(toolNames.keys().next().value as string)
         toolNames.set(callId, announced)
       }
       const name = announced ?? toolNames.get(callId) ?? str(value.title) ?? "tool"
       const phase = toolPhase(value.status, kind === "tool_call_update")
+      const desc = argDescription(value.rawInput)
+      const content = Array.isArray(value.content) ? value.content : []
+      const contentOutput = grokContentText(content)
+      const output = contentOutput || (value.rawOutput !== undefined ? value.rawOutput : undefined)
+      const cat = category(value.kind)
       const out: NormalizedBody[] = [{
         kind: "tool-call",
         callId,
         tool: name,
         ...(typeof value.title === "string" ? { title: value.title } : {}),
         phase,
-        ...(category(value.kind) ? { category: category(value.kind) } : {}),
+        ...(cat ? { category: cat } : {}),
         ...(Array.isArray(value.locations) ? {
           locations: value.locations.flatMap(loc => {
             const row = rec(loc)
@@ -142,20 +164,22 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
           }),
         } : {}),
         ...(value.rawInput !== undefined ? { input: value.rawInput } : {}),
-        ...(value.rawOutput !== undefined ? { output: value.rawOutput } : {}),
+        ...(output !== undefined ? { output } : {}),
+        ...(desc ? { description: desc } : {}),
       }]
-      const content = Array.isArray(value.content) ? value.content : []
       for (const part of content) {
         const row = rec(part)
         if (!row) continue
         if (row.type === "diff" && typeof row.path === "string" && typeof row.diff === "string") {
-          out.push({ kind: "file-diff", callId, path: row.path, diff: row.diff })
+          out.push({ kind: "file-diff", callId, path: row.path, diff: row.diff, ...(typeof row.changeKind === "string" ? { changeKind: row.changeKind } : {}) })
         } else if (row.type === "terminal") {
           const delta = typeof row.output === "string" ? row.output : typeof row.text === "string" ? row.text : JSON.stringify(row)
           out.push({ kind: "command-output", callId, stream: "merged", delta })
+        } else if (row.type === "content" || row.type === "text") {
+          const delta = contentText(row)
+          if (delta) out.push({ kind: "command-output", callId, stream: "merged", delta })
         }
       }
-      const cat = category(value.kind)
       if (cat === "search" || cat === "fetch") {
         out.push({
           kind: "web-search",

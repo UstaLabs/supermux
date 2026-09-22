@@ -38,6 +38,28 @@ describe("acp normalizer", () => {
     expect(updated.map(e => e.kind)).toEqual(["tool-call", "file-diff", "command-output"])
   })
 
+  test("tool_call keeps title as name, description and grok content output", () => {
+    const n = createAcpNormalizer({ vendor: "grok" })
+    const started = n(acp("tool_call", {
+      toolCallId: "g1",
+      title: "bash",
+      rawInput: { command: "ls -la", description: "List project root contents" },
+    }))
+    expect(started[0]).toMatchObject({
+      kind: "tool-call",
+      tool: "bash",
+      description: "List project root contents",
+      input: { command: "ls -la", description: "List project root contents" },
+    })
+    const done = n(acp("tool_call_update", {
+      toolCallId: "g1",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "file1\nfile2" } }],
+    }))
+    expect(done[0]).toMatchObject({ kind: "tool-call", tool: "bash", phase: "completed", output: "file1\nfile2" })
+    expect(done.some(e => e.kind === "command-output" && e.delta === "file1\nfile2")).toBe(true)
+  })
+
   test("search kind also emits web-search", () => {
     const n = createAcpNormalizer()
     const out = n(acp("tool_call", { toolCallId: "s", title: "q", name: "search", kind: "search", status: "completed" }))
