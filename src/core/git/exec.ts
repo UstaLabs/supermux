@@ -3,7 +3,13 @@
 // a freeze past 2 s makes new Claude shims give up registering (2026-09-22).
 import { execFile, spawn } from "node:child_process"
 
-export function gitAsync(cwd: string, args: string[], opts?: { timeoutMs?: number }): Promise<string> {
+/** `trim: false` keeps stdout byte-exact (needed for `-z` / porcelain output whose
+ *  first record may start with a space). */
+export function gitAsync(
+  cwd: string,
+  args: string[],
+  opts?: { timeoutMs?: number; trim?: boolean },
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile("git", args, { cwd, encoding: "utf-8", timeout: opts?.timeoutMs ?? 30_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
@@ -11,7 +17,7 @@ export function gitAsync(cwd: string, args: string[], opts?: { timeoutMs?: numbe
         reject(new Error(msg))
         return
       }
-      resolve(String(stdout).trim())
+      resolve(opts?.trim === false ? String(stdout) : String(stdout).trim())
     })
   })
 }
