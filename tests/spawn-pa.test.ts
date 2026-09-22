@@ -8,6 +8,7 @@ import { spawnPA } from "../src/core/session-manager/spawn-helper"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
 import { fakeCodexHost } from "./helpers/fake-codex-host"
+import { fakeOpenCodeHost } from "./helpers/fake-opencode-host"
 
 // Non-claude collaborators are swapped via bun module mocks (spawnPA has no
 // injection seams). mock.module is process-global: capture the real modules
@@ -17,10 +18,10 @@ const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
 const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
 const realCursorRunner = { ...(await import("../src/core/agents/cursor/runner")) }
 const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter")) }
-const realOpenCodeSpawn = { ...(await import("../src/core/agents/opencode/spawn")) }
-const realOpenCodeAdapter = { ...(await import("../src/core/agents/opencode/adapter")) }
+const realOpenCodeHost = { ...(await import("../src/core/agents/opencode/core-host-provider")) }
 
 let fake = fakeCodexHost()
+let fakeOc = fakeOpenCodeHost()
 
 mock.module("../src/core/agents/codex/core-host-provider", () => ({
   ...realCodexCoreHost,
@@ -45,23 +46,9 @@ mock.module("../src/core/agents/cursor/adapter", () => ({
     async start() { await this.opts.persistSessionId("cursor-session-id") }
   },
 }))
-mock.module("../src/core/agents/opencode/spawn", () => ({
-  ...realOpenCodeSpawn,
-  spawnOpenCodeServer: async () => ({
-    pid: 123,
-    baseUrl: "http://localhost:1234",
-    client: {} as any,
-    child: null as any,
-    kill: () => {},
-    onExit: () => {},
-  }),
-}))
-mock.module("../src/core/agents/opencode/adapter", () => ({
-  ...realOpenCodeAdapter,
-  OpenCodeAdapter: class {
-    constructor(private opts: any) {}
-    async start() { await this.opts.persistSessionId("opencode-sid") }
-  },
+mock.module("../src/core/agents/opencode/core-host-provider", () => ({
+  ...realOpenCodeHost,
+  getOpenCodeCoreHost: () => fakeOc.host,
 }))
 
 afterAll(() => {
@@ -70,8 +57,7 @@ afterAll(() => {
   mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
   mock.module("../src/core/agents/cursor/runner", () => realCursorRunner)
   mock.module("../src/core/agents/cursor/adapter", () => realCursorAdapter)
-  mock.module("../src/core/agents/opencode/spawn", () => realOpenCodeSpawn)
-  mock.module("../src/core/agents/opencode/adapter", () => realOpenCodeAdapter)
+  mock.module("../src/core/agents/opencode/core-host-provider", () => realOpenCodeHost)
 })
 
 let tmpDir: string
@@ -82,9 +68,14 @@ function makeRegistry(): Registry {
   return new Registry(db)
 }
 
-beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-")); fake = fakeCodexHost() })
+beforeEach(() => {
+  tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-"))
+  fake = fakeCodexHost()
+  fakeOc = fakeOpenCodeHost()
+})
 afterEach(async () => {
   await fake.close()
+  await fakeOc.close()
   setSessionBackendForTests()
   rmSync(tmpDir, { recursive: true, force: true })
 })

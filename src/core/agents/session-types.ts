@@ -18,6 +18,8 @@ export type ResumeCtx = {
   grokHost?: import("./grok/core-host").GrokCoreHost
   /** Optional Codex core host (tests inject a fake; production uses the process provider). */
   codexHost?: import("./codex/core-host").CodexCoreHost
+  /** Optional OpenCode core host (tests inject a fake; production uses the process provider). */
+  opencodeHost?: import("./opencode/core-host").OpenCodeCoreHost
 }
 
 /** Input for the optional `commandContext` leaf: build the opaque per-kind

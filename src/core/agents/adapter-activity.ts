@@ -19,27 +19,6 @@ const DETAIL_MAX = 2000
 
 interface ToolCallEventLike { tool: string; phase: "started" | "completed" | "failed"; call_id: string; detail?: unknown }
 
-const OPENCODE_SUMMARY_FIELDS = [
-  "command", "path", "filePath", "file_path", "file", "pattern", "query", "text", "url", "port", "name",
-  "args", "description", "glob", "include", "skill",
-]
-
-/** Pull human-readable tool output from opencode's ToolState. Primary field is
- * `output` (v1 SSE); newer builds may also populate `content: [{type:"text",text}]`. */
-function extractOpenCodeOutput(state: Record<string, unknown>): string {
-  const output = typeof state.output === "string" ? state.output : ""
-  if (output) return output
-  const content = state.content
-  if (!Array.isArray(content)) return ""
-  const texts: string[] = []
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue
-    const row = item as { type?: string; text?: string }
-    if (row.type === "text" && typeof row.text === "string" && row.text) texts.push(row.text)
-  }
-  return texts.join("\n")
-}
-
 /** Extract a human-readable result string from a cursor-agent tool body's `.result`
  * oneof. protobuf-es toJSON() unwraps the oneof so `result` is a single-key object
  * like `{ success: { stdout, stderr, interleavedOutput } }` or
@@ -153,62 +132,6 @@ function summarizeDetail(agent: AgentKind, ev: ToolCallEventLike, workdir: strin
   const obj = ev.detail && typeof ev.detail === "object" ? ev.detail as Record<string, unknown> : undefined
   if (!obj) return { summary: "", rawSummary: "", resultDetail: "" }
   const norm = normalizeToolName(agent, ev.tool)
-
-  if (agent === "opencode") {
-    const state = obj.state as Record<string, unknown> | undefined
-    const input = state?.input as Record<string, unknown> | undefined
-    const output = state ? extractOpenCodeOutput(state) : ""
-    const error = typeof state?.error === "string" ? state.error : ""
-    const rawTitle = typeof state?.title === "string" ? state.title : ""
-    const rawPending = typeof state?.raw === "string" ? state.raw.trim() : ""
-    // Summary prefers path/command fields (not oldString/newString).
-    const rawPicked = input && Object.keys(input).length ? pickString(input, OPENCODE_SUMMARY_FIELDS) : ""
-    const picked = rawPicked ? relativizePath(rawPicked, workdir) : ""
-    const fallback = rawPending ? firstLine(rawPending) : rawTitle
-    const summary = picked || fallback
-    const result = ev.phase === "completed" ? (output || rawTitle) : ev.phase === "failed" ? error : ""
-
-    let body: ActivityToolBody | undefined
-    const command = input && typeof input.command === "string" ? input.command
-      : (isBashTool(norm, ev.tool) && rawPending ? rawPending : "")
-    if (isBashTool(norm, ev.tool) || command) {
-      body = bashBody(
-        command || (typeof rawPicked === "string" && !rawPicked.includes("/") ? rawPicked : undefined),
-        ev.phase === "started" ? undefined : (result || undefined),
-      )
-    } else if (isEditTool(norm, ev.tool) || norm === "Write") {
-      body = editBodyFromArgs(workdir, input, { forceWrite: norm === "Write" })
-      if (ev.phase !== "started" && result && body?.kind === "generic") {
-        body = { kind: "generic", output: result }
-      }
-    } else if (ev.phase === "started" && (rawPicked || fallback)) {
-      body = { kind: "generic", input: rawPicked || fallback }
-    } else if (result) {
-      body = { kind: "generic", output: result }
-    }
-
-    // Full command/path for medium expand (not firstLine of summary only).
-    let inputDetail: string | undefined
-    if (command) inputDetail = command
-    else if (body?.kind === "edit" && body.diff) inputDetail = body.diff
-    else if (body?.kind === "write" && body.content) inputDetail = body.content
-    else if (rawPicked || fallback) inputDetail = rawPicked || fallback
-
-    // Prefer explicit input.description; else state.title when it isn't just the command/path.
-    const description = cleanToolDescription(
-      pickDescriptionField(input) || rawTitle,
-      [command, rawPicked, picked, rawPending],
-    )
-
-    return {
-      summary,
-      rawSummary: rawPicked || fallback,
-      resultDetail: result,
-      inputDetail,
-      description,
-      body,
-    }
-  }
 
   if (agent === "cursor") {
     const tc = obj.tool_call as Record<string, unknown> | undefined

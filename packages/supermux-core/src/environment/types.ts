@@ -27,3 +27,12 @@ export type CodexEnvironmentSpec = EnvironmentSpec & {
   credentials: { apiKey: string | null; canonicalHome: string }
   nativeMemory: boolean
 }
+
+export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
+  /** Session-private XDG_CONFIG_HOME; config lands at <configHome>/opencode/opencode.json (0600). */
+  configHome: string
+  /** User global `provider` block passthrough; null = omit. */
+  provider: Record<string, unknown> | null
+  /** `plugin` array; [] = omit. */
+  pluginPaths: string[]
+}

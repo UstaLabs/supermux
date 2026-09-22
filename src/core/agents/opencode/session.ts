@@ -1,24 +1,21 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
-import { shimSpawnSpec } from "../../session-manager/shim-spawn"
-import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
+import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { OpenCodeCommandClient } from "../../slash-commands/types"
-import { resolveOpenCodeAuth } from "./auth"
-import { writeOpenCodeConfig } from "./config-writer"
-import { writeOpenCodePreamble } from "./preamble-writer"
-import { spawnOpenCodeServer, type OpenCodeSpawnHandle } from "./spawn"
-import { OpenCodeAdapter } from "./adapter"
+import { CoreOpenCodeAdapter } from "./core-adapter"
+import { getOpenCodeCoreHost } from "./core-host-provider"
+import type { OpenCodeCoreHost, OpenCodePrepareExtra } from "./core-host"
 import { opencodeConfigEntries } from "../../plugins"
 import { join } from "path"
-import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
-import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
+import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 /** Slash-command discovery context for the opencode provider. */
 export type OpenCodeCommandContext = {
-  /** Live `opencode serve` client (session discovery only; a preview scans disk). */
+  /** Live ACP adapter does not expose the HTTP SDK client; disk scan is used. */
   client?: OpenCodeCommandClient
   /** Enabled plugin roots for the disk-scan preview / client fallback. */
   pluginDirs: string[]
@@ -26,57 +23,110 @@ export type OpenCodeCommandContext = {
 
 export function commandContext(ctx: CommandContextCtx): OpenCodeCommandContext {
   return {
-    client: (ctx.adapter as { commandClient?: OpenCodeCommandClient } | undefined)?.commandClient,
     pluginDirs: opencodeConfigEntries({ sessionName: ctx.sessionName }).pluginPaths,
   }
 }
 
+function resolveHost(explicit?: OpenCodeCoreHost): OpenCodeCoreHost {
+  return explicit ?? getOpenCodeCoreHost()
+}
+
+function asError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err))
+}
+
+function isSessionBusy(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
+}
+
+function persistNativeId(
+  onOpenCodeSessionId: ((name: string, sid: string) => void) | undefined,
+  name: string,
+): (sid: string) => Promise<void> {
+  return async (sid) => { onOpenCodeSessionId?.(name, sid) }
+}
+
+function createBoundAdapter(opts: {
+  handle: HostHandle
+  reregister: (model?: string) => HostHandle
+  core: Core
+  id: string
+  sessionName: string
+  workdir: string
+  model?: string
+  initialSessionId?: string
+  persistSessionId: (sid: string) => Promise<void>
+  resolveAttachment?: (file_id: string) => Promise<string>
+}): CoreOpenCodeAdapter {
+  return new CoreOpenCodeAdapter({
+    handle: opts.handle,
+    reregister: opts.reregister,
+    core: opts.core,
+    id: opts.id,
+    sessionName: opts.sessionName,
+    workdir: opts.workdir,
+    model: opts.model,
+    initialSessionId: opts.initialSessionId,
+    persistSessionId: opts.persistSessionId,
+    resolveAttachment: opts.resolveAttachment,
+  })
+}
+
+function prepareExtra(opts: {
+  id: string
+  sessionName: string
+  sessionHome: string
+  workdir: string
+  nativeSessionId?: string
+  model?: string
+}): OpenCodePrepareExtra {
+  return {
+    sessionHome: opts.sessionHome,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+    workdir: opts.workdir,
+    cwd: opts.workdir,
+    nativeSessionId: opts.nativeSessionId,
+    model: opts.model,
+  }
+}
+
+/** opencode's worker is an in-process CoreOpenCodeAdapter driving `opencode acp`
+ * via a process-owned OpenCodeCoreHost. The row is registered with pid 0 and
+ * adapter.stop() is the kill. Config/preamble writes run in the host prepare hook. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
-  // PA spawns keep the exact requested name (the row may already exist).
   const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
   const id = args.id ?? randomUUID()
   if (!args.pa) deps.registry.reserveName(name)
+
+  const host = resolveHost(deps.opencodeHost)
+  const sessionHome = join(STATE_DIR, "agents", "opencode", name)
+  const handle = host.register({
+    id,
+    env: {},
+    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model: args.model }),
+  })
+  let adapter: CoreOpenCodeAdapter | undefined
   try {
-    const sessionHome = join(STATE_DIR, "agents", "opencode", name)
-    mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
-    // Session-private XDG_CONFIG_HOME — holds the opencode config (mux-shim MCP +
-    // instructions). Auth (XDG_DATA_HOME) stays at the user's, so the session
-    // reuses the credentials from `opencode auth login`.
-    const configHome = join(sessionHome, "config")
-
-    // NOT fail-closed: opencode ships a free `opencode/*` tier that runs with no
-    // credentials, so a session is usable even before `opencode auth login`. We
-    // still resolve auth for the env; missing creds only limits which models work
-    // (opencode surfaces that at prompt time), it doesn't block the session.
-    const auth = await resolveOpenCodeAuth({ home: HOME })
-
-    // Identity/reply/naming preamble, included via the config's `instructions`
-    // so it never gets written into the user's workdir.
-    const instructionsPath = writeOpenCodePreamble({ sessionHome, sessionName: name, workdir: args.workdir })
-    const { pluginPaths, skillsPaths } = opencodeConfigEntries({ sessionName: name })
-
-    writeOpenCodeConfig({
-      configHome,
-      ...shimSpawnSpec(),
-      sessionName: name,
-      socketsDir: SOCKETS_DIR,
-      sessionId: id,
-      instructionsPath,
-      pluginPaths,
-      skillsPaths,
-    })
-
     await deps.bind(id)
 
-    const handle = await spawnOpenCodeServer({
+    adapter = createBoundAdapter({
+      handle,
+      reregister: (model) => host.register({
+        id,
+        env: {},
+        extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir, model }),
+      }),
+      core: host.core,
+      id,
+      sessionName: name,
       workdir: args.workdir,
-      configHome,
-      authEnv: auth.env,
+      model: args.model,
+      persistSessionId: persistNativeId(deps.onOpenCodeSessionId, name),
+      resolveAttachment: deps.resolveAttachment,
     })
 
-    // Register BEFORE adapter.start() so the persistSessionId callback can find
-    // the row (same ordering codex requires).
     if (args.pa) {
       if (!args.pa.skipRegister) {
         deps.registry.registerPA({
@@ -86,7 +136,7 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
           workdir: args.workdir,
           model: args.model,
           reasoningLevel: args.reasoningLevel,
-          pid: handle.pid,
+          pid: 0,
           is_default: deps.registry.listPAs().length === 0,
           agent_home: sessionHome,
           base_commits: captureBaseCommits(args.workdir),
@@ -97,105 +147,127 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         id,
         name,
         workdir: args.workdir,
-        pid: handle.pid,
+        pid: 0,
         agent: AgentKind.OpenCode,
         agent_home: sessionHome,
         base_commits: captureBaseCommits(args.workdir),
         internal: args.internal,
-      } as any)
+      } as never)
     }
 
-    const adapter = new OpenCodeAdapter({
-      sessionName: name,
-      workdir: args.workdir,
-      client: handle.client,
-      persistSessionId: async (sid) => { deps.onOpenCodeSessionId?.(name, sid) },
-      initialSessionId: undefined,
-      model: args.model,
+    await adapter.start()
+  } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
+    throw err
+  }
+
+  deps.registerAdapter?.(name, adapter, { onExit: () => {} })
+
+  return { name, session_id: id, model: args.model, pid: 0 }
+}
+
+export async function resumeOpenCodeSession(
+  deps: {
+    resolveAttachment?: (file_id: string) => Promise<string>
+    onOpenCodeSessionId?: (name: string, sid: string) => void
+    opencodeHost?: OpenCodeCoreHost
+  },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
+): Promise<{ adapter: CoreOpenCodeAdapter }> {
+  const host = resolveHost(deps.opencodeHost)
+  const sessionHome = session.agent_home
+  const initialSessionId = session.agent_session_id || undefined
+  const handle = host.register({
+    id: session.id,
+    env: {},
+    extra: prepareExtra({
+      id: session.id,
+      sessionName: session.name,
+      sessionHome,
+      workdir: session.workdir,
+      nativeSessionId: initialSessionId,
+      model: session.model,
+    }),
+  })
+  let adapter: CoreOpenCodeAdapter | undefined
+  try {
+    adapter = createBoundAdapter({
+      handle,
+      reregister: (model) => host.register({
+        id: session.id,
+        env: {},
+        extra: prepareExtra({
+          id: session.id,
+          sessionName: session.name,
+          sessionHome,
+          workdir: session.workdir,
+          nativeSessionId: initialSessionId,
+          model,
+        }),
+      }),
+      core: host.core,
+      id: session.id,
+      sessionName: session.name,
+      workdir: session.workdir,
+      model: session.model,
+      initialSessionId,
+      persistSessionId: persistNativeId(deps.onOpenCodeSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
     })
-
-    await adapter.start()
-
-    deps.registerAdapter?.(name, adapter, handle)
-
-    return { name, session_id: id, model: args.model, pid: handle.pid }
+    if (initialSessionId) await adapter.resume()
+    else await adapter.start()
+    return { adapter }
   } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
     throw err
   }
 }
 
-/** Rebuild an opencode session's adapter + `opencode serve` child after a broker
- * restart. Unlike claude/codex, an opencode session's worker lives entirely
- * in-process (the adapter) plus a broker-child `opencode serve`; both die with
- * the broker. The session row, its private config/preamble, and opencode's own
- * session store (under the user's XDG_DATA_HOME) all persist on disk — so resume
- * only needs to respawn the server and re-bind an adapter, resuming the prior
- * opencode session id when one was persisted (else starting fresh).
- *
- * Mirrors spawn but skips name reservation + registry.register
- * (the row already exists). Self-heals the on-disk config/preamble (idempotent),
- * the opencode analogue of codex's codexPrepareSessionHome-on-resume. */
-export async function resumeOpenCodeSession(
-  deps: { resolveAttachment?: (file_id: string) => Promise<string>; onOpenCodeSessionId?: (name: string, sid: string) => void },
-  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; agent_session_id?: string },
-): Promise<{ adapter: OpenCodeAdapter; handle: OpenCodeSpawnHandle }> {
-  const sessionHome = session.agent_home
-  const configHome = join(sessionHome, "config")
-
-  const instructionsPath = writeOpenCodePreamble({ sessionHome, sessionName: session.name, workdir: session.workdir })
-  const { pluginPaths, skillsPaths } = opencodeConfigEntries({ sessionName: session.name })
-  writeOpenCodeConfig({
-    configHome,
-    ...shimSpawnSpec(),
-    sessionName: session.name,
-    socketsDir: SOCKETS_DIR,
-    sessionId: session.id,
-    instructionsPath,
-    pluginPaths,
-    skillsPaths,
-  })
-
-  const auth = await resolveOpenCodeAuth({ home: HOME })
-  const handle = await spawnOpenCodeServer({ workdir: session.workdir, configHome, authEnv: auth.env })
-
-  const adapter = new OpenCodeAdapter({
-    sessionName: session.name,
-    workdir: session.workdir,
-    client: handle.client,
-    persistSessionId: async (sid) => { deps.onOpenCodeSessionId?.(session.name, sid) },
-    initialSessionId: session.agent_session_id || undefined,
-    model: session.model,
-    resolveAttachment: deps.resolveAttachment,
-  })
-  if (session.agent_session_id) await adapter.resume()
-  else await adapter.start()
-  return { adapter, handle }
-}
-
-/** Dialect half of resume; the SessionManager registers + wires the result. */
-export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: OpenCodeAdapter; handle: OpenCodeSpawnHandle }> {
-  return resumeOpenCodeSession(
-    {
-      resolveAttachment: ctx.resolveAttachment,
-      onOpenCodeSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
-    },
-    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
-  )
-}
-
-/** Dialect half of a model change: opencode re-parses the adapter's `model`
- * field in send() (parseModel) on every turn, so a switch is a live
- * in-process field update — no serve restart, no config reapply. (opencode
- * exposes no reasoning levels; there is no effort half.) */
 export async function applyConfig(
   ctx: ApplyConfigCtx,
   _session: ApplyConfigRow,
   _name: string,
   change: ApplyConfigChange,
-): Promise<{ ok: true }> {
-  if (ctx.adapter instanceof OpenCodeAdapter && change.changed?.model !== false && change.model) {
-    ctx.adapter.model = change.model
+): Promise<ApplyConfigResult> {
+  if (change.changed?.effort !== false && "effort" in change && change.effort !== undefined) {
+    return { ok: false, error: "opencode does not support reasoning effort" }
   }
-  return { ok: true }
+  const adapter = ctx.adapter
+  const coreAdapter = adapter instanceof CoreOpenCodeAdapter
+    ? adapter
+    : (adapter && typeof (adapter as CoreOpenCodeAdapter).setConfiguration === "function"
+      ? adapter as CoreOpenCodeAdapter
+      : undefined)
+  if (!coreAdapter) return { ok: true }
+  const patch: { model?: string } = {}
+  if (change.changed?.model !== false && change.model) patch.model = change.model
+  if (!("model" in patch)) return { ok: true }
+  try {
+    await coreAdapter.setConfiguration(patch)
+    return { ok: true }
+  } catch (err) {
+    if (isSessionBusy(err)) return { ok: false, busy: true }
+    return { ok: false, error: asError(err).message }
+  }
+}
+
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreOpenCodeAdapter }> {
+  return resumeOpenCodeSession(
+    {
+      resolveAttachment: ctx.resolveAttachment,
+      onOpenCodeSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
+      opencodeHost: ctx.opencodeHost,
+    },
+    { id: session.id, name, workdir: session.workdir, agent_home: session.agent_home, model: session.model, agent_session_id: session.agent_session_id },
+  )
 }

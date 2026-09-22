@@ -9,7 +9,8 @@ import type { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexCoreHost } from "../agents/codex/core-host"
 import type { CursorAdapter } from "../agents/cursor/adapter"
 import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
-import type { OpenCodeAdapter } from "../agents/opencode/adapter"
+import type { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
+import type { OpenCodeCoreHost } from "../agents/opencode/core-host"
 import type { GrokAdapter } from "../agents/grok/adapter"
 import type { CoreGrokAdapter } from "../agents/grok/core-adapter"
 import type { GrokCoreHost } from "../agents/grok/core-host"
@@ -56,11 +57,12 @@ export type SpawnDeps = {
   resolveAttachment?: (file_id: string) => Promise<string>
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CursorAdapter | OpenCodeAdapter | GrokLikeAdapter,
+    adapter: CodexLikeAdapter | CursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
   codexHost?: CodexCoreHost
+  opencodeHost?: OpenCodeCoreHost
   onThreadId?: (name: string, threadId: string) => void
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
@@ -134,11 +136,12 @@ export async function spawnPA(opts: {
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CursorAdapter | OpenCodeAdapter | GrokLikeAdapter,
+    adapter: CodexLikeAdapter | CursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
   codexHost?: CodexCoreHost
+  opencodeHost?: OpenCodeCoreHost
   resolveAttachment?: (file_id: string) => Promise<string>
   /** When provided, spawnPA skips registerPA (session already exists) and
    * updates the existing session's PID on completion. */
@@ -167,6 +170,7 @@ export async function spawnPA(opts: {
       registerAdapter: opts.registerAdapter,
       grokHost: opts.grokHost,
       codexHost: opts.codexHost,
+      opencodeHost: opts.opencodeHost,
       // PA thread-id persistence is keyed by the broker session id (the
       // supervisor writes setAgentSessionId directly); adapt codex's
       // name-keyed port to that contract.

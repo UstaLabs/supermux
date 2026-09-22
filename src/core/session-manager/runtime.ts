@@ -4,8 +4,7 @@ import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CursorAdapter } from "../agents/cursor/adapter"
-import type { OpenCodeAdapter } from "../agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
+import type { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import type { GrokAdapter } from "../agents/grok/adapter"
 import type { CoreGrokAdapter } from "../agents/grok/core-adapter"
 
@@ -16,9 +15,8 @@ export type SessionRuntime =
   | { kind: typeof AgentKind.Claude; adapter: ClaudeCodeAdapter }
   | { kind: typeof AgentKind.Codex; adapter: CodexRuntimeAdapter; handle?: CodexSpawnHandle }
   | { kind: typeof AgentKind.Cursor; adapter: CursorAdapter }
-  | { kind: typeof AgentKind.OpenCode; adapter: OpenCodeAdapter; handle: OpenCodeSpawnHandle }
-  // grok owns its `grok agent stdio` child inside the adapter (adapter.stop()
-  // kills it), so unlike codex/opencode there's no separate spawn handle.
+  | { kind: typeof AgentKind.OpenCode; adapter: CoreOpenCodeAdapter }
+  // grok/opencode own the child inside the adapter (adapter.stop() kills it).
   | { kind: typeof AgentKind.Grok; adapter: GrokRuntimeAdapter }
 
 export class RuntimeRegistry {

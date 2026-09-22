@@ -122,6 +122,28 @@ describe("real wire captures", () => {
     expect(asst).toBe(seq.length - 1)
   })
 
+  // Real `opencode acp` RESUME (opencode-go/glm-5.3-flash) captured from the keeper
+  // journal of the broker's resume probe: session/load replays turn 1 (user
+  // message, read tool call + update, thought, "42") and then the live turn 2
+  // (user message, thought, "42"); commands and usage follow; no vendor frames.
+  test("opencode-turn.ndjson", () => {
+    const n = createAcpNormalizer({})
+    const events = replay(n, fixture("opencode-turn.ndjson").map(wrapAcp))
+    const kinds = events.map(e => (e.kind === "tool-call" ? `tool-call:${e.phase}` : e.kind))
+    const toolStarted = kinds.indexOf("tool-call:started")
+    const toolDone = kinds.findIndex((k, i) => i > toolStarted && (k === "tool-call:completed" || k === "tool-call:updated"))
+    expect(toolStarted).toBeGreaterThanOrEqual(0)
+    expect(toolDone).toBeGreaterThan(toolStarted)
+    expect(events.some(e => e.kind === "reasoning")).toBe(true)
+    const assistant = events.filter(e => e.kind === "assistant-message")
+    expect(assistant).toHaveLength(2)
+    expect(assistant.every(a => a.kind === "assistant-message" && a.text.trim() === "42")).toBe(true)
+    expect(kinds.indexOf("assistant-message")).toBeGreaterThan(toolDone)
+    expect(events.filter(e => e.kind === "commands-update")).toHaveLength(1)
+    expect(events.some(e => e.kind === "usage")).toBe(true)
+    expect(events.some(e => e.kind === "warning")).toBe(false)
+  })
+
   const claudePath = join(dir, "fixtures/real/claude-turn.ndjson")
   if (existsSync(claudePath)) {
     test("claude-turn.ndjson", () => {

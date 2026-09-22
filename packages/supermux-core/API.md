@@ -19,7 +19,7 @@ Use `module` / `moduleResolution` `NodeNext`. Helpers such as `cursorConfigRoot`
 | `supermux-core/cursor` | `cursor`, `cursorConfigRoot`, `cursorHistoryStorePath` |
 | `supermux-core/agents` | `grok`, `opencode` |
 | `supermux-core/auth` | `copiedCredentials`, `withAuth` |
-| `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, credential helpers |
+| `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, `prepareOpenCodeEnvironment`, credential helpers |
 
 Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
 
@@ -123,7 +123,7 @@ Auth-helper-only codes (`auth_home_locked`, `auth_source_locked`, `auth_missing`
 
 **Grok** `grok({ id, command, commandArgs, alwaysApprove, noLeader, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env?, model?, reasoningEffort?, authPath? })`. Required fields have **no defaults**; `grok()` throws `TypeError` naming a missing field. Optional (absent = flag/field not sent): `model`, `reasoningEffort`, `authPath`, `env`. Configure: `close({ mode: 'shutdown' })` then reopen with **exact** `agentSessionId`. Steer/history/fork unsupported; detach is passed through to the child.
 
-**OpenCode** `opencode({ id, command, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env? })` → `opencode acp`. Required fields have no defaults. Optional: `env`. Steer/fork/configure/history unsupported at this wrapper; detach follows ACP.
+**OpenCode** `opencode({ id, command, inheritEnv, mcpServers, keeper, setupTimeoutMs, shutdownTimeoutMs, maxFrameBytes, maxOutstandingActivity, cancelRetryIntervalMs, cancelRetryTimeoutMs, env?, model? })` → `opencode acp`. Required fields have no defaults. Optional: `env`, `model` (ACP `model` config option after session open). Steer/fork/configure/history unsupported at this wrapper; detach follows ACP. Provider failures arrive as normalized `error` events from stderr.
 
 **Claude** `claude({ id, command, args, keeper, inheritEnv, tools, permissionPrompts, partialMessages, setupTimeoutMs, requestTimeoutMs, shutdownTimeoutMs, maxFrameBytes, env?, model?, effort?, allowedTools?, disallowedTools?, permissionMode? })`. **There are no defaults** for those required fields; `claude()` throws `TypeError` naming a missing field. `partialMessages: true` adds `--include-partial-messages`; `false` omits it. Optional (absent = do not pass the CLI flag): `permissionMode`, `model`, `effort`, `allowedTools`, `disallowedTools`, `env`. `keeper` is `{ stateDirectory, limits: { parkedDeadlineMs, journalMaxBytes, connectTimeoutMs } }`. The driver talks to the Claude CLI only through that keeper (same process-death / re-attach model as Codex). Frames are `claude-control` (`control_request` / `control_response`), not JSON-RPC. Pass `tools: []` for no tools (`'default'` leaves the CLI tool list alone). `permissionPrompts` is `'none'` or `'host'`. Do not default `bypassPermissions`. Steer/fork/configure/history unsupported; `detach: true`.
 
@@ -163,14 +163,15 @@ createHostProvider({ create: () => Host })
 
 ## Environment
 
-`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` is required; `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table.
+`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` is required; `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object.
 
 ```ts
 prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise<PreparedEnvironment>
 prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promise<PreparedEnvironment>
+prepareOpenCodeEnvironment(spec: OpenCodeEnvironmentSpec): Promise<PreparedEnvironment>
 ```
 
-Grok writes `<home>/.grok/config.toml`, points `GROK_AUTH_PATH` at the canonical auth file (legacy private copy is promoted when newer), and writes `AGENTS.md` or `AGENTS.override.md` in `workdir`. Codex writes `<home>/config.toml` and `<home>/AGENTS.md` (0600), sets `CODEX_HOME`, copies `auth.json` unless `apiKey` is set (then `OPENAI_API_KEY`).
+Grok writes `<home>/.grok/config.toml`, points `GROK_AUTH_PATH` at the canonical auth file (legacy private copy is promoted when newer), and writes `AGENTS.md` or `AGENTS.override.md` in `workdir`. Codex writes `<home>/config.toml` and `<home>/AGENTS.md` (0600), sets `CODEX_HOME`, copies `auth.json` unless `apiKey` is set (then `OPENAI_API_KEY`). OpenCode writes `<configHome>/opencode/opencode.json` (0600) and `<home>/AGENTS.md` when `instructions !== null`, sets `XDG_CONFIG_HOME` only; credentials stay under the user's XDG_DATA_HOME (`credentials: "none"`). `provider: null` and `pluginPaths: []` omit those keys.
 
 Credential helpers (`promoteCredential`, `promoteIfNewer`, `jwtExpiryMs`, `readCredentialJson`) are exported for other copy-transport agents (cursor).
 

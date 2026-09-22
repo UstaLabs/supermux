@@ -7,8 +7,7 @@ import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { ClaudeCodeAdapter } from "../agents/claude"
 import { CursorAdapter, type CursorRunner } from "../agents/cursor/adapter"
-import { OpenCodeAdapter, type OpenCodeClientLike } from "../agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
+import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import { GrokAdapter } from "../agents/grok/adapter"
 import type { GrokRunner } from "../agents/grok/runner"
 import type { AgentPhase } from "./agent-state-store"
@@ -198,18 +197,16 @@ describe("SessionManager applyConfig", () => {
     expect(frames).toContainEqual({ type: "session_state", session: "c1", model: "new-model" })
   })
 
-  test("opencode model switch goes through the typed adapter accessor", async () => {
+  test("opencode model switch goes through setConfiguration", async () => {
     const m = manager()
     m.registry.register({ id: "o1", name: "oc", workdir: "/tmp", pid: 0, agent: "opencode", model: "openai/gpt-5" })
-    const adapter = new OpenCodeAdapter({
-      sessionName: "oc",
-      workdir: "/tmp",
-      client: {} as unknown as OpenCodeClientLike,
-      persistSessionId: async () => {},
+    const adapter = {
       model: "openai/gpt-5",
-    })
-    const handle = { pid: 1, kill: () => {}, onExit: () => {} } as unknown as OpenCodeSpawnHandle
-    m.registerOpenCodeRuntime("o1", "oc", adapter, handle)
+      async setConfiguration(patch: { model?: string }) {
+        if (patch.model) this.model = patch.model
+      },
+    }
+    m.registerOpenCodeRuntime("o1", adapter as unknown as CoreOpenCodeAdapter)
     const r = await m.applyConfig("o1", { model: "anthropic/claude-sonnet-5" })
     expect(r).toEqual({ ok: true, status: "applied" })
     expect(adapter.model).toBe("anthropic/claude-sonnet-5")

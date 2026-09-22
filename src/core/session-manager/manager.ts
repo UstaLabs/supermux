@@ -10,8 +10,7 @@ import { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
 import type { CodexRuntimeAdapter } from "./runtime"
 import { CursorAdapter } from "../agents/cursor/adapter"
-import { OpenCodeAdapter } from "../agents/opencode/adapter"
-import type { OpenCodeSpawnHandle } from "../agents/opencode/spawn"
+import { CoreOpenCodeAdapter } from "../agents/opencode/core-adapter"
 import { GrokAdapter } from "../agents/grok/adapter"
 import { CoreGrokAdapter } from "../agents/grok/core-adapter"
 import type { GrokRuntimeAdapter } from "./runtime"
@@ -293,12 +292,8 @@ export class SessionManager {
     this.registerRuntime(sessionId, { kind: AgentKind.Grok, adapter })
   }
 
-  registerOpenCodeRuntime(sessionId: string, name: string, adapter: OpenCodeAdapter, handle: OpenCodeSpawnHandle): void {
-    this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter, handle })
-    handle.onExit?.((code: number | null) => {
-      log.info("opencode_serve_exited", { name, code })
-      this.deleteRuntime(sessionId)
-    })
+  registerOpenCodeRuntime(sessionId: string, adapter: CoreOpenCodeAdapter): void {
+    this.registerRuntime(sessionId, { kind: AgentKind.OpenCode, adapter })
   }
 
   async kill(id: string): Promise<void> {
@@ -342,7 +337,7 @@ export class SessionManager {
       // No persistent process or tmux pane to kill.
     } else if (s.agent === "opencode") {
       const runtime = this.runtimes.get(s.id)
-      if (runtime?.kind === AgentKind.OpenCode) runtime.handle.kill()
+      if (runtime?.kind === AgentKind.OpenCode) await runtime.adapter.stop()
     } else if (s.agent === AgentKind.Grok) {
       // The `grok agent stdio` child is owned by the adapter, so stop() is the kill.
       // Must finish before deleting the runtime / archiving / reclaiming the worktree.
@@ -860,8 +855,8 @@ export class SessionManager {
       this.registerCodexRuntime(sid, name, adapter, handle as CodexSpawnHandle)
     } else if (adapter instanceof CursorAdapter) {
       this.registerCursorRuntime(sid, adapter)
-    } else if (adapter instanceof OpenCodeAdapter) {
-      this.registerOpenCodeRuntime(sid, name, adapter, handle as OpenCodeSpawnHandle)
+    } else if (adapter instanceof CoreOpenCodeAdapter) {
+      this.registerOpenCodeRuntime(sid, adapter)
     } else if (adapter instanceof CoreGrokAdapter || adapter instanceof GrokAdapter) {
       this.registerGrokRuntime(sid, adapter)
     }
@@ -1185,11 +1180,10 @@ export class SessionManager {
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
-  private async resumeOpenCodeArm(session: ResumeRow, name: string): Promise<OpenCodeSpawnHandle> {
-    const { adapter, handle } = await agents.opencode.resume(this.resumeCtx(session.id), session, name)
-    this.registerOpenCodeRuntime(session.id, name, adapter, handle)
+  private async resumeOpenCodeArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await agents.opencode.resume(this.resumeCtx(session.id), session, name)
+    this.registerOpenCodeRuntime(session.id, adapter)
     this.ports.resume.wireAdapterEvents(adapter, session.id)
-    return handle
   }
 
   /** The dialect's narrow view of this component (see agents/session-types.ts):
@@ -1385,8 +1379,8 @@ export class SessionManager {
           continue
         }
         try {
-          const handle = await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
-          if (s.status === "suspended") this.registry.sessions.activate(s.id, handle.pid ?? process.pid)
+          await this.resumeOpenCodeArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, process.pid)
           log.info("opencode_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
         } catch (err: any) {
           log.warn("opencode_resume_failed", { name: s.name, err: String(err) })
