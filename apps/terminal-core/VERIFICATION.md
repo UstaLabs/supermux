@@ -55,14 +55,19 @@ Not verified anywhere yet: **Safari/WebKit** (Plan 4), any **Android device**, a
 | coordinate | artifact | bytes | sha256 (first 16) |
 |---|---|---|---|
 | `dev.supermux.terminal:terminal-core:0.1.0-dev.1` | `.jar` (metadata klib) | 21,281 | `6d0d22bd1b49a13c` |
-| | `-sources.jar` | 31,217 | `389728effcab2572` |
+| | `-sources.jar` | 31,206 | `b1ad03a7827b586b` |
 | | `.module` / `.pom` | 11,711 / 2,636 | — |
-| `…:terminal-core-jvm:0.1.0-dev.1` | `.jar` | **2,864,805** | `5715667a6df275f6` |
-| | `-sources.jar` | 33,794 | `73f1365913b20d8a` |
-| `…:terminal-core-android:0.1.0-dev.1` | `.aar` | **1,801,097** | `3169ef71486ddd80` |
-| | `-sources.jar` | 29,217 | `bb20d53ed5442144` |
-| `…:terminal-core-wasm-js:0.1.0-dev.1` | `.klib` | **426,189** | `3257f1dcefa7760c` |
-| | `-sources.jar` | 29,905 | `240c0e1d642383cf` |
+| `…:terminal-core-jvm:0.1.0-dev.1` | `.jar` | **2,864,845** | `48d5dcb4d9b160bf` |
+| | `-sources.jar` | 33,783 | `d2a988b4bb9cdfaa` |
+| `…:terminal-core-android:0.1.0-dev.1` | `.aar` | **1,801,129** | `75a4205b1f0d876d` |
+| | `-sources.jar` | 29,206 | `91fb1737658e810d` |
+| `…:terminal-core-wasm-js:0.1.0-dev.1` | `.klib` | **426,201** | `14bcf525f0aec6fa` |
+| | `-sources.jar` | 29,894 | `603cb0804fd00fdb` |
+
+Those hashes are **stable**: two full `--rerun-tasks` publishes of the identical tree produced
+byte-identical jars, aar and klib. That needed `isPreserveFileTimestamps = false` +
+`isReproducibleFileOrder = true` on the archive tasks — measured before adding them, two publishes
+of the same tree differed in every archive except the metadata jar.
 
 Every jar and the AAR carry `META-INF/dev.supermux.terminal/LICENSE` (1,075 B) and
 `THIRD-PARTY-NOTICES.md` (20,938 B); the jvm jar and the wasm klib also carry
@@ -130,7 +135,7 @@ consumer-smoke: packaged linux-x64/libsupermux_terminal_jni.so = 2395600 bytes,
 consumer-smoke: red/wide/DSR/resize OK (frame gen 7, 10x40)
 consumer-smoke: mapped native library = …/consumer-smoke/build/terminal-native-cache/
                 supermux-terminal/0.1.0-dev.1/2bf7b385…ab243/libsupermux_terminal_jni.so
-consumer-smoke(android): aar = …/terminal-core-android-0.1.0-dev.1.aar (1801097 bytes)
+consumer-smoke(android): aar = …/terminal-core-android-0.1.0-dev.1.aar (1801129 bytes)
 consumer-smoke(android): jni/arm64-v8a/libsupermux_terminal_jni.so = 1906880 bytes
 consumer-smoke(android): jni/x86_64/libsupermux_terminal_jni.so = 2076992 bytes
 ```
@@ -198,8 +203,8 @@ under the 8 MiB envelope cap that `_Static_assert` guarantees.
 | `:terminal-core:jvmTest` | macOS arm64 (JDK 17) | **60** | 0 | 2026-09-22 19:38 — **Task-5 tree, no `TerminalSession` suites** |
 | `:terminal-core:iosSimulatorArm64Test` | iOS simulator (arm64) | **38** | 0 | 2026-09-22 19:37 — same gap |
 | `:terminal-core:testDebugUnitTest` / `testReleaseUnitTest` | Android host JVM | **disabled** | — | `System.loadLibrary` cannot find a `.so` that only exists inside an APK; the same JNI binding is covered by `jvmTest` |
-| `consumer-smoke:jvmTest` | linux-x64, published artifacts | **5** | 0 | 2026-09-22 21:26 |
-| `consumer-smoke:wasmJsBrowserTest` | headless Chrome 148, published klib | **1** | 0 | 2026-09-22 21:22 |
+| `consumer-smoke:jvmTest` | linux-x64, published artifacts | **5** | 0 | 2026-09-22 22:00 |
+| `consumer-smoke:wasmJsBrowserTest` | headless Chrome 148, published klib | **1** | 0 | 2026-09-22 22:01 |
 
 Linux 86 = EngineContractTest 12, TerminalSessionTest 23, TerminalSessionStressTest 3,
 JvmNativeLoaderTest 13, ViewportCodecTest 11, TerminalTypesTest 8, TerminalConstantsTest 7,

@@ -754,11 +754,15 @@ consumer checks that follow it: [`../VERIFICATION.md`](../VERIFICATION.md),
 | `terminal-core-wasm-js` | `.klib` | `supermux-terminal.wasm` + `terminal-loader.mjs` as klib resources |
 | `terminal-core-iosarm64`, `-iossimulatorarm64` | `.klib` | the cinterop against `libsupermux_terminal.a` (Mac-made publish only) |
 
-Every artifact also carries `dev/supermux/terminal/abi-manifest.json` (jvm jar + wasm
-klib) or the licence files (all jars, the AAR): st_* ABI version, Ghostty commit, Zig
-version, the publication profile, and per target the library name, sha256, size, zig
-target, build host and whether it was runtime-tested — plus `missing_targets`, so an
-incomplete package always says so about itself.
+The desktop jar and the wasm klib additionally carry
+`dev/supermux/terminal/abi-manifest.json`: st_* ABI version, Ghostty commit, Zig version,
+the publication profile, and per target the library name, sha256, size, zig target, build
+host and whether it was runtime-tested — plus `missing_targets`, so an incomplete package
+always says so about itself. Every jar and the AAR carry the two licence files.
+
+The archives are reproducible (`isPreserveFileTimestamps = false`,
+`isReproducibleFileOrder = true`): two full publishes of the identical tree produce
+byte-identical artifacts, the property the native libraries already have.
 
 ### Release vs dev publish
 

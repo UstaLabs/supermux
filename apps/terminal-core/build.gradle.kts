@@ -539,11 +539,21 @@ val licenseFiles = files(layout.projectDirectory.file("LICENSE"), layout.project
 // never collide with another dependency's META-INF/LICENSE.
 tasks.withType<Jar>().configureEach {
     from(licenseFiles) { into("META-INF/dev.supermux.terminal") }
+    // Reproducible archives: without these two, Gradle walks the input directories in whatever
+    // order the file system hands back, so two publishes of the identical tree produce jars with
+    // different sha256s (measured). The native libraries inside them are byte-identical across
+    // rebuilds; the packaging must be too, or "does this artifact match that build?" is unanswerable.
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
 }
 // The AAR is a zip: put the same two files at META-INF/ inside it (AGP does not merge library
 // java-resources into the aar's classes.jar in a way we can rely on).
 tasks.matching { it.name.startsWith("bundle") && it.name.endsWith("Aar") }.configureEach {
-    if (this is Zip) from(licenseFiles) { into("META-INF/dev.supermux.terminal") }
+    if (this is Zip) {
+        from(licenseFiles) { into("META-INF/dev.supermux.terminal") }
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+    }
 }
 
 publishing {

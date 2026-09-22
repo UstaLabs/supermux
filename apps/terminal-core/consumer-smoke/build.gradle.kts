@@ -51,8 +51,9 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            // THE dependency under test. Resolved only from the local test repository
-            // (settings.gradle.kts), never from a project or a remote.
+            // THE dependency under test. The content filters above (and the identical ones in
+            // settings.gradle.kts) let it come from the local test repository and from nowhere
+            // else — never from a project, never from a remote.
             implementation("dev.supermux.terminal:terminal-core:$terminalCoreVersion")
         }
         commonTest.dependencies {
@@ -73,14 +74,14 @@ kotlin {
 // block below does, and it is the documented consumer recipe (terminal-core/native/README.md,
 // "Browser (wasmJs)"). It still proves packaging: the bytes come out of the published klib, never
 // out of terminal-core/build/wasm.
-val terminalCoreWasmKlib: Configuration by configurations.creating {
+val terminalCoreWasmKlib: Configuration = configurations.create("terminalCoreWasmKlib") {
     isCanBeConsumed = false
     isTransitive = false
 }
 dependencies {
     terminalCoreWasmKlib("dev.supermux.terminal:terminal-core-wasm-js:$terminalCoreVersion@klib")
 }
-val extractTerminalWasmAssets by tasks.registering(Copy::class) {
+val extractTerminalWasmAssets = tasks.register<Copy>("extractTerminalWasmAssets") {
     description = "Unpack terminal-loader.mjs + supermux-terminal.wasm from the published klib."
     from(terminalCoreWasmKlib.map { zipTree(it) }) {
         include("terminal-loader.mjs", "supermux-terminal.wasm")
@@ -97,7 +98,7 @@ kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(extractTerminalWasmAs
 //
 // PACKAGING ONLY. Loading the library needs a device or emulator (no adb device here, Plan 3), so
 // this build resolves the published AAR and checks what is inside it; nothing Android ever runs.
-val terminalCoreAar: Configuration by configurations.creating {
+val terminalCoreAar: Configuration = configurations.create("terminalCoreAar") {
     isCanBeConsumed = false
     isTransitive = false
 }
@@ -114,10 +115,11 @@ tasks.named<Test>("jvmTest") {
     val aar = terminalCoreAar
     inputs.files(aar)
     doFirst { cache.mkdirs() }
+    // NOTE what is deliberately NOT set here: -Dsupermux.terminal.nativeLibrary, the developer
+    // override terminal-core's own jvmTest uses to load a library from a path. The packaged one is
+    // the whole point, and the test asserts the override is unset.
     systemProperty("supermux.terminal.cacheDir", cache.absolutePath)
     systemProperty("consumerSmoke.expectedVersion", terminalCoreVersion)
-    // Belt and braces: the developer override that loads a library from a path (used by
-    // terminal-core's own jvmTest) must NOT be set here — the packaged one is the point.
     systemProperty("consumerSmoke.nativeCache", cache.absolutePath)
     doFirst { systemProperty("consumerSmoke.androidAar", aar.singleFile.absolutePath) }
     testLogging { showStandardStreams = true }
