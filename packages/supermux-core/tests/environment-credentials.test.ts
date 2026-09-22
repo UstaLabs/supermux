@@ -19,19 +19,19 @@ import {
   promoteIfNewer,
   readCredentialJson,
   type FreshnessReader,
-} from "./credential-file"
+} from "../src/environment/index.js"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "cred-file-")) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-/** A credential whose freshness is the numeric `exp` field. */
 const cred = (exp: number, token: string) => JSON.stringify({ exp, token })
 const expField: FreshnessReader = (p) => {
   const parsed = readCredentialJson(p)
-  return typeof parsed?.exp === "number" ? parsed.exp : Number.NEGATIVE_INFINITY
+  if (!parsed || typeof parsed !== "object") return Number.NEGATIVE_INFINITY
+  const exp = (parsed as { exp?: unknown }).exp
+  return typeof exp === "number" ? exp : Number.NEGATIVE_INFINITY
 }
-/** No file ever carries a claim, so every comparison falls back to mtime. */
 const noClaim: FreshnessReader = () => Number.NEGATIVE_INFINITY
 
 function ageFile(path: string, secondsAgo: number) {
@@ -48,8 +48,6 @@ describe("promoteCredential", () => {
     promoteCredential(from, canonical)
 
     expect(readFileSync(canonical, "utf8")).toBe(cred(2, "refreshed"))
-    // The temp file is a sibling of the target (rename is atomic only inside
-    // one filesystem) and no temp file survives the write.
     expect(readdirSync(join(dir, "canonical"))).toEqual(["auth.json"])
   })
 
@@ -185,8 +183,6 @@ describe("promoteIfNewer", () => {
     const canonical = join(lockedDir, "canonical.json")
     writeFileSync(sessionCopy, cred(200, "refreshed"))
     writeFileSync(canonical, cred(100, "stale"))
-    // A read-only directory refuses the sibling temp file, so the rename never
-    // runs and the canonical file keeps its old bytes.
     chmodSync(lockedDir, 0o500)
 
     try {

@@ -1,15 +1,12 @@
-import { mkdirSync } from "fs"
 import { join } from "path"
 import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { codex, type CodexOptions } from "../../../../packages/supermux-core/src/codex/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
-import { resolveCodexAuth } from "./auth"
-import { writeCodexConfig } from "./config-writer"
-import { writeCodexPreamble } from "./preamble-writer"
+import { prepareCodexEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
+import { codexInstructions } from "./preamble-writer"
 import { codexPrepareSessionHome } from "../../plugins"
-import { shimSpawnSpec } from "../../session-manager/shim-spawn"
+import { muxShimServer } from "../mux-shim-server"
 import { HOME } from "../../session-manager/spawn-helper"
-import { SOCKETS_DIR } from "../../../shared/paths"
 
 export type CodexDriverFactory = (options: CodexOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -110,26 +107,19 @@ export function createCodexCoreHost(options: CodexCoreHostOptions): CodexCoreHos
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
-      mkdirSync(extra.sessionHome, { recursive: true, mode: 0o700 })
-      const auth = await resolveCodexAuth({
-        apiKey: process.env.OPENAI_API_KEY,
-        userCodexHome: join(HOME, ".codex"),
-        sessionCodexHome: extra.sessionHome,
+      const prepared = await prepareCodexEnvironment({
+        home: extra.sessionHome,
+        workdir: extra.workdir,
+        sessionId: extra.sessionId,
+        sessionName: extra.sessionName,
+        mcpServers: [muxShimServer("codex", extra.sessionId, extra.sessionName)],
+        skillsPaths: [],
+        instructions: codexInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+        credentials: { apiKey: process.env.OPENAI_API_KEY ?? null, canonicalHome: join(HOME, ".codex") },
+        nativeMemory: false,
       })
       await codexPrepareSessionHome(extra.sessionHome)
-      writeCodexConfig({
-        codexHome: extra.sessionHome,
-        ...shimSpawnSpec(),
-        sessionName: extra.sessionName,
-        socketsDir: SOCKETS_DIR,
-        sessionId: extra.sessionId,
-      })
-      writeCodexPreamble({
-        codexHome: extra.sessionHome,
-        sessionName: extra.sessionName,
-        workdir: extra.workdir,
-      })
-      return { env: { ...auth.env, CODEX_HOME: extra.sessionHome } }
+      return { env: prepared.env }
     },
   })
 }

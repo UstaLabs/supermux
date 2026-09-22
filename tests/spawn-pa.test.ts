@@ -7,11 +7,11 @@ import { Registry } from "../src/core/session-manager/registry"
 import { spawnPA } from "../src/core/session-manager/spawn-helper"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+import { fakeCodexHost } from "./helpers/fake-codex-host"
 
 // Non-claude collaborators are swapped via bun module mocks (spawnPA has no
 // injection seams). mock.module is process-global: capture the real modules
 // first, restore them in afterAll so later test files see the real thing.
-const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
 const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 const realCursorAuth = { ...(await import("../src/core/agents/cursor/auth")) }
 const realCursorSmoke = { ...(await import("../src/core/agents/cursor/smoke")) }
@@ -20,29 +20,11 @@ const realCursorAdapter = { ...(await import("../src/core/agents/cursor/adapter"
 const realOpenCodeSpawn = { ...(await import("../src/core/agents/opencode/spawn")) }
 const realOpenCodeAdapter = { ...(await import("../src/core/agents/opencode/adapter")) }
 
-mock.module("../src/core/agents/codex/auth", () => ({
-  ...realCodexAuth,
-  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-}))
+let fake = fakeCodexHost()
+
 mock.module("../src/core/agents/codex/core-host-provider", () => ({
   ...realCodexCoreHost,
-  getCodexCoreHost: () => ({
-    createAdapter: (opts: any) => ({
-      kind: "codex" as const,
-      id: opts.id,
-      sessionName: opts.sessionName,
-      workdir: opts.workdir,
-      async start() { await opts.persistThreadId("codex-thread-id") },
-      async resume() {},
-      async stop() {},
-      async send() {},
-      async interrupt() {},
-      async setConfiguration() {},
-      on() {},
-      emit() {},
-      rpc: { request: async () => ({}) },
-    }),
-  }),
+  getCodexCoreHost: () => fake.host,
 }))
 mock.module("../src/core/agents/cursor/auth", () => ({
   ...realCursorAuth,
@@ -83,7 +65,6 @@ mock.module("../src/core/agents/opencode/adapter", () => ({
 }))
 
 afterAll(() => {
-  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
   mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
   mock.module("../src/core/agents/cursor/auth", () => realCursorAuth)
   mock.module("../src/core/agents/cursor/smoke", () => realCursorSmoke)
@@ -101,8 +82,9 @@ function makeRegistry(): Registry {
   return new Registry(db)
 }
 
-beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-")) })
-afterEach(() => {
+beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), "spawn-pa-")); fake = fakeCodexHost() })
+afterEach(async () => {
+  await fake.close()
   setSessionBackendForTests()
   rmSync(tmpDir, { recursive: true, force: true })
 })

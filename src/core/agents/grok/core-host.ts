@@ -1,15 +1,12 @@
-import { mkdirSync } from "fs"
 import { join } from "path"
 import { createHost, type CoreLimits, type Host, type HostRegistration } from "../../../../packages/supermux-core/src/index.js"
 import { grok, type GrokOptions } from "../../../../packages/supermux-core/src/agents/index.js"
 import type { AgentDriver, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
-import { resolveGrokAuth } from "./auth"
-import { writeGrokConfig } from "./config-writer"
-import { writeGrokPreamble } from "./preamble-writer"
+import { prepareGrokEnvironment } from "../../../../packages/supermux-core/src/environment/index.js"
+import { grokInstructions } from "./preamble-writer"
 import { grokConfigEntries } from "../../plugins"
-import { shimSpawnSpec } from "../../session-manager/shim-spawn"
+import { muxShimServer } from "../mux-shim-server"
 import { HOME } from "../../session-manager/spawn-helper"
-import { SOCKETS_DIR } from "../../../shared/paths"
 
 export type GrokDriverFactory = (options: GrokOptions, overrides: SessionConfiguration) => AgentDriver
 
@@ -92,18 +89,20 @@ export function createGrokCoreHost(options: GrokCoreHostOptions): GrokCoreHost {
     },
     prepare: async (registration) => {
       const extra = asPrepareExtra(registration)
-      mkdirSync(extra.sessionHome, { recursive: true, mode: 0o700 })
-      const auth = await resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome: extra.sessionHome })
-      writeGrokConfig({
-        sessionHome: extra.sessionHome,
-        ...shimSpawnSpec(),
-        sessionName: extra.sessionName,
+      const prepared = await prepareGrokEnvironment({
+        home: extra.sessionHome,
+        workdir: extra.workdir,
         sessionId: extra.sessionId,
-        socketsDir: SOCKETS_DIR,
+        sessionName: extra.sessionName,
+        mcpServers: [muxShimServer("grok", extra.sessionId, extra.sessionName)],
         skillsPaths: grokConfigEntries({ sessionName: extra.sessionName }).skillsPaths,
+        instructions: grokInstructions({ sessionName: extra.sessionName, workdir: extra.workdir }),
+        credentials: { canonicalAuthPath: join(HOME, ".grok", "auth.json") },
+        autoUpdate: false,
+        importClaudeConfig: false,
+        platform: process.platform,
       })
-      writeGrokPreamble({ workdir: extra.workdir, sessionName: extra.sessionName })
-      return { env: auth.env }
+      return { env: prepared.env }
     },
   })
 }

@@ -2,14 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
-import { resolveCodexAuth, codexCredentialFreshness } from "../../src/core/agents/codex/auth"
+import { prepareCodexEnvironment, codexCredentialFreshness } from "../../packages/supermux-core/src/environment/index.js"
 
-/** A JWT whose payload carries the given `exp` claim (seconds since the epoch). */
 function jwt(expSeconds: number): string {
   return ["e30", Buffer.from(JSON.stringify({ exp: expSeconds })).toString("base64url"), "sig"].join(".")
 }
 
-/** A codex auth.json in the real ChatGPT-subscription shape. */
 function codexAuth(expSeconds: number, marker: string): string {
   return JSON.stringify({
     auth_mode: "chatgpt",
@@ -19,7 +17,21 @@ function codexAuth(expSeconds: number, marker: string): string {
   })
 }
 
-describe("resolveCodexAuth", () => {
+function prepare(opts: { apiKey: string | null; userHome: string; sessionHome: string }) {
+  return prepareCodexEnvironment({
+    home: opts.sessionHome,
+    workdir: opts.sessionHome,
+    sessionId: "s",
+    sessionName: "s",
+    mcpServers: [],
+    skillsPaths: [],
+    instructions: null,
+    credentials: { apiKey: opts.apiKey, canonicalHome: opts.userHome },
+    nativeMemory: false,
+  })
+}
+
+describe("prepareCodexEnvironment credentials", () => {
   let userHome: string
   let sessionHome: string
 
@@ -33,8 +45,8 @@ describe("resolveCodexAuth", () => {
   })
 
   test("uses OPENAI_API_KEY when set; no auth.json copy", async () => {
-    const r = await resolveCodexAuth({ apiKey: "sk-test", userCodexHome: userHome, sessionCodexHome: sessionHome })
-    expect(r.mode).toBe("api_key")
+    const r = await prepare({ apiKey: "sk-test", userHome, sessionHome })
+    expect(r.credentials).toBe("api_key")
     expect(r.env.OPENAI_API_KEY).toBe("sk-test")
     expect(existsSync(join(sessionHome, "auth.json"))).toBe(false)
   })
@@ -42,20 +54,14 @@ describe("resolveCodexAuth", () => {
   test("copies ~/.codex/auth.json into session home when no API key", async () => {
     mkdirSync(userHome, { recursive: true })
     writeFileSync(join(userHome, "auth.json"), '{"token":"x"}', { mode: 0o600 })
-    const r = await resolveCodexAuth({ apiKey: undefined, userCodexHome: userHome, sessionCodexHome: sessionHome })
-    expect(r.mode).toBe("oauth_copy")
+    const r = await prepare({ apiKey: null, userHome, sessionHome })
+    expect(r.credentials).toBe("copy")
     expect(readFileSync(join(sessionHome, "auth.json"), "utf8")).toBe('{"token":"x"}')
   })
 
-  // --- failure policy (see tests/agents/auth-contract.test.ts) ---
-
   test("FAILS CLOSED: throws a clear error when no auth is available", async () => {
-    await expect(
-      resolveCodexAuth({ apiKey: undefined, userCodexHome: userHome, sessionCodexHome: sessionHome })
-    ).rejects.toThrow(/codex login/)
+    await expect(prepare({ apiKey: null, userHome, sessionHome })).rejects.toThrow(/codex login/)
   })
-
-  // --- refresh-drift healing ---
 
   test("codexCredentialFreshness reads the access token expiry", () => {
     const path = join(sessionHome, "auth.json")
@@ -71,10 +77,9 @@ describe("resolveCodexAuth", () => {
     writeFileSync(canonical, codexAuth(1_000_000, "stale"))
     writeFileSync(copy, codexAuth(2_000_000, "refreshed"))
 
-    const r = await resolveCodexAuth({ apiKey: undefined, userCodexHome: userHome, sessionCodexHome: sessionHome })
+    const r = await prepare({ apiKey: null, userHome, sessionHome })
 
-    expect(r.mode).toBe("oauth_copy")
-    // The canonical file learned the refresh, so a sibling session gets it too.
+    expect(r.credentials).toBe("copy")
     expect(readFileSync(canonical, "utf8")).toBe(codexAuth(2_000_000, "refreshed"))
     expect(readFileSync(copy, "utf8")).toBe(codexAuth(2_000_000, "refreshed"))
   })
@@ -85,7 +90,7 @@ describe("resolveCodexAuth", () => {
     writeFileSync(canonical, codexAuth(2_000_000, "canonical"))
     writeFileSync(copy, codexAuth(1_000_000, "stale"))
 
-    await resolveCodexAuth({ apiKey: undefined, userCodexHome: userHome, sessionCodexHome: sessionHome })
+    await prepare({ apiKey: null, userHome, sessionHome })
 
     expect(readFileSync(canonical, "utf8")).toBe(codexAuth(2_000_000, "canonical"))
     expect(readFileSync(copy, "utf8")).toBe(codexAuth(2_000_000, "canonical"))
@@ -97,7 +102,7 @@ describe("resolveCodexAuth", () => {
     writeFileSync(canonical, codexAuth(1_000_000, "canonical"))
     writeFileSync(copy, "{ truncated by a crash")
 
-    await resolveCodexAuth({ apiKey: undefined, userCodexHome: userHome, sessionCodexHome: sessionHome })
+    await prepare({ apiKey: null, userHome, sessionHome })
 
     expect(readFileSync(canonical, "utf8")).toBe(codexAuth(1_000_000, "canonical"))
   })
@@ -106,9 +111,7 @@ describe("resolveCodexAuth", () => {
     const canonical = join(userHome, "auth.json")
     writeFileSync(join(sessionHome, "auth.json"), codexAuth(2_000_000, "leftover"))
 
-    await expect(
-      resolveCodexAuth({ apiKey: undefined, userCodexHome: userHome, sessionCodexHome: sessionHome })
-    ).rejects.toThrow(/codex login/)
+    await expect(prepare({ apiKey: null, userHome, sessionHome })).rejects.toThrow(/codex login/)
     expect(existsSync(canonical)).toBe(false)
   })
 
@@ -117,7 +120,7 @@ describe("resolveCodexAuth", () => {
     writeFileSync(canonical, codexAuth(1_000_000, "canonical"))
     writeFileSync(join(sessionHome, "auth.json"), codexAuth(2_000_000, "refreshed"))
 
-    await resolveCodexAuth({ apiKey: "sk-test", userCodexHome: userHome, sessionCodexHome: sessionHome })
+    await prepare({ apiKey: "sk-test", userHome, sessionHome })
 
     expect(readFileSync(canonical, "utf8")).toBe(codexAuth(1_000_000, "canonical"))
   })

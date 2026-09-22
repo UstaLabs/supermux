@@ -8,40 +8,21 @@ import { createSupervisor } from "../src/core/session-manager/supervisor"
 import { AgentKind } from "../src/shared/agents"
 import { setSessionBackendForTests } from "../src/core/runtime"
 import type { SessionBackend } from "../src/core/runtime/session-backend"
+import { fakeCodexHost } from "./helpers/fake-codex-host"
 
 // Codex PA spawns go through the real spawnPA path; its collaborators are
 // swapped via bun module mocks (there are no injection seams). mock.module is
 // process-global: capture the real modules and restore them in afterAll.
-const realCodexAuth = { ...(await import("../src/core/agents/codex/auth")) }
 const realCodexCoreHost = { ...(await import("../src/core/agents/codex/core-host-provider")) }
 
-mock.module("../src/core/agents/codex/auth", () => ({
-  ...realCodexAuth,
-  resolveCodexAuth: async () => ({ mode: "oauth_copy" as const, env: { OPENAI_API_KEY: "test" } }),
-}))
+let fake = fakeCodexHost()
+
 mock.module("../src/core/agents/codex/core-host-provider", () => ({
   ...realCodexCoreHost,
-  getCodexCoreHost: () => ({
-    createAdapter: (opts: any) => ({
-      kind: "codex" as const,
-      id: opts.id,
-      sessionName: opts.sessionName,
-      workdir: opts.workdir,
-      async start() { await opts.persistThreadId?.("codex-thread-id") },
-      async resume() {},
-      async stop() {},
-      async send() {},
-      async interrupt() {},
-      async setConfiguration() {},
-      on() {},
-      emit() {},
-      rpc: { request: async () => ({}) },
-    }),
-  }),
+  getCodexCoreHost: () => fake.host,
 }))
 
 afterAll(() => {
-  mock.module("../src/core/agents/codex/auth", () => realCodexAuth)
   mock.module("../src/core/agents/codex/core-host-provider", () => realCodexCoreHost)
 })
 
@@ -50,8 +31,10 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "amux-sup-"))
   db = openDb(join(tmpDir, "t.sqlite3"))
   runMigrations(db, join(import.meta.dir, "../src/core/storage/migrations"))
+  fake = fakeCodexHost()
 })
-afterEach(() => {
+afterEach(async () => {
+  await fake.close()
   setSessionBackendForTests()
   try { db.close() } catch {}
   rmSync(tmpDir, { recursive: true, force: true })

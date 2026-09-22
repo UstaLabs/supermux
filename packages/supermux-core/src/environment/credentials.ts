@@ -1,9 +1,9 @@
-/** Credential-file mechanics shared by the per-agent auth resolvers.
+/** Credential-file mechanics shared by per-agent environment preparation.
  *
  * This module holds MECHANICS, not a contract: an atomic write, a JWT expiry
  * reader, and one compare-then-promote driver. The dialect — which field of
- * which file carries the freshness signal — stays inside each agent's own
- * `auth.ts`, because the file format is the agent's own.
+ * which file carries the freshness signal — stays with the caller, because the
+ * file format is the agent's own.
  *
  * ## Why promotion exists
  *
@@ -28,9 +28,9 @@ import {
   renameSync,
   rmSync,
   statSync,
-} from "fs"
-import { randomUUID } from "crypto"
-import { dirname } from "path"
+} from "node:fs"
+import { randomUUID } from "node:crypto"
+import { dirname } from "node:path"
 
 /** How fresh a credential file is, in milliseconds since the epoch.
  * Return `Number.NEGATIVE_INFINITY` when the file carries no readable claim. */
@@ -152,7 +152,7 @@ export function jwtExpiryMs(token: unknown): number {
   if (parts.length !== 3) return Number.NEGATIVE_INFINITY
   try {
     const payload = Buffer.from(parts[1]!, "base64url").toString("utf8")
-    const claims = JSON.parse(payload)
+    const claims = JSON.parse(payload) as { exp?: unknown }
     const exp = claims?.exp
     if (typeof exp !== "number" || !Number.isFinite(exp)) return Number.NEGATIVE_INFINITY
     return exp * 1000
@@ -162,10 +162,40 @@ export function jwtExpiryMs(token: unknown): number {
 }
 
 /** Read a credential file as JSON, or undefined when it is missing or corrupt. */
-export function readCredentialJson(path: string): any | undefined {
+export function readCredentialJson(path: string): unknown {
   try {
     return JSON.parse(readFileSync(path, "utf8"))
   } catch {
     return undefined
   }
+}
+
+/** grok's credential dialect: a map of issuer entries, each with `expires_at`.
+ * Grok keeps this comparison and its own control flow instead of the shared
+ * `promoteIfNewer` driver, because grok promotes a legacy private copy even
+ * when the canonical file is missing. Codex and cursor must not do that. */
+export function grokCredentialExpiry(path: string): number {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown
+    if (!parsed || typeof parsed !== "object") return Number.NEGATIVE_INFINITY
+    let latest = Number.NEGATIVE_INFINITY
+    for (const credential of Object.values(parsed as Record<string, unknown>)) {
+      if (!credential || typeof credential !== "object") continue
+      const raw = (credential as { expires_at?: unknown }).expires_at
+      if (typeof raw !== "string" && typeof raw !== "number") continue
+      const expiry = typeof raw === "number" ? raw : Date.parse(raw)
+      if (Number.isFinite(expiry)) latest = Math.max(latest, expiry)
+    }
+    return latest
+  } catch {
+    return Number.NEGATIVE_INFINITY
+  }
+}
+
+/** Codex freshness: `tokens.access_token` is a JWT; `exp` moves on refresh. */
+export function codexCredentialFreshness(path: string): number {
+  const parsed = readCredentialJson(path)
+  if (!parsed || typeof parsed !== "object") return Number.NEGATIVE_INFINITY
+  const tokens = (parsed as { tokens?: { access_token?: unknown } }).tokens
+  return jwtExpiryMs(tokens?.access_token)
 }

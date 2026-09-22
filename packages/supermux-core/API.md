@@ -19,6 +19,7 @@ Use `module` / `moduleResolution` `NodeNext`. Helpers such as `cursorConfigRoot`
 | `supermux-core/cursor` | `cursor`, `cursorConfigRoot`, `cursorHistoryStorePath` |
 | `supermux-core/agents` | `grok`, `opencode` |
 | `supermux-core/auth` | `copiedCredentials`, `withAuth` |
+| `supermux-core/environment` | `prepareGrokEnvironment`, `prepareCodexEnvironment`, credential helpers |
 
 Root public types include `ActivityNotice`, `ActivityPhase`, `CreateOptions`, `AdoptOptions`, `ResumeOptions`, `SessionConfiguration`, `DriverContext`, `CoreEvent`, `Observer`, `AgentDriver`, `AgentRuntime`, `Host`, `HostHandle`, `HostRegistration`.
 
@@ -159,6 +160,19 @@ createHostProvider({ create: () => Host })
 ```
 
 `get()` is lazy and once. `close({ agents })` keeps the handle on failed close for retry and forbids reopen after shutdown. `setFactoryForTests` refuses to replace a live host. `resetForTests` is test-only.
+
+## Environment
+
+`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` is required; `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table.
+
+```ts
+prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise<PreparedEnvironment>
+prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promise<PreparedEnvironment>
+```
+
+Grok writes `<home>/.grok/config.toml`, points `GROK_AUTH_PATH` at the canonical auth file (legacy private copy is promoted when newer), and writes `AGENTS.md` or `AGENTS.override.md` in `workdir`. Codex writes `<home>/config.toml` and `<home>/AGENTS.md` (0600), sets `CODEX_HOME`, copies `auth.json` unless `apiKey` is set (then `OPENAI_API_KEY`).
+
+Credential helpers (`promoteCredential`, `promoteIfNewer`, `jwtExpiryMs`, `readCredentialJson`) are exported for other copy-transport agents (cursor).
 
 ## Auth helper
 

@@ -28,7 +28,7 @@ import { posix, win32 } from "path"
 import { home } from "../../../shared/home"
 import { ensureSharedCursorRuntime } from "../shared-runtime"
 import type { AgentAuthResult } from "../auth-result"
-import { jwtExpiryMs, promoteIfNewer, readCredentialJson } from "../credential-file"
+import { jwtExpiryMs, promoteIfNewer, readCredentialJson } from "../../../../packages/supermux-core/src/environment/index.js"
 import { resolveCommand } from "../../process/launcher"
 import type { LoginSpawnCommand } from "../login/spawn-command"
 
@@ -38,7 +38,9 @@ const CURSOR_DIR_FILES = ["cli-config.json", "agent-cli-state.json"]
 
 /** Expiry claim of a cursor credential file, in milliseconds since the epoch. */
 export function cursorCredentialFreshness(path: string): number {
-  return jwtExpiryMs(readCredentialJson(path)?.accessToken)
+  const parsed = readCredentialJson(path)
+  const token = parsed && typeof parsed === "object" ? (parsed as { accessToken?: unknown }).accessToken : undefined
+  return jwtExpiryMs(token)
 }
 
 export async function resolveCursorAuth(opts: {

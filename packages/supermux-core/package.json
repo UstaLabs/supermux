@@ -33,6 +33,10 @@
     "./cursor": {
       "types": "./dist/cursor/index.d.ts",
       "import": "./dist/cursor/index.js"
+    },
+    "./environment": {
+      "types": "./dist/environment/index.d.ts",
+      "import": "./dist/environment/index.js"
     }
   },
   "files": [
