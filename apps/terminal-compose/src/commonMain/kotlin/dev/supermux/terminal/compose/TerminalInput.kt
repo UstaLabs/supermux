@@ -1,10 +1,11 @@
 package dev.supermux.terminal.compose
 
-import androidx.compose.foundation.focusable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -29,6 +30,7 @@ import dev.supermux.terminal.MouseAction
 import dev.supermux.terminal.MouseButton
 import dev.supermux.terminal.TerminalKey
 import dev.supermux.terminal.TerminalModes
+import dev.supermux.terminal.TerminalKeys
 import dev.supermux.terminal.TerminalMouse
 import dev.supermux.terminal.TerminalSession
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +54,7 @@ internal class TerminalInputController(
     private val session: TerminalSession,
     private val model: ViewportModel,
     private val scroll: ScrollController,
+    private val selection: TerminalSelectionController,
     private val accessories: TerminalAccessoryState,
     private val scope: CoroutineScope,
     val focusRequester: FocusRequester,
@@ -65,6 +68,24 @@ internal class TerminalInputController(
 
     /** An OSC 8 hyperlink the user activated with a plain click. */
     var onLink: (String) -> Unit = {}
+
+    /** The platform clipboard the copy/paste actions go through; the surface keeps it current. */
+    var clipboard: TerminalClipboard? = null
+
+    /**
+     * True while this surface holds focus.
+     *
+     * Snapshot state, not a plain field: the semantics node OBSERVES it, and a screen reader that
+     * was told "not focused" once would never hear otherwise if this did not invalidate.
+     */
+    var focused: Boolean by mutableStateOf(false)
+        private set
+
+    /** How far from a touch handle a finger may land and still grab it. */
+    var handleRadiusPx: Float = 0f
+
+    /** The surface's height in pixels, for the selection's edge autoscroll. */
+    var surfaceHeightPx: Float = 0f
 
     val router = TerminalKeyRouter(
         send = ::sendKey,
@@ -80,11 +101,48 @@ internal class TerminalInputController(
         enabled && router.handle(event)
 
     fun onFocusChanged(focused: Boolean) {
+        this.focused = focused
         session.focus(focused)
         // A modifier armed against a terminal the user has left must not fire into the next one,
         // and a key held while focus moved will never produce its key-up here.
         accessories.clear()
         router.reset()
+        selection.finish()
+    }
+
+    /** Take the keyboard. Used by the pointer, the accessory bar and the a11y focus action. */
+    fun requestFocus(): Boolean = enabled && runCatching { focusRequester.requestFocus() }.isSuccess
+
+    /** Text an IME committed. Never preedit — see [TerminalImeState]. */
+    fun commitText(text: String) {
+        if (!enabled) return
+        router.commitText(text)
+    }
+
+    // ----------------------------------------------------------------- clipboard ----
+
+    /** Copy the selection through the ENGINE's `selectedText()`; false when there is nothing to copy. */
+    fun copySelection(): Boolean {
+        val target = clipboard ?: return false
+        if (!selection.hasSelection) return false
+        selection.copy(target)
+        return true
+    }
+
+    /**
+     * Paste the clipboard's text through the engine's paste API.
+     *
+     * A READ of the clipboard only ever happens here, behind a user action. Nothing the program
+     * prints can reach it: an OSC 52 read is denied inside the engine and an OSC 52 write is
+     * reported to the host, never honoured by this surface. See [Terminal]'s `onClipboard`.
+     */
+    fun pasteClipboard(): Boolean {
+        val source = clipboard ?: return false
+        scope.launch {
+            val text = runCatching { source.read() }.getOrNull() ?: return@launch
+            if (text.isNotEmpty()) paste(text, allowUnsafe = false) {}
+        }
+        return true
     }
 
     // ----------------------------------------------------------------- accessory bar ----
@@ -112,9 +170,16 @@ internal class TerminalInputController(
         session.key(key)
     }
 
-    /** Local input: disarm the accessory modifiers and come back to the newest output. */
+    /**
+     * Local input: disarm the accessory modifiers, drop the selection and come back to the newest
+     * output.
+     *
+     * Typing over a selection is how every terminal ends one — the highlight would otherwise sit on
+     * rows the program is already overwriting.
+     */
     private fun afterLocalInput() {
         accessories.clear()
+        selection.clear()
         if (!scroll.following) scroll.followBottom()
     }
 
@@ -206,18 +271,42 @@ internal class TerminalInputController(
             device = deviceOf(change),
             modifiers = modifiers,
         )
-        // Anything but a remote wheel is the scrollable's: leave the event unconsumed and let it
-        // normalize the notch, track the velocity and run the fling.
-        if (route != PointerRoute.REMOTE_MOUSE) return
+        // Anything the program does not get is the scrollable's: leave the event unconsumed and let
+        // it normalize the notch, track the velocity and run the fling.
+        if (route != PointerRoute.REMOTE_MOUSE && route != PointerRoute.REMOTE_SCROLL_KEYS) return
         val button = TerminalInputPolicy.wheelButton(change.scrollDelta)
-        val cell = cellOf(change.position)
-        if (button != MouseButton.NONE && cell != null) {
-            // xterm's wheel "buttons" are press events; there is no release for a notch.
-            repeat(TerminalInputPolicy.wheelNotches(change.scrollDelta)) {
-                send(cell, button, MouseAction.PRESS, modifiers)
+        val notches = TerminalInputPolicy.wheelNotches(change.scrollDelta)
+        if (route == PointerRoute.REMOTE_SCROLL_KEYS) {
+            sendAlternateScroll(button, notches, modifiers)
+        } else {
+            val cell = cellOf(change.position)
+            if (button != MouseButton.NONE && cell != null) {
+                // xterm's wheel "buttons" are press events; there is no release for a notch.
+                repeat(notches) { send(cell, button, MouseAction.PRESS, modifiers) }
             }
         }
         for (candidate in event.changes) candidate.consume()
+    }
+
+    /**
+     * Alternate scroll (DECSET 1007): a wheel notch becomes cursor-key presses.
+     *
+     * Through the ENGINE's key encoder, not a hard-coded `ESC[A`: the program may have turned
+     * application-cursor mode on, in which case the bytes are `ESC O A`, and it may have the kitty
+     * keyboard protocol on, in which case they are something else again. Only the engine knows,
+     * because only the engine saw the modes being negotiated.
+     */
+    private fun sendAlternateScroll(button: Int, notches: Int, modifiers: Int) {
+        val code = when (button) {
+            MouseButton.WHEEL_UP -> TerminalKeys.ARROW_UP
+            MouseButton.WHEEL_DOWN -> TerminalKeys.ARROW_DOWN
+            // Horizontal wheel: 1007 has nothing to say about it, so neither does this.
+            else -> return
+        }
+        repeat(notches * TerminalInputPolicy.ALTERNATE_SCROLL_LINES) {
+            sendKey(TerminalKey(code, "", modifiers, KeyAction.PRESS))
+            sendKey(TerminalKey(code, "", modifiers, KeyAction.RELEASE))
+        }
     }
 
     private fun AwaitPointerEventScope.onPress(event: PointerEvent) {
@@ -227,6 +316,9 @@ internal class TerminalInputController(
         val device = deviceOf(change)
         val route = TerminalInputPolicy.route(modes(), PointerIntent.PRESS, device, modifiers)
         val button = buttonOf(event)
+        // A finger (or a cursor) landing on a touch handle takes THAT handle, whatever the modes
+        // say: the handles are this surface's own chrome and a program never sees them.
+        val handle = handleUnder(change.position)?.takeIf { selection.beginHandle(it) }
         press = PressTracker(
             pointerId = change.id.value,
             downPosition = change.position,
@@ -236,13 +328,34 @@ internal class TerminalInputController(
             device = device,
             button = button,
             modifiers = modifiers,
-            route = route,
+            route = if (handle != null) PointerRoute.LOCAL_SELECTION else route,
+            handle = handle,
         )
         // Touching a terminal is how a user says "type here"; the host never has to ask for focus.
-        runCatching { focusRequester.requestFocus() }
-        if (route != PointerRoute.REMOTE_MOUSE) return
-        send(cell, button, MouseAction.PRESS, modifiers)
-        change.consume()
+        requestFocus()
+        if (handle != null) {
+            change.consume()
+            return
+        }
+        if (route == PointerRoute.REMOTE_MOUSE) {
+            send(cell, button, MouseAction.PRESS, modifiers)
+            change.consume()
+            return
+        }
+        // A press that is not the program's starts a selection — but only for a MOUSE. A finger is
+        // how a touch user SCROLLS, and stealing it for a selection is the single most infuriating
+        // thing a mobile terminal can do; touch selection starts from a long press instead.
+        if (route == PointerRoute.LOCAL_SELECTION && device == PointerDevice.MOUSE) {
+            selection.begin(cell)
+            change.consume()
+        }
+    }
+
+    /** The selection handle under [position], or null. */
+    private fun handleUnder(position: Offset): SelectionHandle? {
+        val frame = model.frame ?: return null
+        if (frame.selection == null || handleRadiusPx <= 0f) return null
+        return handleAt(position, selectionHandles(frame, metrics, scroll.paintOffset(frame)), handleRadiusPx)
     }
 
     private fun AwaitPointerEventScope.onMove(event: PointerEvent, slop: Float) {
@@ -261,10 +374,16 @@ internal class TerminalInputController(
         // A gesture belongs to whoever its PRESS was routed to, for its whole life: a program that
         // turns mouse reporting off mid-drag must still get the motion and the release of the
         // button it saw go down, or it is left believing that button is still held.
-        val route = if (down && tracker?.route == PointerRoute.REMOTE_MOUSE) {
-            PointerRoute.REMOTE_MOUSE
+        val route = if (down && tracker != null && tracker.route != PointerRoute.LOCAL_HISTORY) {
+            tracker.route
         } else {
             TerminalInputPolicy.route(modes(), intent, device, modifiers)
+        }
+        if (down && route == PointerRoute.LOCAL_SELECTION && selection.dragging) {
+            selection.extendTo(cell)
+            selection.onDragPosition(change.position, surfaceHeightPx, metrics)
+            change.consume()
+            return
         }
         if (route != PointerRoute.REMOTE_MOUSE) return
         // The engine de-duplicates motion per cell too; not sending it saves a mailbox slot per
@@ -298,21 +417,32 @@ internal class TerminalInputController(
             change.consume()
             return
         }
+        val wasDragging = selection.dragging
+        selection.finish()
         // A plain click that never moved, on a cell the frame says carries an OSC 8 hyperlink.
         if (tracker != null && !tracker.moved && !tracker.longPressClaimed && tracker.cell == cell) {
+            // A click drops the selection it did not extend — the standard way to dismiss one — and
+            // only then counts as a link activation.
+            if (tracker.handle == null) selection.clear()
             linkAt(cell)?.let(onLink)
+            return
         }
+        if (wasDragging) change.consume()
     }
 
     private fun fireLongPress(tracker: PressTracker) {
         tracker.longPressFired = true
         // The policy always keeps a long press local — it is the one gesture a touch user keeps
         // when a program has taken the mouse. Claiming the press here is what stops its release
-        // from counting as a click, so holding a hyperlink does not open it. The selection a long
-        // press starts is Plan 2 Task 5.
-        tracker.longPressClaimed =
+        // from counting as a click, so holding a hyperlink does not open it.
+        val local =
             TerminalInputPolicy.route(modes(), PointerIntent.LONG_PRESS, tracker.device, tracker.modifiers) !=
-            PointerRoute.REMOTE_MOUSE
+                PointerRoute.REMOTE_MOUSE
+        tracker.longPressClaimed = local
+        if (!local || tracker.moved || tracker.handle != null) return
+        // A word, not a cell: it gives the user two handles far enough apart to pull.
+        tracker.route = PointerRoute.LOCAL_SELECTION
+        selection.selectWord(tracker.cell)
     }
 
     private fun linkAt(cell: TerminalCellPosition): String? =
@@ -336,7 +466,9 @@ internal class TerminalInputController(
         val device: PointerDevice,
         val button: Int,
         val modifiers: Int,
-        val route: PointerRoute,
+        var route: PointerRoute,
+        /** The selection handle this gesture grabbed, if it landed on one. */
+        val handle: SelectionHandle? = null,
         var moved: Boolean = false,
         var longPressFired: Boolean = false,
         var longPressClaimed: Boolean = false,
@@ -345,7 +477,9 @@ internal class TerminalInputController(
 
     private companion object {
         /** What the policy sees before the first frame: a plain shell, nothing negotiated. */
-        val NO_MODES = TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false)
+        val NO_MODES = TerminalModes(
+            alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = false,
+        )
     }
 }
 
@@ -356,11 +490,15 @@ internal class TerminalInputController(
  * descendant and sees the Main pass first — see [TerminalInputController.handlePointer].
  * `onPreviewKeyEvent` is a preview, not a plain handler, so that Tab, the arrows and Escape reach
  * the program instead of moving focus or closing a dialog.
+ *
+ * The focusABLE node is not here: it is the invisible text field inside the box ([TerminalImeField]),
+ * because an IME only runs for a focused text field and two focusables would be two Tab stops for
+ * one terminal. This box is that field's ancestor, so a key preview still reaches it FIRST (previews
+ * run from the root down to the focused node) and `hasFocus` — not `isFocused` — is what tells this
+ * surface the keyboard is its.
  */
-internal fun Modifier.terminalInput(controller: TerminalInputController, enabled: Boolean): Modifier =
+internal fun Modifier.terminalInput(controller: TerminalInputController): Modifier =
     this
         .onPreviewKeyEvent(controller::onKeyEvent)
-        .onFocusChanged { controller.onFocusChanged(it.isFocused) }
-        .focusRequester(controller.focusRequester)
-        .focusable(enabled = enabled)
+        .onFocusChanged { controller.onFocusChanged(it.hasFocus) }
         .pointerInput(controller) { controller.handlePointer(this) }

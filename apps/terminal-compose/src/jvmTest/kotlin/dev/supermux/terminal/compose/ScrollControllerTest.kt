@@ -480,7 +480,12 @@ class ScrollControllerTest {
                     lines = List(size.rows) { lines.getOrElse((top + it).toInt()) { "" } },
                     viewportTop = top,
                     historyRows = history(),
-                    modes = TerminalModes(alternateScreen = false, mouseTracking = mouseTracking, bracketedPaste = false),
+                    modes = TerminalModes(
+                        alternateScreen = false,
+                        mouseTracking = mouseTracking,
+                        bracketedPaste = false,
+                        alternateScroll = false,
+                    ),
                 )
             }
 

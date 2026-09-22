@@ -27,13 +27,33 @@ import kotlinx.coroutines.flow.StateFlow
  */
 class TerminalEffectRelay {
     private val titleState = MutableStateFlow<String?>(null)
+    private val clipboardState = MutableStateFlow<ClipboardRequest?>(null)
 
     /** The newest OSC 0/2 window title, or null until the program sets one. */
     val title: StateFlow<String?> get() = titleState
 
+    /**
+     * The newest OSC 52 clipboard request, or null until a program makes one.
+     *
+     * Wrapped with a serial number because two identical requests are two requests: a program that
+     * copies the same string twice must reach the host twice, and a [StateFlow] would swallow the
+     * second one.
+     */
+    val clipboard: StateFlow<ClipboardRequest?> get() = clipboardState
+
+    /** One OSC 52 request, with the serial that makes a repeat of it a new value. */
+    data class ClipboardRequest(val serial: Long, val effect: TerminalEffect.ClipboardRequest)
+
+    private var clipboardSerial = 0L
+
     /** Feed one effect in. Safe from the session's owner coroutine; never blocks. */
     fun emit(effect: TerminalEffect) {
-        if (effect is TerminalEffect.Title) titleState.value = effect.value
+        when (effect) {
+            is TerminalEffect.Title -> titleState.value = effect.value
+            is TerminalEffect.ClipboardRequest ->
+                clipboardState.value = ClipboardRequest(++clipboardSerial, effect)
+            else -> Unit
+        }
     }
 
     /** A consumer that records what this relay cares about and forwards everything to [downstream]. */

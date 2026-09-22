@@ -51,6 +51,7 @@ fun DrawScope.drawTerminalFrame(
     cache: TextLayoutCache,
     scrollOffsetPx: Float = 0f,
     cursorEnabled: Boolean = true,
+    marked: String = "",
 ) {
     val fontSizePx = theme.fontSize.toPx()
     cache.retune(
@@ -70,6 +71,7 @@ fun DrawScope.drawTerminalFrame(
             for (run in runs.texts) painter.text(this, run)
             for (run in runs.decorations) painter.decorate(this, run)
             if (cursorEnabled) painter.cursor(this, frame)
+            if (marked.isNotEmpty()) painter.marked(this, frame, marked)
         }
     }
 }
@@ -291,6 +293,34 @@ private class RunPainter(
         }
     }
 
+    /**
+     * The text an IME is still composing, drawn AT the cursor and over the cells it would occupy.
+     *
+     * It is not terminal content and never will be unless the user commits it, so it is painted
+     * here rather than folded into the frame: the engine has never heard of these characters and
+     * the next frame would wipe them. The underline is the convention every platform uses for
+     * marked text, and it is what tells the user these characters are not in the shell yet.
+     *
+     * It is clipped to the row: a long composition runs off the right edge instead of wrapping onto
+     * a row of real output and hiding it.
+     */
+    fun marked(scope: DrawScope, frame: TerminalFrame, text: String) = with(scope) {
+        val cursor = frame.cursor
+        if (cursor.row !in 0 until frame.size.rows) return@with
+        val left = x(cursor.column.coerceIn(0, maxOf(0, frame.size.columns - 1)))
+        val top = y(cursor.row)
+        val right = frame.size.columns * metrics.width
+        if (right <= left) return@with
+        val style = ResolvedStyle(foreground = theme.foreground, background = theme.background)
+        val layout = layoutOf(text, style)
+        val width = minOf(layout.size.width.toFloat(), right - left)
+        clipRect(left = left, top = top, right = left + width, bottom = top + metrics.height) {
+            drawRect(theme.background, Offset(left, top), Size(width, metrics.height))
+            drawText(layout, color = theme.foreground, topLeft = Offset(left, top + metrics.baseline - layout.firstBaseline))
+            drawRect(theme.cursor, Offset(left, top + metrics.height - thin), Size(width, thin))
+        }
+    }
+
     private fun layoutOf(text: String, style: ResolvedStyle): TextLayoutResult {
         val key = TextRunKey(
             text = text,
@@ -324,5 +354,23 @@ private class RunPainter(
 
         /** Gap between the baseline and an underline, as a fraction of the cell height. */
         const val UNDERLINE_GAP = 0.08f
+    }
+}
+
+/**
+ * The two touch handles of the current selection.
+ *
+ * Drawn by the surface and not by [drawTerminalFrame], because they are chrome rather than grid:
+ * they sit outside the cells (above the first, below the last) and must not be clipped to the grid
+ * rectangle the way an overscan row is.
+ */
+fun DrawScope.drawSelectionHandles(
+    handles: List<SelectionHandleSpot>,
+    theme: TerminalTheme,
+    radiusPx: Float,
+) {
+    if (radiusPx <= 0f) return
+    for (spot in handles) {
+        drawCircle(color = theme.selectionHandle, radius = radiusPx, center = spot.position)
     }
 }

@@ -3,6 +3,8 @@ package dev.supermux.terminal.compose
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import dev.supermux.terminal.TerminalColor
@@ -26,6 +28,9 @@ import kotlin.math.roundToInt
  * - [cursorText] is the colour a filled block cursor draws its glyph in; null means "the cell's own
  *   background", which is the usual inverse-video look.
  * - [selectionForeground] null means "keep the cell's own foreground" (only the background changes).
+ * - [selectionHandle] is the colour of the two touch handles a selection grows on a phone, and
+ *   [selectionHandleSize] how big they are — big enough to grab with a finger, which is a size in
+ *   DP rather than in cells because a fingertip does not get smaller with the font.
  * - [boldBrightensAnsi] applies the old xterm habit of drawing bold ANSI 0–7 with 8–15. Off by
  *   default: Ghostty reports the resolved colour and the weight separately, and doubling the two is
  *   what makes themes look washed out.
@@ -39,6 +44,8 @@ data class TerminalTheme(
     val cursorText: Color? = null,
     val selectionBackground: Color = Color(0x553E7BD6),
     val selectionForeground: Color? = null,
+    val selectionHandle: Color = Color(0xFF3E7BD6),
+    val selectionHandleSize: Dp = 12.dp,
     val ansi: List<Color> = DEFAULT_ANSI,
     val fontFamily: FontFamily = FontFamily.Monospace,
     val fontSize: TextUnit = 13.sp,
@@ -51,6 +58,7 @@ data class TerminalTheme(
         require(ansi.size == ANSI_COLORS) { "ansi must have $ANSI_COLORS entries, got ${ansi.size}" }
         require(lineHeightScale > 0f) { "lineHeightScale must be positive" }
         require(faintAlpha in 0f..1f) { "faintAlpha must be in 0..1" }
+        require(selectionHandleSize.value > 0f) { "selectionHandleSize must be positive" }
     }
 
     /**

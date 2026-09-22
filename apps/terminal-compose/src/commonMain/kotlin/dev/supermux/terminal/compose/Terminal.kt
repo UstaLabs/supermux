@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntSize
+import dev.supermux.terminal.TerminalEffect
 import dev.supermux.terminal.TerminalSession
 import dev.supermux.terminal.TerminalSize
 
@@ -58,9 +59,15 @@ import dev.supermux.terminal.TerminalSize
  *   uses only non-blocking calls, so without it a dead terminal is just a screen that stopped
  *   changing.
  *
- * **What it does not do yet.** IME composition, selection and full semantics (Task 5) arrive in
- * their own files; [PointerRoute.LOCAL_SELECTION] is already a routing outcome and already keeps
- * those gestures away from the program, it just has no selection to move yet.
+ * - Takes text from an IME without ever sending a preedit byte: the composing text is held apart
+ *   from the terminal's own content and drawn at the cursor until the user commits it. See
+ *   [TerminalImeState].
+ * - Selects text with the mouse, a long press and two touch handles, in the engine's absolute row
+ *   space, and copies it through the ENGINE (`selectedText()`) so wraps and grapheme clusters come
+ *   out right. See [TerminalSelectionController].
+ * - Publishes itself to accessibility and to UI tests: a name, the visible rows, the selection, and
+ *   stable copy / paste / scroll / focus actions — and deliberately no live region. See
+ *   [terminalSemantics].
  *
  * **Sharing a session.** Several surfaces may show one session. Each takes its own
  * [dev.supermux.terminal.RendererLease], so one going away (or inactive) never stops the frames the
@@ -77,9 +84,20 @@ import dev.supermux.terminal.TerminalSize
  *   change.
  * @param onTitle the newest OSC 0/2 title — only ever called when the host installed a
  *   [TerminalEffectRelay] through [LocalTerminalEffects] (the host, not this surface, owns effects).
+ * @param label the terminal's name for a screen reader; see [terminalSemantics].
+ * @param clipboard where copy puts text and paste takes it from. A clipboard READ only ever happens
+ *   behind a user action (the paste accessory, the a11y paste action); nothing the program prints
+ *   can reach it.
  * @param onLink an OSC 8 hyperlink the user activated with a plain click (a press and a release on
  *   the same cell, with no drag, that the program did not ask for). The surface never opens
- *   anything itself — what a URI means is the host's decision.
+ *   anything itself — it does not launch a URL and it does not run a shell: what a URI means is the
+ *   host's decision, and a link that arrived in a build log is not a reason to open anything.
+ * @param onClipboard an OSC 52 clipboard request from the PROGRAM, reported and nothing more —
+ *   DEFAULT DENY. The surface never puts a program's text on the clipboard and never reads the
+ *   clipboard for one; a host that wants to honour a write asks the user and calls its own
+ *   clipboard. Reads (`write = false`) are informational only: the engine already denied them
+ *   synchronously, because it cannot wait for an embedder to answer. Only fires when the host
+ *   installed a [TerminalEffectRelay] through [LocalTerminalEffects].
  * @param onFailure the unrecoverable engine error that stopped the session, at most once. The
  *   surface keeps showing the last frame it drew — a frozen screen with an explanation beats a
  *   blank one — and the host decides whether to close, retry or show it in [overlay].
@@ -93,8 +111,11 @@ fun Terminal(
     theme: TerminalTheme = TerminalTheme(),
     active: Boolean = true,
     accessories: TerminalAccessoryState = rememberTerminalAccessories(),
+    label: String = TerminalSemantics.LABEL,
+    clipboard: TerminalClipboard = rememberTerminalClipboard(),
     onTitle: (String) -> Unit = {},
     onLink: (String) -> Unit = {},
+    onClipboard: (TerminalEffect.ClipboardRequest) -> Unit = {},
     onFailure: (Throwable) -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {},
 ) {
@@ -117,6 +138,14 @@ fun Terminal(
     // The metrics decide what a pixel of scrolling means; they are known before the first paint.
     SideEffect { scroll.onCellHeight(metrics.height) }
 
+    val focusRequester = remember(session) { FocusRequester() }
+    // Declared before the frame collector: eviction renumbers the rows a selection is anchored to,
+    // so the selection has to see every frame the scroll controller does.
+    val selection = remember(session, model, scroll, scope) {
+        TerminalSelectionController(session, model, scroll, scope)
+    }
+    val ime = remember(session) { TerminalImeState() }
+
     // The engine resolved palette indices and OSC colours itself, so a theme change has to reach it
     // before the next paint or half the screen would keep the old palette.
     val engineColors = remember(theme.foreground, theme.background, theme.cursor, theme.ansi) {
@@ -133,6 +162,9 @@ fun Terminal(
     val relay = LocalTerminalEffects.current
     val title by relay.title.collectAsState()
     LaunchedEffect(title) { title?.let(onTitle) }
+    // Reported, never honoured: the surface does not touch the clipboard on a program's say-so.
+    val clipboardRequest by relay.clipboard.collectAsState()
+    LaunchedEffect(clipboardRequest) { clipboardRequest?.let { onClipboard(it.effect) } }
 
     // The lease, not a session-wide flag: a second surface on the same session must not be frozen
     // by this one going off-screen. Publication runs while at least one lease is open.
@@ -143,7 +175,7 @@ fun Terminal(
 
     // Every frame is applied, and acknowledged, on the composition's own dispatcher: the snapshot
     // writes happen on the UI owner and nothing in the draw path ever touches the engine.
-    LaunchedEffect(session, model, scroll, active) {
+    LaunchedEffect(session, model, scroll, selection, active) {
         if (!active) {
             scroll.cancelFling()
             return@LaunchedEffect
@@ -151,7 +183,10 @@ fun Terminal(
         session.viewports.collect { viewport ->
             val update = model.apply(viewport)
             when (update) {
-                is ViewportUpdate.Applied -> scroll.onFrame(update.frame)
+                is ViewportUpdate.Applied -> {
+                    scroll.onFrame(update.frame)
+                    selection.onFrame(update.frame)
+                }
                 is ViewportUpdate.Rejected -> if (update.reason == ViewportRejection.NEEDS_FULL) {
                     // This surface has no rows to patch (it attached to a session that was already
                     // running, or the grid just changed): ask for a frame that carries all of them.
@@ -194,15 +229,18 @@ fun Terminal(
     // was already running is not something the program asked for, so stop it.
     LaunchedEffect(mouseMode, scroll) { if (mouseMode) scroll.cancelFling() }
 
-    val focusRequester = remember(session) { FocusRequester() }
-    val input = remember(session, model, scroll, accessories, scope) {
-        TerminalInputController(session, model, scroll, accessories, scope, focusRequester)
+    val input = remember(session, model, scroll, selection, accessories, scope) {
+        TerminalInputController(session, model, scroll, selection, accessories, scope, focusRequester)
     }
+    val handleRadiusPx = with(density) { theme.selectionHandleSize.toPx() / 2f }
     // The controller is long-lived; these follow every recomposition without restarting it.
     SideEffect {
         input.metrics = metrics
         input.enabled = active
         input.onLink = onLink
+        input.clipboard = clipboard
+        input.handleRadiusPx = handleRadiusPx
+        input.surfaceHeightPx = viewportPx.height.toFloat()
     }
     DisposableEffect(input, accessories) {
         accessories.bind(input)
@@ -233,10 +271,24 @@ fun Terminal(
                     flingBehavior = ScrollableDefaults.flingBehavior(),
                 )
                 // INSIDE the scrollable on purpose: the pointer node sees the main pass first and
-                // consumes what the program asked for before the scrollable can scroll on it.
-                .terminalInput(input, active)
+                // consumes what the program asked for before the scrollable can scroll on it. This
+                // ordering is load-bearing under application mouse mode, where `scrollable` stays
+                // ENABLED and only the descendant's consumption of the Scroll event in Compose's
+                // Main pass keeps the local history from moving as well — `mouseWheelUnderMouseMode\
+                // DoesNotScrollHistory` in TerminalInputTest is what catches a Compose upgrade that
+                // changes that ordering.
+                .terminalInput(input)
                 // A new frame invalidates the semantics and the draw, never the whole composable.
-                .terminalSemantics(model),
+                .terminalSemantics(
+                    model = model,
+                    scroll = scroll,
+                    label = label,
+                    enabled = active,
+                    focused = { input.focused },
+                    onRequestFocus = input::requestFocus,
+                    onCopy = input::copySelection,
+                    onPaste = input::pasteClipboard,
+                ),
         ) {
             Canvas(Modifier.fillMaxSize()) {
                 drawRect(theme.background)
@@ -255,6 +307,7 @@ fun Terminal(
                         cache = layoutCache,
                         scrollOffsetPx = offset,
                         cursorEnabled = active,
+                        marked = ime.marked,
                     )
                     // Shifted up: the bottom edge of the grid is past the frame's last row.
                     if (offset > 0f) {
@@ -288,7 +341,21 @@ fun Terminal(
                         }
                     }
                 }
+                // Chrome, not grid: the handles sit outside the cells they mark (above the first,
+                // below the last), so they are drawn past the clip the overscan rows need.
+                drawSelectionHandles(
+                    handles = selectionHandles(frame, metrics, offset),
+                    theme = theme,
+                    radiusPx = handleRadiusPx,
+                )
             }
+            // The IME's own node: invisible, one pixel, and the surface's focus target.
+            TerminalImeField(
+                state = ime,
+                enabled = active,
+                focusRequester = focusRequester,
+                onCommit = input::commitText,
+            )
             overlay()
         }
     }

@@ -3,6 +3,7 @@ package dev.supermux.terminal.compose
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
@@ -97,6 +98,27 @@ internal class CountingEngine(private val delegate: TerminalEngine) : TerminalEn
     }
 }
 
+/**
+ * A clipboard that records instead of touching the host's.
+ *
+ * A test that asserted on the real system clipboard would fight every other process on the machine
+ * — and on CI there may not be one at all.
+ */
+internal class RecordingClipboard(@Volatile var content: String? = null) : TerminalClipboard {
+    val writes: MutableList<String> = CopyOnWriteArrayList()
+    val reads = AtomicInteger()
+
+    override suspend fun read(): String? {
+        reads.incrementAndGet()
+        return content
+    }
+
+    override suspend fun write(text: String) {
+        writes += text
+        content = text
+    }
+}
+
 /** One live [Terminal] on one real session, plus everything a test needs to poke at it. */
 internal class InputFixture(
     val session: TerminalSession,
@@ -105,7 +127,16 @@ internal class InputFixture(
     val accessories: TerminalAccessoryState,
     val scroll: ScrollController,
     val links: MutableList<String>,
+    val clipboard: RecordingClipboard,
+    val clipboardRequests: MutableList<TerminalEffect.ClipboardRequest>,
+    val relay: TerminalEffectRelay,
 ) {
+    /** The selection the ENGINE holds, which is the only one that is ever drawn. */
+    fun selection(): dev.supermux.terminal.TerminalSelection? = session.viewports.value.selection
+
+    /** The selected text, straight from the engine (wraps and graphemes included). */
+    fun selectedText(): String = runBlocking { session.selectedText() }
+
     val columns: Int get() = session.viewports.value.size.columns
     val rows: Int get() = session.viewports.value.size.rows
     private val cellWidth: Float get() = session.viewports.value.size.cellWidthPx.toFloat()
@@ -141,17 +172,19 @@ internal const val INPUT_TIMEOUT = 10_000L
 @OptIn(ExperimentalTestApi::class)
 internal fun terminalInputTest(
     focused: Boolean = true,
+    limits: TerminalLimits = TerminalLimits(),
     body: ComposeUiTest.(InputFixture) -> Unit,
 ) = runComposeUiTest {
     val recorder = ByteRecorder()
+    val relay = TerminalEffectRelay()
     var engine: CountingEngine? = null
     val session = runBlocking {
         TerminalSession.open(
             size = TerminalSize(40, 10, 8, 16),
-            limits = TerminalLimits(),
-            effects = recorder::record,
-            engineFactory = { size, limits ->
-                CountingEngine(createTerminalEngine(size, limits)).also { engine = it }
+            limits = limits,
+            effects = relay.wrap(recorder::record),
+            engineFactory = { size, engineLimits ->
+                CountingEngine(createTerminalEngine(size, engineLimits)).also { engine = it }
             },
         )
     }
@@ -159,15 +192,21 @@ internal fun terminalInputTest(
         var scroll: ScrollController? = null
         val accessories = TerminalAccessoryState()
         val links = mutableListOf<String>()
+        val clipboard = RecordingClipboard()
+        val requests = CopyOnWriteArrayList<TerminalEffect.ClipboardRequest>()
         setContent {
-            Box(Modifier.size(400.dp, 300.dp)) {
-                Terminal(
-                    session = session,
-                    modifier = Modifier.fillMaxSize().testTag(INPUT_TAG),
-                    accessories = accessories,
-                    onLink = { links += it },
-                ) {
-                    scroll = LocalTerminalScroll.current
+            CompositionLocalProvider(LocalTerminalEffects provides relay) {
+                Box(Modifier.size(400.dp, 300.dp)) {
+                    Terminal(
+                        session = session,
+                        modifier = Modifier.fillMaxSize().testTag(INPUT_TAG),
+                        accessories = accessories,
+                        clipboard = clipboard,
+                        onLink = { links += it },
+                        onClipboard = { requests += it },
+                    ) {
+                        scroll = LocalTerminalScroll.current
+                    }
                 }
             }
         }
@@ -186,6 +225,9 @@ internal fun terminalInputTest(
                 accessories = accessories,
                 scroll = assertNotNull(scroll, "Terminal did not publish its scroll controller"),
                 links = links,
+                clipboard = clipboard,
+                clipboardRequests = requests,
+                relay = relay,
             ),
         )
     } finally {
@@ -204,6 +246,21 @@ internal fun ComposeUiTest.enableSgrMouse(fixture: InputFixture, alternateScreen
     waitUntil(timeoutMillis = INPUT_TIMEOUT) {
         val modes = fixture.session.viewports.value.modes
         modes.mouseTracking && modes.alternateScreen == alternateScreen
+    }
+    waitForIdle()
+    fixture.recorder.clear()
+}
+
+/**
+ * Put the terminal on the ALTERNATE screen with mouse tracking off, the way a pager does, and say
+ * whether alternate scroll (1007) should be on. 1007 is on by default, so "off" takes a sequence.
+ */
+@OptIn(ExperimentalTestApi::class)
+internal fun ComposeUiTest.enterAlternateScreen(fixture: InputFixture, alternateScroll: Boolean = true) {
+    fixture.feed(if (alternateScroll) "\u001b[?1049h" else "\u001b[?1049h\u001b[?1007l")
+    waitUntil(timeoutMillis = INPUT_TIMEOUT) {
+        val modes = fixture.session.viewports.value.modes
+        modes.alternateScreen && modes.alternateScroll == alternateScroll && !modes.mouseTracking
     }
     waitForIdle()
     fixture.recorder.clear()

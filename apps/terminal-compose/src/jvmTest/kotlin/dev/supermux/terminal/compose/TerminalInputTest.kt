@@ -145,6 +145,9 @@ class TerminalInputTest {
         node.performKeyPress(key(Key.A, KeyEventType.KeyDown, 'a'.code))
         node.performKeyPress(key(Key.A, KeyEventType.KeyDown, 'a'.code))
         node.performKeyPress(key(Key.A, KeyEventType.KeyUp, 'a'.code))
+        // On the KEY CALLS, not on the bytes: the release produces no byte of its own, so waiting
+        // for "aaa" would race the event that this test is actually about.
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.engine.keys.size >= 4 }
         settle(fixture, 3)
 
         assertEquals(

@@ -25,13 +25,15 @@ enum class PointerDevice { MOUSE, TOUCH }
  * Where a pointer gesture goes.
  *
  * - [LOCAL_HISTORY]: the surface's own scrollback. Nothing crosses the wire — see [ScrollController].
- * - [LOCAL_SELECTION]: the surface's own selection. Nothing crosses the wire either. Selection
- *   itself is Plan 2 Task 5; until then this outcome means "the program does not get this gesture",
- *   which is already the half that matters for routing.
+ * - [LOCAL_SELECTION]: the surface's own selection. Nothing crosses the wire either; see
+ *   [TerminalSelectionController], which asks the ENGINE to hold the selection but never sends the
+ *   program anything.
  * - [REMOTE_MOUSE]: a [dev.supermux.terminal.TerminalMouse] for the engine to encode and the program
  *   to read.
+ * - [REMOTE_SCROLL_KEYS]: alternate scroll (DECSET 1007). The program gets CURSOR KEYS, not a mouse
+ *   report — see rule 4.
  */
-enum class PointerRoute { LOCAL_HISTORY, LOCAL_SELECTION, REMOTE_MOUSE }
+enum class PointerRoute { LOCAL_HISTORY, LOCAL_SELECTION, REMOTE_MOUSE, REMOTE_SCROLL_KEYS }
 
 /**
  * Who gets a pointer gesture: this surface, or the program on the other end of the pty.
@@ -54,11 +56,16 @@ enum class PointerRoute { LOCAL_HISTORY, LOCAL_SELECTION, REMOTE_MOUSE }
  *    which format (X10, SGR, SGR-pixels), whether motion is reported at all, whether a wheel notch
  *    produces anything — from the modes the program negotiated. This layer never writes an escape
  *    sequence.
- * 4. **On the alternate screen the wheel is the program's**, even with tracking off. There is no
- *    scrollback there to scroll (`historyRows` is 0 on the alternate screen), and the wheel's
- *    meaning in a full-screen program is whatever the engine's encoder makes of it under the modes
- *    that program set. Sending a fabricated `ESC[A`/`ESC[B` — or, worse, a tmux-shaped escape — from
- *    here would be this layer inventing a protocol it cannot see the other half of.
+ * 4. **On the alternate screen the wheel is alternate scroll's** ([TerminalModes.alternateScroll],
+ *    DECSET 1007 — on by default), even with tracking off. There is no scrollback there to scroll
+ *    (`historyRows` is 0 on the alternate screen), and what a pager wants instead is cursor keys:
+ *    that is what 1007 means and what every terminal does with it. The route is
+ *    [PointerRoute.REMOTE_SCROLL_KEYS] and the bytes are still not written here — the input layer
+ *    hands the engine [dev.supermux.terminal.TerminalKeys.ARROW_UP] / `ARROW_DOWN` and its KEY
+ *    encoder decides what those are under the modes that program set, so application-cursor mode
+ *    (DECCKM) is respected without this layer knowing it exists. With 1007 OFF the wheel does
+ *    nothing at all, which is also what every terminal does: there is nothing to scroll and
+ *    fabricating an escape sequence would be inventing a protocol.
  * 5. **Everything else is local**: in the shell, a wheel notch and a finger drag scroll this
  *    surface's history, and a mouse press or drag is a selection.
  */
@@ -74,7 +81,9 @@ object TerminalInputPolicy {
         val shift = modifiers and Modifiers.SHIFT != 0
         if (shift) return localRoute(intent, device)
         if (modes.mouseTracking) return PointerRoute.REMOTE_MOUSE
-        if (modes.alternateScreen && intent == PointerIntent.WHEEL) return PointerRoute.REMOTE_MOUSE
+        if (modes.alternateScreen && intent == PointerIntent.WHEEL) {
+            return if (modes.alternateScroll) PointerRoute.REMOTE_SCROLL_KEYS else PointerRoute.LOCAL_HISTORY
+        }
         return localRoute(intent, device)
     }
 
@@ -122,6 +131,15 @@ object TerminalInputPolicy {
 
     /** Never send more than this many wheel events for one platform scroll event. */
     const val MAX_NOTCHES: Int = 8
+
+    /**
+     * Cursor-key presses one wheel notch is worth under alternate scroll (DECSET 1007).
+     *
+     * Three, like xterm's own alternate-scroll and like the three lines a wheel notch scrolls
+     * everywhere else; one would make a pager crawl and the user would reach for the scrollbar that
+     * a full-screen program does not have.
+     */
+    const val ALTERNATE_SCROLL_LINES: Int = 3
 }
 
 /** A cell of the VIEWPORT: column 0 is the left edge, row 0 the top VISIBLE row. */

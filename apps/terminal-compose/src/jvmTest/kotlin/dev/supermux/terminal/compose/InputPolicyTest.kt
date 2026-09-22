@@ -28,10 +28,16 @@ import kotlin.test.assertTrue
  */
 class InputPolicyTest {
 
-    private val shell = TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false)
-    private val sgrMouse = TerminalModes(alternateScreen = false, mouseTracking = true, bracketedPaste = false)
-    private val altSgrMouse = TerminalModes(alternateScreen = true, mouseTracking = true, bracketedPaste = false)
-    private val altPlain = TerminalModes(alternateScreen = true, mouseTracking = false, bracketedPaste = false)
+    // 1007 (alternate scroll) is on by default in the engine, so the "plain" modes carry it on.
+    private val shell = TerminalModes(
+        alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = true,
+    )
+    private val sgrMouse = shell.copy(mouseTracking = true)
+    private val altSgrMouse = shell.copy(alternateScreen = true, mouseTracking = true)
+    private val altPlain = shell.copy(alternateScreen = true)
+
+    /** The alternate screen with mouse tracking off AND the program having turned 1007 off. */
+    private val altNoScroll = altPlain.copy(alternateScroll = false)
 
     // ----------------------------------------------------------------- the table ----
 
@@ -71,11 +77,17 @@ class InputPolicyTest {
             Row("SGR mouse + Ctrl + wheel", sgrMouse, PointerIntent.WHEEL, PointerDevice.MOUSE, Modifiers.CTRL, PointerRoute.REMOTE_MOUSE),
             Row("SGR mouse + Alt + press", sgrMouse, PointerIntent.PRESS, PointerDevice.MOUSE, Modifiers.ALT, PointerRoute.REMOTE_MOUSE),
 
-            // The alternate screen has no history to scroll: the wheel belongs to the program's own
-            // modes, whatever the engine's encoder makes of them.
-            Row("alternate + mouse off + wheel", altPlain, PointerIntent.WHEEL, PointerDevice.MOUSE, Modifiers.NONE, PointerRoute.REMOTE_MOUSE),
+            // The alternate screen has no history to scroll. With 1007 on (its default) the wheel
+            // becomes cursor keys for the program; with 1007 off it does nothing at all, and the
+            // route says so by staying local rather than inventing an escape sequence.
+            Row("alternate + mouse off + wheel", altPlain, PointerIntent.WHEEL, PointerDevice.MOUSE, Modifiers.NONE, PointerRoute.REMOTE_SCROLL_KEYS),
+            Row("alternate + 1007 off + wheel", altNoScroll, PointerIntent.WHEEL, PointerDevice.MOUSE, Modifiers.NONE, PointerRoute.LOCAL_HISTORY),
+            Row("alternate + 1007 off + touch drag", altNoScroll, PointerIntent.DRAG, PointerDevice.TOUCH, Modifiers.NONE, PointerRoute.LOCAL_HISTORY),
+            // Shift is still the user's override: it takes the wheel back from 1007 too.
             Row("alternate + mouse off + Shift + wheel", altPlain, PointerIntent.WHEEL, PointerDevice.MOUSE, Modifiers.SHIFT, PointerRoute.LOCAL_HISTORY),
             Row("alternate + mouse off + press", altPlain, PointerIntent.PRESS, PointerDevice.MOUSE, Modifiers.NONE, PointerRoute.LOCAL_SELECTION),
+            // Mouse tracking still wins over 1007: a program that asked for the mouse gets the mouse.
+            Row("alternate + tracking + 1007 + wheel", altSgrMouse.copy(alternateScroll = true), PointerIntent.WHEEL, PointerDevice.MOUSE, Modifiers.NONE, PointerRoute.REMOTE_MOUSE),
         )
         val failures = table.mapNotNull { row ->
             val actual = TerminalInputPolicy.route(row.modes, row.intent, row.device, row.modifiers)
@@ -273,5 +285,49 @@ class InputPolicyTest {
         fixture.assertSilence("a touch drag in the shell")
         assertEquals(0, fixture.engine.mouseCalls.get())
         assertTrue(!fixture.scroll.following, "the drag did not walk back into history")
+    }
+
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun alternateScrollTurnsTheWheelIntoCursorKeysTheEngineEncodes() = terminalInputTest { fixture ->
+        // A pager: the alternate screen, no mouse tracking, 1007 on (its default).
+        enterAlternateScreen(fixture)
+        val anchored = fixture.scroll.position
+
+        onNodeWithTag(INPUT_TAG).performMouseInput {
+            moveTo(fixture.centreOf(2, 1))
+            scroll(1f)
+        }
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().size >= 9 }
+        waitForIdle()
+
+        // Three DOWN arrows for one notch, encoded by the ENGINE, not written here.
+        assertEquals("<ESC>[B".repeat(TerminalInputPolicy.ALTERNATE_SCROLL_LINES), fixture.recorded())
+        assertEquals(0, fixture.engine.mouseCalls.get(), "1007 produced a mouse report")
+        assertEquals(anchored, fixture.scroll.position, "the wheel also scrolled the local history")
+
+        // And it follows the modes the program negotiated: DECCKM makes the same wheel ESC O B.
+        fixture.recorder.clear()
+        fixture.feed("\u001b[?1h")
+        waitForIdle()
+        onNodeWithTag(INPUT_TAG).performMouseInput { scroll(-1f) }
+        waitUntil(timeoutMillis = INPUT_TIMEOUT) { fixture.recorder.bytes().size >= 9 }
+        waitForIdle()
+        assertEquals("<ESC>OA".repeat(TerminalInputPolicy.ALTERNATE_SCROLL_LINES), fixture.recorded())
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test fun theWheelIsSilentOnTheAlternateScreenWhenTheProgramTurned1007Off() = terminalInputTest { fixture ->
+        enterAlternateScreen(fixture, alternateScroll = false)
+
+        onNodeWithTag(INPUT_TAG).performMouseInput {
+            moveTo(fixture.centreOf(2, 1))
+            scroll(1f)
+        }
+        waitForIdle()
+
+        // Nothing invented: no arrows, no mouse report, and no history to move on the alt screen.
+        fixture.assertSilence("a wheel on the alternate screen with 1007 off")
+        assertEquals(0, fixture.engine.mouseCalls.get())
     }
 }
