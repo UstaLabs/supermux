@@ -32,7 +32,7 @@ class TerminalTypesTest {
     }
 
     @Test fun colorsNeedFullPalette() {
-        EngineContractTest.fixtureColors()
+        TestFixtures.fixtureColors()
         assertFailsWith<IllegalArgumentException> {
             TerminalColors(TerminalColor.rgb(0), TerminalColor.rgb(0), TerminalColor.rgb(0), List(16) { 0L })
         }
