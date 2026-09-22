@@ -4,8 +4,9 @@ What has actually been built, run and measured for `dev.supermux.terminal:termin
 `0.1.0-dev.1`, and — just as important — what has **not**. A target is called *supported* only
 where a test executed on it. Everything else says "built, not runtime-tested" with the reason.
 
-Recorded **2026-09-22** on branch `mux/supermux-54` (base commit `d9927005`; the follow-up
-review fixes of §4 are included).
+Recorded **2026-09-22** on branch `mux/supermux-54`, at commit `08e6cbf4` — the artifact hashes in
+§3 are the hashes of a publish of THAT tree, so a later commit touching terminal-core sources
+needs a republish before they apply again.
 Design and contracts: [`native/README.md`](native/README.md). Consumer checks:
 [`consumer-smoke/README.md`](consumer-smoke/README.md).
 
@@ -36,9 +37,9 @@ itself.
 
 | target | built | runtime-tested | evidence / why not |
 |---|---|---|---|
-| **linux-x64** | yes (Linux host) | **yes** (this host) | C smoke **66 checks / 0 failures**, st_* bridge **208 / 0**, threads test (6 × 150 cycles) plain and under **TSan**, `dlopen` ctypes check of `.so` and JNI `.so`, bridge again under **ASan+UBSan+LSan** (**187 / 0**). Kotlin: `:terminal-core:jvmTest` **86 tests / 0 failures** (2026-09-22 21:29). Consumer: 5 / 0 from the published jar (§5) |
-| **wasm32** | yes (Linux host) | **yes** (Chrome 148 + Node 24) | `wasm/build.sh --test`: smoke **47 / 0 in each runtime**, loader test **38 / 0 in each runtime**. Kotlin: `:terminal-core:wasmJsBrowserTest` **75 tests / 0 failures** in headless Chrome (2026-09-22 21:32). Consumer: 1 / 0 from the published klib (§5) |
-| **macos-arm64** | yes (**Mac only** — dylibs need ld64) | **yes** (Mac) | `native/build.sh macos-arm64 --test`: smoke **66 / 0**, bridge **204 / 0** (the 4 RSS assertions are Linux-only), `dlopen` checks of all three dylibs, `codesign -v` OK. `:terminal-core:jvmTest` on the macOS JVM **60 / 0** — but that run is from the **Task-5 source tree**: it predates `TerminalSession`, so the 26 session tests have **never run on macOS** |
+| **linux-x64** | yes (Linux host) | **yes** (this host) | C smoke **66 checks / 0 failures**, st_* bridge **208 / 0**, threads test (6 × 150 cycles) plain and under **TSan**, `dlopen` ctypes check of `.so` and JNI `.so`, bridge again under **ASan+UBSan+LSan** (**187 / 0**). Kotlin: `:terminal-core:jvmTest` **89 tests / 0 failures** (2026-09-22 22:52). Consumer: 5 / 0 from the published jar (§5) |
+| **wasm32** | yes (Linux host) | **yes** (Chrome 148 + Node 24) | `wasm/build.sh --test`: smoke **47 / 0 in each runtime**, loader test **38 / 0 in each runtime**. Kotlin: `:terminal-core:wasmJsBrowserTest` **78 tests / 0 failures** in headless Chrome (2026-09-22 22:54). Consumer: 1 / 0 from the published klib (§5) |
+| **macos-arm64** | yes (**Mac only** — dylibs need ld64) | **yes** (Mac) | `native/build.sh macos-arm64 --test`: smoke **66 / 0**, bridge **204 / 0** (the 4 RSS assertions are Linux-only), `dlopen` checks of all three dylibs, `codesign -v` OK. `:terminal-core:jvmTest` on the macOS JVM **60 / 0** — but that run is from the **Task-5 source tree**: it predates `TerminalSession`, so the 29 session tests have **never run on macOS** |
 | **macos-x64** | yes (**Mac only**) | **partly** (Rosetta 2) | smoke **66 / 0**, bridge **204 / 0** under `arch -x86_64`; manifest `test_host: aarch64-macos … (x86_64 under Rosetta 2)`. **No x86_64 JVM anywhere here**, so the packaged JNI dylib has never been loaded from Java. A Linux cross-build of this target produces the static archive only (no dylib) |
 | **ios-simulator-arm64** | yes (**Mac only**) | **yes** (simulator) | `:terminal-core:iosSimulatorArm64Test` through cinterop: **38 tests / 0 failures** (2026-09-22 19:37, Task-5 tree). Same gap as macOS: no `TerminalSession` suite has run on Apple targets |
 | **ios-arm64** | yes (**Mac only**) | **no** — link only | `libsupermux_terminal.a` 2,734,904 B; `:terminal-core:linkDebugTestIosArm64` links the Kotlin test binary against it. **Never run on a device** |
@@ -258,17 +259,18 @@ under the 8 MiB envelope cap that `_Static_assert` guarantees.
 
 | suite | platform | tests | failures | when |
 |---|---|---|---|---|
-| `:terminal-core:jvmTest` | linux-x64 (JDK 17) | **86** | 0 | 2026-09-22 21:29 |
-| `:terminal-core:wasmJsBrowserTest` | headless Chrome 148 | **75** | 0 | 2026-09-22 21:32 |
+| `:terminal-core:jvmTest` | linux-x64 (JDK 17) | **89** | 0 | 2026-09-22 22:52 |
+| `:terminal-core:wasmJsBrowserTest` | headless Chrome 148 | **78** | 0 | 2026-09-22 22:54 |
 | `:terminal-core:jvmTest` | macOS arm64 (JDK 17) | **60** | 0 | 2026-09-22 19:38 — **Task-5 tree, no `TerminalSession` suites** |
 | `:terminal-core:iosSimulatorArm64Test` | iOS simulator (arm64) | **38** | 0 | 2026-09-22 19:37 — same gap |
 | `:terminal-core:testDebugUnitTest` / `testReleaseUnitTest` | Android host JVM | **disabled** | — | `System.loadLibrary` cannot find a `.so` that only exists inside an APK; the same JNI binding is covered by `jvmTest` |
-| `consumer-smoke:jvmTest` | linux-x64, published artifacts | **5** | 0 | 2026-09-22 23:19 |
-| `consumer-smoke:wasmJsBrowserTest` | headless Chrome 148, published klib | **1** | 0 | 2026-09-22 23:20 |
+| `consumer-smoke:jvmTest` | linux-x64, published artifacts | **5** | 0 | 2026-09-22 22:48 |
+| `consumer-smoke:wasmJsBrowserTest` | headless Chrome 148, published klib | **1** | 0 | 2026-09-22 22:49 |
 
-Linux 86 = EngineContractTest 12, TerminalSessionTest 23, TerminalSessionStressTest 3,
-JvmNativeLoaderTest 13, ViewportCodecTest 11, TerminalTypesTest 8, TerminalConstantsTest 7,
-JniBindingTest 7, ConcurrencyTest 2. Wasm 75 = the same 61 common tests + WasmRuntimeTest 14.
+Linux 89 = TerminalSessionTest 26, JvmNativeLoaderTest 13, EngineContractTest 12,
+ViewportCodecTest 11, TerminalTypesTest 8, TerminalConstantsTest 7, JniBindingTest 7,
+TerminalSessionStressTest 3, ConcurrencyTest 2. Wasm 78 = the same 64 common tests +
+WasmRuntimeTest 14.
 
 ## 8. Commands and where their output lives
 
@@ -296,7 +298,7 @@ All Gradle runs on this shared host use
 1. **No device runs**: Android (both ABIs), iOS hardware, Windows, arm64 Linux. Their libraries are
    built and export-checked only.
 2. **macOS/iOS Kotlin suites are one task behind**: the Mac last ran at the Task-5 tree, so the
-   `TerminalSession` owner (26 tests) has never executed on Apple targets. Re-run
+   `TerminalSession` owner (29 tests) has never executed on Apple targets. Re-run
    `:terminal-core:jvmTest` and `:terminal-core:iosSimulatorArm64Test` on the Mac at this commit.
 3. **macos-x64 from Java**: no x86_64 JVM exists here; the packaged dylib is Rosetta-tested from C
    only. There is also no `macos-x64` manifest in `build/mac-evidence/manifests/` (only
