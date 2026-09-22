@@ -101,6 +101,12 @@ data class TerminalSessionConfig(
  * and it never emits an "exit"/"closed" event of its own. [close] stopping the local engine says
  * nothing about the remote program.
  *
+ * **Failure.** Recoverable engine errors ([TerminalNativeException]) go to the host's
+ * `onEngineError` and the loop carries on. Anything else stops the owner: the engine is closed, the
+ * mailbox is closed and every queued command is failed, so suspending calls throw that error (and
+ * a suspended [paste] / [selectedText] / [receive] fails instead of hanging) while the non-blocking
+ * enqueues return [EnqueueResult.Rejected] with [RejectionReason.CLOSED]. [close] rethrows it.
+ *
  * Create one with [open]; always [close] it (it owns native memory).
  */
 class TerminalSession private constructor(
@@ -326,6 +332,8 @@ class TerminalSession private constructor(
             val engine = try {
                 engineFactory(size, limits)
             } catch (t: Throwable) {
+                if (t !is CancellationException) failure = t
+                terminate()
                 ready.completeExceptionally(t)
                 return@launch
             }
@@ -346,12 +354,23 @@ class TerminalSession private constructor(
                 drainEngineEffects(engine)
                 run(engine, flow)
             } catch (t: Throwable) {
-                if (t !is CancellationException) failure = t
-                throw t
+                if (t is CancellationException) throw t
+                // Recorded, NOT rethrown: the failure reaches the host through close() and through
+                // every suspending call, whereas rethrowing here would only reach the platform's
+                // unhandled-coroutine-exception hook — which on Kotlin/Native terminates the process.
+                failure = t
             } finally {
                 // The engine's native memory is released exactly once, on the owner coroutine,
-                // whatever stopped the loop (close, cancellation, engine failure).
-                engine.close()
+                // whatever stopped the loop (close, cancellation, engine failure) — and then the
+                // mailbox is shut down so no producer is left waiting on a loop that is gone.
+                try {
+                    engine.close()
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    if (failure == null) failure = t
+                } finally {
+                    terminate()
+                }
             }
         }
         try {
@@ -456,14 +475,9 @@ class TerminalSession private constructor(
         } catch (e: TerminalNativeException) {
             // Recoverable: an effect or an envelope hit its limit, or an allocation failed. The
             // screen was updated regardless, so the session keeps running.
-            onEngineError(e)
+            reportError(e)
         } finally {
-            command.permits?.let { (budget, count) ->
-                when (budget) {
-                    Budget.OUTPUT -> outputBudget.release(count)
-                    Budget.INPUT -> inputBudget.release(count)
-                }
-            }
+            releasePermits(command)
         }
         drainEngineEffects(engine)
         return fed
@@ -473,7 +487,7 @@ class TerminalSession private constructor(
         val drained = try {
             engine.drainEffects()
         } catch (e: TerminalNativeException) {
-            onEngineError(e)
+            reportError(e)
             return
         }
         for (effect in drained) {
@@ -482,7 +496,7 @@ class TerminalSession private constructor(
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 // A consumer that throws must not cost the remaining effects.
-                onEngineError(t)
+                reportError(t)
             }
         }
     }
@@ -511,7 +525,7 @@ class TerminalSession private constructor(
             try {
                 engine.acknowledge(generation)
             } catch (e: TerminalNativeException) {
-                onEngineError(e)
+                reportError(e)
             }
             pendingGeneration = null
         }
@@ -547,7 +561,11 @@ class TerminalSession private constructor(
         val viewport = try {
             engine.viewport(forceFull = forceFull, breakHold = breakHold)
         } catch (e: TerminalNativeException) {
-            onEngineError(e)
+            // A frame that could not be serialized (ST_ERR_LIMIT / OUT_OF_MEMORY) leaves `dirty` and
+            // `forceFull` SET on purpose: the screen still changed, so the next wake-up retries and
+            // the change is not lost. Nothing is published, so `pendingGeneration` stays null and
+            // the loop parks on `wakeup` instead of spinning on a failing engine.
+            reportError(e)
             return
         }
         forceFull = false
@@ -561,13 +579,64 @@ class TerminalSession private constructor(
             try {
                 engine.acknowledge(viewport.generation)
             } catch (e: TerminalNativeException) {
-                onEngineError(e)
+                reportError(e)
             }
             return
         }
         publishedGeneration = viewport.generation
         pendingGeneration = viewport.generation
         flow.value = viewport
+    }
+
+    // ------------------------------------------------------------------ teardown ----
+
+    /**
+     * Shut the mailbox down from the owner coroutine, whatever stopped it.
+     *
+     * Closing alone is not enough: a command already in the buffer would keep its
+     * [CompletableDeferred] reply forever (so [paste] / [selectedText] would hang) and would never
+     * give its byte-budget permits back (so a [receive] waiting for budget would hang too). Every
+     * leftover command is therefore failed with [failure] — or with a plain "closed" error on the
+     * ordinary [close] path, where the loop has already drained everything and this is a no-op.
+     */
+    private fun terminate() {
+        mailbox.close()
+        while (true) {
+            val command = mailbox.tryReceive().getOrNull() ?: return
+            abandon(command)
+        }
+    }
+
+    private fun abandon(command: Command) {
+        val error = failure ?: IllegalStateException("TerminalSession is closed")
+        when (command) {
+            is Command.Paste -> command.reply.completeExceptionally(error)
+            is Command.SelectedText -> command.reply.completeExceptionally(error)
+            else -> Unit
+        }
+        releasePermits(command)
+    }
+
+    private fun releasePermits(command: Command) {
+        command.permits?.let { (budget, count) ->
+            when (budget) {
+                Budget.OUTPUT -> outputBudget.release(count)
+                Budget.INPUT -> inputBudget.release(count)
+            }
+        }
+    }
+
+    /**
+     * Hand a recoverable error to the host. The callback is documented as "must not throw"; if it
+     * does anyway, that is a host bug and must not take the terminal down with it (there is nowhere
+     * else to report it, so it is dropped).
+     */
+    private fun reportError(error: Throwable) {
+        try {
+            onEngineError(error)
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+        }
     }
 
     // ------------------------------------------------------------------ commands ----
@@ -643,7 +712,8 @@ class TerminalSession private constructor(
          *   queue order. It must not block; [TerminalEffect.Response] and [TerminalEffect.Input]
          *   bytes are what the host writes to its transport (the session owns no transport).
          * @param onEngineError recoverable engine errors (a dropped effect, an allocation failure)
-         *   and consumer exceptions. The session keeps running.
+         *   and [effects] consumer exceptions. The session keeps running. It MUST NOT throw; an
+         *   exception from it is a host bug, and the session drops it rather than dying with it.
          * @param engineFactory engine constructor; the default is [createTerminalEngine]. Injectable
          *   for tests and for hosts that pre-create engines.
          *

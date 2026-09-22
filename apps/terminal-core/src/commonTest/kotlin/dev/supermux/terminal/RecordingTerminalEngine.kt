@@ -26,6 +26,24 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
     var breakHoldReads = 0
         private set
 
+    /**
+     * Fault injection: the names of the calls (`feed`, `viewport`, `paste`, `selectedText`,
+     * `drainEffects`, `acknowledge`, `close`, …) that must throw [injectedFailure] instead of
+     * running. The attempt is still recorded in [calls].
+     */
+    val failingCalls: MutableSet<String> = mutableSetOf()
+
+    /**
+     * What [failingCalls] throws. The default is a plain [IllegalStateException] — i.e. the
+     * UNRECOVERABLE kind that must stop the session; set it to a [TerminalNativeException] for the
+     * recoverable kind the session reports and survives.
+     */
+    var injectedFailure: () -> Throwable = { IllegalStateException("injected engine failure") }
+
+    private fun failIfRequested(call: String) {
+        if (call in failingCalls) throw injectedFailure()
+    }
+
     private val lines = MutableList(size.rows) { StringBuilder() }
     private var cursorRow = 0
     private var cursorColumn = 0
@@ -55,6 +73,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
     override fun feed(bytes: ByteArray, origin: OutputOrigin) {
         var text = bytes.decodeToString()
         calls += "feed(${origin.name},${text.readable()})"
+        failIfRequested("feed")
         if (text.contains(SYNC_BEGIN)) {
             text = text.replace(SYNC_BEGIN, "")
             beginHold()
@@ -94,6 +113,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun reset() {
         calls += "reset"
+        failIfRequested("reset")
         lines.forEach { it.clear() }
         cursorRow = 0
         cursorColumn = 0
@@ -105,6 +125,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun resize(size: TerminalSize) {
         calls += "resize(${size.columns}x${size.rows})"
+        failIfRequested("resize")
         while (lines.size < size.rows) lines.add(StringBuilder())
         while (lines.size > size.rows) lines.removeLast()
         this.size = size
@@ -117,6 +138,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun colors(colors: TerminalColors) {
         calls += "colors"
+        failIfRequested("colors")
         fullAcknowledged = false
         generation++
     }
@@ -124,6 +146,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
     override fun viewport(forceFull: Boolean, breakHold: Boolean): TerminalViewport {
         calls += "viewport(full=$forceFull,break=$breakHold)"
         viewportReads++
+        failIfRequested("viewport")
         if (breakHold) {
             breakHoldReads++
             if (holdActive) {
@@ -148,6 +171,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun acknowledge(generation: Long) {
         calls += "ack($generation)"
+        failIfRequested("acknowledge")
         // Mirrors ST_ERR_INVALID_ARGUMENT for a generation that was never serialized.
         require(generation == serializedGeneration) {
             "ack($generation) but the last serialized frame is $serializedGeneration"
@@ -158,22 +182,26 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun scrollTo(row: Long) {
         calls += "scrollTo($row)"
+        failIfRequested("scrollTo")
         generation++
     }
 
     override fun key(key: TerminalKey) {
         calls += "key(${key.physicalCode},${key.text.readable()})"
+        failIfRequested("key")
         if (key.text.isNotEmpty()) effects.addLast(TerminalEffect.Input(key.text.encodeToByteArray()))
         generation++
     }
 
     override fun mouse(mouse: TerminalMouse) {
         calls += "mouse(${mouse.column},${mouse.row},${mouse.action})"
+        failIfRequested("mouse")
         generation++
     }
 
     override fun paste(text: String, allowUnsafe: Boolean): Boolean {
         calls += "paste(${text.readable()},$allowUnsafe)"
+        failIfRequested("paste")
         // Mirrors the engine's unsafe-paste rule closely enough to test the reply plumbing.
         if (text.contains('\n') && !allowUnsafe) return false
         effects.addLast(TerminalEffect.Input(text.encodeToByteArray()))
@@ -183,21 +211,25 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun focus(focused: Boolean) {
         calls += "focus($focused)"
+        failIfRequested("focus")
         generation++
     }
 
     override fun select(selection: TerminalSelection?) {
         calls += "select(${selection != null})"
+        failIfRequested("select")
         this.selection = selection
         generation++
     }
 
     override fun selectedText(): String {
         calls += "selectedText"
+        failIfRequested("selectedText")
         return selection?.let { "${it.start.row}:${it.start.column}-${it.end.row}:${it.end.column}" } ?: ""
     }
 
     override fun drainEffects(): List<TerminalEffect> {
+        failIfRequested("drainEffects")
         if (effects.isEmpty()) return emptyList()
         val drained = effects.toList()
         effects.clear()
@@ -206,6 +238,7 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
 
     override fun close() {
         calls += "close"
+        failIfRequested("close")
         closeCount++
     }
 

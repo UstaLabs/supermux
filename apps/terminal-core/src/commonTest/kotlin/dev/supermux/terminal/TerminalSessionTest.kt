@@ -8,6 +8,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -395,6 +396,117 @@ class TerminalSessionTest {
 
         assertEquals(listOf<EnqueueResult>(EnqueueResult.Accepted), echoed)
         assertEquals(listOf("feed(LIVE,\\a)", "key(5,b)"), engine.mutations())
+        session.close()
+    }
+
+    // ------------------------------------------------------------------ engine failures ----
+
+    @Test fun anUnrecoverableEngineFailureFailsQueuedRepliesInsteadOfHanging() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val errors = mutableListOf<Throwable>()
+        val session = openSession(engine, onEngineError = { errors += it })
+
+        var pasted: Result<Boolean>? = null
+        var selected: Result<String>? = null
+        // Queued BEFORE the fatal feed: this one still runs and answers.
+        launch(start = CoroutineStart.UNDISPATCHED) { pasted = runCatching { session.paste("ok") } }
+        engine.failingCalls += "feed"
+        session.receive("boom".encodeToByteArray())
+        // Queued AFTER it: nothing will ever execute it, so teardown must fail it.
+        launch(start = CoroutineStart.UNDISPATCHED) { selected = runCatching { session.selectedText() } }
+        clock.advanceUntilIdle()
+
+        assertEquals(true, pasted?.getOrNull())
+        val selectedOutcome = assertNotNull(selected, "selectedText() must fail, not hang, when the owner loop is gone")
+        assertTrue(selectedOutcome.isFailure, "got $selectedOutcome")
+        assertTrue(engine.isClosed, "the engine is closed even on an unexpected failure")
+        assertTrue(errors.isEmpty(), "an unrecoverable failure is not an onEngineError report")
+
+        assertEquals(
+            EnqueueResult.Rejected(RejectionReason.CLOSED),
+            session.key(TerminalKey(TerminalKeys.A, "a", Modifiers.NONE, KeyAction.PRESS)),
+        )
+        val afterwards = runCatching { session.receive("x".encodeToByteArray()) }.exceptionOrNull()
+        assertTrue(afterwards is IllegalStateException, "got $afterwards")
+        val closeFailure = runCatching { session.close() }.exceptionOrNull()
+        assertTrue(closeFailure is IllegalStateException, "close() rethrows what stopped the loop, got $closeFailure")
+    }
+
+    @Test fun aReceiveWaitingForBudgetFailsWhenTheOwnerDies() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine, TerminalSessionConfig(maxPendingOutputBytes = 4096))
+        val chunk = ByteArray(1024) { 'x'.code.toByte() }
+        repeat(4) { session.receive(chunk) }
+
+        engine.failingCalls += "feed"
+        var blockedResult: Result<Unit>? = null
+        val blocked = launch(start = CoroutineStart.UNDISPATCHED) {
+            blockedResult = runCatching { session.receive(chunk) }
+        }
+        assertTrue(blocked.isActive, "the budget is spent, so this receive is waiting")
+
+        clock.advanceUntilIdle()
+        val outcome = assertNotNull(blockedResult, "a receive waiting for budget must not hang when the owner dies")
+        assertTrue(outcome.isFailure, "got $outcome")
+        assertTrue(engine.isClosed)
+    }
+
+    @Test fun anEngineThatThrowsOnCloseStillReleasesWaitingCallers() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine)
+        engine.failingCalls += "feed"
+        engine.failingCalls += "close"
+
+        var selected: Result<String>? = null
+        session.receive("boom".encodeToByteArray())
+        launch(start = CoroutineStart.UNDISPATCHED) { selected = runCatching { session.selectedText() } }
+        clock.advanceUntilIdle()
+
+        val outcome = assertNotNull(selected, "a failing engine.close() must not swallow the mailbox teardown")
+        assertTrue(outcome.isFailure, "got $outcome")
+    }
+
+    @Test fun aHostErrorCallbackThatThrowsDoesNotStopTheSession() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        var reported = 0
+        val session = openSession(engine, onEngineError = { reported++; throw IllegalStateException("host bug") })
+        session.acknowledgeCurrent()
+
+        // The recoverable kind: the engine reports a limit, the session carries on.
+        engine.injectedFailure = { TerminalNativeException(-5, "injected ST_ERR_LIMIT") }
+        engine.failingCalls += "feed"
+        session.receive("dropped".encodeToByteArray())
+        clock.advanceUntilIdle()
+        assertEquals(1, reported)
+
+        engine.failingCalls.clear()
+        session.receive("kept".encodeToByteArray())
+        clock.advanceUntilIdle()
+        assertEquals("kept", engine.screenText())
+        assertEquals("kept", session.viewports.value.rowTextOrNull(0))
+        session.close()
+    }
+
+    @Test fun anEffectConsumerThatThrowsCostsNeitherTheNextEffectNorTheSession() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val seen = mutableListOf<TerminalEffect>()
+        val errors = mutableListOf<Throwable>()
+        val session = openSession(
+            engine,
+            effects = { effect -> seen += effect; if (effect is TerminalEffect.Bell) throw IllegalStateException("host bug") },
+            onEngineError = { errors += it },
+        )
+        session.acknowledgeCurrent()
+
+        session.receive("\u0007a".encodeToByteArray())
+        assertTrue(session.key(TerminalKey(TerminalKeys.B, "b", Modifiers.NONE, KeyAction.PRESS)).accepted)
+        clock.advanceUntilIdle()
+
+        assertEquals(
+            listOf<TerminalEffect>(TerminalEffect.Bell, TerminalEffect.Input("b".encodeToByteArray())),
+            seen,
+        )
+        assertEquals(1, errors.size)
         session.close()
     }
 }

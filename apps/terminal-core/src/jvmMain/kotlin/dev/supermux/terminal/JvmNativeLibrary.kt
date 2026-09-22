@@ -151,6 +151,13 @@ internal class JvmNativeLoader(
     }
 
     private fun loadOverride(file: File): File {
+        // Loud on purpose: this bypasses the manifest sha256/size check that every packaged load
+        // goes through, so a build that honours it must say so (it is a developer/CI hook only).
+        System.getLogger(JvmNativeLoader::class.java.name).log(
+            System.Logger.Level.WARNING,
+            "terminal-core: loading the native engine from -D$LIBRARY_PROPERTY=${'$'}{file.absolutePath} " +
+                "instead of the packaged library; its bytes are NOT verified against a manifest (ABI still checked)",
+        )
         if (!file.isFile) {
             throw TerminalEngineUnavailableException(
                 "-D$LIBRARY_PROPERTY=$file does not exist", reason = Reason.MISSING_BINARY,

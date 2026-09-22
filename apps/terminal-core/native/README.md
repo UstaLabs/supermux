@@ -526,6 +526,35 @@ draw ever holds a lock across native parsing.
   default context is `Dispatchers.Default`.
 - The package owns no transport and emits no "exit" event: `close()` stopping
   the local engine says nothing about the remote program.
+- **Failure and teardown.** A `TerminalNativeException` (a dropped effect, a
+  failed allocation) goes to `onEngineError` — which MUST NOT throw; if it does,
+  the session drops it rather than dying with it — and the loop carries on.
+  Anything else stops the owner, which then, on its own coroutine and in this
+  order: closes the engine, closes the mailbox, and **drains it**, completing
+  every queued `paste`/`selectedText` reply exceptionally and releasing its
+  byte-budget permits. That drain is what keeps a suspended `paste()`,
+  `selectedText()` or budget-blocked `receive()` from hanging forever on a loop
+  that is gone; afterwards suspending calls throw the stored failure (and
+  `close()` rethrows it) while non-blocking enqueues return
+  `Rejected(CLOSED)`. The owner never rethrows that failure out of its
+  coroutine: on Kotlin/Native an unhandled coroutine exception terminates the
+  process.
+
+### Task 6 verification (2026-09-22)
+
+Same sources on all three runtimes, all green:
+
+- `:terminal-core:jvmTest` — **86 tests, 0 failures** (12 EngineContractTest,
+  13 loader/cache-safety, 7 JNI failure paths, 2 concurrency, 26
+  types/codec/constants, **23 TerminalSessionTest**, **3 TerminalSessionStressTest**).
+  The stress suite drives one session from 8 concurrent producers plus an
+  acknowledging renderer on `Dispatchers.Default`, through a probe that fails
+  the test if two threads are ever inside the engine at once, and covers
+  concurrent `close()` and parked replies.
+- `:terminal-core:wasmJsBrowserTest` (headless Chrome) — **75 tests, 0 failures**
+  (50 as of Task 5, + 23 TerminalSessionTest + 2 cancellable-`awaitLoad` cases).
+- `:terminal-core:iosSimulatorArm64Test` (on the Mac) — **61 tests, 0 failures**
+  (38 as of Task 5, + 23 TerminalSessionTest).
 
 ## Bindings
 
