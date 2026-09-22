@@ -84,6 +84,7 @@ import dev.supermux.ui.session.RowContextMenuEntry
 import dev.supermux.ui.theme.LocalSemantics
 import dev.supermux.ui.theme.MonoFontFamily
 import dev.supermux.ui.widgets.KeepAlivePanel
+import dev.supermux.ui.worktree.WorktreeDeleteAction
 import dev.supermux.ui.worktree.reportWorktreeDelete
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.workspace.LayoutNode
@@ -329,9 +330,11 @@ fun WorkspacePanes(
                 chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
                 worktreeForWorkdir = { app.worktreeForWorkdir(it) },
                 onConfirmDeletingWorktree = { ids ->
-                    overlayScope.launch {
-                        reportWorktreeDelete(notices, app.closeViewAndDeleteWorktree(v.workspaceId, v.id, ids))
-                        onCloseCandidate(null)
+                    // Dismiss first; the (possibly minutes-long) close+delete runs on the store's
+                    // scope so leaving this workspace never cancels it or loses its notice.
+                    onCloseCandidate(null)
+                    app.closeViewAndDeleteWorktree(v.workspaceId, v.id, ids) {
+                        reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
                     }
                 },
             )
@@ -530,9 +533,9 @@ fun PhoneWorkspacePanes(
             chatWorkdir = v.chatSessionId()?.let { sid -> app.sessions.value.firstOrNull { it.id == sid }?.workdir },
             worktreeForWorkdir = { app.worktreeForWorkdir(it) },
             onConfirmDeletingWorktree = { ids ->
-                scope.launch {
-                    reportWorktreeDelete(notices, app.closeViewAndDeleteWorktree(current.id, v.id, ids))
-                    closeCandidate = null
+                closeCandidate = null
+                app.closeViewAndDeleteWorktree(current.id, v.id, ids) {
+                    reportWorktreeDelete(notices, it, WorktreeDeleteAction.Close)
                 }
             },
         )

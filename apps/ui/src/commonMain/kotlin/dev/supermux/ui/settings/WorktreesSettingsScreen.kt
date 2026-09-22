@@ -140,32 +140,39 @@ fun WorktreesSettingsScreen(
     var sort by remember { mutableStateOf(WtSort.Size) }
     var confirming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    /** (done, total) while a chunked delete runs, else null. */
+    var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    /** Deleted from this screen since the last load — filtered out without re-sorting. */
+    var deleted by remember { mutableStateOf(setOf<String>()) }
+    /** Bumped per successful load, so a refresh re-sorts even when the list comes back equal. */
+    var loadEpoch by remember { mutableStateOf(0) }
     val sizes = actions.sizes()
     val removed = actions.removedIds()
 
     LaunchedEffect(reloadKey) {
         val r = actions.load()
         loadError = r == null
-        if (r != null) { items = r; selected = emptySet(); rowErrors = emptyMap() }
+        if (r != null) { items = r; loadEpoch++; deleted = emptySet(); selected = emptySet(); rowErrors = emptyMap() }
     }
 
-    // Live sizes/removals are folded in here (not baked into `items`) so a `worktree_sizes` or
-    // `worktrees_removed` frame updates the list without re-fetching it.
-    val visible = remember(items, removed, sizes) {
-        (items ?: emptyList()).filter { it.id !in removed }
-            .map { w -> sizes[w.id]?.let { w.copy(bytes = it) } ?: w }
-    }
-    // Grouped/sorted once per list change, not per row/recomposition — the list can run into the
-    // tens of thousands of rows (mostly "repo gone" test leftovers), so this must stay O(n log n)
-    // per change, not per frame.
-    val groups = remember(visible, sort) {
-        val sorted = when (sort) {
-            WtSort.Size -> visible.sortedByDescending { it.bytes ?: -1 }
-            WtSort.Age -> visible.sortedBy { it.mtime }
-            WtSort.Project -> visible.sortedBy { it.repoName }
+    // Row ORDER depends only on the loaded list and the sort — never on the live `sizes`, or every
+    // `worktree_sizes` frame would move rows under the user's finger (final review I-3). The size
+    // sort reads a snapshot of the sizes known at load/refresh/sort-change time; a manual refresh
+    // re-sorts. Sizes themselves are looked up per row at draw time ([sizeOf]).
+    // Sorted once per list change, not per row/recomposition — the list can run into the tens of
+    // thousands of rows (mostly "repo gone" test leftovers), so this must stay O(n log n) per change.
+    val ordered = remember(items, loadEpoch, sort) {
+        val list = items ?: emptyList()
+        when (sort) {
+            WtSort.Size -> list.sortedByDescending { sizes[it.id] ?: it.bytes ?: -1 }
+            WtSort.Age -> list.sortedBy { it.mtime }
+            WtSort.Project -> list.sortedBy { it.repoName }
         }
-        sorted.groupBy { it.repoName }
     }
+    // A removal only filters (keeps the order); groups are per repository ROOT, not per name.
+    val visible = remember(ordered, removed, deleted) { ordered.filter { it.id !in removed && it.id !in deleted } }
+    val groups = remember(visible) { groupByRepo(visible) }
+    val sizeOf: (WorktreeSummaryDto) -> Long? = { w -> sizes[w.id] ?: w.bytes }
     val selectedSet = selected
     val selectedItems = remember(visible, selectedSet) { visible.filter { it.id in selectedSet } }
 
@@ -187,7 +194,7 @@ fun WorktreesSettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "${visible.size} · ${formatBytes(visible.sumOf { it.bytes ?: 0L })}",
+                    "${visible.size} · ${formatBytes(visible.sumOf { sizeOf(it) ?: 0L })}",
                     Modifier.weight(1f),
                     fontSize = 13.sp,
                 )
@@ -212,10 +219,11 @@ fun WorktreesSettingsScreen(
                 items == null -> CircularProgressIndicator(Modifier.padding(16.dp))
                 visible.isEmpty() -> Text("No worktrees.", Modifier.padding(16.dp))
                 else -> LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 72.dp)) {
-                    groups.forEach { (repo, rows) ->
-                        item(key = "g_$repo") {
+                    groups.forEach { g ->
+                        val rows = g.rows
+                        item(key = "g_${g.key}") {
                             Text(
-                                "$repo  ${rows.size} · ${formatBytes(rows.sumOf { it.bytes ?: 0L })}",
+                                "${g.label}  ${rows.size} · ${formatBytes(rows.sumOf { sizeOf(it) ?: 0L })}",
                                 Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 13.sp,
@@ -224,6 +232,7 @@ fun WorktreesSettingsScreen(
                         items(rows, key = { it.id }) { w ->
                             WorktreeRow(
                                 w = w,
+                                bytes = sizeOf(w),
                                 checked = w.id in selectedSet,
                                 error = rowErrors[w.id],
                                 onCheck = { on -> selected = if (on) selected + w.id else selected - w.id },
@@ -234,12 +243,14 @@ fun WorktreesSettingsScreen(
                 }
             }
         }
-        if (selected.isNotEmpty()) {
+        // The bar reflects only the VISIBLE selection (a row removed elsewhere drops out) and hides
+        // at 0 (m7). While a batch runs its progress shows in the confirm dialog instead.
+        if (progress == null && selectedItems.isNotEmpty()) {
             Button(
                 onClick = { confirming = true },
                 colors = ButtonDefaults.buttonColors(containerColor = cs.error),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth().testTag("wt_delete_bar"),
-            ) { Text("Delete ${selectedItems.size} worktrees · ${formatBytes(selectedItems.sumOf { it.bytes ?: 0L })}") }
+            ) { Text("Delete ${selectedItems.size} worktrees · ${formatBytes(selectedItems.sumOf { sizeOf(it) ?: 0L })}") }
         }
     }
 
@@ -247,9 +258,15 @@ fun WorktreesSettingsScreen(
         val withChanges = selectedItems.count { it.hasChanges }
         AlertDialog(
             onDismissRequest = { if (!deleting) confirming = false },
-            title = { Text("Delete ${selectedItems.size} worktrees?") },
+            title = { Text(if (progress != null) "Deleting worktrees" else "Delete ${selectedItems.size} worktrees?") },
             text = {
-                Text(
+                val p = progress
+                if (p != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.padding(end = 12.dp))
+                        Text(deletingLabel(p), Modifier.testTag("wt_delete_progress"))
+                    }
+                } else Text(
                     buildString {
                         append("Deletes the folders and their mux/ branches. This can't be undone.")
                         if (withChanges > 0) {
@@ -264,21 +281,36 @@ fun WorktreesSettingsScreen(
                     modifier = Modifier.testTag("wt_delete_confirm"),
                     onClick = {
                         deleting = true
+                        val ids = selectedItems.map { it.id }
+                        progress = 0 to ids.size
                         scope.launch {
-                            val ids = selectedItems.map { it.id }
-                            val res = actions.delete(ids)
-                            deleting = false
-                            confirming = false
-                            if (res == null) {
-                                rowErrors = rowErrors + ids.associateWith { "Broker unreachable" }
-                                return@launch
+                            // Chunks of [DELETE_CHUNK], one after another: the broker deletes a
+                            // batch sequentially, so a big one would otherwise sit silent for
+                            // minutes. Each chunk's outcome is applied at once (rows removed /
+                            // inline errors), so partial progress is never lost (final review I-1).
+                            try {
+                                var done = 0
+                                for (chunk in ids.chunked(DELETE_CHUNK)) {
+                                    val res = actions.delete(chunk)
+                                    if (res == null) {
+                                        // Transport failure: mark this chunk, stop; the rest stay selected.
+                                        rowErrors = rowErrors + chunk.associateWith { "Broker unreachable" }
+                                        break
+                                    }
+                                    val ok = res.filter { it.ok }.map { it.id }.toSet()
+                                    deleted = deleted + ok
+                                    rowErrors = rowErrors - ok + res.filter { !it.ok }.associate { r ->
+                                        r.id to if (r.error == "in_use") "In use by ${r.inUseBy.joinToString()}" else (r.error ?: "Failed")
+                                    }
+                                    selected = selected - ok
+                                    done += chunk.size
+                                    progress = done to ids.size
+                                }
+                            } finally {
+                                deleting = false
+                                confirming = false
+                                progress = null
                             }
-                            val ok = res.filter { it.ok }.map { it.id }.toSet()
-                            items = items?.filterNot { it.id in ok }
-                            rowErrors = rowErrors - ok + res.filter { !it.ok }.associate { r ->
-                                r.id to if (r.error == "in_use") "In use by ${r.inUseBy.joinToString()}" else (r.error ?: "Failed")
-                            }
-                            selected = selected - ok
                         }
                     },
                 ) { Text("Delete", color = cs.error) }
@@ -290,9 +322,34 @@ fun WorktreesSettingsScreen(
     }
 }
 
+/** Rows per DELETE /worktrees request (final review I-1). */
+private const val DELETE_CHUNK = 20
+
+private fun deletingLabel(p: Pair<Int, Int>) = "Deleting ${p.first} / ${p.second}…"
+
+private class RepoGroup(val key: String, val label: String, val rows: List<WorktreeSummaryDto>)
+
+/** Group by repository ROOT (two clones both called "app" are different projects), labelled by
+ *  repo name; names shared by several roots get the root's parent dir to tell them apart. Keeps
+ *  the incoming row order within and across groups (first appearance). */
+private fun groupByRepo(rows: List<WorktreeSummaryDto>): List<RepoGroup> {
+    val byKey = rows.groupBy { it.repoRoot ?: "name:${it.repoName}" }
+    val rootsPerName = byKey.values.groupBy { it.first().repoName }.mapValues { it.value.size }
+    return byKey.map { (key, groupRows) ->
+        val first = groupRows.first()
+        val label = if ((rootsPerName[first.repoName] ?: 1) > 1) {
+            "${first.repoName} (${first.repoRoot?.substringBeforeLast('/')?.ifEmpty { "/" } ?: "unknown location"})"
+        } else {
+            first.repoName
+        }
+        RepoGroup(key, label, groupRows)
+    }
+}
+
 @Composable
 private fun WorktreeRow(
     w: WorktreeSummaryDto,
+    bytes: Long?,
     checked: Boolean,
     error: String?,
     onCheck: (Boolean) -> Unit,
@@ -331,7 +388,7 @@ private fun WorktreeRow(
                     ).joinToString(" · ").ifEmpty { "Changes" }
                 }
                 Text(
-                    "$owner · $summary · ${formatAge(nowMs(), w.mtime)} · ${formatBytes(w.bytes)}",
+                    "$owner · $summary · ${formatAge(nowMs(), w.mtime)} · ${formatBytes(bytes)}",
                     fontSize = 12.sp,
                     color = cs.onSurfaceVariant,
                 )

@@ -1318,7 +1318,7 @@ fun SessionListScreen(
                     archiveWorkspaceTarget = null
                     if (deleteWt && deleteIds.isNotEmpty()) {
                         val ids = deleteIds
-                        listScope.launch { reportWorktreeDelete(notices, actions.archiveWorkspaceAndDeleteWorktree(id, ids)) }
+                        actions.archiveWorkspaceAndDeleteWorktree(id, ids) { reportWorktreeDelete(notices, it) }
                     } else {
                         actions.archiveWorkspace(id)
                     }
@@ -1358,8 +1358,8 @@ fun SessionListScreen(
                     killTarget = null
                     if (!discard && deleteWt && deleteIds.isNotEmpty()) {
                         val ids = deleteIds
-                        listScope.launch {
-                            reportWorktreeDelete(notices, actions.killAndDeleteWorktree(id, ids))
+                        actions.killAndDeleteWorktree(id, ids) { res ->
+                            reportWorktreeDelete(notices, res)
                             onKilled(id)
                         }
                     } else {

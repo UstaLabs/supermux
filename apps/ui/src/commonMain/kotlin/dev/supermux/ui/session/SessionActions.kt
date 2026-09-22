@@ -245,10 +245,14 @@ class SessionListActions(
      *  of the host that OWNS the session / workspace being archived (never just the active host). */
     val worktreeForSessionWorkdir: suspend (sessionId: String, workdir: String) -> WorktreeForWorkdirDto? = { _, _ -> null },
     val worktreeForWorkspaceWorkdir: suspend (workspaceId: String, workdir: String) -> WorktreeForWorkdirDto? = { _, _ -> null },
-    /** Archive + delete exactly [worktreeIds] (the ids the dialog displayed and the user confirmed);
-     *  returns per-worktree results, null on transport failure. */
-    val killAndDeleteWorktree: suspend (id: String, worktreeIds: List<String>) -> List<WorktreeDeleteResultDto>? = { _, _ -> null },
-    val archiveWorkspaceAndDeleteWorktree: suspend (workspaceId: String, worktreeIds: List<String>) -> List<WorktreeDeleteResultDto>? = { _, _ -> null },
+    /** Archive + delete exactly [worktreeIds] (the ids the dialog displayed and the user confirmed).
+     *  Fire-and-forget on the store's own scope (the dialog is already gone, and the screen may be
+     *  too, by the time a long delete finishes); `onDone` gets the per-worktree results, null when
+     *  the archive request itself failed. */
+    val killAndDeleteWorktree: (id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) -> Unit =
+        { _, _, onDone -> onDone(null) },
+    val archiveWorkspaceAndDeleteWorktree: (workspaceId: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) -> Unit =
+        { _, _, onDone -> onDone(null) },
 )
 
 /**
@@ -303,8 +307,8 @@ fun rememberSessionListActions(
             forgetHost = { id -> forgetHost(id) },
             worktreeForSessionWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
             worktreeForWorkspaceWorkdir = { _, workdir -> app.worktreeForWorkdir(workdir) },
-            killAndDeleteWorktree = { id, ids -> app.killAndDeleteWorktree(id, ids) },
-            archiveWorkspaceAndDeleteWorktree = { id, ids -> app.archiveWorkspaceAndDeleteWorktree(id, ids) },
+            killAndDeleteWorktree = { id, ids, onDone -> app.killAndDeleteWorktree(id, ids, onDone) },
+            archiveWorkspaceAndDeleteWorktree = { id, ids, onDone -> app.archiveWorkspaceAndDeleteWorktree(id, ids, onDone) },
         )
     }
 }
@@ -327,7 +331,7 @@ fun rememberSessionListActions(fleet: FleetStore): SessionListActions = remember
         forgetHost = { id -> fleet.forgetHost(id) },
         worktreeForSessionWorkdir = { id, workdir -> fleet.worktreeForSessionWorkdir(id, workdir) },
         worktreeForWorkspaceWorkdir = { id, workdir -> fleet.worktreeForWorkspaceWorkdir(id, workdir) },
-        killAndDeleteWorktree = { id, ids -> fleet.killAndDeleteWorktree(id, ids) },
-        archiveWorkspaceAndDeleteWorktree = { id, ids -> fleet.archiveWorkspaceAndDeleteWorktree(id, ids) },
+        killAndDeleteWorktree = { id, ids, onDone -> fleet.killAndDeleteWorktree(id, ids, onDone) },
+        archiveWorkspaceAndDeleteWorktree = { id, ids, onDone -> fleet.archiveWorkspaceAndDeleteWorktree(id, ids, onDone) },
     )
 }

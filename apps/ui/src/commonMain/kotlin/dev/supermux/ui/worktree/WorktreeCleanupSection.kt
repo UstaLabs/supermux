@@ -49,6 +49,9 @@ fun WorktreeCleanupSection(
     var found by remember(workdirs) { mutableStateOf<List<WorktreeForWorkdirDto>>(emptyList()) }
     var checked by remember(workdirs) { mutableStateOf(false) }
     LaunchedEffect(workdirs) {
+        // A reload shows a fresh, unchecked section — tell the dialog too, so it can never send a
+        // stale "checked" with the previous worktrees' ids (final review m2).
+        onDeleteChange(false, emptyList())
         loading = true
         found = workdirs.distinct().mapNotNull { runCatching { load(it) }.getOrNull() }.distinctBy { it.id }
         loading = false
@@ -100,13 +103,25 @@ fun WorktreeCleanupSection(
     }
 }
 
+/** Which dialog ran the archive-and-delete, for the notice's wording. */
+enum class WorktreeDeleteAction(val verb: String, val done: String) {
+    Archive("archive", "Archived"),
+    Close("close", "Closed"),
+}
+
 /** Snackbar/toast after "Archive & delete" (or Settle/Close & delete): silent on success, one
- *  line on any failure. `null` results = transport failure; `in_use` is not an error here — the
- *  dialog already told the user that worktree would be kept. */
-fun reportWorktreeDelete(notices: NoticeChannel, results: List<WorktreeDeleteResultDto>?) {
-    when {
-        results == null -> notices.show("Archived, but couldn't delete worktree: broker unreachable")
-        results.any { !it.ok && it.error != "in_use" } ->
-            notices.show("Archived, but couldn't delete worktree: ${results.first { !it.ok }.error}")
+ *  line on any failure. `null` results = the archive/close request itself failed (so nothing was
+ *  deleted either). `in_use` is not an error here — the dialog already told the user that
+ *  worktree would be kept — so the notice names the first OTHER failure. */
+fun reportWorktreeDelete(
+    notices: NoticeChannel,
+    results: List<WorktreeDeleteResultDto>?,
+    action: WorktreeDeleteAction = WorktreeDeleteAction.Archive,
+) {
+    if (results == null) {
+        notices.show("Couldn't ${action.verb}: broker unreachable or the request was refused")
+        return
     }
+    val failure = results.firstOrNull { !it.ok && it.error != "in_use" } ?: return
+    notices.show("${action.done}, but couldn't delete worktree: ${failure.error ?: "unknown error"}")
 }

@@ -159,4 +159,20 @@ class HostStoreWorktreesTest {
         assertEquals("path=%2Fx%2Fa%20b%2Bc%26d%3D%C3%A9%23%3F", f.queries[1])
         assertEquals("deleteWorktree=a%20b%2Fc%2Bd%26e", f.queries[2])
     }
+
+    // Final review m1: the dialogs' fire-and-forget variants run on the store's own scope and
+    // report through the callback (the dialog/screen may be gone by then).
+    @Test fun fireAndForgetArchiveDeleteReportsThroughTheCallback() = runBlocking {
+        val f = fixture(CoroutineScope(Dispatchers.Default), bodyFor = { """{"worktree":[{"id":"s/u","ok":true}]}""" })
+        val got = kotlinx.coroutines.CompletableDeferred<List<dev.supermux.net.WorktreeDeleteResultDto>?>()
+        f.store.killAndDeleteWorktree("abc", listOf("s/u")) { got.complete(it) }
+        assertEquals(true, kotlinx.coroutines.withTimeout(5_000) { got.await() }!!.single().ok)
+        val got2 = kotlinx.coroutines.CompletableDeferred<List<dev.supermux.net.WorktreeDeleteResultDto>?>()
+        f.store.closeViewAndDeleteWorktree("w1", "v1", listOf("s/u")) { got2.complete(it) }
+        assertEquals("s/u", kotlinx.coroutines.withTimeout(5_000) { got2.await() }!!.single().id)
+        val got3 = kotlinx.coroutines.CompletableDeferred<List<dev.supermux.net.WorktreeDeleteResultDto>?>()
+        f.store.archiveWorkspaceAndDeleteWorktree("w1", listOf("s/u")) { got3.complete(it) }
+        assertEquals("s/u", kotlinx.coroutines.withTimeout(5_000) { got3.await() }!!.single().id)
+        assertEquals(listOf("DELETE /sessions/abc", "DELETE /workspaces/w1/views/v1", "DELETE /workspaces/w1"), f.seen)
+    }
 }

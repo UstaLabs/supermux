@@ -12,6 +12,7 @@ import dev.supermux.host.hostViewsFrom
 import dev.supermux.host.isLegacyHostDisplayName
 import dev.supermux.host.mergeSessions
 import dev.supermux.host.previousHostClearSessionId
+import dev.supermux.net.WorktreeDeleteResultDto
 import dev.supermux.net.ArchivedDto
 import dev.supermux.net.BrokerApi
 import dev.supermux.util.TransportPolicy
@@ -1463,6 +1464,13 @@ class FleetStore(
         appForWorkspace(id)?.archiveWorkspaceAndDeleteWorktree(id, worktreeIds)
     suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>) =
         appForWorkspace(workspaceId)?.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds)
+    /** Fire-and-forget variants (see [HostStore.killAndDeleteWorktree]); no owning host → onDone(null). */
+    fun killAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        appFor(id)?.killAndDeleteWorktree(id, worktreeIds, onDone) ?: onDone(null)
+    }
+    fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        appForWorkspace(id)?.archiveWorkspaceAndDeleteWorktree(id, worktreeIds, onDone) ?: onDone(null)
+    }
     suspend fun archived(): List<ArchivedDto> = activeApp()?.archived().orEmpty()
     suspend fun updateStatus(): UpdateStatus? = activeApp()?.updateStatus()
     suspend fun checkUpdate(): UpdateStatus? = activeApp()?.checkUpdate()

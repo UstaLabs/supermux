@@ -1691,6 +1691,22 @@ class HostStore(
     suspend fun closeViewAndDeleteWorktree(workspaceId: String, viewId: String, worktreeIds: List<String>): List<WorktreeDeleteResultDto>? =
         runApi("closeViewAndDeleteWorktree") { apiWorktreeDelete.closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds) }
 
+    // Fire-and-forget variants for the archive/settle/close dialogs (final review m1): a delete can
+    // take minutes, so the dialog is dismissed first and the call runs on [stateScope] — navigation
+    // or a closed dialog never cancels it — reporting its per-worktree results (null = the archive
+    // request itself failed) through [onDone], like [kill].
+    fun killAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        stateScope.launch { onDone(killAndDeleteWorktree(id, worktreeIds)) }
+    }
+    fun archiveWorkspaceAndDeleteWorktree(id: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit) {
+        stateScope.launch { onDone(archiveWorkspaceAndDeleteWorktree(id, worktreeIds)) }
+    }
+    fun closeViewAndDeleteWorktree(
+        workspaceId: String, viewId: String, worktreeIds: List<String>, onDone: (List<WorktreeDeleteResultDto>?) -> Unit,
+    ) {
+        stateScope.launch { onDone(closeViewAndDeleteWorktree(workspaceId, viewId, worktreeIds)) }
+    }
+
     /** Fire-and-forget Android name for [revokeDevice]. */
     fun revoke(n: String) {
         stateScope.launch { runApi("revoke") { api.revokeDevice(n) } }
