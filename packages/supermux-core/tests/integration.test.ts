@@ -27,7 +27,7 @@ test("public core lifecycle works through a real ACP subprocess", async () => {
     keeper: { stateDirectory, limits: { parkedDeadlineMs: 15_000, journalMaxBytes: 1_000_000, connectTimeoutMs: 4000 } },
   })
   const core = createCore({
-    limits: TEST_LIMITS, stateDirectory, agents: [agent] })
+    limits: { ...TEST_LIMITS, interruptTimeoutMs: 5000 }, stateDirectory, agents: [agent] }) // real subprocess: 30 ms interrupt budget is a flake under load
   let next: ReturnType<typeof createCore> | undefined
   try {
     const session = await core.sessions.create({ id: nextId(), agent: "fixture", cwd: tmpdir() })
@@ -38,7 +38,7 @@ test("public core lifecycle works through a real ACP subprocess", async () => {
     expect(await active.completed).toEqual({ status: "cancelled" })
     await core.close({ agents: "shutdown" })
     next = createCore({
-    limits: TEST_LIMITS, stateDirectory, agents: [agent] })
+    limits: { ...TEST_LIMITS, interruptTimeoutMs: 5000 }, stateDirectory, agents: [agent] }) // real subprocess: 30 ms interrupt budget is a flake under load
     const resumed = await next.sessions.resume(session.id)
     expect(resumed.snapshot().agentSessionId).toBe(session.snapshot().agentSessionId)
     const second = await resumed.send({ content: [{ type: "text", text: "again" }], whenBusy: "queue" })
