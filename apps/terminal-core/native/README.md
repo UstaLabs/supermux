@@ -726,6 +726,71 @@ Kotlin/Wasm app already requires.
   `fetch`, `WebAssembly.compile(Streaming)`, BigInt parameters (Safari 15+)
   and `Uint8Array`; Kotlin/Wasm itself needs WasmGC (Safari 18.2+).
 
+## Publishing (`dev.supermux.terminal:terminal-core`)
+
+Coordinates `dev.supermux.terminal:terminal-core`, version **`0.1.0-dev.1`**, MIT
+([`../LICENSE`](../LICENSE)); the object code the artifacts carry is listed with its
+notices in [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) (Ghostty, uucode,
+Wuffs, simdutf, Google Highway, Zig `compiler_rt`). Both files are packaged into every
+jar and the AAR under `META-INF/dev.supermux.terminal/`.
+
+```sh
+cd apps
+./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository   # -> build/test-repository
+```
+
+Nothing is ever uploaded: the only repository declared is the directory
+`apps/terminal-core/build/test-repository` (git-ignored). Evidence of a real run and the
+consumer checks that follow it: [`../VERIFICATION.md`](../VERIFICATION.md),
+[`../consumer-smoke/`](../consumer-smoke/README.md).
+
+### What the publication contains
+
+| module | artifact | native payload |
+|---|---|---|
+| `terminal-core` (root) | `.jar` (metadata klib) + Gradle module metadata | — |
+| `terminal-core-jvm` | `.jar` | `dev/supermux/terminal/native/<target>/{<library>,native.properties}` for every built desktop target |
+| `terminal-core-android` | `.aar` | `jni/arm64-v8a/`, `jni/x86_64/libsupermux_terminal_jni.so` |
+| `terminal-core-wasm-js` | `.klib` | `supermux-terminal.wasm` + `terminal-loader.mjs` as klib resources |
+| `terminal-core-iosarm64`, `-iossimulatorarm64` | `.klib` | the cinterop against `libsupermux_terminal.a` (Mac-made publish only) |
+
+Every artifact also carries `dev/supermux/terminal/abi-manifest.json` (jvm jar + wasm
+klib) or the licence files (all jars, the AAR): st_* ABI version, Ghostty commit, Zig
+version, the publication profile, and per target the library name, sha256, size, zig
+target, build host and whether it was runtime-tested — plus `missing_targets`, so an
+incomplete package always says so about itself.
+
+### Release vs dev publish
+
+`verifyNativeArtifacts*` runs before every publish task (`AbstractPublishToMaven`,
+`GenerateModuleMetadata`): a missing or stale native artifact fails verification instead
+of publishing a package that cannot start an engine.
+
+| profile | gate task | requires |
+|---|---|---|
+| `dev` (default while the version contains `-dev`) | `verifyNativeArtifactsForHost` | every target THIS host can build, plus `wasm32`. On Linux: `linux-x64`, `linux-arm64`, `windows-x64`, `android-arm64`, `android-x64`, `wasm32`. Targets it cannot build may be absent — but any artifact that IS present must still match its manifest |
+| `release` (a version without `-dev`, or `-Pterminal.publishProfile=release`) | `verifyNativeArtifacts` | ALL ten: the five desktop JVM libraries, both Android ABIs, both iOS archives and `wasm32` |
+
+**A release publication cannot be produced by one machine.** `macos-x64` / `macos-arm64`
+dylibs are linked by ld64 and the `ios-*` archives need Xcode's SDK, so they only exist on
+a Mac; `windows-x64` and the Android ABIs are cross-built on Linux. A release therefore
+means: build the Linux-side targets on the Linux host, build `macos-*` and `ios-*` on the
+Mac, copy the Mac's `build/native/{macos-x64,macos-arm64,ios-arm64,ios-simulator-arm64}/`
+directories (library + `manifest.json`, whose sha256s are re-checked on arrival) into the
+Linux tree, then publish there with `-Pterminal.publishProfile=release`. A publish made on
+Linux alone contains **no Apple publications at all** (their Kotlin targets are disabled
+here), which is exactly why the dev profile exists and says so in the ABI manifest.
+
+### Consuming it
+
+[`../consumer-smoke/`](../consumer-smoke/README.md) is a separate Gradle build that does
+nothing but resolve those coordinates and run the engine — see its README for what each
+check proves. One consumer requirement came out of it and applies to every browser host:
+**the Kotlin/Wasm toolchain does not copy a dependency klib's resources next to the
+consumer's compiled module**, so a `wasmJs` app must re-export `terminal-loader.mjs` and
+`supermux-terminal.wasm` from the klib as its own wasmJs resources (recipe in that
+README). Bundling fails with `Can't resolve './terminal-loader.mjs'` otherwise.
+
 ## Results
 
 Recorded 2026-09-22 on the shared Linux build host (x86_64, Ubuntu, glibc 2.43,
