@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -48,24 +49,37 @@ import dev.supermux.terminal.TerminalSize
  *   [ScrollController] that asks the engine for a new viewport only when a ROW boundary is crossed
  *   and translates the painted grid for everything in between. Nothing about it reaches the host or
  *   the program on the other end of the pty — see [ScrollController].
+ * - Routes input to whoever the terminal's negotiated modes say owns it: keys, the accessory bar and
+ *   pastes go to the engine's encoders, ordinary wheel and touch gestures stay local. See
+ *   [TerminalInputPolicy] for the routing rules and [TerminalAccessoryState] for the bar.
  * - Maps [theme] onto the engine's default colours and palette before repainting, so that cells the
  *   engine already resolved (palette indices, OSC colours) follow the theme too.
  * - Reports the failure that stopped the session, if one ever does, through [onFailure]: a renderer
  *   uses only non-blocking calls, so without it a dead terminal is just a screen that stopped
  *   changing.
  *
- * **What it does not do yet.** Gestures that reach the program (mouse routing, Task 4) and IME,
- * selection and full semantics (Task 5) arrive in their own files. The input layer returns the
- * surface to the bottom through [LocalTerminalScroll].
+ * **What it does not do yet.** IME composition, selection and full semantics (Task 5) arrive in
+ * their own files; [PointerRoute.LOCAL_SELECTION] is already a routing outcome and already keeps
+ * those gestures away from the program, it just has no selection to move yet.
  *
- * @param active `false` for a surface that is off-screen or in a background tab: it stops asking
- *   the session for frames (the session keeps parsing output and delivering effects), stops
- *   animating — a fling is cancelled, not left running in a tab nobody is looking at — and later
- *   also stops focus and input. It is NOT a close, and it never resizes the session.
+ * **Sharing a session.** Several surfaces may show one session. Each takes its own
+ * [dev.supermux.terminal.RendererLease], so one going away (or inactive) never stops the frames the
+ * others are watching.
+ *
+ * @param active `false` for a surface that is off-screen or in a background tab: it releases its
+ *   renderer lease, so it stops asking the session for frames (the session keeps parsing output and
+ *   delivering effects, and any OTHER surface on the same session keeps receiving them), stops
+ *   animating — a fling is cancelled, not left running in a tab nobody is looking at — and takes no
+ *   focus and no input. It is NOT a close, and it never resizes the session.
+ * @param accessories the armed-modifier and direct-key state an accessory bar drives, and the entry
+ *   point for [TerminalAccessoryState.paste]. One per terminal; hoist it to put a bar of your own
+ *   next to the surface. It is bound while this terminal is composed and disarmed on every focus
+ *   change.
  * @param onTitle the newest OSC 0/2 title — only ever called when the host installed a
  *   [TerminalEffectRelay] through [LocalTerminalEffects] (the host, not this surface, owns effects).
- * @param onLink an OSC 8 hyperlink the user activated. The link geometry is already in every frame
- *   (`TerminalViewport.links`); the gesture that fires this lands with Task 4.
+ * @param onLink an OSC 8 hyperlink the user activated with a plain click (a press and a release on
+ *   the same cell, with no drag, that the program did not ask for). The surface never opens
+ *   anything itself — what a URI means is the host's decision.
  * @param onFailure the unrecoverable engine error that stopped the session, at most once. The
  *   surface keeps showing the last frame it drew — a frozen screen with an explanation beats a
  *   blank one — and the host decides whether to close, retry or show it in [overlay].
@@ -78,6 +92,7 @@ fun Terminal(
     modifier: Modifier = Modifier,
     theme: TerminalTheme = TerminalTheme(),
     active: Boolean = true,
+    accessories: TerminalAccessoryState = rememberTerminalAccessories(),
     onTitle: (String) -> Unit = {},
     onLink: (String) -> Unit = {},
     onFailure: (Throwable) -> Unit = {},
@@ -119,15 +134,20 @@ fun Terminal(
     val title by relay.title.collectAsState()
     LaunchedEffect(title) { title?.let(onTitle) }
 
+    // The lease, not a session-wide flag: a second surface on the same session must not be frozen
+    // by this one going off-screen. Publication runs while at least one lease is open.
+    DisposableEffect(session, active) {
+        val lease = if (active) session.attachRenderer() else null
+        onDispose { lease?.close() }
+    }
+
     // Every frame is applied, and acknowledged, on the composition's own dispatcher: the snapshot
     // writes happen on the UI owner and nothing in the draw path ever touches the engine.
     LaunchedEffect(session, model, scroll, active) {
         if (!active) {
             scroll.cancelFling()
-            session.setRenderingEnabled(false)
             return@LaunchedEffect
         }
-        session.setRenderingEnabled(true)
         session.viewports.collect { viewport ->
             val update = model.apply(viewport)
             when (update) {
@@ -144,10 +164,7 @@ fun Terminal(
         }
     }
     DisposableEffect(session, scroll) {
-        onDispose {
-            scroll.cancelFling()
-            session.setRenderingEnabled(false)
-        }
+        onDispose { scroll.cancelFling() }
     }
 
     var viewportPx by remember { mutableStateOf(IntSize.Zero) }
@@ -173,9 +190,24 @@ fun Terminal(
     val mouseMode by remember(model) {
         derivedStateOf { model.frame?.modes?.mouseTracking == true }
     }
-    // Application mouse mode means the program wants the wheel and the drag itself. Stop animating
-    // and stop consuming them.
+    // Application mouse mode means the program wants the wheel and the drag itself: a fling that
+    // was already running is not something the program asked for, so stop it.
     LaunchedEffect(mouseMode, scroll) { if (mouseMode) scroll.cancelFling() }
+
+    val focusRequester = remember(session) { FocusRequester() }
+    val input = remember(session, model, scroll, accessories, scope) {
+        TerminalInputController(session, model, scroll, accessories, scope, focusRequester)
+    }
+    // The controller is long-lived; these follow every recomposition without restarting it.
+    SideEffect {
+        input.metrics = metrics
+        input.enabled = active
+        input.onLink = onLink
+    }
+    DisposableEffect(input, accessories) {
+        accessories.bind(input)
+        onDispose { accessories.unbind(input) }
+    }
 
     CompositionLocalProvider(LocalTerminalScroll provides scroll) {
         Box(
@@ -188,7 +220,11 @@ fun Terminal(
                 .scrollable(
                     state = scroll.scrollableState,
                     orientation = Orientation.Vertical,
-                    enabled = active && !mouseMode,
+                    // Enabled even under application mouse mode: what the program actually gets is
+                    // decided per gesture by TerminalInputPolicy, and the input node below consumes
+                    // what belongs to it. Disabling the whole scrollable here would take Shift+wheel
+                    // — the user's override — away with it.
+                    enabled = active,
                     reverseDirection = ScrollableDefaults.reverseDirection(
                         layoutDirection = LocalLayoutDirection.current,
                         orientation = Orientation.Vertical,
@@ -196,6 +232,9 @@ fun Terminal(
                     ),
                     flingBehavior = ScrollableDefaults.flingBehavior(),
                 )
+                // INSIDE the scrollable on purpose: the pointer node sees the main pass first and
+                // consumes what the program asked for before the scrollable can scroll on it.
+                .terminalInput(input, active)
                 // A new frame invalidates the semantics and the draw, never the whole composable.
                 .terminalSemantics(model),
         ) {

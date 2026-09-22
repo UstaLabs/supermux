@@ -1,6 +1,7 @@
 package dev.supermux.terminal.compose
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.getValue
@@ -414,6 +415,46 @@ class TerminalSurfaceTest {
     }
 
     @OptIn(ExperimentalTestApi::class)
+    @Test fun oneSurfaceGoingInactiveDoesNotFreezeAnotherOnTheSameSession() = runComposeUiTest {
+        val engine = FixtureEngine(TerminalSize(20, 4, 8, 16))
+        val session = openSession(engine)
+        try {
+            var firstActive by mutableStateOf(true)
+            setContent {
+                Column {
+                    Box(Modifier.size(400.dp, 150.dp)) {
+                        Terminal(session, Modifier.fillMaxSize().testTag(TAG), active = firstActive)
+                    }
+                    Box(Modifier.size(400.dp, 150.dp)) {
+                        Terminal(session, Modifier.fillMaxSize().testTag(SECOND_TAG))
+                    }
+                }
+            }
+            waitForIdle()
+            runBlocking { session.receive("both".encodeToByteArray()) }
+            waitUntil(timeoutMillis = TIMEOUT) { textOf(SECOND_TAG).startsWith("both") }
+
+            // The first surface goes off-screen and releases ITS lease. Rendering is reference
+            // counted, so the surface still on screen keeps getting frames — a session-wide flag
+            // here would freeze it on "both" forever.
+            firstActive = false
+            waitForIdle()
+            runBlocking { session.receive("alone".encodeToByteArray()) }
+            waitUntil(timeoutMillis = TIMEOUT) { textOf(SECOND_TAG).startsWith("alone") }
+        } finally {
+            runBlocking { session.close() }
+        }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    private fun androidx.compose.ui.test.ComposeUiTest.textOf(tag: String): String =
+        onNodeWithTag(tag).fetchSemanticsNode()
+            .config
+            .getOrNull(SemanticsProperties.Text)
+            ?.joinToString("") { it.text }
+            .orEmpty()
+
+    @OptIn(ExperimentalTestApi::class)
     private fun androidx.compose.ui.test.ComposeUiTest.screenText(): String =
         onNodeWithTag(TAG).fetchSemanticsNode()
             .config
@@ -423,6 +464,7 @@ class TerminalSurfaceTest {
 
     private companion object {
         const val TAG = "terminal-surface"
+        const val SECOND_TAG = "terminal-surface-2"
         const val TIMEOUT = 10_000L
     }
 }
