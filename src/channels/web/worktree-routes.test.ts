@@ -122,6 +122,16 @@ test("GET /worktrees 503s when not configured", async () => {
   expect(res.status).toBe(503)
 })
 
+test("DELETE /worktrees 500s with the error only when remove itself throws", async () => {
+  const w = fakeWorktrees()
+  const made = makeChannel({ worktrees: { ...w.api, remove: async () => { throw new Error("boom") } } })
+  channel = made.channel
+  await channel.start()
+  const res = await request(channel, made.devicesFile, "DELETE", "/worktrees", { ids: ["s/u"] })
+  expect(res.status).toBe(500)
+  expect((await res.json() as { error: string }).error).toBe("boom")
+})
+
 /** The three archive routes, each with its archive fake and the name it records. */
 const ARCHIVE_ROUTES = [
   { name: "session", path: "/sessions/abc", step: "kill", opts: (order: string[]) => ({ killSession: async () => { order.push("kill") } }) },

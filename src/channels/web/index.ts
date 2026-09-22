@@ -2833,7 +2833,11 @@ export class WebChannel implements Channel {
       if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
       const body = await req.json().catch(() => ({})) as { ids?: unknown }
       const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : []
-      return this.json({ results: await this.opts.worktrees.remove(ids) })
+      try {
+        return this.json({ results: await this.opts.worktrees.remove(ids) })
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 500)
+      }
     }
     // ── Workspaces ──────────────────────────────────────────────────────────
     // Spec: docs/superpowers/specs/2026-08-06-workspaces-and-views-design.md §7

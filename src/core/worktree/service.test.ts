@@ -92,3 +92,44 @@ test("forWorkdir returns id, all owners, changes and size; undefined for non-wor
   expect(f!.bytes).toBeGreaterThan(0)
   expect(await svc.forWorkdir("/nope")).toBeUndefined()
 })
+
+// ---- Final-review fixes (M1–M4) ----
+
+test("final M1: a failed size broadcast never breaks the sizing chain", async () => {
+  const { base, root } = setup()
+  const frames: any[] = []
+  let fail = true
+  const svc = new WorktreeService({
+    root, owners: () => [],
+    broadcast: (f: any) => { if (f.type === "worktree_sizes" && fail) { fail = false; throw new Error("ws down") } frames.push(f) },
+  })
+  await svc.list()
+  await svc.whenSizesSettled()   // resolves (old code: rejected, and every later size run was skipped)
+  const repo = join(base, "repo")
+  git(repo, "worktree", "add", "-q", "-b", "mux/b", join(root, "repo-abc", "u2"), "main")
+  await svc.list()
+  await svc.whenSizesSettled()
+  const ids = frames.filter((f) => f.type === "worktree_sizes").flatMap((f) => f.sizes).map((s: any) => s.id)
+  expect(ids).toContain("repo-abc/u2")
+})
+
+test("final M2: back-to-back lists size each worktree once", async () => {
+  const { svc, frames } = setup()
+  await Promise.all([svc.list(), svc.list(), svc.list()])
+  await svc.whenSizesSettled()
+  const ids = frames.filter((f) => f.type === "worktree_sizes").flatMap((f) => f.sizes).map((s: any) => s.id)
+  expect(ids).toEqual(["repo-abc/u1"])
+})
+
+test("final M3: a throwing broadcast does not turn a completed delete into an error", async () => {
+  const { root, dir } = setup()
+  const svc = new WorktreeService({ root, owners: () => [], broadcast: () => { throw new Error("ws down") } })
+  expect(await svc.remove(["repo-abc/u1"])).toEqual([{ id: "repo-abc/u1", ok: true }])
+  expect(existsSync(dir)).toBe(false)
+})
+
+test("final M4: remove dedupes ids", async () => {
+  const { svc, frames } = setup()
+  expect(await svc.remove(["repo-abc/u1", "repo-abc/u1"])).toEqual([{ id: "repo-abc/u1", ok: true }])
+  expect(frames).toContainEqual({ type: "worktrees_removed", ids: ["repo-abc/u1"] })
+})

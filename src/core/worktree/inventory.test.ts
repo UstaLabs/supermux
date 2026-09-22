@@ -366,7 +366,7 @@ test("M3: a draft row's base branch is ignored", async () => {
   expect(list[0]!.unmerged).toBeNull()
 })
 
-// ---- Final-review fixes (I1) ----
+// ---- Final-review fixes (I1, M5) ----
 
 test("final I1: owners are re-read per id — a session restored mid-batch keeps its worktree", async () => {
   const f = fixture()
@@ -383,4 +383,17 @@ test("final I1: owners are re-read per id — a session restored mid-batch keeps
   expect(existsSync(a)).toBe(false)
   expect(existsSync(b)).toBe(true)
   expect(calls).toBeGreaterThanOrEqual(2)
+})
+
+test("final M5: an already-gone id inside the root is ok (end state reached); invalid/escaping ids still error", async () => {
+  const f = fixture()
+  f.add("u1", "mux/a")
+  writeFileSync(join(f.root, "a-file"), "x")
+  const outside = tmp("mux-outside-")
+  symlinkSync(outside, join(f.root, "slug-link"))
+  const r = await deleteWorktrees(f.root, ["repo-abc/never-existed", "no-such-slug/u9", "../x", "a/b/c", "a-file/u1", "slug-link/u1"], () => [])
+  expect(r[0]).toEqual({ id: "repo-abc/never-existed", ok: true })
+  expect(r[1]).toEqual({ id: "no-such-slug/u9", ok: true })
+  expect(r.slice(2).every((x) => !x.ok && !!x.error)).toBe(true)
+  expect(existsSync(outside)).toBe(true)
 })

@@ -353,9 +353,24 @@ async function branchCheckedOutElsewhere(repoRoot: string, branch: string, excep
   return false
 }
 
+/** An id whose folder is already gone: syntactically valid, its slug is absent or a real
+ *  directory (never a symlink), and root/<slug>/<uuid> itself is ENOENT. Deleting it is a
+ *  no-op success — gone is the end state the user asked for. */
+async function alreadyGone(root: string, id: string): Promise<boolean> {
+  const parts = id.split("/")
+  if (parts.length !== 2 || parts.some((p) => !p || p === "." || p === "..")) return false
+  const slug = await lstat(join(root, parts[0]!)).then((st) => st, (e: any) => e?.code === "ENOENT" ? null : undefined)
+  if (slug === undefined) return false
+  if (slug && (slug.isSymbolicLink() || !slug.isDirectory())) return false
+  return lstat(join(root, id)).then(() => false, (e: any) => e?.code === "ENOENT")
+}
+
 async function deleteOne(root: string, id: string, owners: () => OwnerRow[], canon: Canon): Promise<DeleteResult> {
   let path: string
-  try { path = await resolveId(root, id) } catch (e: any) { return { id, ok: false, error: String(e?.message ?? e) } }
+  try { path = await resolveId(root, id) } catch (e: any) {
+    if (await alreadyGone(root, id)) return { id, ok: true }
+    return { id, ok: false, error: String(e?.message ?? e) }
+  }
   // Only a verified linked worktree gets git operations; "repo gone", a folder without its own
   // .git, or anything git can't identify as its own top level is just removed from disk.
   let repoRoot: string | undefined

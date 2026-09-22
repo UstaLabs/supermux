@@ -4,10 +4,13 @@
 // WS broadcasts every mutation needs so other devices don't go stale.
 import { realpathSync } from "fs"
 import { basename, dirname, join, resolve, sep } from "path"
+import { makeLogger } from "../../shared/log"
 import {
   canonRows, canonicalizer, deleteWorktrees, listWorktrees, ownersOf, pool, resolveId, worktreeChanges, worktreeSize,
   type DeleteResult, type OwnerRow, type WorktreeChanges, type WorktreeOwner, type WorktreeSummary,
 } from "./inventory"
+
+const log = makeLogger("worktree")
 
 export interface WorktreeServiceDeps {
   root: string
@@ -31,6 +34,8 @@ function canonSync(p: string): string {
 export class WorktreeService {
   private sizes = new Map<string, { mtime: number; bytes: number }>()
   private sizing: Promise<void> = Promise.resolve()
+  /** Ids queued or being sized — a repeated list() never re-queues them. */
+  private sizingIds = new Set<string>()
 
   constructor(private readonly deps: WorktreeServiceDeps) {}
 
@@ -53,8 +58,15 @@ export class WorktreeService {
       const c = this.sizes.get(w.id)
       if (c && c.mtime === w.mtime) w.bytes = c.bytes
     }
-    const missing = list.filter((w) => w.bytes === undefined)
-    if (missing.length) this.sizing = this.sizing.then(() => this.computeSizes(missing))
+    const missing = list.filter((w) => w.bytes === undefined && !this.sizingIds.has(w.id))
+    if (missing.length) {
+      for (const w of missing) this.sizingIds.add(w.id)
+      // Always resolves: one failed run (e.g. a throwing broadcast) must not disable sizes forever.
+      this.sizing = this.sizing
+        .then(() => this.computeSizes(missing))
+        .catch((err) => log.warn("worktree_sizes_failed", { err: String((err as any)?.message ?? err) }))
+        .finally(() => { for (const w of missing) this.sizingIds.delete(w.id) })
+    }
     return list
   }
 
@@ -98,11 +110,18 @@ export class WorktreeService {
     return { id, branch: changes.branch, owners, changes, bytes }
   }
 
+  /** Delete exactly these ids (the ones the user confirmed). Owner rows are re-read per id
+   *  inside deleteWorktrees, so a session that goes live mid-batch keeps its worktree. */
   async remove(ids: string[]): Promise<DeleteResult[]> {
-    const results = await deleteWorktrees(this.deps.root, ids, () => this.deps.owners())
+    const results = await deleteWorktrees(this.deps.root, [...new Set(ids)], () => this.deps.owners())
     const removed = results.filter((r) => r.ok).map((r) => r.id)
     for (const id of removed) this.sizes.delete(id)
-    if (removed.length) this.deps.broadcast({ type: "worktrees_removed", ids: removed })
+    // The deletes already happened: a broadcast failure is logged, never reported as a failed delete.
+    if (removed.length) {
+      try { this.deps.broadcast({ type: "worktrees_removed", ids: removed }) } catch (err: any) {
+        log.warn("worktrees_removed_broadcast_failed", { err: String(err?.message ?? err) })
+      }
+    }
     return results
   }
 }
