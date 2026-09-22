@@ -37,12 +37,6 @@ internal object NativeTerminal {
     @JvmStatic external fun selectedText(handle: Int, status: IntArray): ByteArray?
     @JvmStatic external fun drainEffects(handle: Int, status: IntArray): ByteArray?
 
-    /** Test hook: [buffers taken, buffers freed, array elements acquired, array elements released]. */
-    @JvmStatic external fun debugCounters(): LongArray
-
-    /** Test hook: the next output byte[] allocation fails with OutOfMemoryError. */
-    @JvmStatic external fun debugFailNextArray(fail: Boolean)
-
     /**
      * After the library is loaded: its st_* ABI must be [expected] and every JNI entry point this
      * class declares must resolve (a missing one surfaces as [UnsatisfiedLinkError] on first call).

@@ -13,10 +13,10 @@ import kotlin.test.assertTrue
  * raised mid-call; no terminal is created when the out-array is unusable.
  */
 class JniBindingTest {
-    @BeforeTest fun load() = JvmNativeLibrary.ensureLoaded()
+    @BeforeTest fun load() = NativeTerminalTestHooks.assumeAvailable()
 
     /** [taken, freed, acquired, released] */
-    private fun counters() = NativeTerminal.debugCounters()
+    private fun counters() = NativeTerminalTestHooks.debugCounters()
 
     private fun assertBalanced(before: LongArray, expectBuffers: Long? = null) {
         val after = counters()
@@ -99,7 +99,7 @@ class JniBindingTest {
         try {
             NativeTerminal.feed(h, "abc".encodeToByteArray(), 0)
             val before = counters()
-            NativeTerminal.debugFailNextArray(true)
+            NativeTerminalTestHooks.debugFailNextArray(true)
             val status = IntArray(1)
             assertFailsWith<OutOfMemoryError> { NativeTerminal.readViewport(h, 1, status) }
             assertEquals(NativeStatus.OK, status[0])
@@ -107,7 +107,7 @@ class JniBindingTest {
             val frame = ViewportCodec.decodeViewport(NativeTerminal.readViewport(h, 1, status)!!)
             assertEquals("abc", frame.rows[0].cells.take(3).joinToString("") { it.text })
         } finally {
-            NativeTerminal.debugFailNextArray(false)
+            NativeTerminalTestHooks.debugFailNextArray(false)
             NativeTerminal.destroy(h)
         }
     }
@@ -117,13 +117,13 @@ class JniBindingTest {
         try {
             engine.feed("\u0007".encodeToByteArray(), OutputOrigin.LIVE)
             val before = counters()
-            NativeTerminal.debugFailNextArray(true)
+            NativeTerminalTestHooks.debugFailNextArray(true)
             assertFailsWith<OutOfMemoryError> { engine.drainEffects() }
             assertBalanced(before, expectBuffers = 1)
             engine.feed("x".encodeToByteArray(), OutputOrigin.LIVE)
             assertEquals("x", engine.viewport(forceFull = true).rows[0].cells[0].text)
         } finally {
-            NativeTerminal.debugFailNextArray(false)
+            NativeTerminalTestHooks.debugFailNextArray(false)
             engine.close()
         }
     }

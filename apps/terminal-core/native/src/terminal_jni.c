@@ -20,10 +20,13 @@
  * - Thread safety is the Kotlin binding's job (per-engine lock + closed flag):
  *   the st_* table is safe for different handles on different threads only.
  *
- * Test hooks (debugCounters / debugFailNextArray): process-wide atomic counters
- * of buffers taken/freed and array elements acquired/released, and a one-shot
- * injected NewByteArray failure, so JVM tests can prove the failure paths free
- * everything. They cost two atomic increments per call.
+ * Test hooks: only when compiled with -DST_JNI_TEST_HOOKS (build.sh --test
+ * builds that variant as test-lib/lib<name>_test.*; it is never packaged).
+ * They add process-wide atomic counters of buffers taken/freed and array
+ * elements acquired/released and a one-shot injected NewByteArray failure,
+ * bound to dev.supermux.terminal.NativeTerminalTestHooks (jvmTest only), so
+ * JVM tests can prove the failure paths free everything. In the release
+ * library the counters compile to nothing and the hooks do not exist.
  */
 #include <jni.h>
 #include <stdatomic.h>
@@ -35,11 +38,18 @@
 #define ST_JNI_INT(name) JNIEXPORT jint JNICALL Java_dev_supermux_terminal_NativeTerminal_##name
 #define ST_JNI_BYTES(name) JNIEXPORT jbyteArray JNICALL Java_dev_supermux_terminal_NativeTerminal_##name
 
+#ifdef ST_JNI_TEST_HOOKS
 static _Atomic int64_t g_buffers_taken;
 static _Atomic int64_t g_buffers_freed;
 static _Atomic int64_t g_elements_acquired;
 static _Atomic int64_t g_elements_released;
 static _Atomic int g_fail_next_array;
+#define COUNT(counter) atomic_fetch_add(&(counter), 1)
+#define INJECTED_ARRAY_FAILURE() atomic_exchange(&g_fail_next_array, 0)
+#else
+#define COUNT(counter) ((void)0)
+#define INJECTED_ARRAY_FAILURE() 0
+#endif
 
 /* ------------------------------------------------------------ helpers --- */
 
@@ -55,7 +65,7 @@ static void throw_new(JNIEnv *env, const char *cls, const char *msg) {
 static void free_buffer(uint8_t *buf) {
   if (buf == NULL) return;
   st_free_buffer(buf);
-  atomic_fetch_add(&g_buffers_freed, 1);
+  COUNT(g_buffers_freed);
 }
 
 /* Store `status` in out[0]. Returns 0 on success; on failure a Java exception
@@ -75,7 +85,7 @@ static jbyteArray to_java_and_free(JNIEnv *env, uint8_t *buf, uint32_t len) {
   jbyteArray arr = NULL;
   if (len > (uint32_t)INT32_MAX) {
     throw_new(env, "java/lang/IllegalStateException", "native buffer too large");
-  } else if (atomic_exchange(&g_fail_next_array, 0)) {
+  } else if (INJECTED_ARRAY_FAILURE()) {
     throw_new(env, "java/lang/OutOfMemoryError", "injected NewByteArray failure (test hook)");
   } else {
     arr = (*env)->NewByteArray(env, (jsize)len);
@@ -94,7 +104,7 @@ static jbyteArray to_java_and_free(JNIEnv *env, uint8_t *buf, uint32_t len) {
 /* Common shape of the three buffer readers: status goes to status[0], the
  * envelope (only on ST_OK) is returned as byte[]. */
 static jbyteArray finish_read(JNIEnv *env, jintArray status_out, st_status st, uint8_t *buf, uint32_t len) {
-  if (st == ST_OK) atomic_fetch_add(&g_buffers_taken, 1);
+  if (st == ST_OK) COUNT(g_buffers_taken);
   else buf = NULL; /* outputs are written only on ST_OK */
   if (put_status(env, status_out, st) != 0) {
     free_buffer(buf);
@@ -117,14 +127,14 @@ static int acquire_bytes(JNIEnv *env, jbyteArray arr, jbyte **out, jsize *len) {
   if (*len == 0) return 0;
   *out = (*env)->GetByteArrayElements(env, arr, NULL);
   if (*out == NULL) return -1; /* OutOfMemoryError pending */
-  atomic_fetch_add(&g_elements_acquired, 1);
+  COUNT(g_elements_acquired);
   return 0;
 }
 
 static void release_bytes(JNIEnv *env, jbyteArray arr, jbyte *elems) {
   if (elems == NULL) return;
   (*env)->ReleaseByteArrayElements(env, arr, elems, JNI_ABORT);
-  atomic_fetch_add(&g_elements_released, 1);
+  COUNT(g_elements_released);
 }
 
 /* ----------------------------------------------------------- lifecycle --- */
@@ -207,11 +217,11 @@ ST_JNI_INT(colors)(JNIEnv *env, jclass cls, jint handle, jlongArray colors) {
   if (n == 0) return st_colors((st_handle)handle, NULL, 0);
   jlong *elems = (*env)->GetLongArrayElements(env, colors, NULL);
   if (elems == NULL) return ST_ERR_OUT_OF_MEMORY; /* OutOfMemoryError pending */
-  atomic_fetch_add(&g_elements_acquired, 1);
+  COUNT(g_elements_acquired);
   _Static_assert(sizeof(jlong) == sizeof(uint64_t), "jlong must be 64-bit");
   st_status st = st_colors((st_handle)handle, (const uint64_t *)elems, (uint32_t)n);
   (*env)->ReleaseLongArrayElements(env, colors, elems, JNI_ABORT);
-  atomic_fetch_add(&g_elements_released, 1);
+  COUNT(g_elements_released);
   return st;
 }
 
@@ -299,9 +309,11 @@ ST_JNI_BYTES(drainEffects)(JNIEnv *env, jclass cls, jint handle, jintArray statu
 }
 
 /* ---------------------------------------------------------- test hooks --- */
+#ifdef ST_JNI_TEST_HOOKS
 
 /* [buffers taken, buffers freed, array elements acquired, array elements released] */
-JNIEXPORT jlongArray JNICALL Java_dev_supermux_terminal_NativeTerminal_debugCounters(JNIEnv *env, jclass cls) {
+JNIEXPORT jlongArray JNICALL Java_dev_supermux_terminal_NativeTerminalTestHooks_debugCounters(JNIEnv *env,
+                                                                                            jclass cls) {
   (void)cls;
   jlong v[4] = {
       (jlong)atomic_load(&g_buffers_taken),
@@ -315,9 +327,12 @@ JNIEXPORT jlongArray JNICALL Java_dev_supermux_terminal_NativeTerminal_debugCoun
 }
 
 /* The next byte[] allocation for an output envelope fails with OutOfMemoryError. */
-JNIEXPORT void JNICALL Java_dev_supermux_terminal_NativeTerminal_debugFailNextArray(JNIEnv *env, jclass cls,
-                                                                                   jboolean fail) {
+JNIEXPORT void JNICALL Java_dev_supermux_terminal_NativeTerminalTestHooks_debugFailNextArray(JNIEnv *env,
+                                                                                           jclass cls,
+                                                                                           jboolean fail) {
   (void)env;
   (void)cls;
   atomic_store(&g_fail_next_array, fail ? 1 : 0);
 }
+
+#endif /* ST_JNI_TEST_HOOKS */

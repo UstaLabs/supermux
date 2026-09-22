@@ -4,8 +4,15 @@ import dev.supermux.terminal.TerminalEngineUnavailableException.Reason
 import java.io.File
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileSystems
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.FileAttribute
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.UserPrincipal
 import java.security.MessageDigest
 import java.util.Properties
 
@@ -21,9 +28,23 @@ import java.util.Properties
  * manifest's sha256 and size, and the manifest's ABI must be the one this binding speaks; the
  * verified bytes are extracted to `<cache>/supermux-terminal/<version>/<sha256>/<library>` (an
  * existing file there is reused only if its hash matches; a bad one is replaced by atomic rename,
- * never rewritten in place, since a mapped library must not change under a running process) and
- * loaded with [System.load]. After
- * loading, `st_abi_version()` must match too.
+ * never rewritten in place, since a mapped library must not change under a running process), the
+ * file's sha256 is checked once more immediately before [System.load], and after loading
+ * `st_abi_version()` must match too.
+ *
+ * Cache directory safety: every directory of the cache path is created owner-only (POSIX 0700
+ * where the file system supports it) and an existing one is used only if it is a real directory
+ * (not a symlink) owned by the current user and not group/world-writable. Otherwise the loader
+ * falls back to a FRESH private directory (`Files.createTempDirectory`, 0700) under the same
+ * root, then to the next root (user cache first, `java.io.tmpdir` last), so a pre-created or
+ * loosened `/tmp/supermux-terminal` from another user is never used. Residual risk, accepted:
+ * the re-hash and `System.load` are two steps, so a process running as the SAME user could swap
+ * the file in between (it can equally attach to or ptrace the JVM); nobody else can write into an
+ * owner-only directory. On Windows only ownership is checked (%LOCALAPPDATA% is per-user).
+ *
+ * Developer override: `-Dsupermux.terminal.nativeLibrary=<path>` loads that file instead of the
+ * packaged one (no manifest/hash check, ABI still checked); Gradle's jvmTest uses it to load the
+ * test-hook build of the JNI library.
  *
  * Every failure is a [TerminalEngineUnavailableException] with a [Reason]: UNSUPPORTED_PLATFORM,
  * MISSING_BINARY, CORRUPT_BINARY, ABI_MISMATCH, INITIALIZATION_FAILED.
@@ -38,6 +59,9 @@ internal class JvmNativeLoader(
     private val cacheRoots: List<File> = defaultCacheRoots(),
     private val anchor: Class<*> = JvmNativeLoader::class.java,
     private val systemLoad: (String) -> Unit = { System.load(it) },
+    private val libraryOverride: String? = System.getProperty(LIBRARY_PROPERTY)?.takeIf { it.isNotBlank() },
+    /** Runs between extraction and the pre-load hash check (tests tamper here). */
+    private val afterExtract: (File) -> Unit = {},
 ) {
     /** `<os>-<arch>` of the packaged library for this JVM. */
     fun platformKey(): String {
@@ -64,6 +88,7 @@ internal class JvmNativeLoader(
 
     /** Load and verify the library; returns the loaded file. */
     fun load(): File {
+        libraryOverride?.let { return loadOverride(File(it)) }
         val key = platformKey()
         val dir = "$resourceRoot/$key"
         val props = Properties()
@@ -101,6 +126,19 @@ internal class JvmNativeLoader(
             )
         }
         val file = extract(bytes, sha256, version, library)
+        afterExtract(file)
+        // Last check right before the load (see "Residual risk" above).
+        val onDisk = try {
+            sha256(file.readBytes())
+        } catch (e: IOException) {
+            throw TerminalEngineUnavailableException("cannot re-read $file: ${e.message}", e, Reason.INITIALIZATION_FAILED)
+        }
+        if (onDisk != sha256) {
+            throw TerminalEngineUnavailableException(
+                "$file changed between extraction and loading (sha256 $onDisk, expected $sha256)",
+                reason = Reason.CORRUPT_BINARY,
+            )
+        }
         try {
             systemLoad(file.absolutePath)
         } catch (e: UnsatisfiedLinkError) {
@@ -112,32 +150,51 @@ internal class JvmNativeLoader(
         return file
     }
 
+    private fun loadOverride(file: File): File {
+        if (!file.isFile) {
+            throw TerminalEngineUnavailableException(
+                "-D$LIBRARY_PROPERTY=$file does not exist", reason = Reason.MISSING_BINARY,
+            )
+        }
+        try {
+            systemLoad(file.absolutePath)
+        } catch (e: UnsatisfiedLinkError) {
+            throw TerminalEngineUnavailableException(
+                "cannot load ${file.absolutePath}: ${e.message}", e, Reason.INITIALIZATION_FAILED,
+            )
+        }
+        NativeTerminal.verifyAbi(expectedAbi, file.name)
+        return file
+    }
+
     private fun extract(bytes: ByteArray, sha256: String, version: String, library: String): File {
         val errors = mutableListOf<String>()
         for (root in cacheRoots) {
-            val dir = File(root, "supermux-terminal/$version/$sha256")
-            val target = File(dir, library)
             try {
-                if (target.isFile && sha256(target.readBytes()) == sha256) return target
-                Files.createDirectories(dir.toPath())
-                val tmp = Files.createTempFile(dir.toPath(), "$library.", ".tmp")
+                Files.createDirectories(root.toPath())
+                val me = currentUser(root.toPath())
+                val base = privateBase(root, me)
+                val dir = privateSubdir(privateSubdir(base, version, me), sha256, me)
+                val target = File(dir, library)
+                val path = target.toPath()
+                if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && sha256(target.readBytes()) == sha256) return target
+                val tmp = Files.createTempFile(dir.toPath(), "$library.", ".tmp", *privateFileAttrs())
                 try {
                     Files.write(tmp, bytes)
                     try {
-                        Files.move(tmp, target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                        Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
                     } catch (_: AtomicMoveNotSupportedException) {
-                        Files.move(tmp, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING)
                     }
                 } finally {
                     Files.deleteIfExists(tmp)
                 }
-                // Re-read what landed on disk: another process may have raced us with other bytes.
                 if (sha256(target.readBytes()) == sha256) return target
                 errors += "$target: hash mismatch after extraction"
             } catch (e: IOException) {
-                errors += "$dir: ${e.message}"
+                errors += "$root: ${e.message}"
             } catch (e: SecurityException) {
-                errors += "$dir: ${e.message}"
+                errors += "$root: ${e.message}"
             }
         }
         throw TerminalEngineUnavailableException(
@@ -145,8 +202,71 @@ internal class JvmNativeLoader(
         )
     }
 
+    /**
+     * `<root>/supermux-terminal` if it is (or can be created as) a private directory, else a fresh
+     * private `<root>/supermux-terminal-*` directory. Throws [IOException] if neither works.
+     */
+    private fun privateBase(root: File, me: UserPrincipal): File {
+        val preferred = File(root, BASE_DIR).toPath()
+        if (!Files.exists(preferred, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(preferred, *privateDirAttrs())
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                // raced with another process; checked below like any existing directory
+            }
+        }
+        if (isPrivateDir(preferred, me)) return preferred.toFile()
+        val fresh = Files.createTempDirectory(root.toPath(), "$BASE_DIR-", *privateDirAttrs())
+        if (!isPrivateDir(fresh, me)) throw IOException("cannot create a private directory under $root")
+        return fresh.toFile()
+    }
+
+    /** `<parent>/<name>`, created owner-only; must be private (its parent is). */
+    private fun privateSubdir(parent: File, name: String, me: UserPrincipal): File {
+        val dir = File(parent, name).toPath()
+        if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Files.createDirectory(dir, *privateDirAttrs())
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+            }
+        }
+        if (!isPrivateDir(dir, me)) throw IOException("$dir is not a private directory")
+        return dir.toFile()
+    }
+
     companion object {
         const val RESOURCE_ROOT = "/dev/supermux/terminal/native"
+        const val LIBRARY_PROPERTY = "supermux.terminal.nativeLibrary"
+        const val BASE_DIR = "supermux-terminal"
+
+        private val posix: Boolean = "posix" in FileSystems.getDefault().supportedFileAttributeViews()
+        private val OWNER_ONLY_DIR = PosixFilePermissions.fromString("rwx------")
+        private val OWNER_ONLY_FILE = PosixFilePermissions.fromString("rw-------")
+
+        private fun privateDirAttrs(): Array<FileAttribute<*>> =
+            if (posix) arrayOf(PosixFilePermissions.asFileAttribute(OWNER_ONLY_DIR)) else emptyArray()
+
+        private fun privateFileAttrs(): Array<FileAttribute<*>> =
+            if (posix) arrayOf(PosixFilePermissions.asFileAttribute(OWNER_ONLY_FILE)) else emptyArray()
+
+        /** The user this JVM runs as = the owner of a file it just created in [dir]. */
+        internal fun currentUser(dir: Path): UserPrincipal {
+            val probe = Files.createTempFile(dir, ".owner-probe", ".tmp")
+            try {
+                return Files.getOwner(probe)
+            } finally {
+                Files.deleteIfExists(probe)
+            }
+        }
+
+        /** A real directory (no symlink), owned by [me], not group- or world-writable. */
+        internal fun isPrivateDir(dir: Path, me: UserPrincipal): Boolean {
+            if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return false
+            if (Files.getOwner(dir, LinkOption.NOFOLLOW_LINKS) != me) return false
+            if (!posix) return true
+            val perms = Files.getPosixFilePermissions(dir, LinkOption.NOFOLLOW_LINKS)
+            return PosixFilePermission.GROUP_WRITE !in perms && PosixFilePermission.OTHERS_WRITE !in perms
+        }
 
         /**
          * `-Dsupermux.terminal.cacheDir`, else the OS user cache dir (XDG_CACHE_HOME or ~/.cache,

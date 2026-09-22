@@ -61,8 +61,11 @@ WRAPPER_SOURCES=("$NATIVE_DIR/src/terminal_bridge.c")
 # linking the combined static archive above (see build_jni).
 JNI_NAME="supermux_terminal_jni"
 JNI_SOURCE="$NATIVE_DIR/src/terminal_jni.c"
-# Java_* entry points terminal_jni.c defines (17 st_* calls + 2 test hooks).
-JNI_EXPORT_COUNT=19
+# Java_* entry points terminal_jni.c defines: 17 NativeTerminal_* (one per
+# st_* call) in every library; the -DST_JNI_TEST_HOOKS variant (--test only,
+# test-lib/, never packaged) adds 2 NativeTerminalTestHooks_*.
+JNI_EXPORT_COUNT=17
+JNI_TEST_HOOK_COUNT=2
 FIXTURES_DIR="$PKG_DIR/fixtures/codec"
 
 ZIG_TARGET="$(lock_opt "targets.$TARGET.zig_target")"
@@ -218,10 +221,11 @@ link_macos_dylib() {
     "-Wl,-install_name,@rpath/$name" -o "$out"
 }
 
-# Every symbol the shared library exports must be ours. $2 = the exact number
-# of Java_* exports expected (JNI library), default: any.
+# Every symbol the shared library exports must be ours. JNI libraries: $2 =
+# the exact number of NativeTerminal_* entry points, $3 = of
+# NativeTerminalTestHooks_* (0 for anything that may be packaged).
 verify_exports() {
-  local lib="$1" want_java="${2:-}" nm readobj syms
+  local lib="$1" want_java="${2:-}" want_hooks="${3:-0}" nm readobj syms
   nm="$(dirname "$LLVM_OBJCOPY")/llvm-nm"; [[ -x "$nm" ]] || nm="$(command -v llvm-nm || command -v nm)"
   readobj="$(dirname "$LLVM_OBJCOPY")/llvm-readobj"; [[ -x "$readobj" ]] || readobj="$(command -v llvm-readobj || true)"
   case "$lib" in
@@ -238,8 +242,14 @@ verify_exports() {
   [[ "$n" -ge 18 ]] || die "$(basename "$lib") exports only $n st_* symbols"
   if [[ -n "$want_java" ]]; then
     local nj
+    local nh nall
     nj="$(printf '%s\n' "$syms" | grep -Ec '^_?Java_dev_supermux_terminal_NativeTerminal_' || true)"
-    [[ "$nj" -eq "$want_java" ]] || die "$(basename "$lib") exports $nj Java_* symbols, expected $want_java"
+    nh="$(printf '%s\n' "$syms" | grep -Ec '^_?Java_dev_supermux_terminal_NativeTerminalTestHooks_' || true)"
+    nall="$(printf '%s\n' "$syms" | grep -Ec '^_?Java_' || true)"
+    [[ "$nj" -eq "$want_java" ]] || die "$(basename "$lib") exports $nj NativeTerminal_* entry points, expected $want_java"
+    [[ "$nh" -eq "$want_hooks" ]] || die "$(basename "$lib") exports $nh test hooks, expected $want_hooks"
+    [[ "$nall" -eq $((nj + nh)) ]] || die "$(basename "$lib") exports unexpected Java_* symbols"
+    nj="$nall"
     printf '%s\n' "$syms" | grep -Eq '^_?JNI_OnLoad$' || die "$(basename "$lib") does not export JNI_OnLoad"
     log "$(basename "$lib"): exports $n st_* + $nj Java_* + JNI_OnLoad and nothing else"
     return 0
@@ -340,50 +350,65 @@ resolve_jni_includes() {
 
 # lib<JNI_NAME>: terminal_jni.c + the combined static archive, hidden
 # visibility, exporting only st_*/Java_*/JNI_OnLoad. Not built for iOS (the
-# cinterop binding links the static archive) or wasm.
+# cinterop binding links the static archive) or wasm. With --test (JVM targets
+# only) also test-lib/lib<JNI_NAME>_test.*: the same library compiled with
+# -DST_JNI_TEST_HOOKS for the JVM tests (Gradle's jvmTest points
+# -Dsupermux.terminal.nativeLibrary at it); never packaged.
 build_jni() {
-  JNI_SHARED=""
+  JNI_SHARED=""; JNI_TEST_SHARED=""
   [[ -n "${WRAPPER_STATIC:-}" ]] || return 0
   case "$TARGET" in ios-*) return 0 ;; esac
+  [[ "$TARGET" != macos-* ]] || macos_dylib_supported || return 0
   resolve_jni_includes
-  local obj="$WORK_DIR/wrapper/terminal_jni.o"
+  JNI_SHARED="$(link_jni release "$OUT_DIR/lib" "$JNI_NAME")"
+  verify_exports "$JNI_SHARED" "$JNI_EXPORT_COUNT" 0
+  if [[ $RUN_TEST -eq 1 && "$TARGET" != android-* ]]; then
+    JNI_TEST_SHARED="$(link_jni test "$OUT_DIR/test-lib" "${JNI_NAME}_test" -DST_JNI_TEST_HOOKS)"
+    verify_exports "$JNI_TEST_SHARED" "$JNI_EXPORT_COUNT" "$JNI_TEST_HOOK_COUNT"
+  fi
+}
+
+# link_jni <variant> <out dir> <library base name> [extra cflags...]: compile
+# terminal_jni.c and link it; prints the library path.
+link_jni() {
+  local variant="$1" dir="$2" name="$3"; shift 3
+  local obj="$WORK_DIR/wrapper/terminal_jni_$variant.o" out
   local cflags=(-std=c11 -O2 -g0 -Wall -Wextra -Werror -fvisibility=hidden -DGHOSTTY_STATIC
-                "-ffile-prefix-map=$PKG_DIR/=" -I "$NATIVE_DIR/include" "${JNI_CFLAGS[@]}")
+                "-ffile-prefix-map=$PKG_DIR/=" -I "$NATIVE_DIR/include" "${JNI_CFLAGS[@]}" "$@")
   [[ "$TARGET" == windows-* ]] || cflags+=(-fPIC)
-  log "jni: compile terminal_jni.c${JDK_ID:+ (JDK $JDK_ID)}"
+  mkdir -p "$dir"
+  log "jni ($variant): compile terminal_jni.c${JDK_ID:+ (JDK $JDK_ID)}"
   cc_target "$JNI_SOURCE" "$obj" "${cflags[@]}"
   "$LLVM_OBJCOPY" --strip-debug "$obj"
   case "$TARGET" in
     linux-*)
-      JNI_SHARED="$OUT_DIR/lib/lib$JNI_NAME.so"
+      out="$dir/lib$name.so"
       "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "$obj" "$WRAPPER_STATIC" -lc++ \
         "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
-        "-Wl,-soname,lib$JNI_NAME.so" -o "$JNI_SHARED" ;;
+        "-Wl,-soname,lib$name.so" -o "$out" >&2 ;;
     android-*)
-      JNI_SHARED="$OUT_DIR/lib/lib$JNI_NAME.so"
+      out="$dir/lib$name.so"
       "$NDK_BIN/clang++" "--target=$(lock "targets.$TARGET.ndk_clang_target")" -shared "$obj" "$WRAPPER_STATIC" \
         -static-libstdc++ "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
-        -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$JNI_NAME.so" -o "$JNI_SHARED" ;;
+        -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$name.so" -o "$out" >&2 ;;
     macos-*)
-      macos_dylib_supported || return 0
-      JNI_SHARED="$OUT_DIR/lib/lib$JNI_NAME.dylib"
-      link_macos_dylib "$JNI_SHARED" "lib$JNI_NAME.dylib" "$obj" "$WRAPPER_STATIC" ;;
+      out="$dir/lib$name.dylib"
+      link_macos_dylib "$out" "lib$name.dylib" "$obj" "$WRAPPER_STATIC" >&2 ;;
     windows-*)
-      JNI_SHARED="$OUT_DIR/lib/$JNI_NAME.dll"
+      out="$dir/$name.dll"
       "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "$obj" "$WRAPPER_STATIC" -lc++ \
-        -lntdll -lkernel32 -o "$JNI_SHARED"
-      rm -f "${JNI_SHARED%.dll}.pdb" "${JNI_SHARED%.dll}.lib" "$OUT_DIR/lib/terminal_jni.lib" ;;
-    *) return 0 ;;
+        -lntdll -lkernel32 -o "$out" >&2
+      rm -f "${out%.dll}.pdb" "${out%.dll}.lib" "$dir/terminal_jni_$variant.lib" ;;
   esac
-  "$LLVM_OBJCOPY" --strip-debug "$JNI_SHARED"
-  verify_exports "$JNI_SHARED" "$JNI_EXPORT_COUNT"
+  "$LLVM_OBJCOPY" --strip-debug "$out"
+  printf '%s\n' "$out"
 }
 
 # Load the shared library on its own (dlopen) and drive one terminal through
 # it: proves the export list is complete for a JNI-style consumer.
 run_shared_load_check() {
   local lib
-  for lib in "${WRAPPER_SHARED:-}" "${JNI_SHARED:-}"; do
+  for lib in "${WRAPPER_SHARED:-}" "${JNI_SHARED:-}" "${JNI_TEST_SHARED:-}"; do
     [[ -n "$lib" && "$lib" != *.dll ]] || continue
     run_one_load_check "$lib" || return 1
   done
@@ -391,7 +416,7 @@ run_shared_load_check() {
 
 run_one_load_check() {
   log "dlopen $(basename "$1") and drive a terminal through it"
-  python3 - "$1" <<'PY'
+  ${RUN_PREFIX[@]+"${RUN_PREFIX[@]}"} /usr/bin/env python3 - "$1" <<'PY'
 import ctypes, sys
 lib = ctypes.CDLL(sys.argv[1])
 assert lib.st_abi_version() == 1, "abi"
@@ -568,6 +593,7 @@ check_no_abs_paths() {
 
 # --------------------------------------------------------- run test ------
 RUNTIME_TESTED=false
+RUN_PREFIX=()   # e.g. (/usr/bin/arch -x86_64) to run macos-x64 tests under Rosetta
 TEST_HOST=""
 TEST_RESULT="not-run"
 
@@ -582,20 +608,27 @@ run_smoke() {
     android-*) run_smoke_android; return ;;
     ios-*) log "--test: $TARGET needs an iOS device/simulator run via Xcode; not runtime-tested"; TEST_RESULT="no-matching-device"; return 3 ;;
   esac
-  if [[ "$host_os" != "$want_os" || "$host_arch" != "$want_arch" ]]; then
+  RUN_PREFIX=()
+  TEST_HOST="$HOST_KEY $(uname -r)"
+  # macos-x64 on an Apple-silicon Mac: run the x86_64 executables (and an
+  # x86_64 python for the dlopen check) under Rosetta 2.
+  if [[ "$TARGET" == macos-x64 && "$host_os" == macos && "$host_arch" == aarch64 ]] &&
+     /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+    RUN_PREFIX=(/usr/bin/arch -x86_64)
+    TEST_HOST="$TEST_HOST (x86_64 under Rosetta 2)"
+  elif [[ "$host_os" != "$want_os" || "$host_arch" != "$want_arch" ]]; then
     log "--test: host $HOST_KEY does not match $TARGET; artifact is NOT runtime-tested"
-    TEST_RESULT="host-mismatch"
+    TEST_RESULT="host-mismatch"; TEST_HOST=""
     return 3
   fi
-  log "running smoke test on host $HOST_KEY"
-  TEST_HOST="$HOST_KEY $(uname -r)"
-  if ! "$SMOKE_EXE"; then
+  log "running smoke test on host $TEST_HOST"
+  if ! ${RUN_PREFIX[@]+"${RUN_PREFIX[@]}"} "$SMOKE_EXE"; then
     TEST_RESULT="failed"
     return 1
   fi
   if [[ -n "${BRIDGE_EXE:-}" ]]; then
     log "running st_* bridge test on host $HOST_KEY"
-    if ! ST_FIXTURES_DIR="$FIXTURES_DIR" "$BRIDGE_EXE"; then
+    if ! ST_FIXTURES_DIR="$FIXTURES_DIR" ${RUN_PREFIX[@]+"${RUN_PREFIX[@]}"} "$BRIDGE_EXE"; then
       TEST_RESULT="failed"
       return 1
     fi

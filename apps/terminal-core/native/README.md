@@ -93,8 +93,16 @@ What `native/build.sh` does, in order:
    `jni.h`) and link it with the combined `libsupermux_terminal.a` into
    `lib/libsupermux_terminal_jni.{so,dylib}` / `supermux_terminal_jni.dll`
    with the same export map. The export check additionally requires exactly
-   the 19 `Java_dev_supermux_terminal_NativeTerminal_*` entry points plus
-   `JNI_OnLoad`. The host JDK's `jni_md.h` serves every target (`jint` = int,
+   the 17 `Java_dev_supermux_terminal_NativeTerminal_*` entry points plus
+   `JNI_OnLoad`, and **no** test hook. With `--test` (JVM targets only) it
+   also builds `test-lib/lib<name>_test.*` from the same source with
+   `-DST_JNI_TEST_HOOKS`, which adds exactly 2
+   `NativeTerminalTestHooks_*` entry points (buffer/array counters, injected
+   `NewByteArray` failure; checked as 17 + 2). Only that variant has them;
+   it is never packaged — Gradle's `jvmTest` loads it through
+   `-Dsupermux.terminal.nativeLibrary` when present (else `JniBindingTest`
+   is skipped with a warning and everything else runs on the release
+   library). The host JDK's `jni_md.h` serves every target (`jint` = int,
    `jlong` = long on LP64 / long long on LLP64); Windows gets
    `-DJNIEXPORT=__declspec(dllexport)`.
 9. Compile the smoke test with `-Wall -Wextra -Werror` and link it against the
@@ -532,8 +540,26 @@ half-created.
     else `$XDG_CACHE_HOME`/`~/.cache`, `~/Library/Caches`, `%LOCALAPPDATA%`,
     then `java.io.tmpdir`; a cached copy is reused only if its hash matches
     and is replaced by atomic rename, never rewritten in place — rewriting a
-    mapped library SIGBUSes the process), `System.load`s it and checks
-    `st_abi_version()`. A load failure is sticky for the process.
+    mapped library SIGBUSes the process), re-hashes the final file, then
+    `System.load`s it and checks `st_abi_version()`. A load failure is
+    sticky for the process.
+    **Cache safety:** every cache directory is created owner-only (POSIX
+    `0700`, the file `0600`); an existing directory is used only if it is a
+    real directory (not a symlink) owned by the current user (= the owner of
+    a probe file the JVM just created) and not group/world-writable.
+    Otherwise the loader uses a fresh `Files.createTempDirectory` (0700)
+    under the same root, and failing that the next root, so a
+    `/tmp/supermux-terminal` planted or loosened by another user is never
+    used. Accepted residual risk: the final re-hash and `System.load` are two
+    steps, so a process of the *same* user could swap the file in between
+    (such a process can attach to the JVM anyway); no other user can write
+    into the owner-only directory. Windows: ownership only (`%LOCALAPPDATA%`
+    is per-user). Developer override: `-Dsupermux.terminal.nativeLibrary=<path>`
+    loads that file (ABI checked, no manifest/hash).
+  - **Android host unit tests** (`testDebugUnitTest`/`testReleaseUnitTest`)
+    are disabled: on the desktop JVM `System.loadLibrary` cannot find the
+    `.so` that only exists inside an APK, so `check`/`allTests` would always
+    fail. `jvmTest` covers the shared JNI binding; device tests come later.
 - **iOS** (`iosMain`, `src/nativeInterop/cinterop/terminal.def`): cinterop
   against `supermux_terminal.h`, embedding `build/native/ios-*/lib/libsupermux_terminal.a`
   (`-libraryPath` per target) + `-lc++`. Arrays are pinned (`usePinned`) only
@@ -658,16 +684,16 @@ Toolchain IDs:
 
 | target | built | runtime-tested | result / notes |
 |---|---|---|---|
-| linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**; st_* bridge test **208 checks, 0 failures — BRIDGE TEST PASSED**; threads test 6 × 150 cycles OK, and again under TSan; `dlopen` check OK; ASan+UBSan+LSan bridge run **187 checks, 0 failures**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `libsupermux_terminal.a` 3.4 MB (`fb26df366b41…`), `libsupermux_terminal.so` 2.4 MB (`2e53dcb19abd…`, exports exactly the 18 `st_*`, needs libc/librt only). `.so` files need glibc ≤ 2.27 symbols. **Task 4 (JNI):** `libsupermux_terminal_jni.so` 2.4 MB (`4e13c7020c45…`, 18 `st_*` + 19 `Java_*` + `JNI_OnLoad`, dlopen check OK); `:terminal-core:jvmTest` against it **56 tests, 0 failures** (12 EngineContractTest, 9 loader, 7 JNI failure paths, 2 concurrency, + types/codec/constants). |
+| linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**; st_* bridge test **208 checks, 0 failures — BRIDGE TEST PASSED**; threads test 6 × 150 cycles OK, and again under TSan; `dlopen` check OK; ASan+UBSan+LSan bridge run **187 checks, 0 failures**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `libsupermux_terminal.a` 3.4 MB (`fb26df366b41…`), `libsupermux_terminal.so` 2.4 MB (`2e53dcb19abd…`, exports exactly the 18 `st_*`, needs libc/librt only). `.so` files need glibc ≤ 2.27 symbols. **Task 4 (JNI):** `libsupermux_terminal_jni.so` 2.4 MB (18 `st_*` + 17 `Java_*` + `JNI_OnLoad`, no test hook) and `test-lib/libsupermux_terminal_jni_test.so` (+2 hooks); dlopen check drives a terminal through each. `:terminal-core:jvmTest` against the test-hook build: **60 tests, 0 failures** (12 EngineContractTest, 13 loader/cache-safety, 7 JNI failure paths, 2 concurrency, 26 types/codec/constants); `:terminal-core:allTests` green (jvm 60 + wasm 50, Android host unit tests disabled). |
 | wasm32 | yes | **yes** (Node 24 + headless Chrome 148) | `wasm/build.sh --test`: **47 checks, 0 failures in each runtime — WASM SMOKE PASSED** (run against `supermux-terminal.wasm`), and **loader test 38 checks, 0 failures in each runtime — LOADER TEST PASSED**. **Task 5 (browser binding):** `:terminal-core:wasmJsBrowserTest` in headless Chrome 148 **50 tests, 0 failures** (12 EngineContractTest, 11 codec, 8 types, 7 constants, 12 WasmRuntimeTest). `supermux-terminal.wasm` 831 KB (sha256 `42be902a16e0…`, identical across rebuilds): the same `terminal_bridge.c` compiled `wasm32-freestanding` and linked with the wasm `libghostty-vt.a` by `zig cc` (`--export-dynamic --export-table`, 128 KiB stack, table made growable by `wasm/patch_growable_table.py`), 205 function exports = 187 `ghostty_*` + the 18 `st_*`, no imports. Raw upstream `ghostty-vt.wasm` 814 KB (`75f0ed5b23ef…`) is still staged. |
 | linux-arm64 | yes | no (no arm64 host/qemu here) | smoke test cross-linked (`aarch64`, glibc 2.28); JNI `.so` export-checked, packaged in the jar. |
-| windows-x64 | yes | no (no Windows host/wine) | `x86_64-windows-gnu`: `ghostty-vt-static.lib`, `ghostty-vt.dll` + import lib, smoke `.exe`; imports only KERNEL32/ntdll/UCRT (`api-ms-win-crt-*`). PDBs dropped. `supermux_terminal_jni.dll` 2.1 MB: exports exactly 18 `st_*` + 19 `Java_*` + `JNI_OnLoad` (llvm-readobj), packaged in the jar — **never loaded by a JVM**. |
+| windows-x64 | yes | no (no Windows host/wine) | `x86_64-windows-gnu`: `ghostty-vt-static.lib`, `ghostty-vt.dll` + import lib, smoke `.exe`; imports only KERNEL32/ntdll/UCRT (`api-ms-win-crt-*`). PDBs dropped. `supermux_terminal_jni.dll` 2.1 MB: exports exactly 18 `st_*` + 17 `Java_*` + `JNI_OnLoad` (llvm-readobj), packaged in the jar — **never loaded by a JVM**. |
 | android-arm64 | yes | no (no adb device attached) | API 26, NDK-linked smoke test; `.so` has 16 KB-aligned LOAD segments, needs only libc/libm/libdl. JNI `.so` in the AAR as `jni/arm64-v8a/` (`:terminal-core:assembleDebug`; AGP strips `.symtab`, dynamic exports intact). Not loaded on a device yet. |
 | android-x64 | yes | no (no adb device/emulator running) | same as above (`jni/x86_64/`); `--test` exits 3 with `no-matching-device`. |
-| macos-arm64 | yes (**on the Mac**, macOS 26.6, Xcode 26.5) | **yes** | `native/build.sh macos-arm64 --test`: **SMOKE 66/0, BRIDGE 204/0** (the 4 RSS-growth assertions of the history-budget fixtures are Linux-only; the budgets themselves pass), dlopen checks of both dylibs OK; dylibs linked by ld64 (`libsupermux_terminal_jni.dylib` 1.5 MB, `075afceed14e…`, links /usr/lib/libc++ + libSystem, `codesign -v` OK). `:terminal-core:jvmTest` on macOS JVM 17 against it: **56/0**. No llvm-objcopy there: Apple `strip -S` shim. |
-| macos-x64 | static only (cross from Linux) | no | static archive + test executables; dylibs need a macOS host (see step 8). |
-| ios-arm64 | yes (**on the Mac**) | link only | `libsupermux_terminal.a` 2.7 MB (`ff1bfb00ed55…`). C test executables not built (Zig has no iOS libc headers); `:terminal-core:linkDebugTestIosArm64` links the Kotlin test binary against it. No device run. |
-| ios-simulator-arm64 | yes (**on the Mac**) | **yes** (simulator) | `libsupermux_terminal.a` (`80157e8ca3fd…`); `:terminal-core:iosSimulatorArm64Test` through cinterop: **38 tests, 0 failures** (12 EngineContractTest + types/codec/constants); `compileIosMainKotlinMetadata` OK with cinterop commonization. |
+| macos-arm64 | yes (**on the Mac**, macOS 26.6, Xcode 26.5) | **yes** | `native/build.sh macos-arm64 --test`: **SMOKE 66/0, BRIDGE 204/0** (the 4 RSS-growth assertions of the history-budget fixtures are Linux-only; the budgets themselves pass), dlopen checks of all three dylibs OK; dylibs linked by ld64 (`libsupermux_terminal_jni.dylib` ~1.5 MB, links /usr/lib/libc++ + libSystem, `codesign -v` OK). `:terminal-core:jvmTest` on macOS JVM 17 against the test-hook dylib: **60/0**. No llvm-objcopy there: Apple `strip -S` shim. |
+| macos-x64 | yes (**on the Mac**) | **yes** (Rosetta 2) | built for `x86_64-macos` on the arm64 Mac; the x86_64 smoke/bridge/dlopen tests run under Rosetta 2 (`arch -x86_64`, also for the ctypes check): **SMOKE 66/0, BRIDGE 204/0**, manifest `test_host: aarch64-macos … (x86_64 under Rosetta 2)`. A Linux cross build produces the static archive only (no dylibs, see step 8). No x86_64 JVM here, so the jar's macos-x64 entry is untested from Java. |
+| ios-arm64 | yes (**on the Mac**) | link only | `libsupermux_terminal.a` 2.7 MB. C test executables not built (Zig has no iOS libc headers); `:terminal-core:linkDebugTestIosArm64` links the Kotlin test binary against it. No device run. |
+| ios-simulator-arm64 | yes (**on the Mac**) | **yes** (simulator) | `libsupermux_terminal.a`; `:terminal-core:iosSimulatorArm64Test` through cinterop: **38 tests, 0 failures** (12 EngineContractTest + types/codec/constants); `compileKotlinIosSimulatorArm64` and `compileIosMainKotlinMetadata` OK with cinterop commonization. |
 
 No artifact contains `$HOME`, the package path or the build path (checked by
 `build.sh` / `wasm/build.sh` on every build). Every first build of a target

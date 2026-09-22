@@ -215,6 +215,44 @@ val stageJvmNativeResources by tasks.registering {
 }
 kotlin.sourceSets.getByName("jvmMain").resources.srcDir(stageJvmNativeResources)
 
+// jvmTest loads the -DST_JNI_TEST_HOOKS build of the host's JNI library (made only by
+// `native/build.sh <host> --test`, never packaged) so JniBindingTest can use its counters and
+// failure injection; without it those tests are skipped and everything else runs against the
+// packaged release library.
+val hostNativeTarget: String? = run {
+    val os = System.getProperty("os.name").lowercase()
+    val arch = System.getProperty("os.arch").lowercase()
+    val o = when {
+        os.startsWith("linux") -> "linux"
+        os.startsWith("mac") -> "macos"
+        os.startsWith("windows") -> "windows"
+        else -> null
+    }
+    val a = when (arch) { "amd64", "x86_64" -> "x64"; "aarch64", "arm64" -> "arm64"; else -> null }
+    if (o != null && a != null) "$o-$a" else null
+}
+tasks.named<Test>("jvmTest") {
+    val lib = hostNativeTarget?.let { t ->
+        jvmNativeTargets[t]?.let { name ->
+            val dot = name.lastIndexOf('.')
+            File(nativeBuildDir, "$t/test-lib/${name.substring(0, dot)}_test${name.substring(dot)}")
+        }
+    }
+    if (lib != null) inputs.files(lib).optional().withPropertyName("jniTestHookLibrary")
+    doFirst {
+        if (lib != null && lib.isFile) {
+            systemProperty("supermux.terminal.nativeLibrary", lib.absolutePath)
+        } else {
+            logger.warn("terminal-core: no JNI test-hook library ($lib); JniBindingTest is skipped (run native/build.sh $hostNativeTarget --test)")
+        }
+    }
+}
+
+// Android host unit tests would run commonTest (EngineContractTest) on the desktop JVM through the
+// Android actual, whose System.loadLibrary can only find the .so inside an APK: they cannot pass
+// there. The engine is covered by jvmTest (same JNI binding) and, later, device tests.
+tasks.matching { it.name.matches(Regex("test(Debug|Release)UnitTest")) }.configureEach { enabled = false }
+
 // Browser: supermux-terminal.wasm + terminal-loader.mjs at the root of the wasmJs resources. Kotlin/Wasm
 // copies them next to the compiled module, where the loader's `@JsModule("./terminal-loader.mjs")`
 // import and its default `new URL("./supermux-terminal.wasm", import.meta.url)` resolve; bundlers
