@@ -2496,7 +2496,7 @@ async function spawnSession(args: {
   let effectiveWorkdir = workdir
   let wt: WorktreeHandle | undefined
   if (args.worktree !== false) {
-    const info = getRepoInfo(workdir)
+    const info = await getRepoInfo(workdir)
     if (info.eligible && info.repoRoot) {
       try {
         wt = await createWorktree({

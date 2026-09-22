@@ -2654,7 +2654,7 @@ export class WebChannel implements Channel {
       if (!p?.trim()) return this.json({ error: "path required" }, 400)
       const doFetch = url.searchParams.get("fetch") === "1"
       try {
-        return this.json(getRepoInfo(normalizeExistingWorkdir(p, home()), { fetch: doFetch }))
+        return this.json(await getRepoInfo(normalizeExistingWorkdir(p, home()), { fetch: doFetch }))
       } catch (err: any) {
         return this.json({ isGitRepo: false, eligible: false, error: err?.message ?? String(err) })
       }
