@@ -1,8 +1,8 @@
 package dev.supermux.terminal
 
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 import kotlin.js.Promise
 
 /** The JS `Uint8Array` (kotlinx-browser is deliberately not a dependency of this package). */
@@ -126,10 +126,18 @@ internal fun loadFailure(error: JsAny?): TerminalEngineUnavailableException {
     return TerminalEngineUnavailableException("terminal wasm runtime: ${jsErrorMessage(error)}", reason = reason)
 }
 
-/** Await a loader promise; a rejection becomes [loadFailure]. */
-internal suspend fun <T : JsAny?> Promise<T>.awaitLoad(): T = suspendCoroutine { cont ->
+/**
+ * Await a loader promise; a rejection becomes [loadFailure].
+ *
+ * Cancellable FROM THE CALLER'S SIDE: `withTimeout`/`cancel` around it resumes the caller with a
+ * [kotlinx.coroutines.CancellationException] at once. A JS promise cannot be aborted, so the shared
+ * load keeps running (and the next caller reuses its result) — the settle handlers simply find the
+ * continuation no longer active and drop the value. Without this, a cancelled caller would hang
+ * until the network settled, which is exactly what `TerminalRuntime.initialize`'s contract forbids.
+ */
+internal suspend fun <T : JsAny?> Promise<T>.awaitLoad(): T = suspendCancellableCoroutine { cont ->
     then(
-        { value -> cont.resume(value); null },
-        { error -> cont.resumeWithException(loadFailure(error)); null },
+        { value -> if (cont.isActive) cont.resume(value); null },
+        { error -> if (cont.isActive) cont.resumeWithException(loadFailure(error)); null },
     )
 }

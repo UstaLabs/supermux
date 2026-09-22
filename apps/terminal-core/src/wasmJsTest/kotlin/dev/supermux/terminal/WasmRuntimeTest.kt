@@ -1,5 +1,7 @@
 package dev.supermux.terminal
 
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
@@ -173,5 +175,27 @@ class WasmRuntimeTest {
             engine.feed("héllo 世界 🙂".encodeToByteArray(), OutputOrigin.LIVE)
             assertEquals("héllo 世界 🙂", engine.viewport(forceFull = true).rowText(0))
         }
+    }
+
+    /**
+     * A caller that gives up must observe cancellation even though a JS promise cannot be aborted:
+     * loader promises are awaited with a cancellable continuation, so `withTimeout` wins instead of
+     * hanging until the network settles, and the shared load settling afterwards is harmless (the
+     * continuation is no longer active, so the value is dropped).
+     */
+    @Test fun awaitingALoadIsCancellableAndALateSettlementIsHarmless() = terminalTest {
+        var resolveLater: ((JsAny?) -> Unit)? = null
+        val pending = Promise<JsAny?> { resolve, _ -> resolveLater = resolve }
+        assertFailsWith<TimeoutCancellationException> { withTimeout(50) { pending.awaitLoad() } }
+        // Settles after the caller gave up; the dropped resumption must not throw.
+        resolveLater!!(null)
+    }
+
+    /** Same for a rejection that arrives after the caller gave up. */
+    @Test fun aRejectionAfterCancellationIsDropped() = terminalTest {
+        var rejectLater: ((JsAny) -> Unit)? = null
+        val pending = Promise<JsAny?> { _, reject -> rejectLater = reject }
+        assertFailsWith<TimeoutCancellationException> { withTimeout(50) { pending.awaitLoad() } }
+        rejectLater!!("boom".toJsString())
     }
 }
