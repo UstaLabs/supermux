@@ -268,6 +268,10 @@ data class ProjectDto(
     val locations: List<ProjectLocationDto> = emptyList(),
 )
 
+/** One worktree's disk usage, as broadcast on `worktree_sizes`. */
+@Serializable
+data class WorktreeSizeDto(val id: String, val bytes: Long)
+
 @Serializable
 sealed interface ServerFrame {
     @Serializable @SerialName("snapshot")
@@ -336,6 +340,16 @@ sealed interface ServerFrame {
     data class SessionsReordered(
         val orderedIds: List<String> = emptyList(),
     ) : ServerFrame
+
+    /** Async worktree disk-usage results, pushed as `du` finishes for each worktree
+     *  (spec 2026-09-22-explicit-worktree-cleanup). Merge into existing sizes by id. */
+    @Serializable @SerialName("worktree_sizes")
+    data class WorktreeSizes(val sizes: List<WorktreeSizeDto> = emptyList()) : ServerFrame
+
+    /** Worktree ids deleted (by this device's explicit delete, another device, or an
+     *  archive-with-worktree) since this client connected. */
+    @Serializable @SerialName("worktrees_removed")
+    data class WorktreesRemoved(val ids: List<String> = emptyList()) : ServerFrame
 
     @Serializable @SerialName("workspace_added")
     data class WorkspaceAdded(val workspace: WorkspaceDto) : ServerFrame

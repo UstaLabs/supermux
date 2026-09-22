@@ -9,6 +9,7 @@ import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
+import dev.supermux.proto.WorktreeSizeDto
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -221,5 +222,15 @@ class HostReducerTest {
         val b = reduceHostFrame(a, ServerFrame.DisplayAdded(d1b))
         assertEquals(1, b.displays.size)
         assertEquals("errored", b.displays.single().status)
+    }
+
+    @Test fun worktreeSizesMergeAndRemovedIdsAccumulate() {
+        var s = HostState()
+        s = reduceHostFrame(s, ServerFrame.WorktreeSizes(listOf(WorktreeSizeDto("a", 10), WorktreeSizeDto("b", 20))))
+        s = reduceHostFrame(s, ServerFrame.WorktreeSizes(listOf(WorktreeSizeDto("a", 11))))
+        assertEquals(mapOf("a" to 11L, "b" to 20L), s.worktreeSizes)
+        s = reduceHostFrame(s, ServerFrame.WorktreesRemoved(listOf("a")))
+        assertEquals(mapOf("b" to 20L), s.worktreeSizes)
+        assertEquals(setOf("a"), s.removedWorktreeIds)
     }
 }

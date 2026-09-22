@@ -36,6 +36,10 @@ data class HostState(
      * (path grouping only) apart from a new broker with no projects yet.
      */
     val projectCatalogKnown: Boolean = false,
+    /** Worktree id → bytes, from `worktree_sizes` frames (spec 2026-09-22-explicit-worktree-cleanup). */
+    val worktreeSizes: Map<String, Long> = emptyMap(),
+    /** Worktree ids another device (or an archive) deleted since this client connected. */
+    val removedWorktreeIds: Set<String> = emptySet(),
 )
 
 /** Outcome of adding a location to a persistent project. */
