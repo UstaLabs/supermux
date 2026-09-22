@@ -1166,6 +1166,12 @@ class FleetStore(
         appFor(id)?.switchModel(id, model) == true
     suspend fun switchReasoning(id: String, level: String): Boolean =
         appFor(id)?.switchReasoning(id, level) == true
+    fun setPrompts(id: String, enabled: Boolean) {
+        appFor(id)?.setPrompts(id, enabled)
+    }
+    fun respondRequest(sessionId: String, requestId: String, answer: kotlinx.serialization.json.JsonObject) {
+        appFor(sessionId)?.respondRequest(sessionId, requestId, answer)
+    }
 
     /** Resume from archive on the owning host, then re-pull that host's archived list so the row
      *  leaves the Archived screen (the resume produces no session_removed frame).

@@ -2,6 +2,8 @@ package dev.supermux.proto
 
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ContractTest {
     // ignoreUnknownKeys = false → strict decode throws if the broker emits a
@@ -19,7 +21,7 @@ class ContractTest {
             "commands_changed", "finish_job", "session_git", "session_git_remote",
             "sessions_reordered", "session_read",
             "walkthrough_updated", "review_comment",
-            "request_open", "request_closed",
+            "request_open", "request_closed", "error",
         )
         for (n in names) {
             val frame = json.decodeFromString<ServerFrame>(load(n))
@@ -67,7 +69,19 @@ class ContractTest {
                 is ServerFrame.ReviewCommentFrame -> {}
                 is ServerFrame.RequestOpen -> {}
                 is ServerFrame.RequestClosed -> {}
+                is ServerFrame.Error -> {}
             }
         }
+    }
+
+    @Test fun client_prompt_frames_round_trip() {
+        val set = json.decodeFromString<ClientFrame>(load("set_prompts"))
+        assertTrue(set is ClientFrame.SetPrompts)
+        assertEquals("s1", (set as ClientFrame.SetPrompts).session)
+        assertTrue(set.enabled)
+        val respond = json.decodeFromString<ClientFrame>(load("request_respond"))
+        assertTrue(respond is ClientFrame.RequestRespond)
+        assertEquals("r1", (respond as ClientFrame.RequestRespond).requestId)
+        assertTrue(respond.answer["optionId"].toString().contains("allow_once"))
     }
 }

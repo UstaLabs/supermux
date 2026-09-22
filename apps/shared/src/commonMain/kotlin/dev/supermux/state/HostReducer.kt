@@ -1,6 +1,8 @@
 package dev.supermux.state
 
 import dev.supermux.proto.AgentStatus
+import dev.supermux.proto.LogEntry
+import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -39,6 +41,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
             finishJobs = frame.sessions
                 .mapNotNull { s -> s.finish_job?.let { s.id to it } }
                 .toMap(),
+            requests = frame.requests,
         )
     }
     is ServerFrame.ProjectsChanged -> state.copy(
@@ -85,6 +88,7 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
                 bgTasks = state.bgTasks - frame.id,
                 agentState = state.agentState - frame.id,
                 agentErrors = state.agentErrors - frame.id,
+                requests = state.requests - frame.id,
             )
         }
     }
@@ -161,9 +165,47 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         if (state.lastRead[frame.session] == next) state
         else state.copy(lastRead = state.lastRead + (frame.session to next))
     }
+    is ServerFrame.SessionState -> state.copy(
+        sessions = state.sessions.map { s ->
+            if (s.id != frame.session) s
+            else s.copy(
+                mute = frame.mute ?: s.mute,
+                connected = frame.connected ?: s.connected,
+                model = frame.model ?: s.model,
+                reasoningLevel = frame.reasoningLevel ?: s.reasoningLevel,
+                prompts = frame.prompts ?: s.prompts,
+            )
+        },
+    )
     is ServerFrame.ActivityAppend -> state.copy(
         activity = state.activity + (frame.session to ((state.activity[frame.session] ?: emptyList()) + frame.event)),
     )
+    is ServerFrame.RequestOpen -> {
+        val prev = state.requests[frame.session] ?: emptyList()
+        if (prev.any { it.requestId == frame.request.requestId }) state
+        else state.copy(requests = state.requests + (frame.session to (prev + frame.request)))
+    }
+    is ServerFrame.RequestClosed -> {
+        val prev = state.requests[frame.session] ?: emptyList()
+        val closing = prev.find { it.requestId == frame.requestId }
+        val remaining = prev.filterNot { it.requestId == frame.requestId }
+        val line = requestClosedLine(frame.outcome, closing)
+        val entry = LogEntry(
+            id = "req-closed-${frame.requestId}",
+            ts = state.messages[frame.session]?.lastOrNull()?.ts
+                ?: state.activity[frame.session]?.lastOrNull()?.ts
+                ?: "9999-12-31T23:59:59Z",
+            direction = "outbound",
+            text = line,
+        )
+        val msgs = (state.messages[frame.session] ?: emptyList()) + entry
+        state.copy(
+            requests = if (remaining.isEmpty()) state.requests - frame.session
+            else state.requests + (frame.session to remaining),
+            messages = state.messages + (frame.session to msgs),
+        )
+    }
+    is ServerFrame.Error -> state.copy(lastError = frame.reason.ifBlank { null })
     is ServerFrame.BgTasks -> state.copy(bgTasks = state.bgTasks + (frame.session to frame.tasks))
     is ServerFrame.AgentState -> {
         val nextErrors = if (frame.state != "dead") state.agentErrors - frame.session else state.agentErrors
@@ -213,6 +255,17 @@ fun reduceHostFrame(state: HostState, frame: ServerFrame): HostState = when (fra
         else state.copy(displays = state.displays.filterNot { it.id == frame.id })
     }
     else -> state
+}
+
+internal fun requestClosedLine(outcome: String, request: PromptRequest?): String = when (outcome) {
+    "answered" -> {
+        val label = request?.options?.firstOrNull { it.kind?.startsWith("allow") == true }?.label
+            ?: request?.options?.firstOrNull()?.label
+        if (label.isNullOrBlank()) "answered" else "answered: $label"
+    }
+    "expired" -> "expired"
+    "cancelled" -> "cancelled"
+    else -> outcome
 }
 
 /** Patch each workspace's projectId from a full membership map; absent ids become unresolved. */

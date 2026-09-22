@@ -74,5 +74,7 @@ fun rememberChatActions(fleet: FleetStore, sessionId: String): ChatActions =
             pickReasoning = { fleet.switchReasoning(sessionId, it) },
             ensureMessagesLoaded = { fleet.ensureMessagesLoaded(sessionId) },
             loadProxies = { fleet.proxies() },
+            respondRequest = { requestId, answer -> fleet.respondRequest(sessionId, requestId, answer) },
+            setPrompts = { fleet.setPrompts(sessionId, it) },
         )
     }

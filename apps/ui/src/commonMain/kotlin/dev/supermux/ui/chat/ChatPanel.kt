@@ -102,9 +102,11 @@ import dev.supermux.net.ReasoningResponse
 import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
+import kotlinx.serialization.json.JsonObject
 import dev.supermux.session.inferHomeDir
 import dev.supermux.session.projectLabel
 import dev.supermux.state.HostStore
@@ -173,6 +175,8 @@ data class ChatState(
     /** Walkthrough replies the user has not opened yet — drives the unread chip. */
     val walkthroughUnread: Int = 0,
     val walkthroughUnreadStepId: String? = null,
+    val requests: List<PromptRequest> = emptyList(),
+    val lastError: String? = null,
 )
 
 /**
@@ -197,6 +201,8 @@ class ChatActions(
     val ensureMessagesLoaded: suspend () -> Unit = {},
     /** Session proxies for the header's links slot. */
     val loadProxies: suspend () -> List<ProxyDto> = { emptyList() },
+    val respondRequest: (requestId: String, answer: JsonObject) -> Unit = { _, _ -> },
+    val setPrompts: (Boolean) -> Unit = {},
 )
 
 /** [ChatActions] wired to a [HostStore] for one session — desktop's ergonomics, kept. */
@@ -224,6 +230,8 @@ fun rememberChatActions(
             pickReasoning = { level -> app.switchReasoning(session.id, level) },
             ensureMessagesLoaded = { app.ensureMessagesLoaded(session.id) },
             loadProxies = loadProxies ?: { app.proxies() },
+            respondRequest = { requestId, answer -> app.respondRequest(session.id, requestId, answer) },
+            setPrompts = { enabled -> app.setPrompts(session.id, enabled) },
         )
     }
 }
@@ -239,6 +247,8 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
     val commandsMap by app.commands.collectAsState()
     val commandsResolvedMap by app.commandsResolved.collectAsState()
     val walkthrough = app.walkthroughState<WalkthroughState>(sessionId)
+    val requestsMap by app.requests.collectAsState()
+    val lastError by app.lastError.collectAsState()
     return ChatState(
         messages = messagesMap[sessionId].orEmpty(),
         activity = activityMap[sessionId].orEmpty(),
@@ -249,6 +259,8 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
         commandsResolved = commandsResolvedMap[sessionId] ?: false,
         walkthroughUnread = walkthrough.unreadReplies,
         walkthroughUnreadStepId = walkthrough.unreadStepId,
+        requests = requestsMap[sessionId].orEmpty(),
+        lastError = lastError,
     )
 }
 
@@ -260,6 +272,7 @@ fun rememberChatState(app: HostStore, sessionId: String): ChatState {
 private fun timelineItemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Msg -> "m:${item.entry.id}"
     is TimelineItem.Tool -> "t:${item.event.callId ?: "${item.event.kind}:${item.event.seq}:${item.event.ts}"}"
+    is TimelineItem.Activity -> "a:${item.event.kind}:${item.event.seq}:${item.event.ts}"
 }
 
 /**
@@ -335,6 +348,17 @@ fun ChatPanel(
     val dead = agent?.state == "dead"
 
     LaunchedEffect(session.id) { actions.ensureMessagesLoaded() }
+
+    var pendingRespondIds by remember(session.id) { mutableStateOf(setOf<String>()) }
+    val liveRequestIds = remember(state.requests) { state.requests.map { it.requestId }.toSet() }
+    LaunchedEffect(liveRequestIds) {
+        pendingRespondIds = pendingRespondIds.filter { it in liveRequestIds }.toSet()
+    }
+    val platform = dev.supermux.ui.platform.LocalPlatform.current
+    LaunchedEffect(state.lastError) {
+        val err = state.lastError
+        if (!err.isNullOrBlank()) platform.notices.show(err)
+    }
 
     // ── Model + reasoning catalogs ────────────────────────────────────────────────────────────
     // Owned here so the panel can fetch-on-open, optimistically update `current` after a switch and
@@ -632,6 +656,8 @@ fun ChatPanel(
                 sessionModel = session.model,
                 sessionReasoning = session.reasoningLevel,
                 sessionAgent = session.agent,
+                sessionPrompts = session.prompts,
+                onSetPrompts = actions.setPrompts,
                 onPickModel = { model ->
                     scope.launch {
                         if (actions.pickModel(model)) {
@@ -775,6 +801,15 @@ fun ChatPanel(
                                 .widthIn(max = CONTENT_MAX_WIDTH)
                                 .padding(start = Space.lg, end = Space.lg, bottom = Space.sm),
                         ) {
+                            RequestCards(
+                                requests = state.requests,
+                                disabledIds = pendingRespondIds,
+                                onRespond = { requestId, answer ->
+                                    pendingRespondIds = pendingRespondIds + requestId
+                                    actions.respondRequest(requestId, answer)
+                                },
+                                modifier = Modifier.padding(bottom = Space.sm),
+                            )
                             composer()
                             ComposerFooter(
                                 session = session,

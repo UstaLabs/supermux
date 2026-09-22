@@ -20,6 +20,7 @@ sealed interface TimelineItem {
         val output: String? = null,
         val resultBody: ActivityToolBody? = null,
     ) : TimelineItem
+    data class Activity(val event: ActivityEvent) : TimelineItem
 }
 
 /**
@@ -65,6 +66,7 @@ fun mergeTimeline(
                     items.add(TimelineItem.Tool(e, status, output, resultBody))
                 }
                 "tool_result" -> { /* folded into the matching tool row above */ }
+                "reasoning", "plan", "task" -> items.add(TimelineItem.Activity(e))
                 // "thinking" (and any other non-tool kind) is intentionally dropped.
                 else -> { /* dropped */ }
             }
@@ -74,6 +76,7 @@ fun mergeTimeline(
         when (item) {
             is TimelineItem.Msg -> item.entry.ts
             is TimelineItem.Tool -> item.event.ts
+            is TimelineItem.Activity -> item.event.ts
         }
     }
 }

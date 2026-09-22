@@ -38,3 +38,25 @@ export function browserLaunchOptions(extra: LaunchOptions = {}): LaunchOptions {
 export function launchBrowser(extra: LaunchOptions = {}): Promise<Browser> {
   return chromium.launch(browserLaunchOptions(extra))
 }
+
+/** Broadcast a server frame to every web client (MUX_TEST_BROKER inject seam). */
+export async function injectServerFrame(page: import("playwright").Page, frame: Record<string, unknown>): Promise<void> {
+  const res = await page.evaluate(async (body) => {
+    const response = await fetch("/debug/inject-frame", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      credentials: "include",
+    })
+    return { ok: response.ok, status: response.status, text: await response.text() }
+  }, frame)
+  if (!res.ok) throw new Error(`inject-frame failed ${res.status}: ${res.text}`)
+}
+
+export async function lastClientFrames(page: import("playwright").Page): Promise<unknown[]> {
+  return await page.evaluate(async () => {
+    const response = await fetch("/debug/last-client-frames", { credentials: "include" })
+    if (!response.ok) throw new Error(`last-client-frames ${response.status}`)
+    return await response.json() as unknown[]
+  })
+}

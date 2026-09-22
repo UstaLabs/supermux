@@ -402,6 +402,8 @@ export class WebChannel implements Channel {
   private readonly mintDeviceToken?: (name: string) => { token: string; name: string }
   private readonly getRelayUrl?: () => string | undefined
   private inboundHandlers: Array<(m: InboundMessage) => void> = []
+  /** Fixture-only: last client WS frames of interest (`request_respond`, …). */
+  private lastClientFrames: unknown[] = []
   private wsConnections = new Set<{ ws: import("bun").ServerWebSocket<WSData>; deviceName: string }>()
   private displaySockets = new WeakMap<object, import("bun").Socket>()
   private readonly fsWatcher?: FsWatcher
@@ -1135,6 +1137,7 @@ export class WebChannel implements Channel {
       return
     }
     if (frame.type === "request_respond" && frame.session && frame.requestId) {
+      if (process.env.MUX_TEST_BROKER === "1") this.lastClientFrames.push(frame)
       if (!this.opts.respondRequest) {
         ws.send(JSON.stringify({ type: "error", reason: "requests not available" }))
         return
@@ -1553,6 +1556,21 @@ export class WebChannel implements Channel {
     if (method === "GET" && !isServerHandledDocumentGet(path, url) && (!isApiPath(path) || isDocumentNavigation(req))) {
       const res = serveStatic({ staticDir: this.opts.staticDir, embedded: this.opts.staticEmbedded ?? {}, path, acceptEncoding: req.headers.get("accept-encoding") ?? undefined })
       if (res) return res
+    }
+
+    if (process.env.MUX_TEST_BROKER === "1" && path === "/debug/inject-frame" && method === "POST") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      let body: unknown
+      try { body = await req.json() } catch { return new Response("bad json", { status: 400 }) }
+      if (!body || typeof body !== "object") return new Response("bad json", { status: 400 })
+      this.broadcastToAll(body as Record<string, unknown>)
+      return new Response("ok", { status: 200 })
+    }
+    if (process.env.MUX_TEST_BROKER === "1" && path === "/debug/last-client-frames" && method === "GET") {
+      const authResult = this.requireAuth(req)
+      if (!authResult.ok) return new Response("unauthorized", { status: 401 })
+      return Response.json(this.lastClientFrames)
     }
 
     if (method === "POST" && path.startsWith("/internal/agent-hook/")) {

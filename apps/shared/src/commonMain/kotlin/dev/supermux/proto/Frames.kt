@@ -140,6 +140,10 @@ data class ActivityEvent(
     val truncated: Boolean? = null,
     /** Structured High-detail payload (bash/edit/write/generic). */
     val body: ActivityToolBody? = null,
+    /** Reasoning card: true when the model redacted the thought stream. */
+    val redacted: Boolean? = null,
+    /** Task card kind (shell / subagent / collab / …). */
+    val taskKind: String? = null,
 )
 
 @Serializable
@@ -540,6 +544,10 @@ sealed interface ServerFrame {
         val requestId: String,
         val outcome: String,
     ) : ServerFrame
+
+    /** Broker `{type:"error", reason}` — switch/respond failures surface here. */
+    @Serializable @SerialName("error")
+    data class Error(val reason: String = "") : ServerFrame
 }
 
 @Serializable
@@ -559,6 +567,24 @@ data class PromptRequest(
     val allowFreeText: Boolean = false,
     val blocking: Boolean = true,
 )
+
+/** One question inside a `kind=question` request. Broker JSON-stringifies the list into [PromptRequest.body]. */
+@Serializable
+data class PromptQuestion(
+    val id: String,
+    val prompt: String = "",
+    val header: String? = null,
+    val multiSelect: Boolean = false,
+    val allowFreeText: Boolean = false,
+    val options: List<PromptRequestOption> = emptyList(),
+)
+
+private val promptQuestionJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+fun PromptRequest.parsedQuestions(): List<PromptQuestion> {
+    if (kind != "question" || body.isBlank()) return emptyList()
+    return runCatching { promptQuestionJson.decodeFromString<List<PromptQuestion>>(body) }.getOrDefault(emptyList())
+}
 
 @Serializable
 sealed interface ClientFrame {

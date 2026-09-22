@@ -6,6 +6,7 @@ import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
 import dev.supermux.proto.ProjectDto
+import dev.supermux.proto.PromptRequest
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
@@ -36,6 +37,10 @@ data class HostState(
      * (path grouping only) apart from a new broker with no projects yet.
      */
     val projectCatalogKnown: Boolean = false,
+    /** Open permission / question prompts keyed by session id. */
+    val requests: Map<String, List<PromptRequest>> = emptyMap(),
+    /** Last `{type:"error", reason}` from the broker (prompts toggle, request respond, …). */
+    val lastError: String? = null,
 )
 
 /** Outcome of adding a location to a persistent project. */

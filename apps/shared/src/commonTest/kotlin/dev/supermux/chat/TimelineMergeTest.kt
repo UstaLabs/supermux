@@ -82,6 +82,20 @@ class TimelineMergeTest {
         assertTrue(items.isEmpty())
     }
 
+    @Test fun reasoningPlanAndTaskBecomeActivityItems() {
+        val items = mergeTimeline(
+            emptyList(),
+            listOf(
+                ActivityEvent(ts = "2026-01-01T00:00:01Z", kind = "reasoning", title = "Thinking", detail = "hmm"),
+                ActivityEvent(ts = "2026-01-01T00:00:02Z", kind = "plan", title = "Plan", detail = "pending: do it"),
+                ActivityEvent(ts = "2026-01-01T00:00:03Z", kind = "task", title = "build", phase = "started", taskKind = "shell"),
+            ),
+        )
+        assertEquals(3, items.size)
+        assertTrue(items.all { it is TimelineItem.Activity })
+        assertEquals(listOf("reasoning", "plan", "task"), items.map { (it as TimelineItem.Activity).event.kind })
+    }
+
     @Test fun messagesAndToolsInterleaveByTs() {
         val items = mergeTimeline(
             listOf(
@@ -182,6 +196,7 @@ class TimelineMergeTest {
         when (it) {
             is TimelineItem.Msg -> "m:${it.entry.id}"
             is TimelineItem.Tool -> "t:${it.event.callId ?: it.event.ts}"
+            is TimelineItem.Activity -> "a:${it.event.kind}:${it.event.ts}"
         }
     }
 

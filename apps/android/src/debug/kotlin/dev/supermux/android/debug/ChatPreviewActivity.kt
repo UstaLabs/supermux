@@ -124,6 +124,7 @@ Minimal chrome, no heavy animation.""",
                             when (it) {
                                 is TimelineItem.Msg -> it.entry.id
                                 is TimelineItem.Tool -> it.event.callId ?: it.event.ts
+                                is TimelineItem.Activity -> "${it.event.kind}:${it.event.ts}"
                             }
                         }) { item ->
                             TimelineItemRow(item, highDetail = false)

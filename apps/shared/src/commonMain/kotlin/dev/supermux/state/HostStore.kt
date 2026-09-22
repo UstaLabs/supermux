@@ -208,6 +208,10 @@ class HostStore(
         _state.map { it.messages }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val activity: StateFlow<Map<String, List<ActivityEvent>>> =
         _state.map { it.activity }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val requests: StateFlow<Map<String, List<dev.supermux.proto.PromptRequest>>> =
+        _state.map { it.requests }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
+    val lastError: StateFlow<String?> =
+        _state.map { it.lastError }.stateIn(projectionScope, SharingStarted.Eagerly, null)
     val agentState: StateFlow<Map<String, AgentStatus>> =
         _state.map { it.agentState }.stateIn(projectionScope, SharingStarted.Eagerly, emptyMap())
     val agentErrors: StateFlow<Map<String, ServerFrame.AgentError>> =
@@ -1864,6 +1868,21 @@ class HostStore(
         val ok = runApi("switchReasoning") { api.switchReasoning(id, level); true } ?: false
         if (ok) patchSession(id) { it.copy(reasoningLevel = level) }
         return ok
+    }
+
+    fun setPrompts(id: String, enabled: Boolean) {
+        patchSession(id) { it.copy(prompts = enabled) }
+        stateScope.launch {
+            runApi("setPrompts") { sendFrame(ClientFrame.SetPrompts(id, enabled)) }
+        }
+    }
+
+    fun respondRequest(sessionId: String, requestId: String, answer: kotlinx.serialization.json.JsonObject) {
+        stateScope.launch {
+            runApi("respondRequest") {
+                sendFrame(ClientFrame.RequestRespond(sessionId, requestId, answer))
+            }
+        }
     }
 
     /** Patch one session row in place (optimistic pill updates). No-op for an unknown id. */

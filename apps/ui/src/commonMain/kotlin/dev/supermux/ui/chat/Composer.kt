@@ -82,6 +82,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -563,6 +564,8 @@ fun Composer(
      */
     sessionReasoning: String? = null,
     sessionAgent: String? = null,
+    sessionPrompts: Boolean = false,
+    onSetPrompts: (Boolean) -> Unit = {},
     onPickModel: (String) -> Unit = {},
     onPickReasoning: (String) -> Unit = {},
     /**
@@ -1332,6 +1335,21 @@ fun Composer(
                                         onDismiss = { reasoningMenu = false },
                                     )
                                 }
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.testTag("prompts-toggle").padding(start = 6.dp),
+                            ) {
+                                Text(
+                                    "Ask before tool calls",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = cs.onSurfaceVariant,
+                                    modifier = Modifier.padding(end = 4.dp),
+                                )
+                                Switch(
+                                    checked = sessionPrompts,
+                                    onCheckedChange = onSetPrompts,
+                                )
                             }
                         }
 
