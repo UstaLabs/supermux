@@ -187,10 +187,156 @@ re-acquired and old handles still valid; malformed input does not trap;
 1,000 terminal create/free cycles with no further memory growth. Only the VT
 engine is loaded — no ghostty-web renderer or DOM terminal.
 
-## Package-owned constant mapping (TODO: Task 2)
+## Package-owned constant mapping
 
-Kotlin models use package-owned constants, not Ghostty enum ordinals. Task 2
-fills this table (key physical codes, modifier bits, key/mouse actions, mouse
-buttons, cursor shapes, style flags, underline kinds, colour encoding with the
-default-colour flag, cell width `0/1/2`) and freezes it in codec fixtures.
-The upstream values it maps from are listed in `API-NOTES.md` §5, §7, §8.
+Kotlin models use package-owned constants
+(`src/commonMain/kotlin/dev/supermux/terminal/TerminalConstants.kt`), never
+Ghostty enum ordinals. The values are frozen by `TerminalConstantsTest`
+(append, never renumber). The `st_*` wrapper (Task 3) translates them to the
+pinned Ghostty enums below with explicit `switch`/table code — never by casting.
+Upstream values: `API-NOTES.md` §5, §7, §8.
+
+### Colours (`Long`, `TerminalColor`)
+
+```
+bit  63..33  32        31..24  23..16  15..8  7..0
+     0       DEFAULT   R       G       B      A
+```
+
+- Explicit colour: `0x0000_0000_RRGGBBAA` (unsigned RGBA in the low 32 bits).
+  Ghostty `GhosttyColorRgb {r,g,b}` → `r<<24 | g<<16 | b<<8 | 0xFF`.
+- `TerminalColor.DEFAULT = 0x1_0000_0000` (bit 32 set, RGBA zero) = "default
+  fg/bg": emitted when the render-state `FG_COLOR`/`BG_COLOR` query returns
+  `GHOSTTY_INVALID_VALUE`. Palette colours arrive already resolved to RGBA.
+- Bits 33..63 set = invalid. `TerminalColors.palette` always has 256 entries
+  (→ `GHOSTTY_TERMINAL_OPT_COLOR_PALETTE`; alpha is dropped on the way in).
+
+### Cell width (`TerminalCell.width`)
+
+| package | Ghostty `GhosttyCellWide` |
+|---|---|
+| `1` narrow leading cell | `GHOSTTY_CELL_WIDE_NARROW` |
+| `2` wide leading cell | `GHOSTTY_CELL_WIDE_WIDE` |
+| `0` continuation / spacer (never rendered) | `GHOSTTY_CELL_WIDE_SPACER_TAIL`, `GHOSTTY_CELL_WIDE_SPACER_HEAD` |
+
+### Style flags (`CellFlags`, bit set) → `GhosttyStyle` bools
+
+| bit | package | Ghostty field |
+|---|---|---|
+| `1<<0` | `BOLD` | `bold` |
+| `1<<1` | `ITALIC` | `italic` |
+| `1<<2` | `FAINT` | `faint` |
+| `1<<3` | `BLINK` | `blink` |
+| `1<<4` | `INVERSE` | `inverse` |
+| `1<<5` | `INVISIBLE` | `invisible` |
+| `1<<6` | `STRIKETHROUGH` | `strikethrough` |
+| `1<<7` | `OVERLINE` | `overline` |
+
+### Underline (`Underline`) → `GhosttyStyle.underline`
+
+| package | Ghostty |
+|---|---|
+| `0 NONE` | `GHOSTTY_SGR_UNDERLINE_NONE` |
+| `1 SINGLE` | `GHOSTTY_SGR_UNDERLINE_SINGLE` |
+| `2 DOUBLE` | `GHOSTTY_SGR_UNDERLINE_DOUBLE` |
+| `3 CURLY` | `GHOSTTY_SGR_UNDERLINE_CURLY` |
+| `4 DOTTED` | `GHOSTTY_SGR_UNDERLINE_DOTTED` |
+| `5 DASHED` | `GHOSTTY_SGR_UNDERLINE_DASHED` |
+
+### Cursor shape (`CursorShape`) ← render-state `CURSOR_VISUAL_STYLE`
+
+Note the order differs from Ghostty's (`BAR=0, BLOCK=1`) on purpose: map by name.
+
+| package | Ghostty `GhosttyRenderStateCursorVisualStyle` |
+|---|---|
+| `0 BLOCK` | `GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK` |
+| `1 BAR` | `GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR` |
+| `2 UNDERLINE` | `GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE` |
+| `3 BLOCK_HOLLOW` | `GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW` |
+
+### Modifiers (`Modifiers`, bit set) → `GhosttyMods`
+
+| bit | package | Ghostty |
+|---|---|---|
+| `1<<0` | `SHIFT` | `GHOSTTY_MODS_SHIFT` |
+| `1<<1` | `CTRL` | `GHOSTTY_MODS_CTRL` |
+| `1<<2` | `ALT` | `GHOSTTY_MODS_ALT` |
+| `1<<3` | `SUPER` | `GHOSTTY_MODS_SUPER` |
+| `1<<4` | `CAPS_LOCK` | `GHOSTTY_MODS_CAPS_LOCK` |
+| `1<<5` | `NUM_LOCK` | `GHOSTTY_MODS_NUM_LOCK` |
+
+The bit positions happen to equal Ghostty's today; the wrapper still maps them
+bit by bit. The right-hand `*_SIDE` bits are not exposed (always left).
+
+### Key action (`KeyAction`) → `GhosttyKeyAction`
+
+| package | Ghostty |
+|---|---|
+| `0 PRESS` | `GHOSTTY_KEY_ACTION_PRESS` |
+| `1 RELEASE` | `GHOSTTY_KEY_ACTION_RELEASE` |
+| `2 REPEAT` | `GHOSTTY_KEY_ACTION_REPEAT` |
+
+### Mouse action / button (`MouseAction`, `MouseButton`)
+
+| package | Ghostty |
+|---|---|
+| `MouseAction 0 PRESS` | `GHOSTTY_MOUSE_ACTION_PRESS` |
+| `MouseAction 1 RELEASE` | `GHOSTTY_MOUSE_ACTION_RELEASE` |
+| `MouseAction 2 MOTION` | `GHOSTTY_MOUSE_ACTION_MOTION` |
+| `MouseButton 0 NONE` | `ghostty_mouse_event_clear_button` (motion, no button) |
+| `MouseButton 1 LEFT` | `GHOSTTY_MOUSE_BUTTON_LEFT` |
+| `MouseButton 2 RIGHT` | `GHOSTTY_MOUSE_BUTTON_RIGHT` |
+| `MouseButton 3 MIDDLE` | `GHOSTTY_MOUSE_BUTTON_MIDDLE` |
+| `MouseButton 4 WHEEL_UP` | `GHOSTTY_MOUSE_BUTTON_FOUR` |
+| `MouseButton 5 WHEEL_DOWN` | `GHOSTTY_MOUSE_BUTTON_FIVE` |
+| `MouseButton 6 WHEEL_LEFT` | `GHOSTTY_MOUSE_BUTTON_SIX` |
+| `MouseButton 7 WHEEL_RIGHT` | `GHOSTTY_MOUSE_BUTTON_SEVEN` |
+
+`TerminalMouse` carries viewport **cell** column/row; Ghostty's mouse event takes
+surface **pixels**. The wrapper sends the cell centre,
+`x = column*cellWidthPx + cellWidthPx/2`, `y = row*cellHeightPx + cellHeightPx/2`,
+with `OPT_SIZE` set from the current `TerminalSize` (no padding).
+
+### Physical keys (`TerminalKeys`) → `GhosttyKey`
+
+`physicalCode` values are USB HID Keyboard/Keypad usage IDs (HID Usage Tables,
+page `0x07`) — the numbering W3C `KeyboardEvent.code` is defined against.
+Anything not listed maps to `GHOSTTY_KEY_UNIDENTIFIED` (only `text` is used).
+
+| package (HID usage) | Ghostty |
+|---|---|
+| `UNIDENTIFIED` `0x00` | `GHOSTTY_KEY_UNIDENTIFIED` |
+| `A`..`Z` `0x04`..`0x1D` | `GHOSTTY_KEY_A`..`GHOSTTY_KEY_Z` |
+| `DIGIT_1`..`DIGIT_9` `0x1E`..`0x26` | `GHOSTTY_KEY_DIGIT_1`..`GHOSTTY_KEY_DIGIT_9` |
+| `DIGIT_0` `0x27` | `GHOSTTY_KEY_DIGIT_0` |
+| `ENTER` `0x28` | `GHOSTTY_KEY_ENTER` |
+| `ESCAPE` `0x29` | `GHOSTTY_KEY_ESCAPE` |
+| `BACKSPACE` `0x2A` | `GHOSTTY_KEY_BACKSPACE` |
+| `TAB` `0x2B` | `GHOSTTY_KEY_TAB` |
+| `SPACE` `0x2C` | `GHOSTTY_KEY_SPACE` |
+| `MINUS` `0x2D` | `GHOSTTY_KEY_MINUS` |
+| `EQUAL` `0x2E` | `GHOSTTY_KEY_EQUAL` |
+| `BRACKET_LEFT` `0x2F` | `GHOSTTY_KEY_BRACKET_LEFT` |
+| `BRACKET_RIGHT` `0x30` | `GHOSTTY_KEY_BRACKET_RIGHT` |
+| `BACKSLASH` `0x31` | `GHOSTTY_KEY_BACKSLASH` |
+| `SEMICOLON` `0x33` | `GHOSTTY_KEY_SEMICOLON` |
+| `QUOTE` `0x34` | `GHOSTTY_KEY_QUOTE` |
+| `BACKQUOTE` `0x35` | `GHOSTTY_KEY_BACKQUOTE` |
+| `COMMA` `0x36` | `GHOSTTY_KEY_COMMA` |
+| `PERIOD` `0x37` | `GHOSTTY_KEY_PERIOD` |
+| `SLASH` `0x38` | `GHOSTTY_KEY_SLASH` |
+| `F1`..`F12` `0x3A`..`0x45` | `GHOSTTY_KEY_F1`..`GHOSTTY_KEY_F12` |
+| `INSERT` `0x49` | `GHOSTTY_KEY_INSERT` |
+| `HOME` `0x4A` | `GHOSTTY_KEY_HOME` |
+| `PAGE_UP` `0x4B` | `GHOSTTY_KEY_PAGE_UP` |
+| `DELETE` `0x4C` | `GHOSTTY_KEY_DELETE` |
+| `END` `0x4D` | `GHOSTTY_KEY_END` |
+| `PAGE_DOWN` `0x4E` | `GHOSTTY_KEY_PAGE_DOWN` |
+| `ARROW_RIGHT` `0x4F` | `GHOSTTY_KEY_ARROW_RIGHT` |
+| `ARROW_LEFT` `0x50` | `GHOSTTY_KEY_ARROW_LEFT` |
+| `ARROW_DOWN` `0x51` | `GHOSTTY_KEY_ARROW_DOWN` |
+| `ARROW_UP` `0x52` | `GHOSTTY_KEY_ARROW_UP` |
+
+`TerminalKey.text` → `ghostty_key_event_set_utf8` (empty → NULL; never C0/DEL).
+Numpad, modifier-only and international keys are deliberately not in the
+first set; add them later by appending their HID usage IDs.
