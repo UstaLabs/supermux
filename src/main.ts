@@ -1669,7 +1669,8 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
         const first = args.firstMessage?.trim()
         if (args.firstAttachments?.length) {
           const messageId = `spawn-${Date.now()}`
-          await routeWebInbound({
+          // Same reason as below: do not hold the spawn response for the turn.
+          void routeWebInbound({
             channel: "web",
             chat_id: "web",
             message_id: messageId,
@@ -1679,12 +1680,14 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
             text: first,
             target_session_id: entry.id,
             attachments: args.firstAttachments,
-          })
+          }).catch((err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
         } else if (first) {
-          const delivered = await deliverUserMessage(entry.id, first)
-          if (!delivered.ok) {
-            log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
-          }
+          // Core adapters resolve send() when the TURN completes; the launcher
+          // must navigate to the new chat as soon as the message is handed
+          // over, not after the agent's first reply, so this is not awaited.
+          void deliverUserMessage(entry.id, first).then((delivered) => {
+            if (!delivered.ok) log.warn("spawn_first_message_failed", { id: entry.id, reason: delivered.reason })
+          }, (err) => log.warn("spawn_first_message_failed", { id: entry.id, reason: String(err) }))
         }
       }
       return {

@@ -34,7 +34,7 @@ export function fakeCursorHost(nativeId = "cursor-sid"): {
       return runtime
     },
   })
-  const host = createCursorCoreHost({ stateDirectory, driverFactory: factory, smoke: async () => {} })
+  const host = createCursorCoreHost({ stateDirectory, driverFactory: factory, smoke: async () => {}, sharedRuntime: null })
   return {
     host,
     opens,

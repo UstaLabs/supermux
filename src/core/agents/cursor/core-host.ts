@@ -21,6 +21,9 @@ export type CursorCoreHostOptions = {
   limits?: CoreLimits
   /** Test seam: production always smokes cursor-agent after the environment is written. */
   smoke?: CursorSmoke
+  /** Test seam: production always links the shared cursor-agent runtime. Seeding it copies
+   *  ~0.9 GB from the user's install, which no test should pay for. */
+  sharedRuntime?: { source: string } | null
 }
 
 export type CursorCoreHost = Host
@@ -115,7 +118,9 @@ export function createCursorCoreHost(options: CursorCoreHostOptions): CursorCore
           userCursorDir: join(HOME, ".cursor"),
           userConfigDir: userConfigDir(),
         },
-        sharedRuntime: process.platform === "win32" ? null : { source: sharedCursorDir(STATE_DIR) },
+        sharedRuntime: options.sharedRuntime !== undefined
+          ? options.sharedRuntime
+          : (process.platform === "win32" ? null : { source: sharedCursorDir(STATE_DIR) }),
         platform: process.platform,
       })
       // Smoke is content: fail early on a broken install, after the environment is written.

@@ -70,7 +70,7 @@ export async function discoverClaudeModels(opts?: {
 }
 
 // Non-blocking so the periodic model refresh never stalls the event loop.
-async function runCli(names: readonly string[], args: string[]): Promise<string> {
+async function runCli(names: readonly string[], args: string[], timeoutMs: number): Promise<string> {
   const env = { ...process.env }
   const command = resolveCommand(names, env, process.platform)
   if (!command) throw new Error(`${names.join(" or ")} not found`)
@@ -81,7 +81,7 @@ async function runCli(names: readonly string[], args: string[]): Promise<string>
     const timer = setTimeout(() => {
       try { child.kill("SIGTERM") } catch {}
       reject(new Error(`${names[0]} timed out`))
-    }, 10_000)
+    }, timeoutMs)
     child.stdout?.on("data", (chunk) => { stdout += chunk.toString("utf8") })
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString("utf8") })
     child.once("error", (error) => { clearTimeout(timer); reject(error) })
@@ -97,7 +97,7 @@ export async function discoverCodexModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {
   try {
-    const raw = opts?.run ? await opts.run("codex debug models") : await runCli(["codex"], ["debug", "models"])
+    const raw = opts?.run ? await opts.run("codex debug models") : await runCli(["codex"], ["debug", "models"], 10_000)
     const parsed = JSON.parse(raw) as { models?: { slug: string; display_name: string; visibility?: string; supported_reasoning_levels?: { effort: string; description?: string }[] }[] }
     return (parsed.models ?? [])
       .filter((m) => m.visibility === "list")
@@ -119,7 +119,7 @@ export async function discoverCursorModels(opts?: {
   run?: (cmd: string) => Promise<string>
 }): Promise<ModelInfo[]> {
   try {
-    const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent", "agent"], ["--list-models"])
+    const raw = opts?.run ? await opts.run("cursor-agent --list-models") : await runCli(["cursor-agent", "agent"], ["--list-models"], 10_000)
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const m = line.match(/^(\S+)\s+-\s+(.+)$/)
@@ -143,7 +143,10 @@ export async function discoverOpenCodeModels(opts?: {
     // that form because OpenCodeAdapter.parseModel splits on the first "/" to
     // build session.prompt's { providerID, modelID }. Only authed providers
     // appear, so this doubles as the picker's opencode list.
-    const raw = opts?.run ? await opts.run("opencode models") : await runCli(["opencode"], ["models"])
+    // `opencode models` boots the whole OpenCode runtime (plugins included) before
+    // it prints anything — ~15 s on a warm box — so it gets a larger budget than
+    // the other CLIs or the picker's opencode list stays empty.
+    const raw = opts?.run ? await opts.run("opencode models") : await runCli(["opencode"], ["models"], 60_000)
     const models: ModelInfo[] = []
     for (const line of raw.split("\n")) {
       const id = line.trim()

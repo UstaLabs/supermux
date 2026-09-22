@@ -126,6 +126,7 @@ async function harness(fake: { driver: AgentDriver } | AgentDriver = fakeAgentDr
     driverFactory: () => driver,
     limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
     smoke: async () => {},
+    sharedRuntime: null,
   })
   hosts.push(host)
   return { host, workdir, stateDirectory }

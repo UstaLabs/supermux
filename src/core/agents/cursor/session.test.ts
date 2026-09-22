@@ -56,7 +56,7 @@ const dirs: string[] = []
 async function makeHost(factory: ReturnType<typeof fakeChildFactory>["factory"]) {
   const dir = mkdtempSync(join(tmpdir(), "mux-cur-core-"))
   dirs.push(dir)
-  const host = createCursorCoreHost({ stateDirectory: dir, driverFactory: factory, smoke: async () => {} })
+  const host = createCursorCoreHost({ stateDirectory: dir, driverFactory: factory, smoke: async () => {}, sharedRuntime: null })
   hosts.push(host)
   return host
 }

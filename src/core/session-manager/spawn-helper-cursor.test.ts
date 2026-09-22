@@ -62,7 +62,7 @@ describe("Cursor spawn", () => {
     const child = fakeChildFactory()
     const dir = mkdtempSync(join(tmpdir(), "mux-cur-core-"))
     dirs.push(dir)
-    const host = createCursorCoreHost({ stateDirectory: dir, driverFactory: child.factory, smoke: async () => {} })
+    const host = createCursorCoreHost({ stateDirectory: dir, driverFactory: child.factory, smoke: async () => {}, sharedRuntime: null })
     hosts.push(host)
     const reg = registry()
     const workdir = mkdtempSync(join(tmpdir(), "mux-cur-"))
