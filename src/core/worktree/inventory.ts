@@ -185,3 +185,46 @@ async function duBytes(path: string): Promise<number | undefined> {
 export async function worktreeSize(root: string, id: string): Promise<number | undefined> {
   return duBytes(await resolveId(root, id))
 }
+
+export interface DeleteResult { id: string; ok: boolean; error?: string; inUseBy?: string[] }
+
+async function branchCheckedOutElsewhere(repoRoot: string, branch: string, except: string): Promise<boolean> {
+  const out = await gitAsync(repoRoot, ["worktree", "list", "--porcelain"]).catch(() => "")
+  let current = ""
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) current = line.slice(9)
+    else if (line === `branch refs/heads/${branch}` && current !== except) return true
+  }
+  return false
+}
+
+async function deleteOne(root: string, id: string, rows: OwnerRow[]): Promise<DeleteResult> {
+  let path: string
+  try { path = await resolveId(root, id) } catch (e: any) { return { id, ok: false, error: String(e?.message ?? e) } }
+  // Evaluated NOW, not from a stale list: a session that just started using it wins.
+  const live = ownersOf(path, rows).filter((o) => o.status === "live")
+  if (live.length) return { id, ok: false, error: "in_use", inUseBy: live.map((o) => o.name) }
+  const repoRoot = repoRootOf(path)
+  const branch = await gitAsync(path, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => undefined)
+  try {
+    if (repoRoot) await gitAsync(repoRoot, ["worktree", "remove", "--force", "--force", path]).catch(() => {})
+    if (existsSync(path)) await rm(path, { recursive: true, force: true })
+    if (repoRoot) {
+      await gitAsync(repoRoot, ["worktree", "prune"]).catch(() => {})
+      if (branch?.startsWith("mux/") && !(await branchCheckedOutElsewhere(repoRoot, branch, path))) {
+        await gitAsync(repoRoot, ["branch", "-D", branch]).catch(() => {})
+      }
+    }
+    return existsSync(path) ? { id, ok: false, error: "folder still exists after delete" } : { id, ok: true }
+  } catch (e: any) {
+    return { id, ok: false, error: String(e?.message ?? e) }
+  }
+}
+
+/** Delete each worktree regardless of its changes — the caller got explicit user consent.
+ *  Never deletes one with a live owner. Per-id results; one failure never aborts the batch. */
+export async function deleteWorktrees(root: string, ids: string[], rows: OwnerRow[]): Promise<DeleteResult[]> {
+  const out: DeleteResult[] = []
+  for (const id of ids) out.push(await deleteOne(root, id, rows))
+  return out
+}

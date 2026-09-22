@@ -1,10 +1,10 @@
 // src/core/worktree/inventory.test.ts
 import { test, expect } from "bun:test"
 import { execFileSync } from "child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs"
+import { existsSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { listWorktrees, worktreeChanges, worktreeSize, type OwnerRow } from "./inventory"
+import { deleteWorktrees, listWorktrees, worktreeChanges, worktreeSize, type OwnerRow } from "./inventory"
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" }).toString().trim()
 
@@ -131,4 +131,51 @@ test("worktreeSize measures the folder", async () => {
   const a = f.add("u1", "mux/a")
   writeFileSync(join(a, "big.bin"), Buffer.alloc(200_000))
   expect(await worktreeSize(f.root, "repo-abc/u1")).toBeGreaterThan(150_000)
+})
+
+test("refuses a worktree a live session uses", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], [row({ id: "s", name: "Sess", workdir: a, status: "active" })])
+  expect(r).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["Sess"] }])
+  expect(existsSync(a)).toBe(true)
+})
+
+test("force-deletes a dirty worktree with ignored files, and its mux branch", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  writeFileSync(join(a, "new.txt"), "x")
+  mkdirSync(join(a, "docs")); writeFileSync(join(a, "docs", "spec.md"), "s")
+  const r = await deleteWorktrees(f.root, ["repo-abc/u1"], [row({ id: "s", workdir: a, status: "archived" })])
+  expect(r).toEqual([{ id: "repo-abc/u1", ok: true }])
+  expect(existsSync(a)).toBe(false)
+  expect(git(f.repo, "branch", "--list", "mux/a")).toBe("")
+})
+
+test("keeps a non-mux branch", async () => {
+  const f = fixture()
+  const a = f.add("u1", "feature/x")
+  await deleteWorktrees(f.root, ["repo-abc/u1"], [])
+  expect(existsSync(a)).toBe(false)
+  expect(git(f.repo, "branch", "--list", "feature/x")).toContain("feature/x")
+})
+
+test("deletes a folder git does not know", async () => {
+  const f = fixture()
+  mkdirSync(join(f.root, "repo-abc", "stray"), { recursive: true })
+  const r = await deleteWorktrees(f.root, ["repo-abc/stray"], [])
+  expect(r[0]!.ok).toBe(true)
+  expect(existsSync(join(f.root, "repo-abc", "stray"))).toBe(false)
+})
+
+test("rejects ids outside the root, '..' and symlink escapes; the batch continues", async () => {
+  const f = fixture()
+  const a = f.add("u1", "mux/a")
+  const outside = mkdtempSync(join(tmpdir(), "mux-outside-"))
+  symlinkSync(outside, join(f.root, "repo-abc", "link"))
+  const r = await deleteWorktrees(f.root, ["../repo", "repo-abc/..", "repo-abc/link", "repo-abc/u1"], [])
+  expect(r.slice(0, 3).every((x) => !x.ok)).toBe(true)
+  expect(r[3]).toEqual({ id: "repo-abc/u1", ok: true })
+  expect(existsSync(outside)).toBe(true)
+  expect(existsSync(a)).toBe(false)
 })
