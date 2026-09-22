@@ -456,6 +456,22 @@ export function acp(options: AcpOptions): AgentDriver {
           startActivity(seedId)
           ownedPrompt = { requestId: rec.requestId, activityId: seedId }
         }
+        // A re-attach reuses the live agent, so a config option the caller passes now (e.g. a
+        // different OpenCode model) must still reach it; applying it idempotently keeps the
+        // "what you asked for is what runs" rule. Skipped while a turn is live: the agent would
+        // switch mid-turn or reject, so the caller sees the same session_busy they would get
+        // from configure.
+        const metaCfg = io.welcome.meta.sessionConfig
+        const applied: Record<string, unknown> = metaCfg && typeof metaCfg === 'object' && !Array.isArray(metaCfg) ? metaCfg as Record<string, unknown> : {}
+        const wanted = options.sessionConfig ?? {}
+        const changed = Object.entries(wanted).filter(([k, v]) => applied[k] !== v)
+        if (changed.length && (io.welcome.meta.liveActivity as unknown[] | undefined)?.length) {
+          throw new CoreError('session_busy', 'Cannot change session config while the re-attached agent has live work')
+        }
+        for (const [configId, value] of changed) {
+          await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value }))
+        }
+        if (changed.length) io.setMeta({ sessionConfig: { ...applied, ...Object.fromEntries(changed) } })
         runtimeReady = true
       } else {
       const initialized = await setup(connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {}, clientInfo: { name: 'supermux-core', version: '0.0.0' } }))
@@ -485,7 +501,7 @@ export function acp(options: AcpOptions): AgentDriver {
       for (const [configId, value] of Object.entries(options.sessionConfig ?? {})) {
         await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value }))
       }
-      io.setMeta({ agentSessionId })
+      io.setMeta({ agentSessionId, ...(options.sessionConfig ? { sessionConfig: { ...options.sessionConfig } } : {}) })
       finishSetup()
       runtimeReady = true
       const normalizer = createAcpNormalizer()

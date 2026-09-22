@@ -284,3 +284,21 @@ test('no leaked keeper after this file', async () => {
     }
   }
 })
+
+test('a different sessionConfig on re-attach is applied to the live agent; the same one is not re-sent', async () => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), 'ak-cfg-'))
+  dirs.push(stateDirectory)
+  const trace = join(stateDirectory, 'trace')
+  const lines = async () => (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
+  const r = await libraryAcp({ env: { TRACE: trace }, sessionConfig: { model: 'a' }, keeper: { stateDirectory, limits: keeperLimits() } }).open(ctx({ sessionId: 'k-cfg' }))
+  const sid = r.agentSessionId
+  expect((await lines()).filter(l => l.setConfig).map(l => l.setConfig.value)).toEqual(['a'])
+  await r.close({ mode: 'detach' })
+  const same = await libraryAcp({ env: { TRACE: trace }, sessionConfig: { model: 'a' }, keeper: { stateDirectory, limits: keeperLimits() } }).open(ctx({ sessionId: 'k-cfg', resumeId: sid }))
+  expect((await lines()).filter(l => l.setConfig).map(l => l.setConfig.value)).toEqual(['a'])
+  await same.close({ mode: 'detach' })
+  const other = await libraryAcp({ env: { TRACE: trace }, sessionConfig: { model: 'b' }, keeper: { stateDirectory, limits: keeperLimits() } }).open(ctx({ sessionId: 'k-cfg', resumeId: sid }))
+  expect((await lines()).filter(l => l.setConfig).map(l => l.setConfig.value)).toEqual(['a', 'b'])
+  expect((await lines()).filter(l => l === 'new')).toHaveLength(1)
+  await other.close({ mode: 'shutdown' })
+})
