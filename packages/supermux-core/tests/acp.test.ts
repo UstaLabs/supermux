@@ -468,3 +468,15 @@ test('detach leaves the agent alive', async()=>{
  try { process.kill(pid, 'SIGKILL') } catch { /* */ }
  await rm(dir,{recursive:true})
 })
+
+test('sessionConfig is applied through session/set_config_option right after the session opens', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'acp-cfg-'))
+  const trace = join(dir, 'trace')
+  const r = await driver({ TRACE: trace }, { sessionConfig: { model: 'opencode-go/deepseek-v4-flash' } }).open(context())
+  try {
+    const lines = (await readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
+    const set = lines.find(l => l.setConfig)
+    expect(set).toEqual({ setConfig: { configId: 'model', value: 'opencode-go/deepseek-v4-flash' } })
+    expect(lines.findIndex(l => l === 'new')).toBeLessThan(lines.indexOf(set))
+  } finally { await r.close({ mode: 'shutdown' }); await rm(dir, { recursive: true, force: true }) }
+})

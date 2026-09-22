@@ -29,6 +29,8 @@ export type AcpOptions = {
   maxFrameBytes: number
   maxOutstandingActivity: number
   keeper: AcpKeeperOptions
+  /** Applied right after session/new|resume|load via session/set_config_option (select options such as OpenCode's `model`). Absent = nothing sent. */
+  sessionConfig?: Record<string, string>
   /** Delay between same-prompt cancel retries. */
   cancelRetryIntervalMs: number
   /**
@@ -476,6 +478,9 @@ export function acp(options: AcpOptions): AgentDriver {
           try { await setup(connection.loadSession({ ...params, sessionId: agentSessionId })) } finally { replay = false }
         } else throw new UnsupportedOperation('resume', options.id)
       } else agentSessionId = (await setup(connection.newSession(params))).sessionId
+      for (const [configId, value] of Object.entries(options.sessionConfig ?? {})) {
+        await setup(connection.setSessionConfigOption({ sessionId: agentSessionId, configId, value }))
+      }
       io.setMeta({ agentSessionId })
       finishSetup()
       runtimeReady = true

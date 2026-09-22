@@ -346,7 +346,7 @@ export function grok(options: GrokOptions, childFactory: GrokChildFactory = grok
   }
 }
 
-export type OpenCodeOptions = Omit<AcpOptions, 'args'> & { id: string; command: string }
+export type OpenCodeOptions = Omit<AcpOptions, 'args' | 'sessionConfig'> & { /** OpenCode model id such as `opencode-go/deepseek-v4-flash`; sent as the `model` config option after the session opens. Absent = OpenCode's own default. */ model?: string }
 /** Uses OpenCode's ACP entrypoint. No library HTTP listener or broker globals. */
 export function opencode(options: OpenCodeOptions): AgentDriver {
   if (!options || typeof options !== 'object') throw new TypeError('OpenCode options are required')
@@ -355,5 +355,7 @@ export function opencode(options: OpenCodeOptions): AgentDriver {
   }
   if (typeof options.id !== 'string' || !options.id) throw new TypeError('OpenCode id is required')
   if (typeof options.command !== 'string' || !options.command) throw new TypeError('OpenCode command is required')
-  return acp({ ...options, args: ['acp'] })
+  if (options.model !== undefined && (typeof options.model !== 'string' || !options.model)) throw new TypeError('OpenCode model must be a nonempty string')
+  const { model, ...rest } = options
+  return acp({ ...rest, args: ['acp'], ...(model ? { sessionConfig: { model } } : {}) })
 }

@@ -117,3 +117,15 @@ describe("acp normalizer", () => {
     expect(n(acp("available_commands_update", { availableCommands: [{ name: "a", description: "" }] }, true))[0].kind).toBe("commands-update")
   })
 })
+
+test("a turn that produced nothing but usage flushes as a warning, a turn with content does not", () => {
+  const n = createAcpNormalizer()
+  n({ protocol: "acp", value: { sessionUpdate: "usage_update", used: 0, size: 1_000_000 } as never })
+  const empty = n.flush()
+  expect(empty).toHaveLength(1)
+  expect(empty[0]).toMatchObject({ kind: "warning", source: "acp" })
+  n({ protocol: "acp", value: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } } as never })
+  const full = n.flush()
+  expect(full.some(b => b.kind === "warning")).toBe(false)
+  expect(full.some(b => b.kind === "assistant-message")).toBe(true)
+})

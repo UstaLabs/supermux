@@ -41,6 +41,7 @@ new AgentSideConnection(client => ({
   }
   return {sessionId};
  },
+ async setSessionConfigOption(params) { record({ setConfig: { configId: params.configId, value: params.value } }); return { configOptions: [] }; },
  async resumeSession(params) { record('resume'); return {}; },
  async loadSession(params) {
   record('load');

@@ -29,7 +29,7 @@ const drivers = {
   codex: () => codex({ id: "codex", command: "codex", args: ["app-server"], inheritEnv: true, sandbox: "workspace-write", approvalPolicy: "on-request", permissionPrompts: "host", requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
   claude: () => claude({ id: "claude", command: "claude", args: [], inheritEnv: true, tools: "default", permissionPrompts: "host", partialMessages: true, requestTimeoutMs: 120_000, ...timeouts, keeper, ...(model ? { model } : {}) }),
   grok: () => grok({ id: "grok", command: "grok", commandArgs: [], alwaysApprove: false, noLeader: true, inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
-  opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper }),
+  opencode: () => opencode({ id: "opencode", command: "opencode", inheritEnv: true, mcpServers: [], cancelRetryIntervalMs: 500, cancelRetryTimeoutMs: 10_000, maxOutstandingActivity: 64, ...timeouts, keeper, ...(model ? { model } : {}) }),
   cursor: () => cursor({ id: "cursor", command: "cursor-agent", args: [], inheritEnv: true, sandbox: "enabled", trust: true, force: true, approveMcps: true, ...timeouts, ...(model ? { model } : {}) }),
 }
 if (!drivers[agentName]) { console.error(`unknown agent ${agentName}`); process.exit(2) }
@@ -68,7 +68,7 @@ core.subscribe((e) => {
 const existing = await core.sessions.get(sessionId)
 const session = existing
   ? await core.sessions.resume(sessionId)
-  : await core.sessions.create({ id: sessionId, agent: agentName, cwd, ...(model ? { configuration: { model } } : {}) })
+  : await core.sessions.create({ id: sessionId, agent: agentName, cwd, ...(model && agentName !== "opencode" && agentName !== "cursor" ? { configuration: { model } } : {}) })
 say(`${existing ? "re-attached to" : "created"} ${bold(sessionId)} (${agentName}, native ${session.snapshot().agentSessionId}) state=${session.snapshot().state}`)
 for (const p of session.requests.list()) { const k = ++n; requestIndex.set(k, p.requestId); say(yellow(`pending ${p.kind} #${k} from before: ${p.body.kind === "permission-request" ? p.body.toolCall.tool : p.body.questions[0]?.prompt}`)) }
 

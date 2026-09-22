@@ -282,11 +282,17 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
     return []
   }
 
+  // Real OpenCode (1.16) ends a turn as a normal completion when its provider rejects the
+  // request: no message, no tool, no error frame, only a usage_update. A silent "completed"
+  // is dishonest, so the turn's flush reports it as a warning when nothing else was produced.
+  const SILENT = new Set(["usage", "commands-update", "session-info", "mode-update"])
+  let turnHadContent = false
   const normalize = ((update: AgentUpdate): NormalizedBody[] => {
     const parsed = unwrapGrok(update)
     if (!parsed) return []
-    if (parsed.kind === "acp") return mapAcp(parsed.value)
-    return mapNative(parsed.method, parsed.params)
+    const out = parsed.kind === "acp" ? mapAcp(parsed.value) : mapNative(parsed.method, parsed.params)
+    if (out.some(body => !SILENT.has(body.kind))) turnHadContent = true
+    return out
   }) as ((update: AgentUpdate) => NormalizedBody[]) & { flush: () => NormalizedBody[] }
 
   normalize.flush = () => {
@@ -297,6 +303,10 @@ export function createAcpNormalizer(options: { vendor?: "grok" } = {}): ((update
     }
     assistant.clear()
     thoughts.clear()
+    if (!turnHadContent && !out.length) {
+      out.push({ kind: "warning", source: "acp", message: "The agent ended the turn without producing any message, reasoning or tool call; check the agent's own logs (for OpenCode: ~/.local/share/opencode/log) for a provider error." })
+    }
+    turnHadContent = false
     return out
   }
   return normalize
