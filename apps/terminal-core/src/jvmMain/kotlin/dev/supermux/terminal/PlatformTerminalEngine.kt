@@ -1,7 +1,9 @@
 package dev.supermux.terminal
 
-// JVM desktop actual. The real engine (JNI (libsupermux_terminal via System.loadLibrary)) lands with the native bindings; until then every call
-// fails with the typed exception — the documented red state of EngineContractTest. Deliberately
-// no Kotlin fallback emulator.
-actual fun createTerminalEngine(size: TerminalSize, limits: TerminalLimits): TerminalEngine =
-    throw TerminalEngineUnavailableException()
+// Desktop JVM actual: the JNI engine (libsupermux_terminal_jni extracted from this jar's resources
+// by JvmNativeLibrary). Deliberately no Kotlin fallback emulator: a missing, corrupt or
+// ABI-mismatched library is a typed TerminalEngineUnavailableException.
+actual fun createTerminalEngine(size: TerminalSize, limits: TerminalLimits): TerminalEngine {
+    JvmNativeLibrary.ensureLoaded()
+    return NativeTerminalEngine.open(size, limits)
+}
