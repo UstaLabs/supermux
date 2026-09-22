@@ -84,7 +84,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views", "/worktrees"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -230,6 +230,19 @@ export interface WebChannelOpts {
   spawnSession?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; worktree?: boolean; baseBranch?: string; inheritFrom?: string; workspaceId?: string; viewId?: string; firstMessage?: string; firstAttachments?: InboundAttachment[]; device?: string }) => Promise<{ id?: string; name: string; workdir: string; agent: AgentKind; model?: string; reasoningLevel?: string; repo_root?: string; session_branch?: string }>
   createDraft?: (args: { name?: string; workdir: string; agent?: AgentKind; model?: string; reasoningLevel?: string; draftPayload?: { text?: string; attachments?: unknown[] } }) => Promise<{ id: string; name: string; workdir: string; agent: AgentKind }>
   killSession?: (name: string) => Promise<void>
+  /** Explicit worktree cleanup (spec 2026-09-22-explicit-worktree-cleanup). */
+  worktrees?: {
+    root: () => string
+    list: () => Promise<unknown[]>
+    changes: (id: string) => Promise<unknown>
+    forWorkdir: (workdir: string) => Promise<unknown | undefined>
+    remove: (ids: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
+    reclaim: (workdirs: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
+  }
+  /** Workdirs an archive would release: the session's / the workspace's chat sessions' / the chat view's. */
+  sessionWorkdirs?: (sessionId: string) => string[]
+  workspaceWorkdirs?: (workspaceId: string) => string[]
+  viewWorkdirs?: (viewId: string) => string[]
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
   listWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
@@ -2766,12 +2779,18 @@ export class WebChannel implements Channel {
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.killSession) return this.json({ error: "not configured" }, 503)
+      const deleteWorktree = url.searchParams.get("deleteWorktree") === "1"
+      // Read BEFORE the archive: afterwards the row is archived but its workdir is what we need.
+      const workdirs = deleteWorktree ? (this.opts.sessionWorkdirs?.(id) ?? []) : []
       try {
         await this.opts.killSession(id)
-        return new Response(null, { status: 204 })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!deleteWorktree) return new Response(null, { status: 204 })
+      // The archive already succeeded; a failed delete is reported, never undone.
+      const worktree = await this.opts.worktrees?.reclaim(workdirs).catch((e: any) => [{ id: "", ok: false, error: String(e?.message ?? e) }]) ?? []
+      return this.json({ worktree })
     }
     if (method === "PATCH" && path === "/sessions/reorder") {
       const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
@@ -2779,6 +2798,35 @@ export class WebChannel implements Channel {
       if (!this.opts.reorderSessions) return this.json({ error: "not configured" }, 503)
       this.opts.reorderSessions(ids)
       return this.json({ ok: true })
+    }
+    // ── Worktrees ───────────────────────────────────────────────────────────
+    // Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3
+    // Deletion is explicit only. No route here runs on a timer.
+    if (method === "GET" && path === "/worktrees") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      return this.json({ root: this.opts.worktrees.root(), worktrees: await this.opts.worktrees.list() })
+    }
+    if (method === "GET" && path === "/worktrees/by-workdir") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const found = await this.opts.worktrees.forWorkdir(url.searchParams.get("path") ?? "")
+      return found ? this.json(found) : this.json({ error: "not a worktree" }, 404)
+    }
+    {
+      const m = method === "GET" ? /^\/worktrees\/([^/]+)\/changes$/.exec(path) : null
+      if (m) {
+        if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+        try {
+          return this.json(await this.opts.worktrees.changes(decodeURIComponent(m[1]!)))
+        } catch (err: any) {
+          return this.json({ error: err?.message ?? String(err) }, 404)
+        }
+      }
+    }
+    if (method === "DELETE" && path === "/worktrees") {
+      if (!this.opts.worktrees) return this.json({ error: "not configured" }, 503)
+      const body = await req.json().catch(() => ({})) as { ids?: unknown }
+      const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : []
+      return this.json({ results: await this.opts.worktrees.remove(ids) })
     }
     // ── Workspaces ──────────────────────────────────────────────────────────
     // Spec: docs/superpowers/specs/2026-08-06-workspaces-and-views-design.md §7
@@ -2838,10 +2886,16 @@ export class WebChannel implements Channel {
     if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+$/)) {
       if (!this.opts.archiveWorkspace) return this.json({ error: "not configured" }, 503)
       const id = decodeURIComponent(path.split("/")[2]!)
+      const deleteWorktree = url.searchParams.get("deleteWorktree") === "1"
+      // Read BEFORE the archive: afterwards the row is archived but its workdirs are what we need.
+      const workdirs = deleteWorktree ? (this.opts.workspaceWorkdirs?.(id) ?? []) : []
       try {
         await this.opts.archiveWorkspace(id)
         this.broadcastToAll({ type: "workspace_removed", id })
-        return new Response(null, { status: 204 })
+        if (!deleteWorktree) return new Response(null, { status: 204 })
+        // The archive already succeeded; a failed delete is reported, never undone.
+        const worktree = await this.opts.worktrees?.reclaim(workdirs).catch((e: any) => [{ id: "", ok: false, error: String(e?.message ?? e) }]) ?? []
+        return this.json({ worktree })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
@@ -2916,12 +2970,18 @@ export class WebChannel implements Channel {
       const parts = path.split("/")
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
+      const deleteWorktree = url.searchParams.get("deleteWorktree") === "1"
+      // Read BEFORE the close: afterwards the view row is gone.
+      const workdirs = deleteWorktree ? (this.opts.viewWorkdirs?.(viewId) ?? []) : []
       try {
         await this.opts.closeWorkspaceView(viewId)
         this.broadcastToAll({ type: "view_removed", workspaceId, viewId })
         const ws = this.opts.getWorkspace?.(workspaceId)
         if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
-        return new Response(null, { status: 204 })
+        if (!deleteWorktree) return new Response(null, { status: 204 })
+        // The close already succeeded; a failed delete is reported, never undone.
+        const worktree = await this.opts.worktrees?.reclaim(workdirs).catch((e: any) => [{ id: "", ok: false, error: String(e?.message ?? e) }]) ?? []
+        return this.json({ worktree })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
