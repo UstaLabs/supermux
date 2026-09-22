@@ -83,10 +83,12 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -113,6 +115,7 @@ import dev.supermux.net.resolveReasoningLevel
 import dev.supermux.net.showReasoningPicker
 import dev.supermux.net.sortEffortLevelsLowToHigh
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
 import dev.supermux.session.chooseDefaultProject
@@ -122,6 +125,7 @@ import dev.supermux.session.recentWorkdirs
 import dev.supermux.session.sessionsByRecency
 import dev.supermux.state.LauncherDraft
 import dev.supermux.state.LauncherPrefs
+import dev.supermux.state.ProjectLocationResult
 import dev.supermux.state.StagedUpload
 import dev.supermux.ui.adaptive.LocalPointerAvailable
 import dev.supermux.ui.adaptive.LocalWindowWidthClass
@@ -149,7 +153,14 @@ import dev.supermux.ui.widgets.Dialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
 import dev.supermux.ui.widgets.Speedometer
+import dev.supermux.workspace.LaunchLocation
+import dev.supermux.workspace.ProjectRef
+import dev.supermux.workspace.launchLocation
+import dev.supermux.workspace.orderProjectCatalog
+import dev.supermux.workspace.projectLocationKey
+import dev.supermux.workspace.projectOwning
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -271,8 +282,22 @@ fun SessionLauncherScreen(
     // ── Multi-host host picker (spec §5); defaults to single-host (no picker) ──
     hosts: List<HostView> = emptyList(),
     selectedHost: String? = null,
+    /** The app's shared project image cache (null → a screen-local one). */
+    projectImageCache: ProjectImageCache? = null,
     standalone: Boolean = false,
     topBarShown: Boolean = false,
+    /**
+     * Open preselecting this persistent project (the sidebar's "+" on a project): once the catalog
+     * of [initialProjectHost] is showing, the launcher applies `launchLocation` to it exactly as a
+     * picker tap would. Ignored inside a workspace tab.
+     */
+    initialProjectId: String? = null,
+    initialProjectHost: String? = null,
+    /**
+     * The preselect above was applied — the shell consumes the request so it is one-shot per
+     * navigation (a remount must not override the user's or a draft's workdir).
+     */
+    onInitialProjectApplied: () -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -327,6 +352,44 @@ fun SessionLauncherScreen(
     var modelMenu by remember { mutableStateOf(false) }
     var reasoningMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
+
+    // ── Persistent projects (Task 10) ──
+    // A workspace tab is locked to its directory and never consults projects: it gets an empty
+    // catalog, so every branch below falls back to the path picker it always had.
+    val catalogFlow = remember(actions, workspaceWorkdir) {
+        if (workspaceWorkdir != null) flowOf(emptyList()) else actions.projectCatalog
+    }
+    val catalogRaw by catalogFlow.collectAsState(emptyList())
+    val catalog = remember(catalogRaw) { orderProjectCatalog(catalogRaw) }
+    val catalogPaths = remember(catalog) { catalog.flatMap { p -> p.locations.map { it.path } }.toHashSet() }
+    // Catalog known AND non-empty → project picker; otherwise today's path omnibox.
+    val useCatalog = workspaceWorkdir == null && catalog.isNotEmpty()
+    val projectHostKey = selectedHost.orEmpty()
+    var catalogMenu by remember { mutableStateOf(false) }
+    var catalogLocationsFor by remember { mutableStateOf<String?>(null) }
+    // A location-less project waiting for the omnibox to name a folder to register.
+    var pendingLocationProject by remember { mutableStateOf<ProjectDto?>(null) }
+    var projectError by remember { mutableStateOf<String?>(null) }
+    // "Already in <owner>": the owning project's id and the path that collided, for "Use <owner>".
+    var projectConflict by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // Read from coroutines that outlive a composition: an in-flight registration must see the
+    // host the launcher targets NOW, not the one it started on.
+    val currentHost by rememberUpdatedState(selectedHost)
+    val currentCatalog by rememberUpdatedState(catalog)
+    // Last location per (host, project) — persisted inside LauncherPrefs.
+    var projectLocations by remember { mutableStateOf(emptyMap<String, String>()) }
+    // Every prefs write goes through this, so no field (e.g. projectLocations) is dropped by a
+    // write that only meant to change the agent or model.
+    fun currentPrefs() = LauncherPrefs(
+        agent = agent,
+        models = launcherModels,
+        reasoningLevels = launcherReasoning,
+        projectLocations = projectLocations,
+    )
+    val loadCatalogImage = rememberCachedProjectImageLoader(
+        remember(actions) { { ref: ProjectRef -> actions.projectImage(ref.project) } },
+        projectImageCache,
+    )
 
     LaunchedEffect(selectedHost, launcherRestoring) {
         if (launcherRestoring) return@LaunchedEffect
@@ -414,6 +477,7 @@ fun SessionLauncherScreen(
         agent = if (agents.contains(prefs.agent)) prefs.agent else "claude"
         launcherModels = prefs.models
         launcherReasoning = prefs.reasoningLevels
+        projectLocations = prefs.projectLocations
         model = prefs.models[agent]
         val draft = loadDraft()
         val restoredWorkdir = workspaceWorkdir ?: draft.workdir
@@ -493,11 +557,15 @@ fun SessionLauncherScreen(
     // An EMPTY project list means "we could not enumerate projects" (slow host, failed fetch,
     // offline) — not "your workdir is gone". Don't reset a restored draft's workdir on that.
     // A workspace tab is locked to its workdir, which is usually a worktree /projects never lists.
-    LaunchedEffect(knownProjects, recentProjectPaths, launcherRestoring) {
+    LaunchedEffect(knownProjects, recentProjectPaths, catalogPaths, launcherRestoring) {
         if (launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
         if (knownProjects.isEmpty()) return@LaunchedEffect
         val known = projects.toHashSet()
-        if (workdir.isBlank() || (workdir != "~" && workdir !in known && recentProjectPaths.none { it == workdir })) {
+        // A catalog location is valid even when GET /projects has no session there yet (an empty
+        // project's freshly registered folder).
+        if (workdir.isBlank() ||
+            (workdir != "~" && workdir !in known && workdir !in catalogPaths && recentProjectPaths.none { it == workdir })
+        ) {
             workdir = recentProjectPaths.firstOrNull() ?: knownProjects.firstOrNull() ?: "~"
         }
     }
@@ -524,6 +592,97 @@ fun SessionLauncherScreen(
             picked = workdirTouched,
             composing = composing,
         )
+    }
+
+    // ── Project → location (Task 10) ─────────────────────────────────────────────────────────────
+    fun pickProjectLocation(project: ProjectDto, path: String) {
+        workdir = path
+        workdirTouched = true
+        error = null
+        projectError = null
+        projectConflict = null
+        pendingLocationProject = null
+        catalogMenu = false
+        catalogLocationsFor = null
+        projectLocations = projectLocations + (projectLocationKey(projectHostKey, project.id) to path)
+        onPrefsChange(currentPrefs())
+    }
+
+    fun applyProject(project: ProjectDto) {
+        projectError = null
+        projectConflict = null
+        when (val loc = launchLocation(project, projectLocations[projectLocationKey(projectHostKey, project.id)])) {
+            is LaunchLocation.Chosen -> pickProjectLocation(project, loc.path)
+            is LaunchLocation.Choose -> {
+                catalogLocationsFor = project.id
+                catalogMenu = true
+            }
+            LaunchLocation.NeedsLocation -> {
+                // The existing path entry (typed path → validatePath, known folders, clone/create)
+                // names the folder; registration happens when it picks.
+                catalogMenu = false
+                catalogLocationsFor = null
+                pendingLocationProject = project
+                projectMenu = true
+            }
+        }
+    }
+
+    /** The omnibox picked [path] for a location-less project: register it, never silently move it. */
+    fun registerLocation(project: ProjectDto, path: String) {
+        val startedOn = currentHost
+        scope.launch {
+            val r = actions.addProjectLocation(project.id, path)
+            // The host pill moved while the broker answered: that project (ids are per-broker) and
+            // its location belong to the OLD host — neither apply nor remember them here.
+            if (currentHost != startedOn) return@launch
+            when (r) {
+                is ProjectLocationResult.Added -> {
+                    // The broker normalizes; prefer its spelling of the new location.
+                    val paths = r.project.locations.map { it.path }
+                    val added = paths.firstOrNull { it == path } ?: paths.singleOrNull() ?: path
+                    pickProjectLocation(project, added)
+                }
+                is ProjectLocationResult.Conflict -> {
+                    val owner = currentCatalog.firstOrNull { it.id == r.projectId }
+                    projectError = "Already in ${owner?.name ?: "another project"}"
+                    projectConflict = owner?.let { it.id to path }
+                }
+                ProjectLocationResult.Failed -> projectError = "Couldn't add this folder to ${project.name}"
+            }
+        }
+    }
+
+    /** "Use <owner>": the conflicting path already belongs to [ownerId] — launch there instead. */
+    fun useConflictOwner() {
+        val (ownerId, path) = projectConflict ?: return
+        val owner = catalog.firstOrNull { it.id == ownerId } ?: return
+        if (owner.locations.any { it.path == path }) pickProjectLocation(owner, path) else applyProject(owner)
+    }
+
+    // A project (and a half-finished location registration) is per-broker: a host switch drops it.
+    LaunchedEffect(selectedHost) {
+        pendingLocationProject = null
+        catalogLocationsFor = null
+        projectError = null
+        projectConflict = null
+    }
+
+    // Sidebar "+" on a project: preselect it once its host's catalog is showing. One-shot per
+    // request: [onInitialProjectApplied] lets the shell consume it (so a remount never re-applies
+    // over a draft), and a fresh "+" arrives as a new request that re-keys this flag.
+    var initialProjectApplied by remember(initialProjectHost, initialProjectId) { mutableStateOf(false) }
+    LaunchedEffect(initialProjectHost, initialProjectId, catalog, selectedHost, launcherRestoring) {
+        if (initialProjectApplied || launcherRestoring || workspaceWorkdir != null) return@LaunchedEffect
+        val id = initialProjectId?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        // Wait for the host pill to land on the project's host (ids are per-broker).
+        if (!initialProjectHost.isNullOrBlank() && selectedHost != null && initialProjectHost != selectedHost) {
+            return@LaunchedEffect
+        }
+        val project = catalog.firstOrNull { it.id == id } ?: return@LaunchedEffect
+        initialProjectApplied = true
+        applyProject(project)
+        onInitialProjectApplied()
     }
 
     // ── The shared chat composer, wearing the launcher's clothes (cluster F7) ────────────────────
@@ -697,18 +856,31 @@ fun SessionLauncherScreen(
                                     // DURING the restore window (draft.workdir != null) would be
                                     // clobbered by the restore effect settling — ignore taps until
                                     // restore lands.
-                                    .clickable(enabled = !launcherRestoring) { projectMenu = true }
+                                    .clickable(enabled = !launcherRestoring) {
+                                        if (useCatalog) {
+                                            catalogLocationsFor = null
+                                            catalogMenu = true
+                                        } else {
+                                            pendingLocationProject = null
+                                            projectMenu = true
+                                        }
+                                    }
                                     .padding(horizontal = Space.sm, vertical = Space.xs)
                                     .testTag("launcher_project_field"),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(Space.xs),
                             ) {
+                                val owner = if (useCatalog) projectOwning(catalog, workdir) else null
+                                if (owner != null) {
+                                    ProjectImage(ProjectRef(projectHostKey, owner), loadCatalogImage, size = 18.dp) {}
+                                }
                                 Text(
-                                    formatWorkdir(workdir, home),
+                                    owner?.name ?: formatWorkdir(workdir, home),
                                     color = cs.onSurfaceVariant,
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Medium,
                                     maxLines = 1,
+                                    modifier = Modifier.testTag("launcher_project_label"),
                                 )
                                 Icon(
                                     Icons.Filled.KeyboardArrowDown,
@@ -726,9 +898,62 @@ fun SessionLauncherScreen(
                                 projects = projects,
                                 home = home,
                                 actions = actions,
-                                onPick = { workdir = it; workdirTouched = true; error = null },
-                                onDismiss = { projectMenu = false },
+                                onPick = { path ->
+                                    val pending = pendingLocationProject
+                                    if (pending != null) {
+                                        registerLocation(pending, path)
+                                    } else {
+                                        workdir = path; workdirTouched = true; error = null; projectError = null; projectConflict = null
+                                    }
+                                },
+                                onDismiss = { projectMenu = false; pendingLocationProject = null },
                             )
+                            if (useCatalog) {
+                                CatalogProjectPicker(
+                                    expanded = catalogMenu,
+                                    projects = catalog,
+                                    hostId = projectHostKey,
+                                    current = workdir,
+                                    home = home,
+                                    locationsFor = catalogLocationsFor,
+                                    loadImage = loadCatalogImage,
+                                    onProject = { applyProject(it) },
+                                    onShowLocations = { catalogLocationsFor = it },
+                                    onLocation = { p, path -> pickProjectLocation(p, path) },
+                                    onOther = {
+                                        catalogMenu = false
+                                        catalogLocationsFor = null
+                                        pendingLocationProject = null
+                                        projectMenu = true
+                                    },
+                                    onDismiss = { catalogMenu = false; catalogLocationsFor = null },
+                                )
+                            }
+                        }
+                        pendingLocationProject?.let { p ->
+                            Text(
+                                "Choose a folder to add to ${p.name}",
+                                color = cs.onSurfaceVariant,
+                                fontSize = 12.sp,
+                                modifier = Modifier.testTag("launcher_project_pending"),
+                            )
+                        }
+                        projectError?.let {
+                            Text(
+                                it,
+                                color = cs.error,
+                                fontSize = 12.sp,
+                                modifier = Modifier.testTag("launcher_project_error"),
+                            )
+                        }
+                        projectConflict?.let { (ownerId, _) ->
+                            val ownerName = catalog.firstOrNull { it.id == ownerId }?.name
+                            if (ownerName != null) {
+                                TextButton(
+                                    onClick = { useConflictOwner() },
+                                    modifier = Modifier.testTag("launcher_project_use_owner"),
+                                ) { Text("Use $ownerName", fontSize = 12.sp) }
+                            }
                         }
                         if (hosts.size > 1 && !pointer && workspaceWorkdir == null) {
                             Spacer(Modifier.height(Space.sm))
@@ -771,13 +996,7 @@ fun SessionLauncherScreen(
                                         modifier = Modifier.testTag("agent_$a"),
                                         onClick = {
                                             agent = a
-                                            onPrefsChange(
-                                                LauncherPrefs(
-                                                    agent = a,
-                                                    models = launcherModels,
-                                                    reasoningLevels = launcherReasoning,
-                                                ),
-                                            )
+                                            onPrefsChange(currentPrefs())
                                             agentMenu = false
                                         },
                                     )
@@ -795,13 +1014,7 @@ fun SessionLauncherScreen(
                         } else {
                             launcherModels - agent
                         }
-                        onPrefsChange(
-                            LauncherPrefs(
-                                agent = agent,
-                                models = launcherModels,
-                                reasoningLevels = launcherReasoning,
-                            ),
-                        )
+                        onPrefsChange(currentPrefs())
                     }
                     val modelControl: @Composable () -> Unit = {
                         Box(Modifier.testTag("launcher_model_picker")) {
@@ -860,13 +1073,7 @@ fun SessionLauncherScreen(
                     val pickEffort: (String) -> Unit = { level ->
                         reasoningLevel = level
                         launcherReasoning = launcherReasoning + (agent to level)
-                        onPrefsChange(
-                            LauncherPrefs(
-                                agent = agent,
-                                models = launcherModels,
-                                reasoningLevels = launcherReasoning,
-                            ),
-                        )
+                        onPrefsChange(currentPrefs())
                     }
                     val effortControl: @Composable () -> Unit = {
                         if (reasoningVisible) {

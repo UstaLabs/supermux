@@ -242,3 +242,34 @@ test("restoreWorkspace throws when the id is unknown", async () => {
   const { svc } = make()
   await expect(svc.restoreWorkspace("missing")).rejects.toThrow("workspace not found")
 })
+
+test("createForSession rolls the workspace back when ensureProject throws", () => {
+  const { store, svc, db } = make({ ensureProject: () => { throw new Error("boom") } })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+
+  expect(() => svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt" })).toThrow("boom")
+
+  expect(store.list({ includeArchived: true })).toEqual([])
+  const link = db.query("SELECT workspace_id FROM sessions WHERE id = 's1'").get() as any
+  expect(link.workspace_id).toBeNull()
+})
+
+test("createForSession registers the workspace's paths with ensureProject once", () => {
+  const seen: Array<{ workdir: string; repo_root?: string; internal: boolean }> = []
+  const { svc, db } = make({ ensureProject: (w) => { seen.push(w) } })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at) VALUES ('s1','a','active','claude','/wt','t')`)
+
+  svc.createForSession({ sessionId: "s1", name: "a", workdir: "/wt", repo_root: "/repo" })
+
+  expect(seen).toEqual([{ workdir: "/wt", repo_root: "/repo", internal: false }])
+})
+
+test("createForSession forwards internal: true to ensureProject for an internal session", () => {
+  const seen: Array<{ workdir: string; repo_root?: string; internal: boolean }> = []
+  const { svc, db } = make({ ensureProject: (w) => { seen.push(w) } })
+  db.run(`INSERT INTO sessions (id, name, status, agent, workdir, created_at, internal) VALUES ('s1','rpc-worker','active','claude','/wt','t', 1)`)
+
+  svc.createForSession({ sessionId: "s1", name: "rpc-worker", workdir: "/wt", internal: true })
+
+  expect(seen).toEqual([{ workdir: "/wt", repo_root: undefined, internal: true }])
+})

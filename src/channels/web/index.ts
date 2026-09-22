@@ -34,6 +34,8 @@ import { detectUpdateMode } from "../../core/update/mode"
 import { resolveAndApply, restartService } from "../../core/update/apply"
 import { BUILD_COMMIT, BUILD_VERSION } from "../../shared/build-info"
 import { workspaceScope, parseScope } from "../../core/workspace/scope"
+import { ProjectConflictError, ProjectNotFoundError } from "../../core/project/service"
+import { PROJECT_IMAGE_MAX_BYTES } from "../../core/project/images"
 
 const VALID_KINDS: AttachmentKind[] = ["photo", "document", "voice", "audio", "video", "video_note"]
 
@@ -82,7 +84,7 @@ function clientIp(req: Request): string {
 // case — each new instance already starts with an empty bucket.
 export function __resetAuthFailures(): void {}
 
-const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
+const API_PREFIXES = ["/api", "/sessions", "/archived-sessions", "/archived-workspaces", "/projects", "/project-catalog", "/paths", "/commands", "/devices", "/pair.json", "/pair", "/me", "/logout", "/ws", "/files", "/upload", "/push", "/usage", "/proxies", "/fs", "/displays", "/settings", "/config", "/agents", "/opencode", "/client-logs", "/debug", "/models", "/reasoning-levels", "/system", "/repos", "/forge", "/host", "/transcribe", "/speak", "/workspaces", "/views"]
 const MAX_CLIENT_LOG_RING = 800
 // randomUUID() shape: version 4, RFC 4122 variant. A client-minted view id must
 // match what the store would have generated itself — it ends up in layout trees
@@ -239,6 +241,20 @@ export interface WebChannelOpts {
   archiveWorkspace?: (id: string) => Promise<void>
   restoreWorkspace?: (id: string) => Promise<import("../../core/workspace/dto").WorkspaceDto>
   listArchivedWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
+  // Persistent project catalog (plan 2026-09-21). Mutations throw
+  // ProjectNotFoundError (→ 404), ProjectConflictError (→ 409) or Error (→ 400).
+  listProjectCatalog?: () => unknown[]
+  /** workspaceId → projectId over active AND archived workspaces. */
+  getProjectMembership?: () => Record<string, string>
+  createProject?: (name: string) => unknown
+  renameProject?: (id: string, name: string) => unknown
+  reorderProjects?: (ids: string[]) => void
+  addProjectLocation?: (id: string, path: string) => unknown
+  moveProjectLocation?: (locationId: string, projectId: string) => unknown
+  setProjectImage?: (id: string, bytes: Uint8Array, mime: string) => unknown
+  clearProjectImage?: (id: string) => unknown
+  /** Where the image should be. Not stat'ed by the caller — the route 404s on a missing file. */
+  projectImageFile?: (id: string) => { path: string; mime: string } | undefined
   reorderWorkspaces?: (orderedIds: string[]) => void
   addWorkspaceView?: (workspaceId: string, args: { id?: string; kind: string; state: unknown; title?: string; groupId?: string })
     => import("../../core/workspace/dto").ViewDto
@@ -602,6 +618,19 @@ export class WebChannel implements Channel {
   broadcastToAll(frame: object): void {
     const json = JSON.stringify(frame)
     for (const c of this.wsConnections) c.ws.send(json)
+  }
+
+  /**
+   * Full-replacement project catalog frame: every project plus the membership of
+   * active AND archived workspaces. Sent after every catalog mutation, and by the
+   * broker when a workspace creation registered a new project.
+   */
+  broadcastProjects(): void {
+    this.broadcastToAll({
+      type: "projects_changed",
+      projects: this.opts.listProjectCatalog?.() ?? [],
+      projectMembership: this.opts.getProjectMembership?.() ?? {},
+    })
   }
 
   broadcastToOthers(frame: object, except: import("bun").ServerWebSocket<WSData>): void {
@@ -977,10 +1006,12 @@ export class WebChannel implements Channel {
       const displays = this.opts.listDisplays?.() ?? []
       const workspaces = this.opts.listWorkspaces?.() ?? []
       const archivedWorkspaces = this.opts.listArchivedWorkspaces?.() ?? []
+      const projects = this.opts.listProjectCatalog?.() ?? []
+      const projectMembership = this.opts.getProjectMembership?.() ?? {}
       const onboarded = this.opts.getAppConfig?.()?.onboarded ?? false
       const reads = this.opts.getReads?.() ?? {}
       const drafts = this.opts.getDrafts?.() ?? {}
-      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
+      ws.send(JSON.stringify({ type: "snapshot", sessions, logs, activity, bgTasks, agentState, proxies, displays, workspaces, archivedWorkspaces, projects, projectMembership, commands, commandsResolved, homeDir: home(), onboarded, reads, drafts }))
       return
     }
     if (frame.type === "ping") {
@@ -1153,6 +1184,131 @@ export class WebChannel implements Channel {
     return a.throttled
       ? new Response("rate limited", { status: 429 })
       : new Response("unauthorized", { status: 401 })
+  }
+
+  /**
+   * /project-catalog routes (plan 2026-09-21 "Wire contract"). `GET /projects` stays
+   * the path-only list for older clients. Every successful mutation broadcasts
+   * projects_changed. Undefined = no route matched (falls through to 404).
+   */
+  private async handleProjectCatalog(req: Request, method: string, path: string): Promise<Response | undefined> {
+    const o = this.opts
+    const body = async () => await req.json().catch(() => ({})) as Record<string, unknown>
+    const mutate = (fn: () => unknown, status = 200): Response => {
+      try {
+        const out = fn()
+        this.broadcastProjects()
+        return this.json(out ?? { ok: true }, status)
+      } catch (err) {
+        return projectErrorResponse(err)
+      }
+    }
+    const notConfigured = () => this.json({ error: "not configured" }, 503)
+    // decodeURIComponent throws URIError on malformed percent-encoding (e.g. "%E0");
+    // undefined here means the caller should answer 400 rather than let it escape as a 500.
+    const decodeId = (raw: string): string | undefined => {
+      try { return decodeURIComponent(raw) } catch { return undefined }
+    }
+    const badId = () => this.json({ error: "bad id" }, 400)
+
+    if (path === "/project-catalog") {
+      if (method === "GET") return this.json({ projects: o.listProjectCatalog?.() ?? [] })
+      if (method === "POST") {
+        if (!o.createProject) return notConfigured()
+        const name = (await body()).name
+        if (typeof name !== "string") return this.json({ error: "name required" }, 400)
+        return mutate(() => o.createProject!(name), 201)
+      }
+      return undefined
+    }
+    // Fixed segments before /:id.
+    if (method === "PATCH" && path === "/project-catalog/reorder") {
+      if (!o.reorderProjects) return notConfigured()
+      const ids = (await body()).orderedIds
+      if (!Array.isArray(ids) || !ids.every((x) => typeof x === "string")) {
+        return this.json({ error: "orderedIds must be a string array" }, 400)
+      }
+      return mutate(() => { o.reorderProjects!(ids as string[]); return { ok: true } })
+    }
+    const loc = path.match(/^\/project-catalog\/locations\/([^/]+)$/)
+    if (loc && method === "PATCH") {
+      if (!o.moveProjectLocation) return notConfigured()
+      const locId = decodeId(loc[1]!)
+      if (locId === undefined) return badId()
+      const projectId = (await body()).projectId
+      if (typeof projectId !== "string" || !projectId) return this.json({ error: "projectId required" }, 400)
+      return mutate(() => o.moveProjectLocation!(locId, projectId))
+    }
+    const m = path.match(/^\/project-catalog\/([^/]+)(\/locations|\/image)?$/)
+    if (!m) return undefined
+    const id = decodeId(m[1]!)
+    if (id === undefined) return badId()
+    const sub = m[2]
+
+    if (!sub && method === "PATCH") {
+      if (!o.renameProject) return notConfigured()
+      const name = (await body()).name
+      if (name === undefined) {
+        // Nothing to change: answer with the current record (or 404).
+        const cur = (o.listProjectCatalog?.() ?? []).find((p) => (p as { id?: string }).id === id)
+        return cur ? this.json(cur) : this.json({ error: "project not found" }, 404)
+      }
+      if (typeof name !== "string") return this.json({ error: "name must be a string" }, 400)
+      return mutate(() => o.renameProject!(id, name))
+    }
+    if (sub === "/locations" && method === "POST") {
+      if (!o.addProjectLocation) return notConfigured()
+      const raw = (await body()).path
+      if (typeof raw !== "string" || !raw.trim()) return this.json({ error: "path required" }, 400)
+      // Registering a location is a user action on a live directory: expand ~ and
+      // require it to exist. Reads never stat.
+      let normalized: string
+      try {
+        normalized = normalizeExistingWorkdir(raw, home())
+      } catch (err: any) {
+        return this.json({ error: err?.message ?? String(err) }, 400)
+      }
+      return mutate(() => o.addProjectLocation!(id, normalized))
+    }
+    if (sub === "/image") {
+      if (method === "GET") {
+        const f = o.projectImageFile?.(id)
+        const file = f ? Bun.file(f.path) : undefined
+        if (!f || !file || !(await file.exists())) return this.json({ error: "image not found" }, 404)
+        return new Response(file, {
+          headers: {
+            "content-type": f.mime,
+            "cache-control": "private, max-age=300",
+            "x-content-type-options": "nosniff",
+          },
+        })
+      }
+      if (method === "PUT") {
+        if (!o.setProjectImage) return notConfigured()
+        const mime = (req.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase()
+        if (!PROJECT_IMAGE_MIMES.has(mime)) return this.json({ error: "unsupported image type" }, 415)
+        const declared = Number(req.headers.get("content-length") ?? 0)
+        if (declared > PROJECT_IMAGE_MAX_BYTES) return this.json({ error: "image too large" }, 413)
+        if (!req.body) return this.json({ error: "empty image" }, 400)
+        // No (or an understated) content-length can't be trusted for a chunked
+        // body, so cap it as bytes stream in rather than buffering the whole
+        // request first — a lying/absent-length client can't force a large read.
+        let bytes: Uint8Array
+        try {
+          bytes = await readCappedBody(req.body, PROJECT_IMAGE_MAX_BYTES)
+        } catch (err) {
+          if (err instanceof PayloadTooLargeError) return this.json({ error: "image too large" }, 413)
+          throw err
+        }
+        if (bytes.byteLength === 0) return this.json({ error: "empty image" }, 400)
+        return mutate(() => o.setProjectImage!(id, bytes, mime))
+      }
+      if (method === "DELETE") {
+        if (!o.clearProjectImage) return notConfigured()
+        return mutate(() => o.clearProjectImage!(id))
+      }
+    }
+    return undefined
   }
 
   private json(body: unknown, status = 200): Response {
@@ -2478,6 +2634,10 @@ export class WebChannel implements Channel {
         .map((p) => ({ path: p }))
       return this.json({ projects })
     }
+    if (path === "/project-catalog" || path.startsWith("/project-catalog/")) {
+      const res = await this.handleProjectCatalog(req, method, path)
+      if (res) return res
+    }
     if (method === "POST" && path === "/paths/validate") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>
       const input = body.path as string | undefined
@@ -3173,6 +3333,49 @@ export class WebChannel implements Channel {
 
     return new Response("not found", { status: 404 })
   }
+}
+
+/** Mirrors ProjectImages.isSupported, checked here so a bad type is rejected before the body is read. */
+const PROJECT_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
+
+/**
+ * Reads `source` chunk-by-chunk, tracking a running byte total so a chunked or
+ * absent/understated content-length body can't force an unbounded in-memory read
+ * (mirrors FileStore.putStream's streaming cap, in memory rather than to a file).
+ * Aborts and cancels the stream, throwing PayloadTooLargeError, the instant the
+ * running total exceeds maxBytes — before reading any further chunks.
+ */
+async function readCappedBody(source: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = source.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        try { await reader.cancel() } catch { /* ignore — best-effort */ }
+        throw new PayloadTooLargeError()
+      }
+      chunks.push(value)
+    }
+  } finally {
+    try { reader.releaseLock() } catch { /* ignore — best-effort (cancel may already have released) */ }
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) { out.set(c, offset); offset += c.byteLength }
+  return out
+}
+
+function projectErrorResponse(err: unknown): Response {
+  const json = (body: unknown, status: number) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  if (err instanceof ProjectNotFoundError) return json({ error: err.message }, 404)
+  if (err instanceof ProjectConflictError) return json({ error: err.message, projectId: err.projectId }, 409)
+  return json({ error: err instanceof Error ? err.message : String(err) }, 400)
 }
 
 async function serveFile(req: Request, meta: { path: string; mime?: string; name?: string; size: number }): Promise<Response> {

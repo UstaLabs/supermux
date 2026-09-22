@@ -28,6 +28,8 @@ export type WorkspaceDto = {
   sort_order: number
   created_at: string
   archived_at?: string
+  /** The owning project, resolved from `repo_root ?? workdir`. Omitted when unresolved. */
+  project_id?: string
   /** Inlined so a client never has to make a second call to render a workspace. */
   views: ViewDto[]
 }
@@ -38,7 +40,7 @@ export function viewDto(v: ViewRecord): ViewDto {
   return dto
 }
 
-export function workspaceDto(w: WorkspaceRecord, views: ViewRecord[]): WorkspaceDto {
+export function workspaceDto(w: WorkspaceRecord, views: ViewRecord[], projectId?: string): WorkspaceDto {
   const dto: WorkspaceDto = {
     id: w.id,
     name: w.name,
@@ -56,5 +58,6 @@ export function workspaceDto(w: WorkspaceRecord, views: ViewRecord[]): Workspace
   if (w.active_view_id !== undefined) dto.active_view_id = w.active_view_id
   if (w.primary_session_id !== undefined) dto.primary_session_id = w.primary_session_id
   if (w.archived_at !== undefined) dto.archived_at = w.archived_at
+  if (projectId !== undefined) dto.project_id = projectId
   return dto
 }

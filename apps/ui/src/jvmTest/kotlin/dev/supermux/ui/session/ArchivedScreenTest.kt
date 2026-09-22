@@ -16,6 +16,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.supermux.net.ArchivedDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.WorkspaceDto
 import dev.supermux.ui.adaptive.InputMode
 import dev.supermux.ui.adaptive.WindowWidthClass
@@ -23,6 +24,8 @@ import dev.supermux.ui.chat.setPlatformContent
 import dev.supermux.ui.platform.FakePlatform
 import dev.supermux.ui.theme.AppearanceMode
 import dev.supermux.ui.theme.SupermuxTheme
+import dev.supermux.workspace.ProjectRef
+import dev.supermux.workspace.projectGroupKey
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.test.Test
@@ -513,5 +516,72 @@ class ArchivedScreenTest {
         onNodeWithTag("archived_restore_w2").performClick()
         waitForIdle()
         assertEquals("w2", restored)
+    }
+
+    // ── (6) Persistent-project headers: settings reachable from the archive ─────────────────────
+
+    @Test fun an_archived_project_header_offers_project_settings() = runComposeUiTest {
+        val beta = ProjectRef("h1", ProjectDto(id = "b", name = "Beta"))
+        var opened: ProjectRef? = null
+        archivedContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(
+                    archived = emptyList(), home = home, onBack = {}, onResume = {},
+                    loadLogs = { emptyList() },
+                    workspaces = listOf(ws("w1", "feature-a", "$home/proj-a").copy(projectId = "b")),
+                    useWorkspaces = true,
+                    projects = listOf(beta),
+                    workspaceHost = { "h1" },
+                    onProjectSettings = { opened = it },
+                )
+            }
+        }
+        waitForIdle()
+        val key = projectGroupKey("h1", "b")
+        onNodeWithTag(ProjectTestIds.menu(key)).performClick()
+        onNodeWithText("Project settings…").assertIsDisplayed()
+        // The archive has no order of its own: settings only.
+        onNodeWithTag(ProjectTestIds.MOVE_UP).assertDoesNotExist()
+        onNodeWithTag(ProjectTestIds.MOVE_DOWN).assertDoesNotExist()
+        onNodeWithTag(ProjectTestIds.SETTINGS).performClick()
+        assertEquals(beta, opened)
+    }
+
+    @Test fun the_actions_overload_forwards_project_settings() = runComposeUiTest {
+        val beta = ProjectRef("h1", ProjectDto(id = "b", name = "Beta"))
+        var opened: ProjectRef? = null
+        archivedContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(
+                    actions = actions(
+                        archivedWorkspaces = listOf(ws("w1", "feature-a", "$home/proj-a").copy(projectId = "b")),
+                        liveWorkspaces = listOf(ws("live", "live-one", "$home/proj-c")),
+                    ),
+                    home = home,
+                    projects = listOf(beta),
+                    workspaceHost = { "h1" },
+                    onProjectSettings = { opened = it },
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag(ProjectTestIds.menu(projectGroupKey("h1", "b"))).performClick()
+        onNodeWithTag(ProjectTestIds.SETTINGS).performClick()
+        assertEquals(beta, opened)
+    }
+
+    @Test fun a_path_group_has_no_project_menu() = runComposeUiTest {
+        archivedContent {
+            SupermuxTheme(appearance = AppearanceMode.DARK) {
+                ArchivedScreen(
+                    archived = emptyList(), home = home, onBack = {}, onResume = {},
+                    loadLogs = { emptyList() },
+                    workspaces = fakeWorkspaces, useWorkspaces = true,
+                    onProjectSettings = {},
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithTag(ProjectTestIds.menu("$home/proj-a")).assertDoesNotExist()
     }
 }

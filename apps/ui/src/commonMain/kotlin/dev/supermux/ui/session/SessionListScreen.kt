@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DarkMode
@@ -128,6 +129,7 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.widgets.AlertDialog
 import dev.supermux.ui.widgets.DropdownMenu
 import dev.supermux.ui.widgets.DropdownMenuItem
+import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.WORKSPACE_FLAT_SCOPE
 import dev.supermux.workspace.WorkspaceDragWorkingState
 import dev.supermux.workspace.WorkspaceReorderScope
@@ -212,6 +214,21 @@ fun SessionListScreen(
     hostFilter: String? = null,
     onHostFilter: (String?) -> Unit = {},
     onAddHost: () -> Unit = {},
+    // ── Persistent projects; default-empty so an old broker keeps the path grouping ──
+    /** Every host's project catalog, host-qualified (the same id space as [workspaceHost]). */
+    projects: List<ProjectRef> = emptyList(),
+    /** Host record id owning a workspace — pairs a row's projectId with a [ProjectRef]. */
+    workspaceHost: (WorkspaceDto) -> String = { "" },
+    /** Authenticated project image bytes; null when missing or on failure. */
+    loadProjectImage: suspend (ProjectRef) -> ByteArray? = { null },
+    /** The app's shared project image cache (null → a screen-local one). */
+    projectImageCache: ProjectImageCache? = null,
+    /** Persist a host's new full project order (`PATCH /project-catalog/reorder`). */
+    onReorderProjects: (hostId: String, orderedIds: List<String>) -> Unit = { _, _ -> },
+    onProjectSettings: (ProjectRef) -> Unit = {},
+    /** "New project" in the ⋮ list menu; null hides the entry. */
+    onNewProject: (() -> Unit)? = null,
+    onNewWorkspaceInProject: (ProjectRef) -> Unit = {},
     // ── Prefs (cluster F1: read synchronously by the host before the first frame) ──
     initialCollapsedPaths: Set<String> = emptySet(),
     onCollapsedPathsChange: (Set<String>) -> Unit = {},
@@ -282,15 +299,25 @@ fun SessionListScreen(
         ?: inferHomeDir(visibleSessions.firstOrNull()?.workdir)
         ?: home
 
-    val groups = remember(visibleWorkspaces, effectiveHome, roles) {
-        groupWorkspaces(visibleWorkspaces, effectiveHome) { w ->
+    // A host filter narrows the catalog too — an empty project of a filtered-out host is noise.
+    val visibleProjects = remember(projects, multiHost, hostFilter) {
+        if (!multiHost || hostFilter == null) projects else projects.filter { it.hostId == hostFilter }
+    }
+    val groups = remember(visibleWorkspaces, effectiveHome, roles, visibleProjects, workspaceHost, archivedWorkspaces) {
+        // Archived rows only decide whether an empty project is shown (archived-only → hidden).
+        groupWorkspaces(visibleWorkspaces, effectiveHome, visibleProjects, workspaceHost, archivedWorkspaces) { w ->
             val sid = w.primarySessionId ?: w.chatSessionIds().firstOrNull()
             sid != null && roles[sid] == "personal_assistant"
         }
     }
-    val archivedGroups = remember(archivedWorkspaces, effectiveHome) {
-        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome)
+    /** hostId → the project ids that have a rendered group (Move up/down neighbours). */
+    val renderedProjectIds = remember(groups) {
+        groups.mapNotNull { it.projectRef() }.groupBy({ it.hostId }, { it.project.id }).mapValues { it.value.toSet() }
     }
+    val archivedGroups = remember(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost) {
+        groupArchivedWorkspaces(archivedWorkspaces, effectiveHome, visibleProjects, workspaceHost)
+    }
+    val cachedProjectImage = rememberCachedProjectImageLoader(loadProjectImage, projectImageCache)
     val archivedByPath = remember(archivedGroups) { archivedGroups.associate { it.key to it.workspaces } }
 
     // ── Session/task fallback (Fleet mode with no workspaces) ─────────────────────────────────
@@ -731,6 +758,7 @@ fun SessionListScreen(
                 g.workspaces,
                 if (canDrag) wsWorkingOrders[g.key] else null,
             )
+            val ref = g.projectRef()
             item(key = "h:${g.key}") {
                 GroupHeaderRow {
                     PathGroupHeader(
@@ -743,10 +771,39 @@ fun SessionListScreen(
                                 if (isCollapsed) collapsedPaths - g.key else collapsedPaths + g.key,
                             )
                         },
+                        fullLabel = ref != null,
+                        leading = ref?.takeIf { it.project.imageId != null }?.let { r ->
+                            {
+                                // Same size as the fallback (the header's own hashed tile), so
+                                // nothing jumps or flashes while the image loads.
+                                ProjectImage(r, cachedProjectImage, size = 18.dp) {
+                                    PathGroupTile(g.label, fullLabel = true)
+                                }
+                            }
+                        },
+                        trailing = ref?.let { r ->
+                            {
+                                // Only the rendered project groups count as neighbours.
+                                val up = reorderedProjectIds(projects, r, -1, renderedProjectIds[r.hostId])
+                                val down = reorderedProjectIds(projects, r, +1, renderedProjectIds[r.hostId])
+                                ProjectHeaderMenu(
+                                    groupKey = g.key,
+                                    label = g.label,
+                                    onSettings = { onProjectSettings(r) },
+                                    onMoveUp = up?.let { ids -> { onReorderProjects(r.hostId, ids) } },
+                                    onMoveDown = down?.let { ids -> { onReorderProjects(r.hostId, ids) } },
+                                )
+                            }
+                        },
                     )
                 }
             }
             if (isCollapsed) return@forEach
+            if (ref != null && ordered.isEmpty()) {
+                item(key = "empty:${g.key}") {
+                    EmptyProjectRow(g.key, onNew = { onNewWorkspaceInProject(ref) })
+                }
+            }
             itemsIndexed(ordered, key = { _, w -> "ws:${w.id}" }) { index, w ->
                 WorkspaceEntry(
                     w = w, scopeKey = g.key, grouped = true,
@@ -1067,7 +1124,25 @@ fun SessionListScreen(
             }
             if (archivedFoldOpen) {
                 archivedGroups.forEach { g ->
-                    item(key = "arch:hdr:${g.key}") { ArchivedGroupLabel(g.label) }
+                    item(key = "arch:hdr:${g.key}") {
+                        // A persistent project keeps its ⋮ → settings here too: an archived-only
+                        // project has no live header to reach them from.
+                        val ref = g.projectRef()
+                        ArchivedGroupLabel(
+                            g.label,
+                            trailing = ref?.let { r ->
+                                {
+                                    ProjectHeaderMenu(
+                                        groupKey = g.key,
+                                        label = g.label,
+                                        onSettings = { onProjectSettings(r) },
+                                        onMoveUp = null,
+                                        onMoveDown = null,
+                                    )
+                                }
+                            },
+                        )
+                    }
                     items(g.workspaces, key = { "arch:${it.id}" }) { w -> ArchivedEntry(w) }
                 }
             }
@@ -1170,6 +1245,7 @@ fun SessionListScreen(
                         onExpandedChange = { menuExpanded = it },
                         onNavigate = nav,
                         onAddHost = onAddHost,
+                        onNewProject = onNewProject,
                     )
                 }
             },
@@ -1283,14 +1359,20 @@ private fun GroupHeaderRow(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ArchivedGroupLabel(label: String) {
-    Text(
-        label,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontFamily = MonoFontFamily,
-        fontSize = 11.sp,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-    )
+private fun ArchivedGroupLabel(label: String, trailing: (@Composable () -> Unit)? = null) {
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontFamily = MonoFontFamily,
+            fontSize = 11.sp,
+        )
+        trailing?.invoke()
+    }
 }
 
 /** Indented child session under a multi-agent workspace (desktop's sidebar). */
@@ -1472,6 +1554,7 @@ private fun OverflowNav(
     onExpandedChange: (Boolean) -> Unit,
     onNavigate: (String) -> Unit,
     onAddHost: () -> Unit,
+    onNewProject: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     Box {
@@ -1490,6 +1573,11 @@ private fun OverflowNav(
             // Always-reachable add-host entry (the filter row's `+` chip is hidden until a 2nd
             // host exists, so the very first extra host is added from here — spec §5).
             NavItem("Add host", Icons.Filled.Add, "nav_add_host") { onExpandedChange(false); onAddHost() }
+            onNewProject?.let { newProject ->
+                NavItem("New project", Icons.Filled.CreateNewFolder, "nav_new_project") {
+                    onExpandedChange(false); newProject()
+                }
+            }
             NavItem("Archived", Icons.Filled.Archive, "nav_archived") {
                 onExpandedChange(false); onNavigate("archived")
             }

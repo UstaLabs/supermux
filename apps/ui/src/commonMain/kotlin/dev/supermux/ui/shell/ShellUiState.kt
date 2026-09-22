@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
@@ -178,6 +179,27 @@ class ShellUiState {
     val launcherOpen: Boolean get() = currentRoute is Route.NewSession
     /** When set, the launcher reopens this draft session (web /new?draft=). */
     val launcherDraftId: String? get() = (currentRoute as? Route.NewSession)?.draftId?.takeIf { it.isNotBlank() }
+    /**
+     * When set, the launcher preselects this persistent project (host record id to project id).
+     *
+     * ONE-SHOT per navigation: once the launcher applies it, [consumeLauncherProject] marks that
+     * very route INSTANCE consumed, so a remount of the launcher (or any later recomposition) no
+     * longer overrides whatever the user or a restored draft chose since. A fresh
+     * [openLauncherInProject] — even for the same project — pushes a NEW instance, so it applies
+     * again. The route itself is left untouched: replacing it would re-key its Nav3 entry and
+     * rebuild the launcher under Compact.
+     */
+    val launcherProject: Pair<String, String>? get() = (currentRoute as? Route.NewSession)
+        ?.takeIf { it.projectId.isNotBlank() && it !== consumedLauncherRoute }
+        ?.let { it.projectHostId to it.projectId }
+
+    // Referential: every navigation is a new instance even when it is structurally equal to the last.
+    private var consumedLauncherRoute by mutableStateOf<Route?>(null, referentialEqualityPolicy())
+
+    /** The launcher applied [launcherProject]; don't hand it out again for this navigation. */
+    fun consumeLauncherProject() {
+        (currentRoute as? Route.NewSession)?.let { consumedLauncherRoute = it }
+    }
     /** The Usage card is showing (an anchored popover on a wide host). */
     val usageOpen: Boolean get() = currentRoute is Route.Usage
     val lspSettingsOpen: Boolean
@@ -224,6 +246,10 @@ class ShellUiState {
 
     /** New-session UI: a detail-pane swap on a wide host, a pushed screen under Compact. */
     fun openLauncher(draftId: String? = null) = navigate(Route.NewSession(draftId.orEmpty()))
+
+    /** New-session UI preselecting persistent project [projectId] of host [hostId]. */
+    fun openLauncherInProject(hostId: String, projectId: String) =
+        navigate(Route.NewSession(projectHostId = hostId, projectId = projectId))
 
     fun closeLauncher() {
         if (launcherOpen) goBack()

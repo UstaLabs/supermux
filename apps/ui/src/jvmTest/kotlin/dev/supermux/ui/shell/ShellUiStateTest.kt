@@ -277,6 +277,20 @@ class WorkspaceUiStateTest {
         ui.navigate(Route.Home)
         assertEquals(listOf(Route.Home), ui.backStack.toList())
     }
+
+    // The sidebar "+" preselect is ONE-SHOT per navigation: consumed once applied (so a remount of
+    // the launcher can't override a draft's workdir), yet a fresh "+" — even for the same project —
+    // is a new request.
+    @Test fun launcherProjectIsConsumedOncePerNavigation() {
+        val ui = ShellUiState()
+        ui.openLauncherInProject("h1", "p")
+        kotlin.test.assertEquals("h1" to "p", ui.launcherProject)
+        ui.consumeLauncherProject()
+        kotlin.test.assertNull(ui.launcherProject)
+        kotlin.test.assertTrue(ui.launcherOpen)
+        ui.openLauncherInProject("h1", "p")
+        kotlin.test.assertEquals("h1" to "p", ui.launcherProject)
+    }
 }
 
 /** Everything is saveable in these cases; the real scope only rejects non-Bundle values. */

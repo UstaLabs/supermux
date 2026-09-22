@@ -5,6 +5,7 @@ import dev.supermux.proto.ActivityEvent
 import dev.supermux.proto.AgentStatus
 import dev.supermux.proto.FinishJobDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.ServerFrame
 import dev.supermux.proto.SessionInfo
 import dev.supermux.proto.SlashCommand
@@ -28,4 +29,19 @@ data class HostState(
     val lspInstallLog: Map<String, List<String>> = emptyMap(),
     val lspInstallDone: Map<String, ServerFrame.LspInstallDone> = emptyMap(),
     val displays: List<DisplayStream> = emptyList(),
+    /** The broker's persistent project catalog. */
+    val projects: List<ProjectDto> = emptyList(),
+    /**
+     * True once a snapshot or `projects_changed` frame carried a catalog — tells an old broker
+     * (path grouping only) apart from a new broker with no projects yet.
+     */
+    val projectCatalogKnown: Boolean = false,
 )
+
+/** Outcome of adding a location to a persistent project. */
+sealed interface ProjectLocationResult {
+    data class Added(val project: ProjectDto) : ProjectLocationResult
+    /** The path already belongs to [projectId] (HTTP 409). */
+    data class Conflict(val projectId: String) : ProjectLocationResult
+    data object Failed : ProjectLocationResult
+}

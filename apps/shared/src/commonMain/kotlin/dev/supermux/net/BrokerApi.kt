@@ -24,6 +24,7 @@ import io.ktor.http.contentType
 import io.ktor.utils.io.readUTF8Line
 import dev.supermux.proto.LayoutNodeDto
 import dev.supermux.proto.LogEntry
+import dev.supermux.proto.ProjectDto
 import dev.supermux.proto.SlashCommand
 import dev.supermux.proto.ViewDto
 import dev.supermux.proto.WorkspaceDto
@@ -278,6 +279,26 @@ data class MoveViewBody(
 
 @Serializable
 data class ReorderWorkspacesBody(val orderedIds: List<String>)
+
+/** GET /project-catalog */
+@Serializable
+data class ProjectCatalogResponse(val projects: List<ProjectDto> = emptyList())
+
+@Serializable
+data class ProjectNameBody(val name: String)
+
+@Serializable
+data class ReorderProjectsBody(val orderedIds: List<String>)
+
+@Serializable
+data class ProjectLocationBody(val path: String)
+
+@Serializable
+data class MoveProjectLocationBody(val projectId: String)
+
+/** The 409 body of POST /project-catalog/:id/locations. */
+@Serializable
+private data class ProjectLocationConflictBody(val error: String? = null, val projectId: String? = null)
 
 @Serializable
 data class SpawnResponse(
@@ -1001,6 +1022,13 @@ data class RunUpdateResult(
 
 class FsException(val status: Int, message: String) : Exception(message)
 
+/**
+ * POST /project-catalog/:id/locations answered 409: the path already belongs to [projectId].
+ * The UI offers to move that location instead (PATCH /project-catalog/locations/:locationId).
+ */
+class ProjectLocationConflict(val projectId: String) :
+    Exception("Location already belongs to project $projectId")
+
 // ─── Private request bodies ───────────────────────────────────────────────────
 
 @Serializable
@@ -1534,6 +1562,88 @@ class BrokerApi(
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(ReorderWorkspacesBody(orderedIds)))
         })
+    }
+
+    // ── Persistent project catalog ─────────────────────────────────────────────
+    // `GET /projects` stays the path-only listing; the persistent catalog lives under
+    // /project-catalog. Every mutation is also broadcast as a `projects_changed` frame.
+
+    /** GET /project-catalog */
+    suspend fun listProjectCatalog(): List<ProjectDto> =
+        getJson<ProjectCatalogResponse>("$httpBase/project-catalog").projects
+
+    /** POST /project-catalog — a new, location-less project. */
+    suspend fun createProject(name: String): ProjectDto =
+        postReturningJson("$httpBase/project-catalog", ProjectNameBody(name))
+
+    /** PATCH /project-catalog/{id} */
+    suspend fun renameProject(id: String, name: String): ProjectDto =
+        decode(http.patch("$httpBase/project-catalog/${urlEncode(id)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ProjectNameBody(name)))
+        })
+
+    /** PATCH /project-catalog/reorder — [orderedIds] index = new sort_order. */
+    suspend fun reorderProjects(orderedIds: List<String>) {
+        patchJson("$httpBase/project-catalog/reorder", ReorderProjectsBody(orderedIds))
+    }
+
+    /**
+     * POST /project-catalog/{id}/locations.
+     *
+     * @throws ProjectLocationConflict when the path already belongs to another project (409).
+     */
+    @Throws(ProjectLocationConflict::class, CancellationException::class)
+    suspend fun addProjectLocation(id: String, path: String): ProjectDto {
+        val resp = http.post("$httpBase/project-catalog/${urlEncode(id)}/locations") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(ProjectLocationBody(path)))
+        }
+        if (resp.status.value == 409) {
+            val owner = runCatching {
+                json.decodeFromString<ProjectLocationConflictBody>(resp.bodyAsText()).projectId
+            }.getOrNull()
+            if (owner != null) throw ProjectLocationConflict(owner)
+        }
+        return decode(resp)
+    }
+
+    /** PATCH /project-catalog/locations/{locationId} — returns the TARGET project. */
+    suspend fun moveProjectLocation(locationId: String, projectId: String): ProjectDto =
+        decode(http.patch("$httpBase/project-catalog/locations/${urlEncode(locationId)}") {
+            authHeader()
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(MoveProjectLocationBody(projectId)))
+        })
+
+    /** PUT /project-catalog/{id}/image — raw bytes; [mime] is image/png|jpeg|webp|gif, ≤ 5 MB. */
+    suspend fun setProjectImage(id: String, bytes: ByteArray, mime: String): ProjectDto =
+        decode(http.put("$httpBase/project-catalog/${urlEncode(id)}/image") {
+            authHeader()
+            contentType(ContentType.parse(mime))
+            setBody(bytes)
+        })
+
+    /** DELETE /project-catalog/{id}/image */
+    suspend fun clearProjectImage(id: String): ProjectDto =
+        decode(http.delete("$httpBase/project-catalog/${urlEncode(id)}/image") {
+            authHeader()
+        })
+
+    /**
+     * GET /project-catalog/{id}/image. The `v` query is the current [ProjectDto.imageId], so a
+     * changed image is a new URL and busts any image cache. The endpoint is authenticated —
+     * load it with this client's bearer.
+     */
+    fun projectImageUrl(id: String, imageId: String): String =
+        "$httpBase/project-catalog/${urlEncode(id)}/image?v=${urlEncode(imageId)}"
+
+    /** GET [projectImageUrl] with this client's bearer — raw image bytes, null on non-2xx. */
+    suspend fun projectImageBytes(id: String, imageId: String): ByteArray? {
+        val resp = http.get(projectImageUrl(id, imageId)) { authHeader() }
+        return if (resp.status.isSuccess()) resp.bodyAsBytes() else null
     }
 
     /** POST /workspaces/{id}/views */

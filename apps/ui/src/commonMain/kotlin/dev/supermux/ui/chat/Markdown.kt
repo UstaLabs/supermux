@@ -73,6 +73,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.compose.asPainter
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
+import coil3.size.Scale
 import dev.supermux.ui.ColumnAlign
 import dev.supermux.ui.FilePathRef
 import dev.supermux.ui.MdBlock
@@ -597,17 +598,26 @@ internal sealed interface DecodedImage {
  * the shrink-only sizing needs before it can lay the image out.
  */
 @Composable
-internal fun rememberDecodedImage(data: Any?): DecodedImage {
+internal fun rememberDecodedImage(
+    data: Any?,
+    /** Decode down to at most this many pixels per side (null = the image's full resolution). */
+    size: Int? = null,
+    /** Coil memory-cache key: a re-composed caller gets the decoded bitmap back without decoding. */
+    memoryCacheKey: String? = null,
+): DecodedImage {
     val context = LocalPlatformContext.current
-    var state by remember(data) { mutableStateOf<DecodedImage>(DecodedImage.Loading) }
-    LaunchedEffect(data) {
+    var state by remember(data, size, memoryCacheKey) { mutableStateOf<DecodedImage>(DecodedImage.Loading) }
+    LaunchedEffect(data, size, memoryCacheKey) {
         if (data == null) {
             state = DecodedImage.Failed
             return@LaunchedEffect
         }
-        val result = runCatching {
-            SingletonImageLoader.get(context).execute(ImageRequest.Builder(context).data(data).build())
-        }.getOrNull()
+        val request = ImageRequest.Builder(context).data(data).apply {
+            // FILL: the short side covers [size], so a centre-cropped square stays sharp.
+            if (size != null) size(size).scale(Scale.FILL)
+            if (memoryCacheKey != null) memoryCacheKey(memoryCacheKey)
+        }.build()
+        val result = runCatching { SingletonImageLoader.get(context).execute(request) }.getOrNull()
         val img = (result as? SuccessResult)?.image
         state = if (img == null) {
             DecodedImage.Failed

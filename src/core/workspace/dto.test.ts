@@ -62,3 +62,12 @@ test("workspaceDto omits archived_at when the workspace is active", () => {
   const w = ws.create({ name: "a", workdir: "/w" })
   expect(workspaceDto(ws.getById(w.id)!, [])).not.toHaveProperty("archived_at")
 })
+
+test("workspaceDto carries project_id when resolved and omits it otherwise", () => {
+  const { ws } = store()
+  const w = ws.create({ name: "app", workdir: "/w" })
+  expect(workspaceDto(w, [], "p1").project_id).toBe("p1")
+  const bare = workspaceDto(w, [])
+  expect(bare.project_id).toBeUndefined()
+  expect("project_id" in bare).toBe(false)
+})

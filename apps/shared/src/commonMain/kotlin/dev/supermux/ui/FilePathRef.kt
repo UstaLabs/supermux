@@ -27,6 +27,11 @@ private val TRAILING_LINE_SUFFIX_RE = Regex(""":(\d+)(?:-(\d+))?$""")
 /** Path + optional line suffix, with word boundaries. Port of FILE_PATH_MATCH_RE. */
 val FILE_PATH_MATCH_RE = Regex("""(?<!\w)($FILE_PATH_BODY)(?::\d+(?:-\d+)?|:[^\s<>"'\w]+)?(?!\w)""")
 
+/** A `scheme://…` URL run. Path-shaped text inside one (`https://host/dir/page.md`) is part of the
+ *  URL, not a workspace file, so [findFilePathRefs] skips any match overlapping it and leaves the
+ *  whole URL to the renderer's URL linkifier. */
+private val URL_RUN_RE = Regex("""[A-Za-z][A-Za-z0-9+.-]*://\S+""")
+
 /** Same 34-entry set as web's FILE_EXTENSIONS (markdown.ts). */
 private val FILE_EXTENSIONS = setOf(
     "ts", "tsx", "js", "jsx", "vue", "py", "json", "md", "css", "html",
@@ -77,9 +82,12 @@ fun formatFilePathRef(ref: FilePathRef): String = when {
  *  thread, which was the dominant cost of opening a session. Android/JVM is fine (fast JDK engine),
  *  which is why only the Apple clients felt it. Apple clients should compile [FILE_PATH_BODY] with
  *  `NSRegularExpression` instead; this implementation stays for Android/JVM. */
-fun findFilePathRefs(text: String): List<FilePathMatch> =
-    FILE_PATH_MATCH_RE.findAll(text).mapNotNull { m ->
+fun findFilePathRefs(text: String): List<FilePathMatch> {
+    val urls = if ("://" in text) URL_RUN_RE.findAll(text).map { it.range }.toList() else emptyList()
+    return FILE_PATH_MATCH_RE.findAll(text).mapNotNull { m ->
+        if (urls.any { m.range.first <= it.last && it.first <= m.range.last }) return@mapNotNull null
         val ref = parseFilePathRef(m.value) ?: return@mapNotNull null
         if (!hasKnownExtension(ref.path)) return@mapNotNull null
         FilePathMatch(m.range.first, m.range.last + 1, ref, m.value)
     }.toList()
+}

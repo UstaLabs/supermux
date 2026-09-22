@@ -64,4 +64,14 @@ class FilePathRefTest {
         val m = findFilePathRefs("a/b.ts and c/d.kt")
         assertEquals(listOf("a/b.ts", "c/d.kt"), m.map { it.ref.path })
     }
+
+    @Test fun skips_path_inside_url() {
+        assertEquals(emptyList(), findFilePathRefs("https://supermux-core-design.ustalabs.com/event-taxonomy-report.md"))
+        assertEquals(emptyList(), findFilePathRefs("see (https://example.com/docs/a.md:12) now"))
+    }
+
+    @Test fun keeps_path_next_to_url() {
+        val m = findFilePathRefs("https://example.com/x.md and src/main.ts:5")
+        assertEquals(listOf(FilePathRef("src/main.ts", 5)), m.map { it.ref })
+    }
 }

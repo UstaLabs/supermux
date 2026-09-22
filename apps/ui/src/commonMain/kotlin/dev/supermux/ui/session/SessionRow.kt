@@ -32,6 +32,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -99,6 +102,8 @@ fun sessionRowContextLabels(
  * Project-group header.
  *
  * One row on every host: a colour-hashed letter tile, the path LEAF, a count and a rotating chevron.
+ * A persistent project passes [fullLabel] (its name is not a path), may replace the tile with
+ * [leading] (its image) and adds [trailing] (its overflow menu) before the chevron.
  */
 @Composable
 fun PathGroupHeader(
@@ -106,17 +111,16 @@ fun PathGroupHeader(
     count: Int,
     collapsed: Boolean = false,
     onToggle: (() -> Unit)? = null,
+    fullLabel: Boolean = false,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
     val rotation by animateFloatAsState(
         targetValue = if (collapsed) -90f else 0f,
         label = "groupChevronRotation",
     )
-    val leaf = label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
-    val letter = leaf.firstOrNull()?.uppercaseChar()?.toString() ?: "·"
-    // Stable-ish pastel from label hash so adjacent groups don't all share the same tile.
-    val hue = ((leaf.hashCode() ushr 1) % 360).toFloat()
-    val tile = Color.hsl(hue, 0.45f, 0.42f)
+    val leaf = groupHeaderLeaf(label, fullLabel)
     val clickable = if (onToggle != null) {
         Modifier
             .pointerHoverIcon(PointerIcon.Hand)
@@ -141,14 +145,10 @@ fun PathGroupHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Box(
-            Modifier
-                .size(18.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(tile),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(letter, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        if (leading != null) {
+            leading()
+        } else {
+            PathGroupTile(label, fullLabel)
         }
         Text(
             leaf,
@@ -162,6 +162,7 @@ fun PathGroupHeader(
         if (count > 1) {
             Text("$count", color = cs.onSurfaceVariant.copy(alpha = 0.55f), fontSize = 10.sp)
         }
+        trailing?.invoke()
         Icon(
             imageVector = Icons.Filled.KeyboardArrowDown,
             contentDescription = null,
@@ -169,6 +170,49 @@ fun PathGroupHeader(
             modifier = Modifier
                 .size(14.dp)
                 .rotate(rotation),
+        )
+    }
+}
+
+private fun groupHeaderLeaf(label: String, fullLabel: Boolean): String =
+    if (fullLabel) label else label.split("/").filter { it.isNotEmpty() }.lastOrNull() ?: label
+
+/** [PathGroupHeader]'s default leading tile: the leaf's first letter on a label-hashed colour. */
+@Composable
+internal fun PathGroupTile(label: String, fullLabel: Boolean = false) {
+    val leaf = groupHeaderLeaf(label, fullLabel)
+    val letter = leaf.firstOrNull()?.uppercaseChar()?.toString() ?: "·"
+    // Stable-ish pastel from label hash so adjacent groups don't all share the same tile.
+    val hue = ((leaf.hashCode() ushr 1) % 360).toFloat()
+    GroupLetterTile(letter, Color.hsl(hue, 0.45f, 0.42f), 18.dp)
+}
+
+/** The colour-hashed letter tile a group header shows when it has no image. */
+@Composable
+internal fun GroupLetterTile(letter: String, color: Color, size: androidx.compose.ui.unit.Dp) {
+    Box(
+        Modifier
+            .size(size)
+            .clip(RoundedCornerShape(4.dp))
+            .background(color),
+        contentAlignment = Alignment.Center,
+    ) {
+        // The default style pads the line above and below the glyph (font ascent/descent and
+        // platform font padding), so a letter "centred" in the box sits visibly low. Trim the line
+        // to the font size and centre the glyph inside it.
+        Text(
+            letter,
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            style = LocalTextStyle.current.copy(
+                lineHeight = 10.sp,
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.Both,
+                ),
+            ),
         )
     }
 }

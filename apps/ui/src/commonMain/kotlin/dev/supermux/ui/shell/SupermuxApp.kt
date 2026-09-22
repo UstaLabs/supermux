@@ -113,6 +113,7 @@ import dev.supermux.session.asSettledSession
 import dev.supermux.session.formatWorkdir
 import dev.supermux.session.inferHomeDir
 import dev.supermux.state.FleetStore
+import dev.supermux.state.HostProject
 import dev.supermux.state.HostStore
 import dev.supermux.state.SidebarReorderKind
 import dev.supermux.state.sidebarReorderKind
@@ -135,6 +136,11 @@ import dev.supermux.ui.platform.NoopNotificationManager
 import dev.supermux.ui.prefs.LocalUiPrefs
 import dev.supermux.ui.session.ArchivedActions
 import dev.supermux.ui.session.ArchivedScreen
+import dev.supermux.ui.session.NewProjectDialog
+import dev.supermux.ui.session.newProjectHosts
+import dev.supermux.ui.session.ProjectImageCache
+import dev.supermux.ui.session.ProjectSettingsActions
+import dev.supermux.ui.session.ProjectSettingsSheet
 import dev.supermux.ui.session.SessionLauncherScreen
 import dev.supermux.ui.session.SessionListFooter
 import dev.supermux.ui.session.SessionListMode
@@ -168,6 +174,7 @@ import dev.supermux.ui.widgets.rememberIosBackSwipe
 import dev.supermux.ui.workspace.WorkspaceSession
 import dev.supermux.ui.workspace.rememberWorkspaceSession
 import dev.supermux.workspace.LayoutNode
+import dev.supermux.workspace.ProjectRef
 import dev.supermux.workspace.chatSessionIds
 import dev.supermux.workspace.collectActiveViewIds
 import dev.supermux.workspace.firstGroupId
@@ -343,6 +350,21 @@ fun SupermuxApp(
     val notices = LocalPlatform.current.notices
 
     val listActions = rememberSessionListActions(fleet)
+
+    // Persistent projects, host-qualified by recordId — the same id space [workspaceHostOf] and
+    // sessionHost use, so a workspace's projectId only ever matches its own broker's catalog.
+    val fleetProjects by fleet.projects.collectAsState()
+    val projectRefs = remember(fleetProjects) { fleetProjects.map { ProjectRef(it.hostId, it.project) } }
+    val workspaceHostIds by fleet.workspaceHost.collectAsState()
+    val workspaceHostOf: (WorkspaceDto) -> String = remember(workspaceHostIds) {
+        { w -> workspaceHostIds[w.id] ?: "" }
+    }
+    val loadProjectImage: suspend (ProjectRef) -> ByteArray? = remember(fleet) {
+        { ref -> fleet.projectImageBytes(HostProject(ref.hostId, ref.project)) }
+    }
+    // ONE project image cache for the sidebar, Archived and the launcher's picker.
+    val projectImageScope = rememberCoroutineScope()
+    val projectImageCache = remember(fleet, projectImageScope) { ProjectImageCache(projectImageScope) }
     val uiPrefs = LocalUiPrefs.current
     val onCollapsedPathsChange: (Set<String>) -> Unit = { paths ->
         ui.collapsedProjectPaths = paths
@@ -468,6 +490,54 @@ fun SupermuxApp(
         inferHomeDir(sessions.firstOrNull()?.workdir) ?: homeFallback
     }
 
+    // ── Persistent project settings (the header ⋮ → Settings) and "New project" (the list ⋮) ──
+    /** (hostId, projectId) of the open settings sheet. */
+    var projectSettingsTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var newProjectOpen by remember { mutableStateOf(false) }
+    val catalogHosts by fleet.projectCatalogHosts.collectAsState()
+    /** Hosts "New project" may create on: those serving a catalog, narrowed by the host filter. */
+    val newProjectHosts = remember(hostViews, catalogHosts, hostFilter) {
+        newProjectHosts(hostViews, catalogHosts, hostFilter)
+    }
+    // No host views (a bare single-host mount): the active host alone decides.
+    val newProjectAvailable = newProjectHosts.isNotEmpty() ||
+        (hostViews.isEmpty() && activeHostId != null && activeHostId in catalogHosts)
+    val projectSettingsActions = remember(fleet) {
+        ProjectSettingsActions(
+            rename = { h, p, n -> fleet.renameProject(h, p, n) },
+            setImage = { h, p, bytes, mime -> fleet.setProjectImage(h, p, bytes, mime) },
+            clearImage = { h, p -> fleet.clearProjectImage(h, p) },
+            addLocation = { h, p, path -> fleet.addProjectLocation(h, p, path) },
+            moveLocation = { h, loc, p -> fleet.moveProjectLocation(h, loc, p) },
+            validatePath = { h, path -> fleet.validatePathOn(h, path) },
+        )
+    }
+    projectSettingsTarget?.let { (hostId, projectId) ->
+        ProjectSettingsSheet(
+            hostId = hostId,
+            projectId = projectId,
+            projects = projectRefs,
+            home = home,
+            actions = projectSettingsActions,
+            onDismiss = { projectSettingsTarget = null },
+            loadImage = { ref -> projectImageCache.get(ref, loadProjectImage) },
+        )
+    }
+    if (newProjectOpen) {
+        // The filtered host, else the only host; with several and no filter the dialog asks.
+        val singleHost = newProjectHosts.singleOrNull()?.recordId ?: activeHostId.takeIf { hostViews.isEmpty() }
+        NewProjectDialog(
+            hosts = newProjectHosts,
+            initialHost = singleHost,
+            onCreate = { h, name -> fleet.createProject(h, name) },
+            onCreated = { h, id ->
+                newProjectOpen = false
+                projectSettingsTarget = h to id
+            },
+            onDismiss = { newProjectOpen = false },
+        )
+    }
+
     // ── The launcher pane, in TWO places: the New-Session destination and a workspace tab whose
     //    chat view has no session yet. Extracted so both render exactly the same thing.
     val launcherActions = rememberLauncherActions(fleet, onOpenSession = { ui.selectSession(it) })
@@ -545,8 +615,13 @@ fun SupermuxApp(
             // A reopened task-list draft belongs to the New Session route, never to a tab.
             initialDraftId = if (tab == null) ui.launcherDraftId else null,
             initialDraft = if (tab == null) ui.launcherDraftId?.let { dId -> sessions.find { it.id == dId } } else null,
+            // The sidebar's "+" on a project; a workspace tab never consults projects.
+            initialProjectHost = if (tab == null) ui.launcherProject?.first else null,
+            initialProjectId = if (tab == null) ui.launcherProject?.second else null,
+            onInitialProjectApplied = { if (tab == null) ui.consumeLauncherProject() },
             hosts = hostViews,
             selectedHost = activeHostId,
+            projectImageCache = projectImageCache,
             // The shell owns this pane's chrome on a wide host (the sidebar / the tab strip), so
             // the screen paints no bar there. Under Compact the launcher is its OWN destination
             // and paints the title + Back at every width — cluster E's chrome rule.
@@ -705,6 +780,25 @@ fun SupermuxApp(
                                 hostFilter = hostFilter,
                                 onHostFilter = setHostFilter,
                                 onAddHost = { ui.openAddHost() },
+                                projects = projectRefs,
+                                workspaceHost = workspaceHostOf,
+                                loadProjectImage = loadProjectImage,
+                                projectImageCache = projectImageCache,
+                                onReorderProjects = { hostId, ids ->
+                                    overlayScope.launch { fleet.reorderProjects(hostId, ids) }
+                                },
+                                // Target the project's OWN host (the launcher's host pill follows),
+                                // then open the launcher preselecting it.
+                                onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
+                                // Only when a relevant host's broker serves a project catalog (an
+                                // old broker would 404 the create).
+                                onNewProject = if (newProjectAvailable) {
+                                    { newProjectOpen = true }
+                                } else null,
+                                onNewWorkspaceInProject = { ref ->
+                                    fleet.setActiveHost(ref.hostId)
+                                    ui.openLauncherInProject(ref.hostId, ref.project.id)
+                                },
                                 initialCollapsedPaths = ui.collapsedProjectPaths,
                                 onCollapsedPathsChange = onCollapsedPathsChange,
                                 initialGroupByProject = groupByProject,
@@ -904,6 +998,13 @@ fun SupermuxApp(
                                                 onBack = { ui.goBack() },
                                                 forceOpenId = ui.forceArchivedOpenFor,
                                                 onForceOpenConsumed = { ui.forceArchivedOpenFor = null },
+                                                projects = projectRefs,
+                                                workspaceHost = workspaceHostOf,
+                                                loadProjectImage = loadProjectImage,
+                                                projectImageCache = projectImageCache,
+                                                // Archived-only projects are hidden from the live
+                                                // sidebar: their settings live on these headers.
+                                                onProjectSettings = { ref -> projectSettingsTarget = ref.hostId to ref.project.id },
                                                 // Every full-pane route paints its own title +
                                                 // Back at every width (G5's `standalone` rule for
                                                 // `Route.AppUpdate`, now applied to all of them):
