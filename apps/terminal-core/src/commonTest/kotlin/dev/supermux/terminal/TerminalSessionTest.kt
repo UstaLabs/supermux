@@ -175,6 +175,78 @@ class TerminalSessionTest {
         session.close()
     }
 
+    @Test fun oneSurfaceLeavingDoesNotFreezeAnotherOnTheSameSession() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine)
+        session.acknowledgeCurrent()
+        clock.advanceUntilIdle()
+
+        val first = session.attachRenderer()
+        val second = session.attachRenderer()
+        clock.advanceUntilIdle()
+        session.acknowledgeCurrent()
+
+        // The surface that went away closes its OWN lease; the other one is still looking.
+        first.close()
+        assertFalse(first.active)
+        clock.advanceUntilIdle()
+        session.acknowledgeCurrent()
+        val before = session.viewports.value.generation
+
+        session.receive("still here".encodeToByteArray())
+        clock.advanceUntilIdle()
+        assertNotEquals(before, session.viewports.value.generation, "the remaining surface was frozen")
+        assertEquals("still here", session.viewports.value.rowTextOrNull(0))
+        session.acknowledgeCurrent()
+        clock.advanceUntilIdle()
+
+        // The last one out turns the lights off: no renderer, no frames.
+        second.close()
+        clock.advanceUntilIdle()
+        val dark = session.viewports.value.generation
+        session.receive("\nunseen".encodeToByteArray())
+        clock.advanceUntilIdle()
+        assertEquals(dark, session.viewports.value.generation, "frames are published to nobody")
+        assertEquals("still here\nunseen", engine.screenText(), "but output is still parsed")
+
+        // And a renderer that attaches to the running session is given every row, not a patch.
+        val third = session.attachRenderer()
+        clock.advanceUntilIdle()
+        val rejoined = session.viewports.value
+        assertNotEquals(dark, rejoined.generation)
+        assertTrue(rejoined.full, "an attaching renderer has no rows to patch")
+        assertEquals("unseen", rejoined.rowTextOrNull(1))
+
+        // Closing twice is idempotent: the count cannot go negative and strand the other surfaces.
+        third.close()
+        third.close()
+        clock.advanceUntilIdle()
+        session.close()
+    }
+
+    @Test fun theHostSwitchAndTheLeasesMustBothAgreeToPublish() = terminalTest {
+        val engine = RecordingTerminalEngine(size)
+        val session = openSession(engine)
+        session.acknowledgeCurrent()
+        val lease = session.attachRenderer()
+        clock.advanceUntilIdle()
+        session.acknowledgeCurrent()
+
+        session.setRenderingEnabled(false)
+        clock.advanceUntilIdle()
+        val hidden = session.viewports.value.generation
+        session.receive("hidden".encodeToByteArray())
+        clock.advanceUntilIdle()
+        assertEquals(hidden, session.viewports.value.generation, "a held lease does not override the host")
+
+        session.setRenderingEnabled(true)
+        clock.advanceUntilIdle()
+        assertNotEquals(hidden, session.viewports.value.generation)
+        assertTrue(session.viewports.value.full)
+        lease.close()
+        session.close()
+    }
+
     // ------------------------------------------------------------------ synchronized output ----
 
     @Test fun aHeldFrameIsBrokenOnlyAfterTheHoldTimeout() = terminalTest {

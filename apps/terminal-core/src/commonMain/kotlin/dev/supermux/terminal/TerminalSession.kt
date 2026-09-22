@@ -34,6 +34,27 @@ import kotlin.time.TimeSource
  */
 enum class RejectionReason { QUEUE_FULL, CLOSED }
 
+/**
+ * One renderer's claim on a session's published frames; see [TerminalSession.attachRenderer].
+ *
+ * Hold it while the surface is on screen and [close] it when it is not. Closing is idempotent and
+ * non-blocking, and closing one lease never stops the frames another surface is still holding open.
+ * Closing the SAME lease from two threads at once is a caller bug.
+ */
+class RendererLease internal constructor(private val session: TerminalSession) : AutoCloseable {
+    @Volatile
+    private var open = true
+
+    /** True until this lease has been released. */
+    val active: Boolean get() = open
+
+    override fun close() {
+        if (!open) return
+        open = false
+        session.releaseRenderer()
+    }
+}
+
 /** Result of a non-blocking [TerminalSession] enqueue. */
 sealed interface EnqueueResult {
     data object Accepted : EnqueueResult
@@ -129,6 +150,14 @@ class TerminalSession private constructor(
 
     /** Newest requested rendering state (see [setRenderingEnabled]). */
     private val renderingRequests = Channel<Boolean>(Channel.CONFLATED)
+
+    /**
+     * Renderer attach (`true`) / release (`false`) deltas; see [attachRenderer].
+     *
+     * UNLIMITED, not conflated: a count cannot be rebuilt from the newest delta. It is closed by
+     * [terminate], so a lease released after the session died simply fails to enqueue.
+     */
+    private val leaseRequests = Channel<Boolean>(Channel.UNLIMITED)
 
     /** Pending "make the next frame full" request (see [requestFullFrame]). */
     private val fullFrameRequests = Channel<Unit>(Channel.CONFLATED)
@@ -262,14 +291,50 @@ class TerminalSession private constructor(
     }
 
     /**
-     * Hidden views: `false` stops PUBLISHING frames (and stops reading them out of the engine)
-     * while output keeps being parsed and effects keep being delivered. `true` publishes a fresh
-     * FULL frame, because the session cannot know what a hidden renderer still has on screen.
+     * The session's master rendering switch: `false` stops PUBLISHING frames (and stops reading
+     * them out of the engine) while output keeps being parsed and effects keep being delivered.
+     * `true` publishes a fresh FULL frame, because the session cannot know what a hidden renderer
+     * still has on screen.
+     *
+     * It is a HOST-level switch (a whole window that went off-screen), not a per-surface one: a
+     * surface that goes away takes a [RendererLease] and closes it instead, which is ref-counted and
+     * therefore safe when several surfaces share one session. Both must allow publication:
+     * `renderingEnabled = thisFlag && (no lease was ever taken || at least one is open)`.
      *
      * Non-blocking; applied by the owner loop.
      */
     fun setRenderingEnabled(enabled: Boolean) {
         renderingRequests.trySend(enabled)
+        wakeup.trySend(Unit)
+    }
+
+    /**
+     * Attach a renderer and keep frames flowing while the returned lease is open.
+     *
+     * Rendering is a REFERENCE-COUNTED property of the session, because a session may legitimately
+     * have more than one surface on it (a split view, a picture-in-picture preview, a screen that is
+     * animating out while its replacement animates in). The first lease starts publication and asks
+     * for a FULL frame — an attaching renderer has no rows to patch — and only the LAST one to close
+     * stops it. A surface that goes off-screen therefore closes its own lease without freezing
+     * anybody else's; a session-wide flag would (that is what [setRenderingEnabled] is for, and it
+     * is the host's to flip).
+     *
+     * Before the first lease is ever taken the session publishes as it always did, so a host that
+     * never attaches one — a headless session, a test — is unaffected. After the last lease closes,
+     * publication stops until a new one is taken: no renderer, no frames.
+     *
+     * Non-blocking, applied by the owner loop, and safe from a UI thread. Closing the lease is
+     * idempotent; a lease on a closed session is inert.
+     */
+    fun attachRenderer(): RendererLease {
+        leaseRequests.trySend(true)
+        wakeup.trySend(Unit)
+        return RendererLease(this)
+    }
+
+    /** Called by [RendererLease.close]; never by anything else. */
+    internal fun releaseRenderer() {
+        leaseRequests.trySend(false)
         wakeup.trySend(Unit)
     }
 
@@ -349,7 +414,16 @@ class TerminalSession private constructor(
 
     /** The next read must be full (first frame, a re-shown view). */
     private var forceFull = false
+
+    /** The effective switch: [hostRendering] and the leases together; see [attachRenderer]. */
     private var renderingEnabled = true
+
+    /** The host's own switch ([setRenderingEnabled]). */
+    private var hostRendering = true
+
+    /** Open [RendererLease]s, and whether one was ever taken at all. */
+    private var leases = 0
+    private var leasesUsed = false
 
     /** When the currently held (mode 2026) frame was first seen; null when no hold is active. */
     private var heldSince: TimeMark? = null
@@ -424,6 +498,8 @@ class TerminalSession private constructor(
             // render state, so hiding does not silently force the next frame full.
             applyAcknowledgements(engine)
             applyRenderingRequests()
+            applyLeaseRequests()
+            applyRenderingState()
             applyFullFrameRequests()
             val wait = renderStep(engine, flow)
             when (drained) {
@@ -541,17 +617,40 @@ class TerminalSession private constructor(
     private fun applyRenderingRequests() {
         while (true) {
             val enabled = renderingRequests.tryReceive().getOrNull() ?: return
-            if (enabled == renderingEnabled) continue
-            renderingEnabled = enabled
-            if (enabled) {
-                // The hidden renderer may have dropped anything; start it over from a full frame.
+            hostRendering = enabled
+        }
+    }
+
+    private fun applyLeaseRequests() {
+        while (true) {
+            val attach = leaseRequests.tryReceive().getOrNull() ?: return
+            if (attach) {
+                leases++
+                leasesUsed = true
+                // Every attaching renderer starts from nothing, not only the first one: a second
+                // surface joining a live session has no rows a partial frame could patch.
                 forceFull = true
                 dirty = true
-            } else {
-                // A hidden renderer will not acknowledge; do not wedge the loop on it. The frame
-                // stays unacknowledged in the engine, which is exactly what makes the next one full.
-                pendingGeneration = null
+            } else if (leases > 0) {
+                leases--
             }
+        }
+    }
+
+    /** Fold [hostRendering] and the leases into [renderingEnabled] and apply the transition. */
+    private fun applyRenderingState() {
+        val enabled = hostRendering && (!leasesUsed || leases > 0)
+        if (enabled == renderingEnabled) return
+        renderingEnabled = enabled
+        if (enabled) {
+            // The hidden (or newly attached) renderer may have dropped anything, and an attaching
+            // one has no rows to patch at all; start it over from a full frame.
+            forceFull = true
+            dirty = true
+        } else {
+            // A hidden renderer will not acknowledge; do not wedge the loop on it. The frame
+            // stays unacknowledged in the engine, which is exactly what makes the next one full.
+            pendingGeneration = null
         }
     }
 
@@ -656,6 +755,7 @@ class TerminalSession private constructor(
      */
     private fun terminate() {
         mailbox.close()
+        leaseRequests.close()
         while (true) {
             val command = mailbox.tryReceive().getOrNull() ?: return
             abandon(command)
