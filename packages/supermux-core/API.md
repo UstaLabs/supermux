@@ -142,13 +142,13 @@ createHost({
   limits,          // CoreLimits, required
   agent,           // driver id
   driver: (registered, context) => AgentDriver | Promise<AgentDriver>,
-  prepare?: (registration) => Promise<void>,
+  prepare?: (registration) => Promise<void | { env? }>,   // after admission, before open; may return the env the driver gets
 }): Host
 ```
 
 `HostRegistration`: `{ id, env, command?, args?, extra? }`. `register` throws `host_closing` or `already_live` / `session_busy` (id already `admission` | `starting` | `ready` | `recovering`). A `failed-cleanup` id (start failed and the leftover process refused to die) may be re-registered: the new handle's `start` retries that cleanup first.
 
-`HostHandle.start({ cwd, configuration?, nativeSessionId? })` / `resume({ configuration? })` / `stop({ mode })`. Lifetime fence: a stale handle cannot start/resume after replacement; concurrent `start` calls on one handle join the same in-flight open; `stop` is idempotent after confirmed release and a **no-op on a handle that never owned the id** (it never closes a replacement's session); retry is allowed after a failed stop; replacement is allowed only after confirmed stop. `handle.session` is the Core `Session` once started. `host.core` is for `subscribe`.
+`HostHandle.start({ cwd, configuration?, nativeSessionId?, onOpened? })` / `resume({ configuration? })` / `stop({ mode })`. `onOpened(session)` runs inside the start (e.g. persist the native id): its rejection is a failed start and the session is closed. Lifetime fence: a stale handle cannot start/resume after replacement; concurrent `start` calls on one handle join the same in-flight open; `stop` is idempotent after confirmed release and a **no-op on a handle that never owned the id** (it never closes a replacement's session); a failed stop leaves the id `failed-cleanup` (retry `stop` on the same handle, or re-register and `start`, which retries the cleanup first); replacement is allowed only after confirmed stop. `handle.session` is the Core `Session` once started. `host.core` is for `subscribe`.
 
 Admission fence is built in. `failed-cleanup` is retried **before** `prepare` (credential/config/home writes). Concurrent same-id starts from different handles: exactly one wins, the other rejects `session_busy` ("already awaiting failed-start cleanup" / "already starting") without closing anything. Recovering-token semantics match the former broker session fence.
 

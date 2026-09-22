@@ -16,6 +16,9 @@ export type HostStartOptions = {
   cwd: string
   configuration?: SessionConfiguration
   nativeSessionId?: string
+  /** Runs after the session opened, still inside the start: a rejection is a
+   * failed start (the session is closed; a failed close leaves failed-cleanup). */
+  onOpened?: (session: Session) => Promise<void>
 }
 
 export type HostHandle = {
@@ -31,7 +34,10 @@ export type HostOptions = {
   limits: CoreLimits
   agent: string
   driver: (registered: HostRegistration, context: DriverContext) => AgentDriver | Promise<AgentDriver>
-  prepare?: (registration: HostRegistration) => Promise<void>
+  /** Runs after admission and before the driver opens (credential/config/home
+   * writes). May return an env patch that replaces the registration's env for
+   * this and later opens. */
+  prepare?: (registration: HostRegistration) => Promise<void | { env?: Record<string, string> }>
 }
 
 export type Host = {
@@ -223,6 +229,9 @@ class HostImpl implements Host {
         try {
           await this.core.sessions.close(handle.id, { mode })
         } catch (err) {
+          // The leftover could not be released: the id is failed-cleanup so a
+          // retry on this handle or a takeover registration recovers it first.
+          this.markFailedCleanup(handle)
           throw startError != null
             ? new Error(`${asError(startError).message}; cleanup failed: ${asError(err).message}`, { cause: asError(startError) })
             : asError(err)
@@ -258,9 +267,13 @@ class HostImpl implements Host {
   private async openWithAdmission(handle: HostHandleImpl, options: HostStartOptions, _mode: "start" | "resume"): Promise<Session> {
     const token = await this.reserveAdmission(handle)
     try {
-      if (this.prepare) await this.prepare(cloneRegistration(handle.registration))
+      if (this.prepare) {
+        const patch = await this.prepare(cloneRegistration(handle.registration))
+        if (patch && patch.env) handle.registration.env = { ...patch.env }
+      }
       this.attachStarting(handle, token)
       const session = await this.openSession(handle, options)
+      if (options.onOpened) await options.onOpened(session)
       this.markReady(handle)
       handle.session = session
       return session

@@ -306,13 +306,14 @@ test("failed stop keeps registration; retry cleanup then replacement is allowed"
   const first = host.register({ id: "same", env: { K: "1" } })
   await first.start({ cwd: workdir })
   await expect(first.stop({ mode: "shutdown" })).rejects.toThrow(/close failed/)
+  // The id is failed-cleanup: retrying stop on the same handle releases it.
+  await first.stop({ mode: "shutdown" })
+  expect(fake.closeAttempts).toBe(2)
   await expect(first.start({ cwd: workdir })).rejects.toThrow(/stopped/)
   await expect(first.resume()).rejects.toThrow(/stopped/)
-  expect(() => host.register({ id: "same", env: { K: "2" } })).toThrow(/already live|already/)
-  await first.stop({ mode: "shutdown" })
   const second = host.register({ id: "same", env: { K: "2" } })
   await second.start({ cwd: workdir })
-  expect(fake.closeAttempts).toBe(2)
+  expect(fake.opens).toHaveLength(2)
   expect(second).not.toBe(first)
   await expect(first.start({ cwd: workdir })).rejects.toThrow(/stopped/)
 })
@@ -646,4 +647,54 @@ test("host.core is available for subscribe", async () => {
   const handle = host.register({ id: "sub", env: {} })
   await handle.start({ cwd: workdir })
   expect(seen).toContain("session.created")
+})
+
+test("prepare may return an env patch that the driver sees; the registration's env is otherwise untouched", async () => {
+  const fake = fakeChildFactory()
+  const { host, workdir } = await makeHost(fake, {
+    prepare: async (registration) => {
+      expect(registration.env).toEqual({ SEED: "1" })
+      return { env: { ...registration.env, GROK_TOKEN: "from-prepare" } }
+    },
+  })
+  const handle = host.register({ id: "prep-env", env: { SEED: "1" } })
+  await handle.start({ cwd: workdir })
+  expect(fake.registrations[0]?.env).toEqual({ SEED: "1", GROK_TOKEN: "from-prepare" })
+})
+
+test("onOpened runs inside the start: its rejection is a failed start and the session is closed", async () => {
+  const fake = fakeChildFactory()
+  const { host, workdir } = await makeHost(fake)
+  const handle = host.register({ id: "opened-fail", env: {} })
+  let seen: string | undefined
+  await expect(handle.start({
+    cwd: workdir,
+    onOpened: async (session) => { seen = session.snapshot().agentSessionId; throw new Error("persist failed") },
+  })).rejects.toThrow(/persist failed/)
+  expect(seen).toBe("native-1")
+  expect(fake.closes).toBe(1)
+  expect(handle.session).toBeUndefined()
+  // The id is free again: a fresh registration starts cleanly.
+  const again = host.register({ id: "opened-fail", env: {} })
+  await again.start({ cwd: workdir, onOpened: async () => {} })
+  expect(fake.opens).toHaveLength(2)
+})
+
+test("failed stop of a live handle becomes failed-cleanup: a takeover registration retries the cleanup before opening", async () => {
+  const fake = fakeChildFactory({ failCloses: 1 })
+  let prepares = 0
+  const { host, workdir } = await makeHost(fake, { prepare: async () => { prepares++ } })
+  const first = host.register({ id: "stop-fail", env: {} })
+  await first.start({ cwd: workdir })
+  await expect(first.stop({ mode: "shutdown" })).rejects.toThrow(/close failed/)
+  const takeover = host.register({ id: "stop-fail", env: {} })
+  await takeover.start({ cwd: workdir })
+  expect(fake.closeAttempts).toBe(2)
+  expect(fake.closes).toBe(1)
+  expect(fake.opens).toHaveLength(2)
+  expect(prepares).toBe(2)
+  // The old handle's stop is a no-op now; the takeover's session survives it.
+  await first.stop({ mode: "shutdown" })
+  expect(fake.closeAttempts).toBe(2)
+  expect(takeover.session?.snapshot().state).not.toBe("closed")
 })
