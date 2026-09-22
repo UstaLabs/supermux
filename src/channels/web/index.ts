@@ -56,6 +56,20 @@ const log = makeLogger("channels/web")
 const RATE_LIMIT_WINDOW_MS = 5 * 60_000
 const RATE_LIMIT_MAX = 16
 
+// Bun.serve's socket idle timeout (seconds): the connection is dropped if it goes quiet — no
+// bytes sent OR received — for this long. This is an IDLE timeout, not a deadline on the
+// whole request: a handler may run far longer than this as long as it keeps the socket from
+// going silent for this many consecutive seconds (it doesn't here — the response is written
+// once, atomically, at the end). Bun's default is 10s, which is why routes slower than that
+// used to get "Empty reply from server" while the broker stayed healthy:
+//  - GET /worktrees over a large ~/.mux/worktrees root (tens of thousands of folders): ~15-35s
+//  - GET /repos?fetch=1 (a real network `git fetch`): up to a 15s budget
+// 255 is Bun's own hard maximum for this option (0 would disable it, which risks a socket
+// held open forever by a client that never closes). Client-side fetch timeouts (2min list,
+// 10min delete) are meaningless while the SERVER drops the connection first, so this must be
+// raised too. See src/channels/web/serve-idle-timeout.test.ts.
+export const SERVE_IDLE_TIMEOUT_SECONDS = 255
+
 // Only a proxy we actually sit behind may name the peer for us. frpc (relay) and the nginx
 // exposure recipe both forward from loopback and set X-Forwarded-For; anyone else reaching
 // the port directly is quoting a header they invented. Trusting it from every caller let a
@@ -509,8 +523,20 @@ export class WebChannel implements Channel {
     if (this.deviceTokenStore) {
       this.store.addRevokeListener((name) => { this.deviceTokenStore!.remove(name) })
     }
-    this.server = Bun.serve<WSData>({
+    this.server = Bun.serve<WSData>(this.buildServeOptions())
+    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
+    log.info("web channel listening", { port: this.boundPort })
+  }
+
+  /** Split out of `start()` so a test can assert on the options object itself — including
+   *  that `idleTimeout` is actually the value `Bun.serve` receives, not just that the
+   *  constant is big enough — without needing to spin up a real socket to check it. */
+  private buildServeOptions(): Parameters<typeof Bun.serve<WSData>>[0] {
+    return {
       port: this.opts.port,
+      // See SERVE_IDLE_TIMEOUT_SECONDS above: without this, any response slower than Bun's
+      // 10s default gets its connection dropped mid-flight.
+      idleTimeout: SERVE_IDLE_TIMEOUT_SECONDS,
       fetch: (req, server) => this.routeRequestOrUpgrade(req, server),
       websocket: {
         // Negotiated per-connection (clients that don't support it are unaffected).
@@ -583,9 +609,7 @@ export class WebChannel implements Channel {
           if (d) { ws.data._termDrain = undefined; d.resolve() }
         },
       },
-    })
-    this.heartbeatTimer = setInterval(() => this.pingAll(), 30_000)
-    log.info("web channel listening", { port: this.boundPort })
+    }
   }
 
   async stop(): Promise<void> {
