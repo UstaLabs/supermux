@@ -120,3 +120,8 @@ internal class NativeTerminalEngine private constructor(private val handle: Int)
         }
     }
 }
+
+/** Android / desktop JVM: the JNI library loads lazily in [createTerminalEngine]; nothing to await. */
+actual object TerminalRuntime {
+    actual suspend fun initialize(wasmUrl: String?) {}
+}

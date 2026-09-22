@@ -508,8 +508,10 @@ contend.
 don't match the manifest sha256/size), `ABI_MISMATCH` (manifest ABI,
 `st_abi_version()`, missing JNI entry points, or `st_create`'s
 `ABI_MISMATCH`), `INITIALIZATION_FAILED` (dlopen failure, cache not writable,
-`st_create` `LIMIT`/`OUT_OF_MEMORY`), `NOT_LINKED` (browser, until the wasm
-loader). Nothing is left half-created.
+`st_create` `LIMIT`/`OUT_OF_MEMORY`), `NOT_INITIALIZED` (browser:
+`createTerminalEngine` before `TerminalRuntime.initialize()` completed),
+`NOT_LINKED` (a platform without a binding; none today). Nothing is left
+half-created.
 
 - **JNI (Android + desktop JVM)**: `src/jvmAndAndroidMain` (a `jvmAndAndroid`
   group added to the default hierarchy): `NativeTerminal` (`@JvmStatic
@@ -539,9 +541,106 @@ loader). Nothing is left half-created.
   and freed with `st_free_buffer` in `finally`, the lock is an `NSLock`, and a
   `Cleaner` destroys the handle of an engine collected without `close()`
   (an atomic flag makes `st_destroy` run exactly once).
+- **Browser (wasmJs)** — see "Browser (wasmJs)" below.
 - **Gradle**: missing targets only warn (local dev);
   `:terminal-core:verifyNativeArtifacts` fails unless every release target
-  (5 JVM, 2 Android, 2 iOS) is present and matches its manifest.
+  (5 JVM, 2 Android, 2 iOS, wasm32) is present and matches its manifest.
+
+### Browser (wasmJs)
+
+**Init API** (common, so shared code can call it everywhere):
+
+```kotlin
+TerminalRuntime.initialize(wasmUrl: String? = null)   // suspend; no-op on Android/JVM/iOS
+val engine = createTerminalEngine(size, limits)        // after initialize() returned
+```
+
+The wasm module is fetched and compiled asynchronously, so a host app awaits
+`TerminalRuntime.initialize()` once at startup. Until it has completed,
+`createTerminalEngine` throws `TerminalEngineUnavailableException` with
+`NOT_INITIALIZED` (or, after a failed load, the load's own reason).
+`initialize` fails with `MISSING_BINARY` (fetch error / non-2xx),
+`CORRUPT_BINARY` (not a wasm module), `ABI_MISMATCH` (missing `st_*` /
+allocator exports, `st_abi_version() != 1`, link error) or
+`INITIALIZATION_FAILED` (non-http(s) URL, instantiation failure, or a second
+call with a *different* URL after a successful load). A failed load is not
+cached: calling `initialize` again retries. `initialize` never creates a
+terminal handle, so cancelling the awaiting coroutine cannot leak one (the
+shared load completes and is reused). The package has no kotlinx-coroutines
+dependency (the await uses stdlib `suspendCoroutine`).
+
+**Pieces**: `wasm/terminal-loader.mjs` (plain ES module, no Node APIs, no
+dependencies) compiles the module once per URL (cached promise), instantiates
+it with no imports (effects are queued natively and drained; no callbacks, no
+table patching), checks exports + ABI, and exposes one `TerminalRuntime`
+object per instance with synchronous `create/feed/…/readViewport/drainEffects`
+methods. Inputs are copied into memory allocated with `ghostty_wasm_alloc` for
+that call only; every output envelope is copied out with `Uint8Array.slice`
+**after** the call (a call may grow memory, which detaches older views) and
+freed with `st_free_buffer` in `finally` — no view of `memory.buffer` survives
+a call. u64/i64 parameters cross as BigInt (Kotlin `Long` maps to BigInt),
+handles as the u32 bit pattern in an `Int`. The Kotlin side
+(`src/wasmJsMain`) imports it with `@file:JsModule("./terminal-loader.mjs")`
+externals, converts `ByteArray` ⇄ `Uint8Array` four bytes per boundary
+crossing (Kotlin/Wasm GC arrays have no zero-copy view; ~30–50 ms per MiB in
+the development build, terminal chunks are KBs), and wraps a handle in
+`WasmTerminalEngine` (closed flag; after `close()` every call throws
+`IllegalStateException`; `close()` idempotent; no lock — the browser runs
+Kotlin/Wasm on one thread). An engine dropped without `close()` keeps its
+handle until the page unloads (no finalizer).
+
+**Wasm URL**: the package default is `new URL("./supermux-terminal.wasm",
+import.meta.url)` — the binary next to the loader. Bundlers that understand
+that pattern (webpack 5, which the Kotlin Gradle plugin uses; vite; rollup
+with the URL plugin) emit it as an asset, content-hashed in production
+builds, and rewrite the URL. A host that serves the file itself passes its
+URL once to `initialize(wasmUrl)`; it must be host configuration (a constant
+or build setting), never user input. Only `http:`/`https:` (and URLs relative
+to the document) are accepted.
+
+**Packaging / serving**: `:terminal-core:stageWasmResources` copies
+`build/wasm/supermux-terminal.wasm` (sha256/size/ABI checked against
+`build/wasm/manifest.json`; a missing module only warns, `verifyNativeArtifacts`
+fails) and `wasm/terminal-loader.mjs` into the wasmJs resources, so both sit at
+the root of the published `terminal-core-wasm-js-*.klib` and next to the
+compiled module of any executable the Kotlin plugin links (verified for this
+package's own test executable; a consumer app whose toolchain does not copy
+klib resources copies these two files next to its compiled `.mjs`). Serve the
+wasm with `Content-Type: application/wasm` (otherwise the loader falls back to
+a buffered `WebAssembly.compile`, slower but correct), with a content-hashed
+name and a long immutable cache lifetime, same-origin (the fetch uses
+`credentials: "same-origin"`; a cross-origin host needs CORS). CSP needs
+`script-src 'wasm-unsafe-eval'` (or `'unsafe-eval'`) for any wasm, which a
+Kotlin/Wasm app already requires.
+
+**Tests**:
+- `node wasm/loader-test.mjs build/wasm/supermux-terminal.wasm --browser <chrome>`
+  (also run by `wasm/build.sh --test`): serves the loader over real HTTP and
+  runs `wasm/loader-test-core.mjs` in Node and in headless Chrome — typed load
+  failures (404, non-wasm bytes, a module without exports, `file:`/`javascript:`
+  URLs), failed compiles not cached, compile promise cached, the
+  `initialize()` singleton (same URL → same runtime, different URL rejected),
+  the octet-stream fallback, **two handles in one instance fed different
+  content across memory growth** (a 6 MiB feed plus a 48 MiB allocation:
+  2.5 MB → 78 MB; envelopes read before the growth stay intact, neither
+  screen shows stale or foreign content, each drains only its own CSI 6n
+  reply), and two instances of one compiled module isolated.
+- `:terminal-core:wasmJsBrowserTest` (Karma + headless Chrome; `CHROME_BIN`
+  defaults to `/usr/bin/google-chrome` when present): all of `commonTest`
+  (EngineContractTest unchanged) plus `WasmRuntimeTest`. Before any test runs,
+  the test-only `terminal-test-setup.mjs` (imported by the test module)
+  awaits `initialize()` at module top level, so the synchronous shared suites
+  need no browser-specific code; the engine module reaches the page as the
+  webpack asset of the loader's default URL — the consumer path.
+  `karma.config.d/terminal-wasm.js` only adds a non-wasm URL for the
+  corrupt-binary test and a 60 s mocha timeout.
+- Host gotcha: with a D-Bus session bus, headless Chrome on this Linux host
+  stalls every http(s) navigation (file: pages still load), which hangs Karma
+  capture and the loader test; both run Chrome with
+  `DBUS_SESSION_BUS_ADDRESS=disabled:`.
+- **Safari / WebKit**: not run yet (Plan 4, on the Mac). The loader uses only
+  `fetch`, `WebAssembly.compile(Streaming)`, BigInt parameters (Safari 15+)
+  and `Uint8Array`; Kotlin/Wasm itself needs WasmGC (Safari 18.2+).
 
 ## Results
 
@@ -560,7 +659,7 @@ Toolchain IDs:
 | target | built | runtime-tested | result / notes |
 |---|---|---|---|
 | linux-x64 | yes | **yes** (this host) | `native/build.sh linux-x64 --test`: **66 checks, 0 failures — SMOKE PASSED**; st_* bridge test **208 checks, 0 failures — BRIDGE TEST PASSED**; threads test 6 × 150 cycles OK, and again under TSan; `dlopen` check OK; ASan+UBSan+LSan bridge run **187 checks, 0 failures**. `libghostty-vt.a` 3.3 MB (sha256 `727bd6eb4cfa…`), `.so` 2.4 MB (`c5a5b48ae08a…`); identical hashes across two builds. `libsupermux_terminal.a` 3.4 MB (`fb26df366b41…`), `libsupermux_terminal.so` 2.4 MB (`2e53dcb19abd…`, exports exactly the 18 `st_*`, needs libc/librt only). `.so` files need glibc ≤ 2.27 symbols. **Task 4 (JNI):** `libsupermux_terminal_jni.so` 2.4 MB (`4e13c7020c45…`, 18 `st_*` + 19 `Java_*` + `JNI_OnLoad`, dlopen check OK); `:terminal-core:jvmTest` against it **56 tests, 0 failures** (12 EngineContractTest, 9 loader, 7 JNI failure paths, 2 concurrency, + types/codec/constants). |
-| wasm32 | yes | **yes** (Node 24 + headless Chrome 148) | `wasm/build.sh --test`: **47 checks, 0 failures in each runtime — WASM SMOKE PASSED** (run against `supermux-terminal.wasm`). `supermux-terminal.wasm` 831 KB (sha256 `e8f5df919983…`): the same `terminal_bridge.c` compiled `wasm32-freestanding` and linked with the wasm `libghostty-vt.a` by `zig cc` (`--export-dynamic --export-table`, 128 KiB stack, table made growable by `wasm/patch_growable_table.py`), 205 function exports = 187 `ghostty_*` + the 18 `st_*`, no imports. Raw upstream `ghostty-vt.wasm` 814 KB (`75f0ed5b23ef…`) is still staged. |
+| wasm32 | yes | **yes** (Node 24 + headless Chrome 148) | `wasm/build.sh --test`: **47 checks, 0 failures in each runtime — WASM SMOKE PASSED** (run against `supermux-terminal.wasm`), and **loader test 38 checks, 0 failures in each runtime — LOADER TEST PASSED**. **Task 5 (browser binding):** `:terminal-core:wasmJsBrowserTest` in headless Chrome 148 **50 tests, 0 failures** (12 EngineContractTest, 11 codec, 8 types, 7 constants, 12 WasmRuntimeTest). `supermux-terminal.wasm` 831 KB (sha256 `42be902a16e0…`, identical across rebuilds): the same `terminal_bridge.c` compiled `wasm32-freestanding` and linked with the wasm `libghostty-vt.a` by `zig cc` (`--export-dynamic --export-table`, 128 KiB stack, table made growable by `wasm/patch_growable_table.py`), 205 function exports = 187 `ghostty_*` + the 18 `st_*`, no imports. Raw upstream `ghostty-vt.wasm` 814 KB (`75f0ed5b23ef…`) is still staged. |
 | linux-arm64 | yes | no (no arm64 host/qemu here) | smoke test cross-linked (`aarch64`, glibc 2.28); JNI `.so` export-checked, packaged in the jar. |
 | windows-x64 | yes | no (no Windows host/wine) | `x86_64-windows-gnu`: `ghostty-vt-static.lib`, `ghostty-vt.dll` + import lib, smoke `.exe`; imports only KERNEL32/ntdll/UCRT (`api-ms-win-crt-*`). PDBs dropped. `supermux_terminal_jni.dll` 2.1 MB: exports exactly 18 `st_*` + 19 `Java_*` + `JNI_OnLoad` (llvm-readobj), packaged in the jar — **never loaded by a JVM**. |
 | android-arm64 | yes | no (no adb device attached) | API 26, NDK-linked smoke test; `.so` has 16 KB-aligned LOAD segments, needs only libc/libm/libdl. JNI `.so` in the AAR as `jni/arm64-v8a/` (`:terminal-core:assembleDebug`; AGP strips `.symtab`, dynamic exports intact). Not loaded on a device yet. |

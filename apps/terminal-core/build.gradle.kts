@@ -11,8 +11,8 @@ plugins {
 // (dev.supermux.terminal:terminal-core, MIT).
 //
 // Bindings: JNI (jvmAndAndroidMain + native/src/terminal_jni.c) on Android and the desktop JVM,
-// cinterop (src/nativeInterop/cinterop/terminal.def) on iOS. The browser (wasm) still throws
-// TerminalEngineUnavailableException(NOT_LINKED) until its loader lands.
+// cinterop (src/nativeInterop/cinterop/terminal.def) on iOS, and in the browser wasm/terminal-loader.mjs
+// + build/wasm/supermux-terminal.wasm (both staged as wasmJsMain resources) behind @JsModule externals.
 //
 // Native artifacts are NOT built by Gradle: `native/build.sh <target>` stages them to
 // build/native/<target>/ (with a manifest.json of sha256s). Gradle packages whatever targets exist
@@ -41,6 +41,10 @@ val jvmNativeTargets = linkedMapOf(
 val androidNativeTargets = linkedMapOf("android-arm64" to "arm64-v8a", "android-x64" to "x86_64")
 // iOS: build.sh target -> Kotlin target name (static archive linked through cinterop).
 val iosNativeTargets = linkedMapOf("ios-arm64" to "iosArm64", "ios-simulator-arm64" to "iosSimulatorArm64")
+// Browser: wasm/build.sh output (supermux-terminal.wasm + manifest.json) and the loader it ships with.
+val wasmBuildDir: File = layout.projectDirectory.dir("build/wasm").asFile
+val wasmModuleName = "supermux-terminal.wasm"
+val wasmLoaderFile: File = layout.projectDirectory.file("wasm/terminal-loader.mjs").asFile
 
 /**
  * `build/native/<target>/lib/<lib>` verified against `build/native/<target>/manifest.json`:
@@ -64,6 +68,29 @@ fun verifiedNativeLib(root: File, target: String, lib: String): Pair<File, Strin
         throw GradleException("$target/lib/$lib does not match $target/manifest.json (stale): rerun native/build.sh $target")
     }
     return file to sha
+}
+
+/**
+ * `build/wasm/supermux-terminal.wasm` verified against `build/wasm/manifest.json` (ABI, sha256,
+ * size); null if wasm/build.sh has not run here, throws if the module is stale.
+ */
+fun verifiedWasmModule(dir: File, name: String): File? {
+    val file = File(dir, name)
+    val manifestFile = File(dir, "manifest.json")
+    if (!file.isFile || !manifestFile.isFile) return null
+    @Suppress("UNCHECKED_CAST")
+    val manifest = groovy.json.JsonSlurper().parse(manifestFile) as Map<String, Any?>
+    val abi = (manifest["abi_version"] as Number?)?.toInt()
+    if (abi != nativeAbiVersion) throw GradleException("wasm/$name: manifest abi_version $abi, expected $nativeAbiVersion")
+    @Suppress("UNCHECKED_CAST")
+    val entry = (manifest["files"] as List<Map<String, Any?>>).firstOrNull { it["path"] == name }
+        ?: throw GradleException("build/wasm/manifest.json does not list $name: rerun wasm/build.sh")
+    val bytes = file.readBytes()
+    val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    if (sha != entry["sha256"] || bytes.size.toLong() != (entry["size"] as Number).toLong()) {
+        throw GradleException("build/wasm/$name does not match build/wasm/manifest.json (stale): rerun wasm/build.sh")
+    }
+    return file
 }
 
 kotlin {
@@ -94,11 +121,17 @@ kotlin {
             extraOpts("-libraryPath", File(nativeBuildDir, "$nativeTarget/lib").absolutePath)
         }
     }
-    // Browser only; commonTest is compiled for wasm but executed on the JVM.
+    // Browser only. `:terminal-core:wasmJsBrowserTest` runs commonTest (EngineContractTest, codec,
+    // types) + wasmJsTest in headless Chrome through Karma against the real wasm module; it needs
+    // wasm/build.sh to have run and CHROME_BIN pointing at a WasmGC-capable Chrome (this host:
+    // /usr/bin/google-chrome, used by default when present). karma.config.d/terminal-wasm.js serves
+    // the staged module and the loader to the test page.
     @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
     wasmJs {
         browser {
-            testTask { enabled = false }
+            testTask {
+                useKarma { useChromeHeadless() }
+            }
         }
     }
 
@@ -106,7 +139,23 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        wasmJsMain {
+            // js("…"), external declarations and JsAny are behind this opt-in.
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+        }
+        wasmJsTest {
+            languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+        }
     }
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.targets.js.testing.KotlinJsTest>().configureEach {
+    if (System.getenv("CHROME_BIN") == null && File("/usr/bin/google-chrome").canExecute()) {
+        environment("CHROME_BIN", "/usr/bin/google-chrome")
+    }
+    // With a D-Bus session bus, headless Chrome can stall every http(s) navigation on a headless
+    // host (file: URLs still load), which hangs Karma's capture; Chrome needs no bus here.
+    environment("DBUS_SESSION_BUS_ADDRESS", "disabled:")
 }
 
 android {
@@ -166,6 +215,36 @@ val stageJvmNativeResources by tasks.registering {
 }
 kotlin.sourceSets.getByName("jvmMain").resources.srcDir(stageJvmNativeResources)
 
+// Browser: supermux-terminal.wasm + terminal-loader.mjs at the root of the wasmJs resources. Kotlin/Wasm
+// copies them next to the compiled module, where the loader's `@JsModule("./terminal-loader.mjs")`
+// import and its default `new URL("./supermux-terminal.wasm", import.meta.url)` resolve; bundlers
+// (webpack, vite) emit the wasm as a content-hashed asset from that URL. README: "Browser (wasmJs)".
+val stageWasmResources by tasks.registering {
+    description = "Stage the verified supermux-terminal.wasm and wasm/terminal-loader.mjs as wasmJsMain resources."
+    val dir = wasmBuildDir
+    val name = wasmModuleName
+    val loader = wasmLoaderFile
+    val outDir = layout.buildDirectory.dir("generated/wasmResources")
+    inputs.files(File(dir, name), File(dir, "manifest.json"), loader)
+    outputs.dir(outDir)
+    doLast {
+        val out = outDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        loader.copyTo(File(out, loader.name), overwrite = true)
+        val module = verifiedWasmModule(dir, name)
+        if (module == null) {
+            logger.warn(
+                "terminal-core: no $name — the wasmJs artifact cannot start an engine " +
+                    "(build with wasm/build.sh; verifyNativeArtifacts fails for releases)",
+            )
+        } else {
+            module.copyTo(File(out, name), overwrite = true)
+        }
+    }
+}
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(stageWasmResources)
+
 // Android: jniLibs/<abi>/libsupermux_terminal_jni.so, added to every variant as a generated
 // jniLibs directory (AGP variant API; the legacy sourceSets DSL is unusable under AGP 9 + KMP).
 abstract class StageAndroidJniLibs : DefaultTask() {
@@ -218,6 +297,8 @@ tasks.register("verifyNativeArtifacts") {
     val jvm = jvmNativeTargets
     val android = androidNativeTargets
     val ios = iosNativeTargets
+    val wasmDir = wasmBuildDir
+    val wasmName = wasmModuleName
     doLast {
         val problems = mutableListOf<String>()
         fun check(target: String, lib: String) {
@@ -230,12 +311,17 @@ tasks.register("verifyNativeArtifacts") {
         jvm.forEach { (t, lib) -> check(t, lib) }
         android.keys.forEach { t -> check(t, "libsupermux_terminal_jni.so") }
         ios.keys.forEach { t -> check(t, "libsupermux_terminal.a") }
+        try {
+            if (verifiedWasmModule(wasmDir, wasmName) == null) problems += "wasm32: build/wasm/$wasmName or manifest.json missing"
+        } catch (e: GradleException) {
+            problems += e.message.orEmpty()
+        }
         if (problems.isNotEmpty()) {
             throw GradleException(
                 "terminal-core native artifacts incomplete (run native/build.sh <target> on the right host):\n  " +
                     problems.joinToString("\n  "),
             )
         }
-        logger.lifecycle("terminal-core: all ${jvm.size + android.size + ios.size} native targets present and verified")
+        logger.lifecycle("terminal-core: all ${jvm.size + android.size + ios.size + 1} native targets (incl. wasm32) present and verified")
     }
 }

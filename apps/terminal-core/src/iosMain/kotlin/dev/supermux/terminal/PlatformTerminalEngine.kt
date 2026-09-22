@@ -216,3 +216,8 @@ internal class IosTerminalEngine private constructor(private val handle: NativeH
         }
     }
 }
+
+/** iOS: the st_* archive is statically linked; nothing to load or await. */
+actual object TerminalRuntime {
+    actual suspend fun initialize(wasmUrl: String?) {}
+}

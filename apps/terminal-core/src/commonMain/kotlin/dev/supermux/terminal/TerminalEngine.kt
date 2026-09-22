@@ -43,9 +43,11 @@ interface TerminalEngine : AutoCloseable {
 }
 
 /**
- * Thrown by [createTerminalEngine] when no engine can be started; [reason] says why. Nothing is
- * left half-created when it is thrown. A load failure is sticky for the process (the native
- * library is loaded once), so retrying does not help.
+ * Thrown by [createTerminalEngine] (and, in the browser, [TerminalRuntime.initialize]) when no
+ * engine can be started; [reason] says why. Nothing is left half-created when it is thrown. On
+ * Android, the JVM and iOS a load failure is sticky for the process (the native library is loaded
+ * once), so retrying does not help; in the browser a failed [TerminalRuntime.initialize] may be
+ * retried (e.g. after a network error).
  */
 class TerminalEngineUnavailableException(
     message: String = "native engine not linked yet",
@@ -53,8 +55,13 @@ class TerminalEngineUnavailableException(
     val reason: Reason = Reason.NOT_LINKED,
 ) : IllegalStateException(message, cause) {
     enum class Reason {
-        /** This platform has no native binding yet (browser until the wasm loader lands). */
+        /** This platform has no native binding. */
         NOT_LINKED,
+        /**
+         * Browser only: [createTerminalEngine] was called before [TerminalRuntime.initialize]
+         * completed (the wasm module loads asynchronously).
+         */
+        NOT_INITIALIZED,
         /** The OS/CPU combination has no packaged native library (e.g. JVM on linux-riscv64). */
         UNSUPPORTED_PLATFORM,
         /** The native library for this platform is not packaged (jar resource / jniLibs missing). */
@@ -76,5 +83,36 @@ class TerminalEngineUnavailableException(
  */
 class TerminalNativeException(val status: Int, message: String) : RuntimeException(message)
 
-/** Create an engine. Throws [TerminalEngineUnavailableException] if no native engine is available. */
+/**
+ * Create an engine. Throws [TerminalEngineUnavailableException] if no native engine is available
+ * (in the browser: reason [TerminalEngineUnavailableException.Reason.NOT_INITIALIZED] until
+ * [TerminalRuntime.initialize] has completed).
+ */
 expect fun createTerminalEngine(size: TerminalSize, limits: TerminalLimits): TerminalEngine
+
+/**
+ * Process-wide engine runtime.
+ *
+ * In the browser the engine is a WebAssembly module that must be fetched and compiled
+ * asynchronously, so a host app awaits [initialize] once (e.g. during app start) before the first
+ * [createTerminalEngine]. On Android, the desktop JVM and iOS the native library is loaded lazily
+ * by the first [createTerminalEngine] and [initialize] is a no-op, so shared code may call it
+ * unconditionally.
+ */
+expect object TerminalRuntime {
+    /**
+     * Browser: fetch, compile and instantiate the engine module once. [wasmUrl] is the URL of
+     * `supermux-terminal.wasm` as configured by the HOST APP (never user input); null uses the
+     * package default, the file next to `terminal-loader.mjs` (bundlers rewrite it to the emitted,
+     * content-hashed asset). Idempotent: later calls with no URL or the same URL return at once;
+     * a different URL after a successful load fails. Throws [TerminalEngineUnavailableException]
+     * with reason MISSING_BINARY (fetch failed / HTTP error), CORRUPT_BINARY (not a wasm module),
+     * ABI_MISMATCH (wrong st_* ABI or exports) or INITIALIZATION_FAILED (bad URL, instantiation
+     * failed, already initialized from another URL). A failed load is not cached: calling again
+     * retries. Cancelling the caller does not abort the shared load (it completes and is reused by
+     * the next call); no terminal handle is created by [initialize], so nothing can leak.
+     *
+     * Android / JVM / iOS: no-op ([wasmUrl] is ignored).
+     */
+    suspend fun initialize(wasmUrl: String? = null)
+}
