@@ -69,7 +69,7 @@ export class Registry {
     return healSessionsWithoutWorkspace(this.db, this.workspaces, ensureProject)
   }
 
-  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch">>): Session {
+  register(input: { id?: string; name: string; workdir: string; tmux_target?: string; tmux_window_id?: string; pid: number; base_commit?: string; base_commits?: Record<string, string>; role?: SessionRole; is_default?: boolean; internal?: boolean; connected?: boolean } & Partial<Pick<Session, "mute" | "can_orchestrate" | "agent" | "agent_session_id" | "agent_home" | "model" | "reasoningLevel" | "repo_root" | "base_branch" | "session_branch" | "core">>): Session {
     if (this.sessions.takenNames().has(input.name)) {
       throw new Error(`session name already in use: ${input.name}`)
     }
@@ -94,6 +94,7 @@ export class Registry {
       repo_root: input.repo_root,
       base_branch: input.base_branch,
       session_branch: input.session_branch,
+      core: input.core,
     })
     // Connected as soon as the shim joins. The claude spawn path registers the
     // row BEFORE the shim exists, so it passes connected:false; the socket

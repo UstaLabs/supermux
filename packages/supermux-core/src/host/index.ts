@@ -37,7 +37,7 @@ export type HostOptions = {
   /** Runs after admission and before the driver opens (credential/config/home
    * writes). May return an env patch that replaces the registration's env for
    * this and later opens. */
-  prepare?: (registration: HostRegistration) => Promise<void | { env?: Record<string, string> }>
+  prepare?: (registration: HostRegistration) => Promise<void | { env?: Record<string, string>; args?: string[] }>
 }
 
 export type Host = {
@@ -268,6 +268,7 @@ class HostImpl implements Host {
       if (this.prepare) {
         const patch = await this.prepare(cloneRegistration(handle.registration))
         if (patch && patch.env) handle.registration.env = { ...patch.env }
+        if (patch && patch.args) handle.registration.args = [...patch.args]
       }
       this.attachStarting(handle, token)
       const session = await this.openSession(handle, options)

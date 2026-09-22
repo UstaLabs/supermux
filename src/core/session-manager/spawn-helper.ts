@@ -15,6 +15,8 @@ import type { OpenCodeCoreHost } from "../agents/opencode/core-host"
 import type { GrokAdapter } from "../agents/grok/adapter"
 import type { CoreGrokAdapter } from "../agents/grok/core-adapter"
 import type { GrokCoreHost } from "../agents/grok/core-host"
+import type { CoreClaudeAdapter } from "../agents/claude/core-adapter"
+import type { ClaudeCoreHost } from "../agents/claude/core-host"
 
 export type GrokLikeAdapter = CoreGrokAdapter | GrokAdapter
 export type CodexLikeAdapter = CoreCodexAdapter | CodexAdapter
@@ -58,10 +60,11 @@ export type SpawnDeps = {
   resolveAttachment?: (file_id: string) => Promise<string>
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
+    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter | CoreClaudeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
+  claudeHost?: ClaudeCoreHost
   codexHost?: CodexCoreHost
   opencodeHost?: OpenCodeCoreHost
   cursorHost?: CursorCoreHost
@@ -69,6 +72,7 @@ export type SpawnDeps = {
   onCursorSessionId?: (name: string, sessionId: string) => void
   onOpenCodeSessionId?: (name: string, sessionId: string) => void
   onGrokSessionId?: (name: string, sessionId: string) => void
+  onClaudeSessionId?: (name: string, sessionId: string) => void
 }
 
 export type SpawnArgs = {
@@ -138,10 +142,11 @@ export async function spawnPA(opts: {
   resolveEffort?: (session: Pick<Session, "agent" | "model" | "reasoningLevel">) => string | undefined
   registerAdapter?: (
     name: string,
-    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter,
+    adapter: CodexLikeAdapter | CoreCursorAdapter | CoreOpenCodeAdapter | GrokLikeAdapter | CoreClaudeAdapter,
     handle: CodexSpawnHandle | CursorSpawnHandle | OpenCodeSpawnHandle | GrokSpawnHandle,
   ) => void
   grokHost?: GrokCoreHost
+  claudeHost?: ClaudeCoreHost
   codexHost?: CodexCoreHost
   opencodeHost?: OpenCodeCoreHost
   cursorHost?: CursorCoreHost

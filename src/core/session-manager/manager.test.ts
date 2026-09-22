@@ -869,3 +869,27 @@ describe("SessionManager.isDeliverable / waitDeliverable", () => {
     expect(m.isDeliverable("nope")).toBe(false)
   })
 })
+
+describe("onRegister already-known Core Claude row", () => {
+  test("does not spawn a phantom adapter or tailer", async () => {
+    const m = manager()
+    const s = m.registry.register({
+      name: "core-cl",
+      workdir: "/tmp",
+      pid: 0,
+      agent: "claude",
+      core: true,
+      id: "already",
+    })
+    const reply = await m.handleRegister({
+      session_id: s.id,
+      requested_name: "core-cl",
+      workdir: "/tmp",
+      pid: 9999,
+      agent_session_id: "native-from-shim",
+    } as never)
+    expect(reply).toEqual({ name: "core-cl", session_id: s.id })
+    expect(m.adapterFor(s.id)).toBeUndefined()
+    expect(m.registry.get(s.id)?.pid).toBe(0)
+  })
+})

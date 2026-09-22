@@ -1,4 +1,5 @@
 export type {
+  ClaudeEnvironmentSpec,
   CodexEnvironmentSpec,
   CursorEnvironmentSpec,
   EnvironmentSpec,
@@ -12,6 +13,7 @@ export { prepareGrokEnvironment } from "./grok.js"
 export { prepareCodexEnvironment } from "./codex.js"
 export { prepareOpenCodeEnvironment } from "./opencode.js"
 export { prepareCursorEnvironment } from "./cursor.js"
+export { prepareClaudeEnvironment } from "./claude.js"
 export { ensureSharedCursorRuntime, sharedCursorDir, cursorRuntimeRel } from "./cursor-runtime.js"
 export {
   type FreshnessReader,

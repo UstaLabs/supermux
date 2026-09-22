@@ -36,6 +36,7 @@ import m028 from "./028_message_error.sql" with { type: "text" }
 import m029 from "./029_walkthroughs.sql" with { type: "text" }
 import m030 from "./030_projects.sql" with { type: "text" }
 import m031 from "./031_prompts.sql" with { type: "text" }
+import m032 from "./032_core.sql" with { type: "text" }
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "001_init", sql: m001 },
@@ -68,4 +69,5 @@ export const MIGRATIONS: Migration[] = [
   { version: 29, name: "029_walkthroughs", sql: m029 },
   { version: 30, name: "030_projects", sql: m030 },
   { version: 31, name: "031_prompts", sql: m031 },
+  { version: 32, name: "032_core", sql: m032 },
 ].sort((a, b) => a.version - b.version)

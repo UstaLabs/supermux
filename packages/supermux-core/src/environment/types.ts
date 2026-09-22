@@ -12,6 +12,8 @@ export type PreparedEnvironment = {
   env: Record<string, string>
   files: string[]
   credentials: "canonical" | "api_key" | "copy" | "none"
+  /** Claude only: CLI args assembled from session-private files (not HOME). */
+  args?: string[]
 }
 
 export type GrokEnvironmentSpec = EnvironmentSpec & {
@@ -33,6 +35,15 @@ export type OpenCodeEnvironmentSpec = EnvironmentSpec & {
   provider: Record<string, unknown> | null
   /** `plugin` array; [] = omit. */
   pluginPaths: string[]
+}
+
+export type ClaudeEnvironmentSpec = EnvironmentSpec & {
+  // EnvironmentSpec.home is the session dir where the files below are written (created 0700); Claude's own home is untouched.
+  pluginDirs: string[]
+  addDirs: string[]
+  systemPromptFiles: string[]
+  strictMcp: boolean
+  nativeMemory: boolean
 }
 
 export type CursorEnvironmentSpec = EnvironmentSpec & {

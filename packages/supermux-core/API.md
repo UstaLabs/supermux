@@ -143,7 +143,7 @@ createHost({
   limits,          // CoreLimits, required
   agent,           // driver id
   driver: (registered, context) => AgentDriver | Promise<AgentDriver>,
-  prepare?: (registration) => Promise<void | { env? }>,   // after admission, before open; may return the env the driver gets
+  prepare?: (registration) => Promise<void | { env?, args? }>,   // after admission, before open; may return env/args the driver gets
 }): Host
 ```
 
@@ -163,16 +163,17 @@ createHostProvider({ create: () => Host })
 
 ## Environment
 
-`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` / `CursorEnvironmentSpec` is required (`requireSpec` throws `TypeError('<field> is required')` for a missing field, including explicit-null fields `instructions`, `provider`, `sharedRuntime`, and `credentials.apiKey`). `sessionId` / `sessionName` are not environment-spec fields — the broker puts them into the mux-shim server env itself. `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object. MCP `name` must match `/^[A-Za-z0-9_-]+$/`.
+`supermux-core/environment` owns **mechanism**: session-private home, config.toml, instruction-file placement, credential copy/canonical path. The caller owns **content** (MCP server command/args/env, instruction text, skill paths). No defaults: every field on `GrokEnvironmentSpec` / `CodexEnvironmentSpec` / `OpenCodeEnvironmentSpec` / `CursorEnvironmentSpec` / `ClaudeEnvironmentSpec` is required (`requireSpec` throws `TypeError('<field> is required')` for a missing field, including explicit-null fields `instructions`, `provider`, `sharedRuntime`, and `credentials.apiKey`). `sessionId` / `sessionName` are not environment-spec fields — the broker puts them into the mux-shim server env itself. `instructions: null` writes no instruction file; `skillsPaths: []` omits the grok `[skills]` table / OpenCode `skills` object. MCP `name` must match `/^[A-Za-z0-9_-]+$/`.
 
 ```ts
 prepareGrokEnvironment(spec: GrokEnvironmentSpec): Promise<PreparedEnvironment>
 prepareCodexEnvironment(spec: CodexEnvironmentSpec): Promise<PreparedEnvironment>
 prepareOpenCodeEnvironment(spec: OpenCodeEnvironmentSpec): Promise<PreparedEnvironment>
 prepareCursorEnvironment(spec: CursorEnvironmentSpec): Promise<PreparedEnvironment>
+prepareClaudeEnvironment(spec: ClaudeEnvironmentSpec): Promise<PreparedEnvironment & { args: string[] }>
 ```
 
-Grok writes `<home>/.grok/config.toml`, points `GROK_AUTH_PATH` at the canonical auth file (legacy private copy is promoted when newer), and writes `AGENTS.md` or `AGENTS.override.md` in `workdir`. Codex writes `<home>/config.toml` and `<home>/AGENTS.md` (0600), sets `CODEX_HOME`, copies `auth.json` unless `apiKey` is set (then `OPENAI_API_KEY`). OpenCode writes `<configHome>/opencode/opencode.json` (0600) and `<home>/AGENTS.md` when `instructions !== null`, sets `XDG_CONFIG_HOME` only; credentials stay under the user's XDG_DATA_HOME (`credentials: "none"`). `provider: null` and `pluginPaths: []` omit those keys. Cursor writes `<home>/.cursor/mcp.json` (0600) and `<workdir>/.cursor/rules/mux.mdc` when `instructions !== null`, copies `cli-config.json` / `agent-cli-state.json` and `auth.json` unless `apiKey` is set (then `CURSOR_API_KEY`), and links `.local/share/cursor-agent` to `sharedRuntime.source` when that field is non-null.
+Grok writes `<home>/.grok/config.toml`, points `GROK_AUTH_PATH` at the canonical auth file (legacy private copy is promoted when newer), and writes `AGENTS.md` or `AGENTS.override.md` in `workdir`. Codex writes `<home>/config.toml` and `<home>/AGENTS.md` (0600), sets `CODEX_HOME`, copies `auth.json` unless `apiKey` is set (then `OPENAI_API_KEY`). OpenCode writes `<configHome>/opencode/opencode.json` (0600) and `<home>/AGENTS.md` when `instructions !== null`, sets `XDG_CONFIG_HOME` only; credentials stay under the user's XDG_DATA_HOME (`credentials: "none"`). `provider: null` and `pluginPaths: []` omit those keys. Cursor writes `<home>/.cursor/mcp.json` (0600) and `<workdir>/.cursor/rules/mux.mdc` when `instructions !== null`, copies `cli-config.json` / `agent-cli-state.json` and `auth.json` unless `apiKey` is set (then `CURSOR_API_KEY`), and links `.local/share/cursor-agent` to `sharedRuntime.source` when that field is non-null. Claude does **not** isolate HOME (auth lives in the user's `~/.claude`). `prepareClaudeEnvironment` writes session-private `<home>/mcp.json` (0600) and `<home>/instructions.md` (0600) and returns CLI `args`: `--append-system-prompt-file` for instructions then `systemPromptFiles`, then `--plugin-dir` / `--add-dir`, then `--strict-mcp-config` (when `strictMcp`) and `--mcp-config`. `nativeMemory: false` sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. `credentials: "none"`. `PreparedEnvironment.args` is Claude-only.
 
 Credential helpers (`promoteCredential`, `promoteIfNewer`, `jwtExpiryMs`, `readCredentialJson`, `cursorCredentialFreshness`) are exported for copy-transport agents.
 

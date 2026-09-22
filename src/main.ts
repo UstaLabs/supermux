@@ -47,6 +47,7 @@ import { closeGrokCoreHost } from "./core/agents/grok/core-host-provider"
 import { closeCodexCoreHost } from "./core/agents/codex/core-host-provider"
 import { closeOpenCodeCoreHost } from "./core/agents/opencode/core-host-provider"
 import { closeCursorCoreHost } from "./core/agents/cursor/core-host-provider"
+import { closeClaudeCoreHost } from "./core/agents/claude/core-host-provider"
 import { buildClaudeSpawnSpec } from "./core/session-manager/spawn-command"
 import { getSessionBackend } from "./core/runtime"
 import { createAgentRpc } from "./core/agent-rpc"
@@ -451,7 +452,7 @@ const bgDetectors = new Map<string, BgTaskDetector>()  // keyed by session UUID
 
 function ensureClaudeTailer(sessionUuid: string, _name: string, workdir: string, seekToEnd = false): void {
   const session = registry.get(sessionUuid)
-  if (!session || (session.agent ?? "claude") !== "claude") return
+  if (!session || (session.agent ?? "claude") !== "claude" || session.core) return
   const claudeSid = session.agent_session_id
   if (!claudeSid || tailers.has(sessionUuid)) return
   const detector = new BgTaskDetector({
@@ -2615,6 +2616,10 @@ async function spawnSession(args: {
         const session = registry.resolveName(name)
         if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
       },
+      onClaudeSessionId: (name: string, sessionId: string) => {
+        const session = registry.resolveName(name)
+        if (session) registry.sessions.setAgentSessionId(session.id, sessionId)
+      },
     },
     // Worktree-backed: derive the session name from the ORIGINAL repo, not the
     // worktree dir (whose basename is a uuid) — otherwise the session is named after the uuid.
@@ -2625,7 +2630,7 @@ async function spawnSession(args: {
   // while polling window liveness so an instant death fast-fails instead of
   // waiting out the full timeout.
   let registered = registry.get(r.session_id)
-  if (isPersistentRuntimeSession({ agent })) {
+  if (registered && isPersistentRuntimeSession(registered)) {
     registered = await waitForRegisteredSession({
       id: r.session_id,
       name: r.name,
@@ -2652,6 +2657,12 @@ async function spawnSession(args: {
       })
       await refreshTelegramMenu()
     }
+  } else if (registered?.core && !registered.internal) {
+    webChannel?.broadcastToAll({
+      type: "session_added",
+      session: { id: registered.id, name: registered.name, workdir: registered.workdir, mute: false, connected: true, agent: registered.agent, capabilities: sessionCapabilities(registered.agent), user_status: registered.user_status, sort_order: registered.sort_order, draft_payload: registered.draft_payload },
+    })
+    await refreshTelegramMenu()
   }
   if (args.model && registered) {
     registry.sessions.setModel(registered.id, args.model)
@@ -3361,6 +3372,9 @@ async function gracefulShutdown(signal: string) {
   try {
     await closeCursorCoreHost()
   } catch (err: any) { log.warn("cursor_core_host_close_failed", { err: err?.message ?? String(err) }) }
+  try {
+    await closeClaudeCoreHost()
+  } catch (err: any) { log.warn("claude_core_host_close_failed", { err: err?.message ?? String(err) }) }
   try {
     curatorScheduler?.stop()
   } catch (err: any) { log.warn("curator_scheduler_stop_failed", { err: err?.message }) }

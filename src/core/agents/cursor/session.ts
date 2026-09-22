@@ -147,6 +147,11 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     } catch {
       // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
     }
+    // A failed spawn must not leave a dead row or a held name behind: the
+    // row was registered before start so the native-id callback could find
+    // it, and the reservation is what a retry needs back.
+    if (!args.pa) deps.registry.releaseName(name)
+    if (!args.pa?.skipRegister && deps.registry.get(id)) deps.registry.unregister(id)
     throw err
   }
 

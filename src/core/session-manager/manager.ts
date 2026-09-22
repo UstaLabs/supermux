@@ -5,6 +5,7 @@ import { isPersistentRuntimeSession } from "./types"
 import type { Registry, ProxyEntry, Session } from "./registry"
 import type { AgentAdapter } from "../agents/types"
 import { ClaudeCodeAdapter } from "../agents/claude"
+import { CoreClaudeAdapter } from "../agents/claude/core-adapter"
 import { CodexAdapter } from "../agents/codex/adapter"
 import { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
@@ -270,7 +271,7 @@ export class SessionManager {
     this.runtimes.delete(sessionId)
   }
 
-  registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter): void {
+  registerClaudeRuntime(sessionId: string, adapter: ClaudeCodeAdapter | CoreClaudeAdapter): void {
     this.registerRuntime(sessionId, { kind: AgentKind.Claude, adapter })
   }
 
@@ -323,7 +324,10 @@ export class SessionManager {
       }
     }
 
-    if (s.agent === "claude") {
+    if (s.agent === "claude" && s.core) {
+      const runtime = this.runtimes.get(s.id)
+      if (runtime?.kind === AgentKind.Claude) await runtime.adapter.stop()
+    } else if (s.agent === "claude") {
       const wid = await this.ports.backend.runtimeTargetIdOf(s)
       if (wid) await this.ports.backend.kill(wid)
       else log.warn("kill_session_no_runtime_target", { name: displayName })
@@ -387,7 +391,16 @@ export class SessionManager {
     // reconnect look identical).
     const existing = this.registry.get(sessionUuid)
     if (existing) {
-      log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid })
+      log.info("shim_attach", { name: existing.name, id: sessionUuid, old_pid: existing.pid, new_pid: msg.pid, core: existing.core })
+      if (existing.core) {
+        if (agentSessionId && !existing.agent_session_id) {
+          this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
+        }
+        if (existing.status === "suspended" && typeof msg.pid === "number") {
+          this.registry.sessions.activate(sessionUuid, msg.pid)
+        }
+        return { name: existing.name, session_id: sessionUuid }
+      }
       if (agentSessionId) {
         this.registry.sessions.setAgentSessionId(sessionUuid, agentSessionId)
       }
@@ -859,6 +872,8 @@ export class SessionManager {
       this.registerOpenCodeRuntime(sid, adapter)
     } else if (adapter instanceof CoreGrokAdapter || adapter instanceof GrokAdapter) {
       this.registerGrokRuntime(sid, adapter)
+    } else if (adapter instanceof CoreClaudeAdapter) {
+      this.registerClaudeRuntime(sid, adapter)
     }
     this.ports.resume.wireAdapterEvents(adapter, sid)
   }
@@ -1104,6 +1119,22 @@ export class SessionManager {
     const effort = this.ports.resume.sessionEffort(session)
 
     if (session.agent === AgentKind.Claude) {
+      if (session.core) {
+        const runtime = this.runtimes.get(session.id)
+        const result = await agents.claude.applyConfig(
+          { ...this.resumeCtx(session.id), adapter: runtime?.adapter },
+          session, session.name,
+          { model: session.model, effort, changed },
+        )
+        if (!result.ok) return result
+        this.ports.getWebChannel()?.broadcastToAll({
+          type: "session_state",
+          session: session.id,
+          model: session.model,
+          reasoningLevel: effort,
+        })
+        return { ok: true }
+      }
       // Live switch: type /model and/or /effort into the running TUI — never a
       // kill+respawn (user decision 2026-07-10). Failure is an explicit error;
       // callers roll the registry back.
@@ -1230,8 +1261,14 @@ export class SessionManager {
     this.ports.resume.wireAdapterEvents(adapter, session.id)
   }
 
+  private async resumeClaudeCoreArm(session: ResumeRow, name: string): Promise<void> {
+    const { adapter } = await agents.claude.resume!(this.resumeCtx(session.id), session, name)
+    this.registerClaudeRuntime(session.id, adapter as CoreClaudeAdapter)
+    this.ports.resume.wireAdapterEvents(adapter, session.id)
+  }
+
   /** Suspended → live (lazy, triggered by the next inbound message). */
-  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null }): Promise<boolean> {
+  async resumeSuspended(session: { id: string; name: string; agent: string; workdir: string; model?: string; reasoningLevel?: string; pid?: number; agent_session_id?: string; agent_home?: string; tmux_window_id?: string | null; repo_root?: string | null; session_branch?: string | null; base_branch?: string | null; core?: boolean }): Promise<boolean> {
     const { sessionBackend, tmuxSession } = this.ports.resume
     let resumedRuntimePid: number | null = null
     try {
@@ -1243,7 +1280,10 @@ export class SessionManager {
         has_agent_session_id: !!session.agent_session_id,
       })
       await this.ports.resume.ensureSessionWorktree(session)
-      if (session.agent === "claude") {
+      if (session.agent === "claude" && session.core && session.agent_home) {
+        await this.ports.resume.bind(session.id)
+        await this.resumeClaudeCoreArm({ ...session, agent_home: session.agent_home }, session.name)
+      } else if (session.agent === "claude") {
         await this.ports.resume.bind(session.id)
         preAcceptTrust(session.workdir)
         // Clear ONLY our own prior window, by id — never kill by name (a name
@@ -1306,7 +1346,10 @@ export class SessionManager {
     let resumedRuntimePid: number | null = null
     try {
       await this.ports.resume.ensureSessionWorktree(session)
-      if (session.agent === "claude") {
+      if (session.agent === "claude" && session.core && session.agent_home) {
+        await this.ports.resume.bind(sessionId)
+        await this.resumeClaudeCoreArm({ ...session, agent_home: session.agent_home }, name)
+      } else if (session.agent === "claude") {
         await this.ports.resume.bind(sessionId)
         const effort = this.ports.resume.sessionEffort(session)
         const spec = buildClaudeSpawnSpec({
@@ -1368,7 +1411,19 @@ export class SessionManager {
    *  reattach via the shim; dead ones suspend.) Failures log and continue. */
   async resumeAtBoot(): Promise<void> {
     for (const s of this.registry.list()) {
-      if (s.agent === "codex") {
+      if (s.agent === "claude" && s.core) {
+        if (!s.agent_home) {
+          log.warn("claude_core_resume_skip", { name: s.name, reason: "missing agent_home" })
+          continue
+        }
+        try {
+          await this.resumeClaudeCoreArm({ ...s, agent_home: s.agent_home }, s.name)
+          if (s.status === "suspended") this.registry.sessions.activate(s.id, 0)
+          log.info("claude_core_resume_ok", { name: s.name, session_id: s.agent_session_id ?? "(fresh)" })
+        } catch (err: any) {
+          log.warn("claude_core_resume_failed", { name: s.name, err: String(err) })
+        }
+      } else if (s.agent === "codex") {
         if (!s.agent_session_id || !s.agent_home) {
           log.warn("codex_resume_skip", { name: s.name, reason: "missing agent_session_id or agent_home" })
           continue

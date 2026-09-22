@@ -49,6 +49,8 @@ export type SessionRecord = {
   self_renamed?: boolean
   /** Opt-in permission prompts (default false = auto-approve). */
   prompts: boolean
+  /** 1 = Core-backed worker (no tmux/hooks/tailer). */
+  core: boolean
   user_status: UserStatus
   sort_order: number
   draft_payload?: DraftPayload
@@ -86,6 +88,7 @@ export type SessionRow = {
   finish_job: string | null
   self_renamed: number
   prompts: number
+  core: number
   user_status?: string
   sort_order?: number
   draft_payload?: string | null
@@ -130,12 +133,13 @@ export function rowToRecord(row: SessionRow): SessionRecord {
     finish_job: row.finish_job ? JSON.parse(row.finish_job) : undefined,
     self_renamed: row.self_renamed === 1,
     prompts: row.prompts === 1,
+    core: row.core === 1,
     user_status: (row.user_status as UserStatus) ?? "in_progress",
     sort_order: row.sort_order ?? 0,
     draft_payload: row.draft_payload ? JSON.parse(row.draft_payload) : undefined,
   }
 }
 
-export function isPersistentRuntimeSession(session: Pick<SessionRecord, "agent">): boolean {
-  return session.agent === AgentKind.Claude
+export function isPersistentRuntimeSession(session: Pick<SessionRecord, "agent"> & { core?: boolean }): boolean {
+  return session.agent === AgentKind.Claude && !session.core
 }

@@ -662,6 +662,16 @@ test("prepare may return an env patch that the driver sees; the registration's e
   expect(fake.registrations[0]?.env).toEqual({ SEED: "1", GROK_TOKEN: "from-prepare" })
 })
 
+test("prepare may return args that the driver sees", async () => {
+  const fake = fakeChildFactory()
+  const { host, workdir } = await makeHost(fake, {
+    prepare: async () => ({ args: ["--plugin-dir", "/p", "--add-dir", "/a"] }),
+  })
+  const handle = host.register({ id: "prep-args", env: {}, args: ["seed"] })
+  await handle.start({ cwd: workdir })
+  expect(fake.registrations[0]?.args).toEqual(["--plugin-dir", "/p", "--add-dir", "/a"])
+})
+
 test("onOpened runs inside the start: its rejection is a failed start and the session is closed", async () => {
   const fake = fakeChildFactory()
   const { host, workdir } = await makeHost(fake)

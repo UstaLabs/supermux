@@ -1,24 +1,16 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { join } from "path"
-import { rmSync } from "fs"
+import { mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import { AgentKind } from "../../shared/agents"
-import { STATE_DIR } from "../../shared/paths"
 import { openDb, runMigrations } from "../storage/db"
 import { Registry } from "./registry"
 import { spawnSession } from "./spawn-helper"
+import { createClaudeCoreHost, type ClaudeCoreHost } from "../agents/claude/core-host"
+import type { AgentDriver, AgentRuntime, SessionConfiguration } from "../../../packages/supermux-core/src/index.js"
+import type { ClaudeOptions } from "../../../packages/supermux-core/src/claude/index.js"
 import { setSessionBackendForTests } from "../runtime"
 import type { SessionBackend } from "../runtime/session-backend"
-
-// Regression test for the "new session kills the prior same-repo session" bug.
-//
-// Every worker on a repo gets a tmux WINDOW named after the repo base (e.g.
-// "supermux"). Sessions then rename their DISPLAY name, but the tmux window keeps
-// its original name. The old spawn path resolved the new window name against only
-// the DISPLAY names (so the repo base was "free" again) and then ran
-//   while (listSessionWindows().includes(name)) killSessionWindow({ window: name })
-// which `tmux kill-window -t mux:<name>` — killing the EXISTING live window that
-// shared the name, i.e. the previously-active session. The fix resolves the name
-// against existing tmux window names too, so it never collides (and never kills).
 
 function registry(): Registry {
   const db = openDb(":memory:")
@@ -26,67 +18,67 @@ function registry(): Registry {
   return new Registry(db)
 }
 
-const NAMES = ["ztest-spawn-collision", "ztest-spawn-collision-2", "ztest-spawn-unique"]
-
-afterAll(() => {
-  // buildClaudeSpawnCommand writes a per-session memory preamble — clean ours.
-  for (const n of NAMES) {
-    try { rmSync(join(STATE_DIR, "memory-preambles", `${n}.md`)) } catch {}
+function fakeFactory(): AgentDriver {
+  return {
+    id: "claude",
+    async open(ctx) {
+      const runtime: AgentRuntime = {
+        agentSessionId: ctx.resumeId ?? "native",
+        capabilities: { resume: true, steer: false, fork: false, detach: true, configure: false, history: false },
+        async prompt() { return { stopReason: "end_turn" } },
+        async interrupt() {},
+        async close() {},
+      }
+      return runtime
+    },
   }
+}
+
+const hosts: ClaudeCoreHost[] = []
+const dirs: string[] = []
+afterEach(async () => {
+  setSessionBackendForTests()
+  for (const h of hosts.splice(0)) await h.close({ agents: "shutdown" }).catch(() => {})
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-// The fake backend is injected via the runtime override (never the real tmux).
-afterEach(() => setSessionBackendForTests())
-
-describe("Claude spawn — tmux window-name collision", () => {
-  test("a new session whose name matches an existing window gets a unique window name (does NOT reuse/kill it)", async () => {
+describe("Claude worker spawn is Core-backed (no tmux window)", () => {
+  test("does not create a tmux window even when a same-named window exists", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cl-col-"))
+    dirs.push(dir)
+    const host = createClaudeCoreHost({
+      stateDirectory: dir,
+      driverFactory: (_o: ClaudeOptions, _ov: SessionConfiguration) => fakeFactory(),
+    })
+    hosts.push(host)
     const reg = registry()
     const occupied = "ztest-spawn-collision"
-    const existingWindows = [occupied] // a live session already owns this window name
     const spawnedWindows: string[] = []
-
     setSessionBackendForTests({
-      list: async () => existingWindows.map((name, i) => ({ id: `target-${i}`, name, pid: i + 1, alive: true })),
-      create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
+      list: async () => [{ id: "target-0", name: occupied, pid: 1, alive: true }],
+      create: async (opts: Parameters<SessionBackend["create"]>[0]) => {
+        spawnedWindows.push(opts.name)
+        return { id: "target-new", name: opts.name, pid: 99, alive: true }
+      },
       capture: async () => "Listening for channel messages",
     } as unknown as SessionBackend)
 
+    const workdir = mkdtempSync(join(tmpdir(), "cl-wd-"))
+    dirs.push(workdir)
     const result = await spawnSession({
       registry: reg,
       bind: async () => {},
       tmuxSession: "mux",
+      claudeHost: host,
     }, {
-      workdir: process.cwd(),
+      workdir,
       requestedName: occupied,
       agent: AgentKind.Claude,
     })
 
-    // Must create a DISTINCT window, not reuse (and not kill) the occupied one.
-    expect(spawnedWindows).toEqual(["ztest-spawn-collision-2"])
-    expect(result.name).toBe("ztest-spawn-collision-2")
-  })
-
-  test("a new session with a free name keeps that name as-is", async () => {
-    const reg = registry()
-    const spawnedWindows: string[] = []
-
-    setSessionBackendForTests({
-      list: async () => [],
-      create: async (opts: Parameters<SessionBackend["create"]>[0]) => { spawnedWindows.push(opts.name); return { id: "target-new", name: opts.name, pid: 99, alive: true } },
-      capture: async () => "Listening for channel messages",
-    } as unknown as SessionBackend)
-
-    const result = await spawnSession({
-      registry: reg,
-      bind: async () => {},
-      tmuxSession: "mux",
-    }, {
-      workdir: process.cwd(),
-      requestedName: "ztest-spawn-unique",
-      agent: AgentKind.Claude,
-    })
-
-    expect(spawnedWindows).toEqual(["ztest-spawn-unique"])
-    expect(result.name).toBe("ztest-spawn-unique")
+    expect(spawnedWindows).toEqual([])
+    expect(result.pid).toBe(0)
+    expect(result.name).toBe(occupied)
+    expect(reg.get(result.session_id)?.core).toBe(true)
   })
 })

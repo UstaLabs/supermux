@@ -5,33 +5,94 @@ import { sendChannelConsentEnter } from "../../session-manager/post-spawn-keys"
 import { getSessionBackend } from "../../runtime"
 import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
-import type { ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
+import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import { applyClaudeLiveSwitch } from "./live-switch"
 import { randomUUID } from "crypto"
 import { AgentKind } from "../../../shared/agents"
+import { CoreClaudeAdapter } from "./core-adapter"
+import { getClaudeCoreHost } from "./core-host-provider"
+import { claudeSessionHome, type ClaudeCoreHost, type ClaudePrepareExtra } from "./core-host"
+import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
-export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
+function resolveHost(explicit?: ClaudeCoreHost): ClaudeCoreHost {
+  return explicit ?? getClaudeCoreHost()
+}
+
+function asError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err))
+}
+
+function isSessionBusy(err: unknown): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
+}
+
+function persistNativeId(
+  onClaudeSessionId: ((name: string, sid: string) => void) | undefined,
+  name: string,
+): (sid: string) => Promise<void> {
+  return async (sid) => { onClaudeSessionId?.(name, sid) }
+}
+
+function prepareExtra(opts: {
+  id: string
+  sessionName: string
+  sessionHome: string
+  workdir: string
+  nativeSessionId?: string
+  model?: string
+  effort?: string
+  prompts?: boolean
+}): ClaudePrepareExtra {
+  return {
+    sessionHome: opts.sessionHome,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+    workdir: opts.workdir,
+    cwd: opts.workdir,
+    nativeSessionId: opts.nativeSessionId,
+    model: opts.model,
+    effort: opts.effort,
+    prompts: opts.prompts === true,
+  }
+}
+
+function createBoundAdapter(opts: {
+  handle: HostHandle
+  reregister: (fields: { model?: string; prompts?: boolean }) => HostHandle
+  core: Core
+  id: string
+  sessionName: string
+  workdir: string
+  model?: string
+  effort?: string
+  prompts?: boolean
+  initialSessionId?: string
+  persistSessionId: (sid: string) => Promise<void>
+  resolveAttachment?: (file_id: string) => Promise<string>
+}): CoreClaudeAdapter {
+  return new CoreClaudeAdapter({
+    handle: opts.handle,
+    reregister: opts.reregister,
+    core: opts.core,
+    id: opts.id,
+    sessionName: opts.sessionName,
+    workdir: opts.workdir,
+    model: opts.model,
+    effort: opts.effort,
+    prompts: opts.prompts,
+    initialSessionId: opts.initialSessionId,
+    persistSessionId: opts.persistSessionId,
+    resolveAttachment: opts.resolveAttachment,
+  })
+}
+
+async function spawnTmux(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const backend = getSessionBackend()
   const base = args.requestedName ?? deriveName(args.workdir)
-  // PA spawns keep the exact requested name: the row may already exist
-  // (supervisor respawn with a persisted id), so uniquifying would rename the
-  // PA to "<name>-2". User sessions resolve a window name unique against BOTH
-  // taken display names AND existing tmux window names. Worker windows are
-  // named after the repo base (e.g. "supermux"); a session that later renames
-  // its DISPLAY name keeps its original window name, so the base would
-  // otherwise look "free" as a display name and collide with that still-live
-  // window. The old path then ran `kill-window -t mux:<name>`, which killed
-  // the existing same-named (live!) session — i.e. creating a new session
-  // silently killed the previously-active one on the same repo. Uniquifying
-  // against live window names means we never collide, so we never need to
-  // (and never do) kill a sibling's window.
   let name: string
   if (args.pa) {
     name = base
   } else {
-    // takenNames() MUST be read AFTER the backend.list await: a concurrent
-    // spawn can reserve a name during that await, and a stale set would let
-    // both spawns pick the same name.
     const existingWindows = (await backend.list(deps.tmuxSession)).map(target => target.name)
     name = ensureUnique(base, new Set([...deps.registry.takenNames(), ...existingWindows]))
   }
@@ -41,8 +102,6 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   preAcceptTrust(args.workdir)
   try {
     await deps.bind(id)
-    // The PA row is registered BEFORE the window exists (mirror of the old
-    // spawnPA order); its window id + fresh claude session id follow create.
     if (args.pa && !args.pa.skipRegister) {
       deps.registry.registerPA({
         id,
@@ -69,14 +128,9 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     })
     if (args.pa) {
       deps.registry.sessions.setTmuxWindowId(id, target.id)
-      // The row exists either way (registerPA above, or skipRegister with a
-      // live row) — write the fresh claude session id directly.
       deps.registry.sessions.setAgentSessionId(id, claudeSessionId)
       void sendChannelConsentEnter(target.id, { backend })
     } else {
-      // The row is born HERE, synchronously — not in onRegister. The shim's
-      // register frame later ATTACHES to this row (main.ts onRegister).
-      // connected:false — the socket layer flips it when the shim joins.
       deps.registry.register({
         id,
         name,
@@ -94,9 +148,6 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
     }
     return { name, session_id: id, model: args.model, pid: target.pid ?? process.pid }
   } catch (err) {
-    // Free the reserved name AND any row so a retry can reclaim the name.
-    // Never on the PA path: the name was not reserved, and deleting a
-    // pre-existing PA row on a failed respawn would destroy the PA.
     if (!args.pa) {
       deps.registry.releaseName(name)
       if (deps.registry.get(id)) deps.registry.sessions.deleteById(id)
@@ -105,22 +156,191 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   }
 }
 
-/** Dialect half of a model/effort change: type /model and/or /effort into the
- * running TUI (applyClaudeLiveSwitch) — never a kill+respawn (user decision
- * 2026-07-10). Failure is an explicit error; the SessionManager rolls the
- * registry back. `changed` narrows to what the user actually touched so a
- * model-only switch doesn't re-type /effort. The component resolves the
- * window id and guarantees idleness (the pending-reapply queue drains on the
- * idle transition). */
+export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
+  if (args.pa) return spawnTmux(deps, args)
+
+  const base = args.requestedName ?? deriveName(args.workdir)
+  const name = ensureUnique(base, deps.registry.takenNames())
+  const id = args.id ?? randomUUID()
+  deps.registry.reserveName(name)
+
+  const host = resolveHost(deps.claudeHost)
+  const sessionHome = claudeSessionHome(name)
+  const extra = prepareExtra({
+    id, sessionName: name, sessionHome, workdir: args.workdir,
+    model: args.model, effort: args.effort, prompts: false,
+  })
+  const handle = host.register({
+    id,
+    env: {},
+    extra,
+  })
+  let adapter: CoreClaudeAdapter | undefined
+  try {
+    await deps.bind(id)
+    adapter = createBoundAdapter({
+      handle,
+      reregister: (fields) => host.register({
+        id,
+        env: {},
+        extra: prepareExtra({
+          id, sessionName: name, sessionHome, workdir: args.workdir,
+          model: fields.model ?? args.model, effort: args.effort, prompts: fields.prompts,
+        }),
+      }),
+      core: host.core,
+      id,
+      sessionName: name,
+      workdir: args.workdir,
+      model: args.model,
+      effort: args.effort,
+      persistSessionId: persistNativeId(deps.onClaudeSessionId, name),
+      resolveAttachment: deps.resolveAttachment,
+    })
+    deps.registry.register({
+      id,
+      name,
+      workdir: args.workdir,
+      pid: 0,
+      agent: AgentKind.Claude,
+      agent_home: sessionHome,
+      base_commits: captureBaseCommits(args.workdir),
+      internal: args.internal,
+      core: true,
+    } as any)
+    await adapter.start()
+  } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch { /* failed-cleanup */ }
+    // A failed spawn must not leave a dead row or a held name behind: the
+    // row was registered before start so the native-id callback could find
+    // it, and the reservation is what a retry needs back.
+    deps.registry.releaseName(name)
+    if (deps.registry.get(id)) deps.registry.unregister(id)
+    throw err
+  }
+  deps.registerAdapter?.(name, adapter, { onExit: () => {} })
+  return { name, session_id: id, model: args.model, pid: 0 }
+}
+
+export async function resumeClaudeSession(
+  deps: {
+    resolveAttachment?: (file_id: string) => Promise<string>
+    onClaudeSessionId?: (name: string, sid: string) => void
+    claudeHost?: ClaudeCoreHost
+  },
+  session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string; prompts?: boolean },
+): Promise<{ adapter: CoreClaudeAdapter }> {
+  const host = resolveHost(deps.claudeHost)
+  const sessionHome = session.agent_home
+  const initialSessionId = session.agent_session_id || undefined
+  const extra = prepareExtra({
+    id: session.id,
+    sessionName: session.name,
+    sessionHome,
+    workdir: session.workdir,
+    nativeSessionId: initialSessionId,
+    model: session.model,
+    effort: session.effort,
+    prompts: session.prompts,
+  })
+  const handle = host.register({ id: session.id, env: {}, extra })
+  let adapter: CoreClaudeAdapter | undefined
+  try {
+    adapter = createBoundAdapter({
+      handle,
+      reregister: (fields) => host.register({
+        id: session.id,
+        env: {},
+        extra: prepareExtra({
+          id: session.id,
+          sessionName: session.name,
+          sessionHome,
+          workdir: session.workdir,
+          nativeSessionId: initialSessionId,
+          model: fields.model ?? session.model,
+          effort: session.effort,
+          prompts: fields.prompts,
+        }),
+      }),
+      core: host.core,
+      id: session.id,
+      sessionName: session.name,
+      workdir: session.workdir,
+      model: session.model,
+      effort: session.effort,
+      prompts: session.prompts,
+      initialSessionId,
+      persistSessionId: persistNativeId(deps.onClaudeSessionId, session.name),
+      resolveAttachment: deps.resolveAttachment,
+    })
+    if (initialSessionId) await adapter.resume()
+    else await adapter.start()
+    return { adapter }
+  } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch { /* */ }
+    throw err
+  }
+}
+
 export async function applyConfig(
   ctx: ApplyConfigCtx,
   _session: ApplyConfigRow,
   _name: string,
   change: ApplyConfigChange,
 ): Promise<ApplyConfigResult> {
+  const adapter = ctx.adapter
+  const coreAdapter = adapter instanceof CoreClaudeAdapter
+    ? adapter
+    : (adapter && typeof (adapter as CoreClaudeAdapter).setConfiguration === "function" && !ctx.windowId
+      ? adapter as CoreClaudeAdapter
+      : undefined)
+  if (coreAdapter) {
+    const adapter = coreAdapter
+    const patch: { model?: string; effort?: string } = {}
+    if (change.changed?.model !== false && change.model) patch.model = change.model
+    if (change.changed?.effort !== false && "effort" in change) patch.effort = change.effort
+    if (!("model" in patch) && !("effort" in patch)) return { ok: true }
+    try {
+      await adapter.setConfiguration(patch)
+      return { ok: true }
+    } catch (err) {
+      if (isSessionBusy(err)) return { ok: false, busy: true }
+      return { ok: false, error: asError(err).message }
+    }
+  }
   if (!ctx.windowId) return { ok: false, error: "session window not found" }
   return applyClaudeLiveSwitch(ctx.windowId, {
     model: change.changed?.model === false ? undefined : change.model,
     effort: change.changed?.effort === false ? undefined : change.effort,
   }, { backend: ctx.backend })
+}
+
+export async function resume(ctx: ResumeCtx, session: ResumeRow, name: string): Promise<{ adapter: CoreClaudeAdapter }> {
+  return resumeClaudeSession(
+    {
+      resolveAttachment: ctx.resolveAttachment,
+      onClaudeSessionId: (_name, sid) => { ctx.persistAgentSessionId(sid) },
+      claudeHost: ctx.claudeHost,
+    },
+    {
+      id: session.id,
+      name,
+      workdir: session.workdir,
+      agent_home: session.agent_home,
+      model: session.model,
+      effort: ctx.sessionEffort(session),
+      agent_session_id: session.agent_session_id,
+      prompts: session.prompts,
+    },
+  )
+}
+
+export function commandContext(_ctx: CommandContextCtx): undefined {
+  return undefined
 }

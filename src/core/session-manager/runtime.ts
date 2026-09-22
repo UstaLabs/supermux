@@ -1,5 +1,6 @@
 import type { AgentKind } from "../../shared/agents"
 import type { ClaudeCodeAdapter } from "../agents/claude"
+import type { CoreClaudeAdapter } from "../agents/claude/core-adapter"
 import type { CodexAdapter } from "../agents/codex/adapter"
 import type { CoreCodexAdapter } from "../agents/codex/core-adapter"
 import type { CodexSpawnHandle } from "../agents/codex/spawn"
@@ -11,8 +12,10 @@ import type { CoreGrokAdapter } from "../agents/grok/core-adapter"
 export type GrokRuntimeAdapter = CoreGrokAdapter | GrokAdapter
 export type CodexRuntimeAdapter = CoreCodexAdapter | CodexAdapter
 
+export type ClaudeRuntimeAdapter = ClaudeCodeAdapter | CoreClaudeAdapter
+
 export type SessionRuntime =
-  | { kind: typeof AgentKind.Claude; adapter: ClaudeCodeAdapter }
+  | { kind: typeof AgentKind.Claude; adapter: ClaudeRuntimeAdapter }
   | { kind: typeof AgentKind.Codex; adapter: CodexRuntimeAdapter; handle?: CodexSpawnHandle }
   | { kind: typeof AgentKind.Cursor; adapter: CoreCursorAdapter }
   | { kind: typeof AgentKind.OpenCode; adapter: CoreOpenCodeAdapter }
