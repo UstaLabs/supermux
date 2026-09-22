@@ -48,7 +48,7 @@ const hosts: GrokCoreHost[] = []
 const dirs: string[] = []
 
 afterEach(async () => {
-  for (const h of hosts.splice(0)) await h.close().catch(() => {})
+  for (const h of hosts.splice(0)) await h.close({ agents: "shutdown" }).catch(() => {})
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 

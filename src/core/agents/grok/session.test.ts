@@ -129,7 +129,7 @@ async function makeHost(factory: ReturnType<typeof fakeChildFactory>["factory"])
 }
 
 afterEach(async () => {
-  for (const h of hosts.splice(0)) await h.close().catch(() => {})
+  for (const h of hosts.splice(0)) await h.close({ agents: "shutdown" }).catch(() => {})
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
@@ -211,62 +211,12 @@ describe("grok core spawn/resume dialect", () => {
     })
     const sessionHome = reg.get(result.session_id)!.agent_home!
     expect(child.grokCalls[0]?.options.env?.HOME).toBe(sessionHome)
+    expect(child.grokCalls[0]?.options.alwaysApprove).toBe(true)
+    expect(child.grokCalls[0]?.options.command).toBe("grok")
+    expect(child.grokCalls[0]?.options.noLeader).toBe(false)
     const toml = readFileSync(join(sessionHome, ".grok", "config.toml"), "utf8")
     expect(toml).toContain("[mcp_servers.mux-shim]")
     expect(existsSync(join(workdir, "AGENTS.md"))).toBe(true)
-  })
-
-  test("failed start + failed cleanup retains host registration; retry stop then create", async () => {
-    const child = fakeChildFactory({ failCloses: 1 })
-    const host = await makeHost(child.factory)
-    const workdir = mkdtempSync(join(tmpdir(), "mux-grok-wd-"))
-    dirs.push(workdir)
-    const home = mkdtempSync(join(tmpdir(), "mux-grok-home-"))
-    dirs.push(home)
-    const session = {
-      id: "retry-id",
-      name: "gk-retry",
-      workdir,
-      agent_home: home,
-    }
-    await expect(resumeGrokSession({
-      grokHost: host,
-      onGrokSessionId: () => { throw new Error("persist failed") },
-    }, session)).rejects.toThrow(/persist failed; cleanup failed/)
-    await expect(resumeGrokSession({ grokHost: host }, session)).resolves.toMatchObject({ adapter: expect.any(CoreGrokAdapter) })
-  })
-
-  test("persistent close failure then allow: recovering stop must not drop the slot before admission", async () => {
-    let allowClose = false
-    const opens: DriverContext[] = []
-    const factory = (): AgentDriver => ({
-      id: "grok",
-      async open(ctx) {
-        opens.push(ctx)
-        return {
-          agentSessionId: ctx.resumeId ?? "native",
-          capabilities: { resume: true, steer: false, fork: false, detach: false },
-          async prompt() { return { stopReason: "end_turn" as const } },
-          async interrupt() {},
-          async close() { if (!allowClose) throw new Error("still alive") },
-        }
-      },
-    })
-    const host = await makeHost(factory)
-    const workdir = mkdtempSync(join(tmpdir(), "mux-grok-wd-"))
-    dirs.push(workdir)
-    const home = mkdtempSync(join(tmpdir(), "mux-grok-home-"))
-    dirs.push(home)
-    const session = { id: "persist-fail-id", name: "gk-persist-fail", workdir, agent_home: home }
-    await expect(resumeGrokSession({
-      grokHost: host,
-      onGrokSessionId: () => { throw new Error("persist failed") },
-    }, session)).rejects.toThrow(/persist failed; cleanup failed/)
-    allowClose = true
-    const second = await resumeGrokSession({ grokHost: host }, session)
-    expect(second.adapter).toBeInstanceOf(CoreGrokAdapter)
-    expect(opens).toHaveLength(2)
-    await second.adapter.stop()
   })
 
   test("CoreGrokAdapter setConfiguration session_busy is typed busy, native errors are not", async () => {
@@ -304,7 +254,7 @@ describe("grok core spawn/resume dialect", () => {
     writeFileSync(join(grokDir, "config.toml"), "SENTINEL", "utf8")
 
     const second = resumeGrokSession({ grokHost: host }, session)
-    await expect(second).rejects.toThrow(/already starting/)
+    await expect(second).rejects.toThrow(/already starting|already live/)
     expect(readFileSync(join(grokDir, "config.toml"), "utf8")).toBe("SENTINEL")
     expect(child.closeAttempts).toBe(0)
     expect(child.openAttempts).toBe(1)

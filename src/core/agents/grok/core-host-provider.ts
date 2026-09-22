@@ -1,55 +1,37 @@
 import { join } from "path"
+import { createHostProvider } from "../../../../packages/supermux-core/src/index.js"
 import { STATE_DIR } from "../../../shared/paths"
 import { createGrokCoreHost, type GrokCoreHost } from "./core-host"
 
 export type GrokCoreHostFactory = () => GrokCoreHost
 
-let factory: GrokCoreHostFactory | undefined
-let processHost: GrokCoreHost | undefined
-let shutdown = false
-
-function defaultFactory(): GrokCoreHost {
-  return createGrokCoreHost({
+const provider = createHostProvider({
+  create: () => createGrokCoreHost({
     stateDirectory: join(STATE_DIR, "core", "grok"),
-  })
-}
+  }),
+})
 
 /** Lazy process-owned Grok core host. Does not acquire the core lock at import time. */
 export function getGrokCoreHost(): GrokCoreHost {
-  if (shutdown) {
-    throw new Error("Grok core host is closed")
-  }
-  if (!processHost) {
-    processHost = (factory ?? defaultFactory)()
-  }
-  return processHost
+  return provider.get()
 }
 
 /** Await the current host (if any) and forbid creating another in this process.
  *  The live handle is kept until close confirms so a failed close can be retried. */
 export async function closeGrokCoreHost(): Promise<void> {
-  shutdown = true
-  const current = processHost
-  if (!current) return
-  await current.close()
-  processHost = undefined
+  await provider.close({ agents: "shutdown" })
 }
 
 export function grokCoreHostIsShutdown(): boolean {
-  return shutdown
+  return provider.isShutdown()
 }
 
 /** Test seam: inject a factory before the process host exists. Refuses to replace a live owner. */
 export function setGrokCoreHostFactoryForTests(next: GrokCoreHostFactory | undefined): void {
-  if (processHost) {
-    throw new Error("cannot replace a live Grok core host")
-  }
-  factory = next
+  provider.setFactoryForTests(next)
 }
 
 /** Isolated-test reset. Production shutdown is one-way. */
 export function resetGrokCoreHostProviderForTests(): void {
-  shutdown = false
-  processHost = undefined
-  factory = undefined
+  provider.resetForTests()
 }

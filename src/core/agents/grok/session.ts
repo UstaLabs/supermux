@@ -1,22 +1,18 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
-import { shimSpawnSpec } from "../../session-manager/shim-spawn"
-import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
+import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { GrokAcpCommand } from "../../slash-commands/types"
-import { writeGrokPreamble } from "./preamble-writer"
-import { writeGrokConfig } from "./config-writer"
-import { resolveGrokAuth } from "./auth"
 import { GrokAdapter } from "./adapter"
 import { CoreGrokAdapter } from "./core-adapter"
 import { getGrokCoreHost } from "./core-host-provider"
-import type { GrokCoreHost } from "./core-host"
+import type { GrokCoreHost, GrokPrepareExtra } from "./core-host"
 import { join } from "path"
-import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
-import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
+import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
 import { grokConfigEntries } from "../../plugins"
+import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 export type GrokCommandContext = {
   commands?: GrokAcpCommand[]
@@ -40,31 +36,8 @@ function asError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
 
-function withCleanupError(original: unknown, cleanup: unknown): Error {
-  const primary = asError(original)
-  const secondary = asError(cleanup)
-  return new Error(`${primary.message}; cleanup failed: ${secondary.message}`, { cause: primary })
-}
-
 function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
-}
-
-async function startOrCleanup(host: GrokCoreHost, adapter: CoreGrokAdapter, mode: "start" | "resume"): Promise<void> {
-  try {
-    if (mode === "resume") await adapter.resume()
-    else await adapter.start()
-    markReady(host, adapter)
-  } catch (startErr) {
-    try {
-      await adapter.stop()
-      dropOwned(host, adapter)
-    } catch (stopErr) {
-      markFailedCleanup(host, adapter)
-      throw withCleanupError(startErr, stopErr)
-    }
-    throw startErr
-  }
 }
 
 function persistNativeId(
@@ -74,167 +47,47 @@ function persistNativeId(
   return async (sid) => { onGrokSessionId?.(name, sid) }
 }
 
-type SlotState = "admission" | "recovering" | "starting" | "ready" | "failed-cleanup"
-type OwnedSlot =
-  | { state: "admission"; token: symbol; adapter?: undefined }
-  | { state: "recovering"; token: symbol; adapter: CoreGrokAdapter }
-  | { state: "starting" | "ready" | "failed-cleanup"; adapter: CoreGrokAdapter }
-const ownedByHost = new WeakMap<GrokCoreHost, Map<string, OwnedSlot>>()
-const admissionTokenByHostId = new WeakMap<GrokCoreHost, Map<string, symbol>>()
-
-function ownedMap(host: GrokCoreHost): Map<string, OwnedSlot> {
-  let map = ownedByHost.get(host)
-  if (!map) {
-    map = new Map()
-    ownedByHost.set(host, map)
-  }
-  return map
-}
-
-function tokenMap(host: GrokCoreHost): Map<string, symbol> {
-  let map = admissionTokenByHostId.get(host)
-  if (!map) {
-    map = new Map()
-    admissionTokenByHostId.set(host, map)
-  }
-  return map
-}
-
-function alreadyOwnedError(id: string, state: SlotState): Error {
-  const phase = state === "ready"
-    ? "live"
-    : state === "failed-cleanup" || state === "recovering"
-      ? "awaiting failed-start cleanup"
-      : "starting"
-  return new Error(`grok session ${id} is already ${phase}`)
-}
-
-function dropOwned(host: GrokCoreHost, adapter: CoreGrokAdapter): void {
-  const map = ownedMap(host)
-  const slot = map.get(adapter.id)
-  // Recovering is owned by reserveAdmission until it transitions the slot.
-  // wrapStopToRelease must not delete that token on a successful cleanup stop.
-  if (slot?.adapter === adapter && slot.state !== "recovering") {
-    map.delete(adapter.id)
-    tokenMap(host).delete(adapter.id)
-  }
-}
-
-function releaseOwnAdmission(host: GrokCoreHost, id: string, token: symbol): void {
-  const map = ownedMap(host)
-  const slot = map.get(id)
-  if (slot?.state === "admission" && slot.token === token) {
-    map.delete(id)
-    tokenMap(host).delete(id)
-  }
-}
-
-function markReady(host: GrokCoreHost, adapter: CoreGrokAdapter): void {
-  const slot = ownedMap(host).get(adapter.id)
-  if (slot?.adapter === adapter && slot.state === "starting") {
-    ownedMap(host).set(adapter.id, { state: "ready", adapter })
-    tokenMap(host).delete(adapter.id)
-  }
-}
-
-function markFailedCleanup(host: GrokCoreHost, adapter: CoreGrokAdapter): void {
-  const slot = ownedMap(host).get(adapter.id)
-  if (slot?.adapter === adapter) {
-    ownedMap(host).set(adapter.id, { state: "failed-cleanup", adapter })
-    tokenMap(host).delete(adapter.id)
-  }
-}
-
-function attachStarting(host: GrokCoreHost, adapter: CoreGrokAdapter): void {
-  const map = ownedMap(host)
-  const slot = map.get(adapter.id)
-  const token = tokenMap(host).get(adapter.id)
-  if (!slot || slot.state !== "admission" || slot.token !== token) {
-    throw alreadyOwnedError(adapter.id, slot?.state ?? "ready")
-  }
-  map.set(adapter.id, { state: "starting", adapter })
-}
-
-function wrapStopToRelease(host: GrokCoreHost, adapter: CoreGrokAdapter): void {
-  const original = adapter.stop.bind(adapter)
-  adapter.stop = async () => {
-    await original()
-    dropOwned(host, adapter)
-  }
-}
-
-async function stopAllocatedThenRelease(host: GrokCoreHost, adapter: CoreGrokAdapter, cause: unknown): Promise<never> {
-  try {
-    await adapter.stop()
-    dropOwned(host, adapter)
-  } catch (stopErr) {
-    markFailedCleanup(host, adapter)
-    throw withCleanupError(cause, stopErr)
-  }
-  throw asError(cause)
-}
-
-/** Retry a proven failed-start cleanup, then reserve admission before any
- * credential/config/home writes. Concurrent same-host/id starts reject. */
-async function reserveAdmission(host: GrokCoreHost, id: string): Promise<symbol> {
-  const map = ownedMap(host)
-  const tokens = tokenMap(host)
-  const prior = map.get(id)
-  if (prior?.state === "failed-cleanup") {
-    const recoverToken = Symbol("grok-recover")
-    const failedOwner = prior.adapter
-    map.set(id, { state: "recovering", token: recoverToken, adapter: failedOwner })
-    try {
-      await failedOwner.stop()
-    } catch (stopErr) {
-      const cur = map.get(id)
-      if (cur?.state === "recovering" && cur.token === recoverToken && cur.adapter === failedOwner) {
-        map.set(id, { state: "failed-cleanup", adapter: failedOwner })
-      }
-      throw asError(stopErr)
-    }
-    const cur = map.get(id)
-    if (cur?.state !== "recovering" || cur.token !== recoverToken || cur.adapter !== failedOwner) {
-      throw alreadyOwnedError(id, cur?.state ?? "ready")
-    }
-    const token = Symbol("grok-admission")
-    map.set(id, { state: "admission", token })
-    tokens.set(id, token)
-    return token
-  }
-  if (prior) throw alreadyOwnedError(id, prior.state)
-  const token = Symbol("grok-admission")
-  map.set(id, { state: "admission", token })
-  tokens.set(id, token)
-  return token
-}
-
 function createBoundAdapter(opts: {
-  host: GrokCoreHost
+  handle: HostHandle
+  core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
-  env: Record<string, string>
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
 }): CoreGrokAdapter {
-  const adapter = opts.host.createAdapter({
+  return new CoreGrokAdapter({
+    handle: opts.handle,
+    core: opts.core,
     id: opts.id,
     sessionName: opts.sessionName,
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
-    env: opts.env,
     initialSessionId: opts.initialSessionId,
     persistSessionId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
   })
-  attachStarting(opts.host, adapter)
-  wrapStopToRelease(opts.host, adapter)
-  return adapter
+}
+
+function prepareExtra(opts: {
+  id: string
+  sessionName: string
+  sessionHome: string
+  workdir: string
+  nativeSessionId?: string
+}): GrokPrepareExtra {
+  return {
+    sessionHome: opts.sessionHome,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+    workdir: opts.workdir,
+    cwd: opts.workdir,
+    nativeSessionId: opts.nativeSessionId,
+  }
 }
 
 /** grok's worker is an in-process CoreGrokAdapter driving a `grok agent stdio`
@@ -246,7 +99,8 @@ function createBoundAdapter(opts: {
  * MCP + skills live in the session-private config.toml (mux-shim). Grok does
  * not take MCP servers inline via ACP session/new. The identity preamble is
  * AGENTS.md in the workdir (git-excluded, override-safe). sessionHome is the
- * redirected HOME plus agent_home for resume. */
+ * redirected HOME plus agent_home for resume. Private-home writes run in the
+ * host prepare hook, after admission. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
   const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
@@ -254,46 +108,31 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.grokHost)
-  const admissionToken = await reserveAdmission(host, id)
   const sessionHome = join(STATE_DIR, "agents", "grok", name)
+  const handle = host.register({
+    id,
+    env: {},
+    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir }),
+  })
   let adapter: CoreGrokAdapter | undefined
   try {
-    mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
-
-    const auth = await resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
-    writeGrokConfig({
-      sessionHome,
-      ...shimSpawnSpec(),
-      sessionName: name,
-      sessionId: id,
-      socketsDir: SOCKETS_DIR,
-      skillsPaths: grokConfigEntries({ sessionName: name }).skillsPaths,
-    })
-    writeGrokPreamble({ workdir: args.workdir, sessionName: name })
-
     await deps.bind(id)
 
     adapter = createBoundAdapter({
-      host,
+      handle,
+      core: host.core,
       id,
       sessionName: name,
       workdir: args.workdir,
       model: args.model,
       effort: args.effort,
-      env: auth.env,
       persistSessionId: persistNativeId(deps.onGrokSessionId, name),
       resolveAttachment: deps.resolveAttachment,
     })
-  } catch (err) {
-    if (adapter) await stopAllocatedThenRelease(host, adapter, err)
-    releaseOwnAdmission(host, id, admissionToken)
-    throw err
-  }
 
-  // Register BEFORE adapter.start(): start() completes the ACP handshake, which
-  // fires persistSessionId — that callback resolves the row by name, so the row
-  // must already exist or the grok session id is lost (breaking resume).
-  try {
+    // Register BEFORE adapter.start(): start() completes the ACP handshake, which
+    // fires persistSessionId — that callback resolves the row by name, so the row
+    // must already exist or the grok session id is lost (breaking resume).
     if (args.pa) {
       if (!args.pa.skipRegister) {
         deps.registry.registerPA({
@@ -321,11 +160,17 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         internal: args.internal,
       } as any)
     }
-  } catch (err) {
-    await stopAllocatedThenRelease(host, adapter, err)
-  }
 
-  await startOrCleanup(host, adapter, "start")
+    await adapter.start()
+  } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
+    throw err
+  }
 
   deps.registerAdapter?.(name, adapter, { onExit: () => {} })
 
@@ -345,43 +190,43 @@ export async function resumeGrokSession(
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: CoreGrokAdapter }> {
   const host = resolveHost(deps.grokHost)
-  const admissionToken = await reserveAdmission(host, session.id)
   const sessionHome = session.agent_home
+  const initialSessionId = session.agent_session_id || undefined
+  const handle = host.register({
+    id: session.id,
+    env: {},
+    extra: prepareExtra({
+      id: session.id,
+      sessionName: session.name,
+      sessionHome,
+      workdir: session.workdir,
+      nativeSessionId: initialSessionId,
+    }),
+  })
   let adapter: CoreGrokAdapter | undefined
   try {
-    const auth = await resolveGrokAuth({ userGrokDir: join(HOME, ".grok"), sessionHome })
-    writeGrokConfig({
-      sessionHome,
-      ...shimSpawnSpec(),
-      sessionName: session.name,
-      sessionId: session.id,
-      socketsDir: SOCKETS_DIR,
-      skillsPaths: grokConfigEntries({ sessionName: session.name }).skillsPaths,
-    })
-    writeGrokPreamble({ workdir: session.workdir, sessionName: session.name })
-
-    const initialSessionId = session.agent_session_id || undefined
     adapter = createBoundAdapter({
-      host,
+      handle,
+      core: host.core,
       id: session.id,
       sessionName: session.name,
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
-      env: auth.env,
       initialSessionId,
       persistSessionId: persistNativeId(deps.onGrokSessionId, session.name),
       resolveAttachment: deps.resolveAttachment,
     })
-    if (initialSessionId) await startOrCleanup(host, adapter, "resume")
-    else await startOrCleanup(host, adapter, "start")
+    if (initialSessionId) await adapter.resume()
+    else await adapter.start()
     return { adapter }
   } catch (err) {
-    const slot = adapter ? ownedMap(host).get(adapter.id) : undefined
-    if (adapter && slot?.adapter === adapter && slot.state === "starting") {
-      await stopAllocatedThenRelease(host, adapter, err)
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
     }
-    releaseOwnAdmission(host, session.id, admissionToken)
     throw err
   }
 }

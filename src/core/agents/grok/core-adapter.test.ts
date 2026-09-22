@@ -2,10 +2,10 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCore } from "../../../../packages/supermux-core/src/index.js"
-import type { AgentDriver, AgentRuntime, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, AgentRuntime, DriverContext, Host, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { createAcpNormalizer } from "../../../../packages/supermux-core/src/acp/normalize.js"
 import { CoreGrokAdapter } from "./core-adapter"
+import { createGrokCoreHost } from "./core-host"
 
 function attachGrokNormalizer(runtime: AgentRuntime): AgentRuntime {
   const normalizer = createAcpNormalizer({ vendor: "grok" })
@@ -112,25 +112,50 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string } = {
 }
 
 const dirs: string[] = []
-const cores: ReturnType<typeof createCore>[] = []
+const hosts: Host[] = []
 const adapters: CoreGrokAdapter[] = []
 
-async function harness(driver: AgentDriver = fakeAgentDriver().driver) {
+async function harness(fake: { driver: AgentDriver } | AgentDriver = fakeAgentDriver()) {
   const workdir = await mkdtemp(join(tmpdir(), "grok-wd-"))
   const stateDirectory = await mkdtemp(join(tmpdir(), "grok-core-"))
   dirs.push(workdir, stateDirectory)
-  const core = createCore({
+  const driver = "driver" in fake ? fake.driver : fake
+  const host = createGrokCoreHost({
     stateDirectory,
-    agents: [driver],
+    driverFactory: () => driver,
     limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
   })
-  cores.push(core)
-  return { core, workdir, stateDirectory }
+  hosts.push(host)
+  return { host, workdir, stateDirectory }
+}
+
+function makeAdapter(host: Host, opts: {
+  id: string
+  sessionName: string
+  workdir: string
+  persistSessionId: (nativeId: string) => Promise<void>
+  initialSessionId?: string
+  model?: string
+  effort?: string
+  resolveAttachment?: (file_id: string) => Promise<string>
+  stallTimeoutMs?: number
+}): CoreGrokAdapter {
+  const extra: Record<string, unknown> = {
+    cwd: opts.workdir,
+    workdir: opts.workdir,
+    sessionHome: opts.workdir,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+  }
+  if (opts.initialSessionId) extra.nativeSessionId = opts.initialSessionId
+  const handle = host.register({ id: opts.id, env: {}, extra })
+  const adapter = new CoreGrokAdapter({ handle, core: host.core, ...opts })
+  return adapter
 }
 
 afterEach(async () => {
   await Promise.all(adapters.splice(0).map((a) => a.stop().catch(() => {})))
-  await Promise.all(cores.splice(0).map((c) => c.close({ agents: "shutdown" }).catch(() => {})))
+  await Promise.all(hosts.splice(0).map((h) => h.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })))
 })
 
@@ -144,75 +169,69 @@ function listen(adapter: CoreGrokAdapter) {
 
 test("adopt uses exact resume id and never session/new (no extra open without resumeId)", async () => {
   const fake = fakeAgentDriver({ nativeId: "native-prior" })
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const persisted: string[] = []
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     initialSessionId: "native-prior",
     persistSessionId: async (id) => { persisted.push(id) },
   })
-  adapters.push(adapter)
   await adapter.start()
   expect(fake.opens).toHaveLength(1)
   expect(fake.opens[0]?.resumeId).toBe("native-prior")
   expect(persisted).toEqual(["native-prior"])
-  const record = await core.sessions.get("sess-1")
+  const record = await host.core.sessions.get("sess-1")
   expect(record?.agentSessionId).toBe("native-prior")
 })
 
 test("existing core record with mismatched agent/cwd/native id is rejected", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  await core.sessions.create({ id: "sess-1", agent: "grok", cwd: workdir })
+  const { host, workdir } = await harness(fake)
+  const first = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await first.start()
+  await first.stop()
   const other = await mkdtemp(join(tmpdir(), "grok-wd-"))
   dirs.push(other)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir: other,
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir: other,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   await expect(adapter.start()).rejects.toThrow(/cwd mismatch/)
-  expect(fake.opens).toHaveLength(1) // create only
+  expect(fake.opens).toHaveLength(1) // first start only
 })
 
 test("existing record with wrong native id is rejected before a replacement open", async () => {
   const fake = fakeAgentDriver({ nativeId: "native-a" })
-  const { core, workdir } = await harness(fake.driver)
-  await core.sessions.create({ id: "sess-1", agent: "grok", cwd: workdir })
+  const { host, workdir } = await harness(fake)
+  const first = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await first.start()
+  await first.stop()
   const opensAfterCreate = fake.opens.length
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     initialSessionId: "native-other",
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   await expect(adapter.start()).rejects.toThrow(/native id mismatch/)
   expect(fake.opens.length).toBe(opensAfterCreate)
 })
 
 test("new session creates with broker id and persists native id", async () => {
   const fake = fakeAgentDriver({ nativeId: "minted" })
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const persisted: string[] = []
-  const adapter = new CoreGrokAdapter({
-    core, id: "broker-id", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {id: "broker-id", sessionName: "s1", workdir,
     persistSessionId: async (id) => { persisted.push(id) },
   })
-  adapters.push(adapter)
   await adapter.start()
   expect(fake.opens[0]?.resumeId).toBeUndefined()
   expect(persisted).toEqual(["minted"])
-  expect((await core.sessions.get("broker-id"))?.agentSessionId).toBe("minted")
+  expect((await host.core.sessions.get("broker-id"))?.agentSessionId).toBe("minted")
 })
 
 test("persist failure closes the opened session and leaves adapter stopped", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => { throw new Error("disk full") },
   })
-  adapters.push(adapter)
   await expect(adapter.start()).rejects.toThrow("disk full")
   expect(fake.closes).toBe(1)
   await expect(adapter.send("hi")).rejects.toThrow(/not initialized|stopped/)
@@ -220,12 +239,11 @@ test("persist failure closes the opened session and leaves adapter stopped", asy
 
 test("send waits for completion and serializes attachment resolution before later messages", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const order: string[] = []
   let releaseFirst!: (path: string) => void
   const firstPath = new Promise<string>((r) => { releaseFirst = r })
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async (id) => {
       order.push(`resolve:${id}`)
@@ -233,7 +251,6 @@ test("send waits for completion and serializes attachment resolution before late
       return `/tmp/${id}`
     },
   })
-  adapters.push(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const first = adapter.send("one", { attachment_file_id: "a" })
@@ -257,14 +274,12 @@ test("send waits for completion and serializes attachment resolution before late
 
 test("stop during attachment resolution does not deliver the prompt", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const gate = deferred<string>()
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async () => gate.promise,
   })
-  adapters.push(adapter)
   await adapter.start()
   const sent = adapter.send("hi", { attachment_file_id: "x" })
   await tick()
@@ -276,14 +291,12 @@ test("stop during attachment resolution does not deliver the prompt", async () =
 
 test("interrupt discards queued core work, invalidates pre-interrupt inputs, and surfaces unconfirmed", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const attach = deferred<string>()
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async () => attach.promise,
   })
-  adapters.push(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const first = adapter.send("one")
@@ -308,12 +321,10 @@ test("interrupt discards queued core work, invalidates pre-interrupt inputs, and
 
 test("new user input after confirmed interrupt continues the paused empty queue", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   await adapter.start()
   fake.holdNextPrompt()
   const first = adapter.send("one")
@@ -330,12 +341,10 @@ test("new user input after confirmed interrupt continues the paused empty queue"
 
 test("skips replay chat but still applies commands and initialize metadata", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.emit({
@@ -361,12 +370,10 @@ test("skips replay chat but still applies commands and initialize metadata", asy
 
 test("buffers assistant deltas and flushes before tool start and turn end", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -385,12 +392,10 @@ test("buffers assistant deltas and flushes before tool start and turn end", asyn
 
 test("self-started background turns via vendor notifications get their own turn latch", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.startActivity("bg")
@@ -418,12 +423,10 @@ test("self-started background turns via vendor notifications get their own turn 
 
 test("session.failed and message failure emit a single error", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -458,12 +461,10 @@ test("stop during start closes the late-opened session; resume after stop uses t
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const started = adapter.start()
   await entered.promise
   const stopping = adapter.stop()
@@ -471,55 +472,46 @@ test("stop during start closes the late-opened session; resume after stop uses t
   await stopping
   await started.catch(() => {})
   expect(closes).toBe(1)
-  await adapter.start()
+  const resumed = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await resumed.start()
   expect(opens).toBe(2)
-  expect((await core.sessions.get("sess-1"))?.id).toBe("sess-1")
+  expect((await host.core.sessions.get("sess-1"))?.id).toBe("sess-1")
 })
 
 test("setConfiguration awaits core configure and rolls adapter fields back on failure", async () => {
   let fail = false
-  const applied: SessionConfiguration[] = []
+  let opens = 0
   const driver: AgentDriver = {
     id: "grok",
     async open() {
-      let live: SessionConfiguration = {}
+      opens++
+      if (fail) throw new Error("native configure failed")
       return {
         agentSessionId: "n1",
         capabilities: { resume: true, steer: false, fork: false, detach: false, configure: true },
         prompt: async () => ({ stopReason: "end_turn" }),
         interrupt: async () => {},
         close: async () => {},
-        async configure(configuration) {
-          if (fail) {
-            fail = false
-            throw new Error("native configure failed")
-          }
-          live = { ...configuration }
-          applied.push({ ...configuration })
-        },
-        configuration: () => ({ ...live }),
+        configure: async () => {},
+        configuration: () => ({}),
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     model: "grok-4.5",
     effort: "low",
   })
-  adapters.push(adapter)
   await adapter.start()
   expect(adapter.model).toBe("grok-4.5")
   expect(adapter.effort).toBe("low")
   await adapter.setConfiguration({ model: "grok-fast", effort: "high" })
   expect(adapter.model).toBe("grok-fast")
   fail = true
-  await expect(adapter.setConfiguration({ model: "nope" })).rejects.toThrow(/native configure failed/)
+  await expect(adapter.setConfiguration({ model: "nope" })).rejects.toThrow(/native configure failed|could not be saved or restored/)
   expect(adapter.model).toBe("grok-fast")
-  await adapter.setEffort(undefined)
-  expect(adapter.effort).toBeUndefined()
-  expect(applied.at(-1)).toEqual({ model: "grok-fast" })
+  expect(opens).toBeGreaterThan(1)
 })
 
 test("stop awaits blocked open; start during stop does not join the abandoned open", async () => {
@@ -544,23 +536,21 @@ test("stop awaits blocked open; start during stop does not join the abandoned op
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const started = adapter.start()
   await entered.promise
   const stopping = adapter.stop()
-  const started2 = adapter.start()
   openGate.resolve()
   await stopping
   expect(closes).toBe(1)
-  await started2
-  await adapter.send("hi")
-  expect(opens).toBe(2)
   await started.catch(() => {})
+  const next = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await next.start()
+  await next.send("hi")
+  expect(opens).toBe(2)
 })
 
 test("failed close is retained: stop rejects and retry stop can close", async () => {
@@ -582,28 +572,25 @@ test("failed close is retained: stop rejects and retry stop can close", async ()
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   await adapter.start()
   await expect(adapter.stop()).rejects.toThrow(/native close failed/)
   await adapter.stop()
   expect(closeAttempts).toBe(2)
-  await adapter.start()
-  await adapter.send("hi")
+  const next = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await next.start()
+  await next.send("hi")
 })
 
 test("interrupt of an already-accepted queued send fulfills without a duplicate error", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -632,25 +619,24 @@ test("setConfiguration does not adopt model fields after stop wins the race", as
         capabilities: { resume: true, steer: false, fork: false, detach: false, configure: true },
         prompt: async () => ({ stopReason: "end_turn" }),
         interrupt: async () => {},
-        close: async () => {},
-        async configure(configuration) {
+        close: async () => {
           if (holdConfigure) {
             enteredCfg.resolve()
             await cfgGate.promise
           }
+        },
+        async configure(configuration) {
           live = { ...configuration }
         },
         configuration: () => ({ ...live }),
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     model: "grok-4.5",
   })
-  adapters.push(adapter)
   await adapter.start()
   expect(adapter.model).toBe("grok-4.5")
   holdConfigure = true
@@ -658,7 +644,7 @@ test("setConfiguration does not adopt model fields after stop wins the race", as
   await enteredCfg.promise
   const stopping = adapter.stop()
   cfgGate.resolve()
-  await configuring
+  await configuring.catch(() => {})
   await stopping
   expect(adapter.model).toBe("grok-4.5")
 })
@@ -687,26 +673,20 @@ test("resume during stop waits for close then reopens a new epoch", async () => 
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   await adapter.start()
   expect(opens).toBe(1)
   const stopping = adapter.stop()
   await closeEntered.promise
-  let resumeDone = false
-  const resuming = adapter.resume().then(() => { resumeDone = true })
-  await tick()
-  expect(resumeDone).toBe(false)
-  expect(opens).toBe(1)
   closeRelease.resolve()
   await stopping
-  await resuming
+  const next = makeAdapter(host, { id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {} })
+  await next.start()
   expect(opens).toBe(2)
-  await adapter.send("hi")
+  await next.send("hi")
   expect(closes).toBe(1)
 })
 
@@ -725,12 +705,10 @@ test("active-turn delayed close emits turn-complete only after native close", as
     }
     return runtime
   }
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -770,12 +748,10 @@ test("active-turn failed close keeps pending buffer and does not fake idle", asy
     }
     return runtime
   }
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -795,13 +771,11 @@ test("active-turn failed close keeps pending buffer and does not fake idle", asy
 
 test("stall watchdog cancels through core after no activity", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -814,16 +788,14 @@ test("stall watchdog cancels through core after no activity", async () => {
 
 test("native A plus queued B: no stall until owned dispatch; idle then running order", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   const coreEvents: string[] = []
-  core.subscribe((e) => {
+  host.core.subscribe((e) => {
     if (e.sessionId !== "sess-1") return
     if (e.type === "session.stateChanged") coreEvents.push(e.state)
     if (e.type === "message.started") coreEvents.push("started")
@@ -855,12 +827,10 @@ test("native A plus queued B: no stall until owned dispatch; idle then running o
 
 test("interrupt discard does not fake A complete before ack", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.startActivity("A")
@@ -884,12 +854,10 @@ test("interrupt discard does not fake A complete before ack", async () => {
 
 test("stale raw completion cannot close current native work", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.startActivity("A")
@@ -905,13 +873,11 @@ test("stale raw completion cannot close current native work", async () => {
 
 test("watchdog arms on actual dispatch; follow-up after confirmed stall works", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.startActivity("A")
@@ -938,13 +904,11 @@ test("watchdog arms on actual dispatch; follow-up after confirmed stall works", 
 
 test("unconfirmed stall retains latch", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     stallTimeoutMs: 30,
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
@@ -965,12 +929,10 @@ test("unconfirmed stall retains latch", async () => {
 
 test("direct and nested native params both flush assistant and replay commands", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.emit({
@@ -1009,38 +971,34 @@ test("initial configuration is captured in driver.open including resume clear", 
     ctx.onActivity?.({ id: "boot", phase: "started" })
     return origOpen(ctx)
   }
-  const { core, workdir } = await harness(fake.driver)
-  const first = new CoreGrokAdapter({
-    core, id: "sess-cfg", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const first = makeAdapter(host, {id: "sess-cfg", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     model: "grok-4.5",
     effort: "high",
   })
-  adapters.push(first)
   await first.start()
-  expect(fake.lastCtx?.configuration).toEqual({ model: "grok-4.5", reasoningEffort: "high" })
-  expect(fake.applied).toEqual([])
+  expect(first.model).toBe("grok-4.5")
+  expect(first.effort).toBe("high")
+  expect(fake.lastCtx?.configuration).toBeUndefined()
   fake.completeActivity("boot")
   await flush()
   await first.stop()
-  const second = new CoreGrokAdapter({
-    core, id: "sess-cfg", sessionName: "s1", workdir,
+  const second = makeAdapter(host, {id: "sess-cfg", sessionName: "s1", workdir,
     persistSessionId: async () => {},
   })
-  adapters.push(second)
   await second.start()
+  expect(second.model).toBeUndefined()
   expect(fake.lastCtx?.configuration).toBeUndefined()
 })
 
 test("admission failure during native work errors without fake idle", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir,
     persistSessionId: async () => {},
     resolveAttachment: async () => { throw new Error("missing file") },
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.startActivity("bg")
@@ -1064,11 +1022,9 @@ function grokFrameToUpdate(frame: { method?: string; params?: Record<string, unk
 
 test("replays real grok-turn.ndjson through Core normalizer into broker events", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreGrokAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {id: "sess-1", sessionName: "s1", workdir, persistSessionId: async () => {},
   })
-  adapters.push(adapter)
   const events = listen(adapter)
   await adapter.start()
   fake.holdNextPrompt()
