@@ -22,6 +22,8 @@
 #                     check when python3 'cryptography' is missing (sha256 only)
 #   ANDROID_NDK_HOME  NDK root for android-* (default: lock's NDK version under
 #                     $ANDROID_HOME / $ANDROID_SDK_ROOT / ~/Android/Sdk)
+#   JAVA_HOME         JDK whose include/jni.h builds the JNI library
+#                     (default: the JDK `java` resolves to; macOS: java_home)
 set -euo pipefail
 
 usage() {
@@ -52,9 +54,15 @@ ST_ABI_VERSION=1
 # Wrapper sources: compiled and linked against the static libghostty-vt into
 # lib<WRAPPER_NAME> (static archive with libghostty-vt folded in, plus a
 # shared library exporting only st_*/Java_*/JNI_On* where the target has
-# one). The JNI glue (terminal_jni.c) joins this list in the next task.
+# one).
 WRAPPER_NAME="supermux_terminal"
 WRAPPER_SOURCES=("$NATIVE_DIR/src/terminal_bridge.c")
+# JNI glue (Android + desktop JVM): its own shared library lib<JNI_NAME>
+# linking the combined static archive above (see build_jni).
+JNI_NAME="supermux_terminal_jni"
+JNI_SOURCE="$NATIVE_DIR/src/terminal_jni.c"
+# Java_* entry points terminal_jni.c defines (17 st_* calls + 2 test hooks).
+JNI_EXPORT_COUNT=19
 FIXTURES_DIR="$PKG_DIR/fixtures/codec"
 
 ZIG_TARGET="$(lock_opt "targets.$TARGET.zig_target")"
@@ -158,9 +166,37 @@ cc_target() {
   fi
 }
 
-# Every symbol the shared library exports must be ours.
+# macOS dylibs are linked by Apple's toolchain (xcrun clang -> ld64), on a
+# macOS host only: Zig's self-hosted Mach-O linker ignores
+# -exported_symbols_list and would export every libghostty-vt/highway/simdutf/
+# wuffs global (verified: 587 exports), and llvm-objcopy cannot localize
+# Mach-O symbols. Cross builds from Linux still produce the static archive and
+# the test executables, just no dylibs (manifest: no jni_library) -- so
+# verifyNativeArtifacts only passes with macOS artifacts built on the Mac.
+macos_dylib_supported() {
+  if [[ "$host_os" != macos ]]; then
+    log "macOS dylibs skipped on $HOST_KEY: Zig's Mach-O linker ignores -exported_symbols_list; build $TARGET on a macOS host"
+    return 1
+  fi
+  command -v xcrun >/dev/null || die "xcrun (Xcode command line tools) is needed to link $TARGET dylibs"
+}
+
+# link_macos_dylib <out> <install-name> <inputs...>: Apple clang + ld64 with
+# the exported-symbols list. The archive's C++ (highway, simdutf) links the
+# system libc++.
+link_macos_dylib() {
+  local out="$1" name="$2"; shift 2
+  local arch=arm64
+  [[ "$TARGET" == macos-x64 ]] && arch=x86_64
+  xcrun clang++ -arch "$arch" -mmacosx-version-min=11.0 -dynamiclib "$@" \
+    "-Wl,-exported_symbols_list,$NATIVE_DIR/exports/$WRAPPER_NAME.exp" -Wl,-dead_strip \
+    "-Wl,-install_name,@rpath/$name" -o "$out"
+}
+
+# Every symbol the shared library exports must be ours. $2 = the exact number
+# of Java_* exports expected (JNI library), default: any.
 verify_exports() {
-  local lib="$1" nm readobj syms
+  local lib="$1" want_java="${2:-}" nm readobj syms
   nm="$(dirname "$LLVM_OBJCOPY")/llvm-nm"; [[ -x "$nm" ]] || nm="$(command -v llvm-nm || command -v nm)"
   readobj="$(dirname "$LLVM_OBJCOPY")/llvm-readobj"; [[ -x "$readobj" ]] || readobj="$(command -v llvm-readobj || true)"
   case "$lib" in
@@ -175,6 +211,14 @@ verify_exports() {
   local n
   n="$(printf '%s\n' "$syms" | grep -Ec '^_?st_' || true)"
   [[ "$n" -ge 18 ]] || die "$(basename "$lib") exports only $n st_* symbols"
+  if [[ -n "$want_java" ]]; then
+    local nj
+    nj="$(printf '%s\n' "$syms" | grep -Ec '^_?Java_dev_supermux_terminal_NativeTerminal_' || true)"
+    [[ "$nj" -eq "$want_java" ]] || die "$(basename "$lib") exports $nj Java_* symbols, expected $want_java"
+    printf '%s\n' "$syms" | grep -Eq '^_?JNI_OnLoad$' || die "$(basename "$lib") does not export JNI_OnLoad"
+    log "$(basename "$lib"): exports $n st_* + $nj Java_* + JNI_OnLoad and nothing else"
+    return 0
+  fi
   log "$(basename "$lib"): exports $n st_* symbols and nothing else"
 }
 
@@ -189,6 +233,9 @@ build_wrapper() {
   for src in "${WRAPPER_SOURCES[@]}"; do
     obj="$wdir/$(basename "${src%.c}").o"
     cc_target "$src" "$obj" "${cflags[@]}"
+    # COFF objects carry a CodeView S_OBJNAME record (the absolute temp .obj
+    # path) even with -g0; drop all debug sections so artifacts stay path-free.
+    "$LLVM_OBJCOPY" --strip-debug "$obj"
     objs+=("$obj")
   done
   cp "$NATIVE_DIR/include/supermux_terminal.h" "$OUT_DIR/include/"
@@ -219,15 +266,17 @@ build_wrapper() {
         -static-libstdc++ "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
         -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$WRAPPER_NAME.so" -o "$shared" ;;
     macos-*)
-      shared="$OUT_DIR/lib/lib$WRAPPER_NAME.dylib"
-      "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "${objs[@]}" "$ghostty_static" -lc++ \
-        "-Wl,-exported_symbols_list,$NATIVE_DIR/exports/$WRAPPER_NAME.exp" \
-        "-Wl,-install_name,@rpath/lib$WRAPPER_NAME.dylib" -o "$shared" ;;
+      if macos_dylib_supported; then
+        shared="$OUT_DIR/lib/lib$WRAPPER_NAME.dylib"
+        link_macos_dylib "$shared" "lib$WRAPPER_NAME.dylib" "${objs[@]}" "$ghostty_static"
+      fi ;;
     windows-*)
       shared="$OUT_DIR/lib/$WRAPPER_NAME.dll"
       "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "${objs[@]}" "$ghostty_static" -lc++ \
         -lntdll -lkernel32 -o "$shared"
-      rm -f "${shared%.dll}.pdb" ;;
+      # zig also writes a PDB and an import library named after the first
+      # object (terminal_bridge.lib); neither is shipped.
+      rm -f "${shared%.dll}.pdb" "${shared%.dll}.lib" "$OUT_DIR/lib/terminal_bridge.lib" ;;
   esac
   if [[ -n "$shared" ]]; then
     "$LLVM_OBJCOPY" --strip-debug "$shared"
@@ -236,12 +285,88 @@ build_wrapper() {
   WRAPPER_SHARED="$shared"
 }
 
+# JDK headers for the JNI glue: jni.h from $JAVA_HOME (else the JDK `java`
+# resolves to; macOS: /usr/libexec/java_home). jni_md.h: the host JDK's
+# platform dir. Its linux/darwin variants are equivalent for every target we
+# build (jint = int; jlong = long on LP64, long long on LLP64 Windows); only
+# JNIEXPORT differs on Windows, where it must be dllexport -> -DJNIEXPORT.
+# Android uses the NDK sysroot's own jni.h.
+resolve_jni_includes() {
+  JNI_CFLAGS=()
+  [[ "$TARGET" == android-* ]] && return 0
+  local jdk="${JAVA_HOME:-}" java md
+  if [[ -z "$jdk" && "$host_os" == macos && -x /usr/libexec/java_home ]]; then
+    jdk="$(/usr/libexec/java_home 2>/dev/null || true)"
+  fi
+  if [[ -z "$jdk" ]] && java="$(command -v java)"; then
+    java="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$java")"
+    jdk="$(dirname "$(dirname "$java")")"
+  fi
+  [[ -n "$jdk" && -f "$jdk/include/jni.h" ]] ||
+    die "JDK headers (include/jni.h) not found: set JAVA_HOME to a JDK (17+)"
+  for md in linux darwin win32; do
+    [[ -f "$jdk/include/$md/jni_md.h" ]] && break
+  done
+  [[ -f "$jdk/include/$md/jni_md.h" ]] || die "no jni_md.h under $jdk/include"
+  JNI_CFLAGS=(-I "$jdk/include" -I "$jdk/include/$md")
+  [[ "$TARGET" == windows-* ]] && JNI_CFLAGS+=("-DJNIEXPORT=__declspec(dllexport)")
+  JDK_ID="$(sed -n 's/^JAVA_VERSION="\(.*\)"/\1/p' "$jdk/release" 2>/dev/null || true) ($md jni_md.h)"
+}
+
+# lib<JNI_NAME>: terminal_jni.c + the combined static archive, hidden
+# visibility, exporting only st_*/Java_*/JNI_OnLoad. Not built for iOS (the
+# cinterop binding links the static archive) or wasm.
+build_jni() {
+  JNI_SHARED=""
+  [[ -n "${WRAPPER_STATIC:-}" ]] || return 0
+  case "$TARGET" in ios-*) return 0 ;; esac
+  resolve_jni_includes
+  local obj="$WORK_DIR/wrapper/terminal_jni.o"
+  local cflags=(-std=c11 -O2 -g0 -Wall -Wextra -Werror -fvisibility=hidden -DGHOSTTY_STATIC
+                "-ffile-prefix-map=$PKG_DIR/=" -I "$NATIVE_DIR/include" "${JNI_CFLAGS[@]}")
+  [[ "$TARGET" == windows-* ]] || cflags+=(-fPIC)
+  log "jni: compile terminal_jni.c${JDK_ID:+ (JDK $JDK_ID)}"
+  cc_target "$JNI_SOURCE" "$obj" "${cflags[@]}"
+  "$LLVM_OBJCOPY" --strip-debug "$obj"
+  case "$TARGET" in
+    linux-*)
+      JNI_SHARED="$OUT_DIR/lib/lib$JNI_NAME.so"
+      "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "$obj" "$WRAPPER_STATIC" -lc++ \
+        "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
+        "-Wl,-soname,lib$JNI_NAME.so" -o "$JNI_SHARED" ;;
+    android-*)
+      JNI_SHARED="$OUT_DIR/lib/lib$JNI_NAME.so"
+      "$NDK_BIN/clang++" "--target=$(lock "targets.$TARGET.ndk_clang_target")" -shared "$obj" "$WRAPPER_STATIC" \
+        -static-libstdc++ "-Wl,--version-script=$NATIVE_DIR/exports/$WRAPPER_NAME.map" -Wl,--gc-sections \
+        -Wl,-z,max-page-size=16384 "-Wl,-soname,lib$JNI_NAME.so" -o "$JNI_SHARED" ;;
+    macos-*)
+      macos_dylib_supported || return 0
+      JNI_SHARED="$OUT_DIR/lib/lib$JNI_NAME.dylib"
+      link_macos_dylib "$JNI_SHARED" "lib$JNI_NAME.dylib" "$obj" "$WRAPPER_STATIC" ;;
+    windows-*)
+      JNI_SHARED="$OUT_DIR/lib/$JNI_NAME.dll"
+      "$ZIG" cc -target "$ZIG_TARGET" "-mcpu=$ZIG_CPU" -shared "$obj" "$WRAPPER_STATIC" -lc++ \
+        -lntdll -lkernel32 -o "$JNI_SHARED"
+      rm -f "${JNI_SHARED%.dll}.pdb" "${JNI_SHARED%.dll}.lib" "$OUT_DIR/lib/terminal_jni.lib" ;;
+    *) return 0 ;;
+  esac
+  "$LLVM_OBJCOPY" --strip-debug "$JNI_SHARED"
+  verify_exports "$JNI_SHARED" "$JNI_EXPORT_COUNT"
+}
+
 # Load the shared library on its own (dlopen) and drive one terminal through
 # it: proves the export list is complete for a JNI-style consumer.
 run_shared_load_check() {
-  [[ -n "${WRAPPER_SHARED:-}" && "$WRAPPER_SHARED" != *.dll ]] || return 0
-  log "dlopen $(basename "$WRAPPER_SHARED") and drive a terminal through it"
-  python3 - "$WRAPPER_SHARED" <<'PY'
+  local lib
+  for lib in "${WRAPPER_SHARED:-}" "${JNI_SHARED:-}"; do
+    [[ -n "$lib" && "$lib" != *.dll ]] || continue
+    run_one_load_check "$lib" || return 1
+  done
+}
+
+run_one_load_check() {
+  log "dlopen $(basename "$1") and drive a terminal through it"
+  python3 - "$1" <<'PY'
 import ctypes, sys
 lib = ctypes.CDLL(sys.argv[1])
 assert lib.st_abi_version() == 1, "abi"
@@ -520,6 +645,8 @@ manifest = {
     "build_host": "$HOST_KEY",
     "android_ndk": "${NDK_ID:-}" or None,
     "strip_tool": "llvm-objcopy $LLVM_OBJCOPY_ID",
+    "jni_library": "${JNI_SHARED##*/}" or None,
+    "jni_headers": "${JDK_ID:-}" or ("android-ndk" if "$TARGET".startswith("android-") and "${JNI_SHARED:-}" else None),
     "runtime_tested": "$RUNTIME_TESTED" == "true",
     "test_result": "$TEST_RESULT",
     "test_host": "$TEST_HOST" or None,
@@ -543,6 +670,7 @@ build_ghostty
 stage_outputs
 normalize_outputs
 build_wrapper
+build_jni
 build_smoke
 build_bridge_test
 check_no_abs_paths

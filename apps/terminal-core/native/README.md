@@ -79,6 +79,24 @@ What `native/build.sh` does, in order:
    `exports/supermux_terminal.map`, Mach-O `exports/supermux_terminal.exp`,
    PE dllexport), and **fail if the shared library exports anything else**
    (or fewer than the 18 `st_*`). Stage `include/supermux_terminal.h`.
+   Wrapper objects are `--strip-debug`ged first (COFF objects carry the
+   absolute temp `.obj` path in a CodeView record even with `-g0`).
+   **macOS dylibs are linked only on a macOS host**, by `xcrun clang++`
+   (ld64, system libc++, `-mmacosx-version-min=11.0`): Zig's self-hosted
+   Mach-O linker ignores `-exported_symbols_list` (it exported all 587
+   globals of the archive) and `llvm-objcopy` cannot localize Mach-O symbols.
+   A Linux cross build of `macos-*` therefore stages the static archive and
+   test executables but no dylibs.
+8b. **JNI library** (not iOS/wasm): compile `src/terminal_jni.c`
+   (`-fvisibility=hidden`, JDK `jni.h` from `$JAVA_HOME` / the JDK `java`
+   resolves to / `/usr/libexec/java_home`; Android: the NDK sysroot's
+   `jni.h`) and link it with the combined `libsupermux_terminal.a` into
+   `lib/libsupermux_terminal_jni.{so,dylib}` / `supermux_terminal_jni.dll`
+   with the same export map. The export check additionally requires exactly
+   the 19 `Java_dev_supermux_terminal_NativeTerminal_*` entry points plus
+   `JNI_OnLoad`. The host JDK's `jni_md.h` serves every target (`jint` = int,
+   `jlong` = long on LP64 / long long on LLP64); Windows gets
+   `-DJNIEXPORT=__declspec(dllexport)`.
 9. Compile the smoke test with `-Wall -Wextra -Werror` and link it against the
    **static** archive (Zig `cc` + Zig's libc++; Android: NDK clang +
    `-static-libstdc++`, 16 KB page size).
@@ -89,8 +107,8 @@ What `native/build.sh` does, in order:
     `scripts/gen_codec_golden.py` generates from `fixtures/codec/*.bin`.
 11. `--test`: run the smoke test, the bridge test (with
     `ST_FIXTURES_DIR=fixtures/codec`, so golden buffers are compared byte for
-    byte), a `dlopen` check of the shared library (python ctypes drives one
-    terminal through the exported symbols only) and, on a Linux host with
+    byte), a `dlopen` check of the shared library and of the JNI library
+    (python ctypes drives one terminal through the exported symbols only) and, on a Linux host with
     `gcc`, the bridge test again under **ASan + UBSan + LeakSanitizer**
     (`ST_SKIP_HEAVY=1`); for linux targets also the handle-table threads
     test (`tests/terminal_bridge_threads_test.c`), plainly and under
