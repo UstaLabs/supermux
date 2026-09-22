@@ -17,6 +17,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlin.concurrent.Volatile
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -39,18 +41,22 @@ enum class RejectionReason { QUEUE_FULL, CLOSED }
  *
  * Hold it while the surface is on screen and [close] it when it is not. Closing is idempotent and
  * non-blocking, and closing one lease never stops the frames another surface is still holding open.
- * Closing the SAME lease from two threads at once is a caller bug.
+ *
+ * Idempotence is ATOMIC, not merely a flag check: a Compose `onDispose` and a host's own cleanup
+ * can race on the same lease, and a check-then-act would let both of them release it — one lease,
+ * two decrements, and the session stops publishing for a SIBLING surface that is still on screen.
+ * The compare-and-set makes exactly one caller the releaser; every other close is a no-op.
  */
+@OptIn(ExperimentalAtomicApi::class)
 class RendererLease internal constructor(private val session: TerminalSession) : AutoCloseable {
-    @Volatile
-    private var open = true
+    private val open = AtomicBoolean(true)
 
     /** True until this lease has been released. */
-    val active: Boolean get() = open
+    val active: Boolean get() = open.load()
 
     override fun close() {
-        if (!open) return
-        open = false
+        // Exactly one caller wins the transition true -> false, and only that one decrements.
+        if (!open.compareAndSet(expectedValue = true, newValue = false)) return
         session.releaseRenderer()
     }
 }

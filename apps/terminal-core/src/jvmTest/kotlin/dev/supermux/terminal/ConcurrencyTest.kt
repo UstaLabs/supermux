@@ -1,5 +1,8 @@
 package dev.supermux.terminal
 
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.atomic.AtomicReference
@@ -93,6 +96,50 @@ class ConcurrencyTest {
             assertFailsWith<IllegalStateException> { engine.resize(size) }
             assertFailsWith<IllegalStateException> { engine.selectedText() }
             engine.close()
+        }
+    }
+
+    /**
+     * Two threads closing the SAME [RendererLease] must release it once, not twice.
+     *
+     * A double release decrements the session's lease count for a lease that was only ever taken
+     * once, which turns publication off for a SIBLING surface that is still on screen — a frozen
+     * terminal with no error anywhere. The check-then-act this replaced could do exactly that; the
+     * assertion is on the sibling, which is what the user would notice.
+     */
+    @Test fun closingOneLeaseTwiceAtOnceDoesNotStrandASibling() = runBlocking {
+        repeat(200) { round ->
+            val session = TerminalSession.open(size, TerminalLimits(), effects = {})
+            try {
+                val sibling = session.attachRenderer()
+                val doomed = session.attachRenderer()
+                session.acknowledge(session.viewports.value.generation)
+                val start = CyclicBarrier(2)
+                val failure = AtomicReference<Throwable?>(null)
+                val racer = thread(name = "st-lease-$round") {
+                    try {
+                        start.await()
+                        doomed.close()
+                    } catch (t: Throwable) {
+                        failure.compareAndSet(null, t)
+                    }
+                }
+                start.await()
+                doomed.close()
+                racer.join(10_000)
+                assertNull(failure.get())
+                assertTrue(!doomed.active, "the lease is released after either close wins")
+
+                // The sibling still holds a lease, so the session must still publish to it.
+                val before = session.viewports.value.generation
+                session.receive("round $round".encodeToByteArray())
+                withTimeout(10_000) {
+                    session.viewports.first { it.generation != before && it.rowText(0) == "round $round" }
+                }
+                sibling.close()
+            } finally {
+                session.close()
+            }
         }
     }
 }
