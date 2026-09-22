@@ -2,11 +2,11 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createCore } from "../../../../packages/supermux-core/src/index.js"
+import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, Host, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { CoreError } from "../../../../packages/supermux-core/src/errors.js"
-import type { AgentDriver, AgentRuntime, ContentBlock, DriverContext, SessionConfiguration } from "../../../../packages/supermux-core/src/index.js"
 import { createCodexNormalizer } from "../../../../packages/supermux-core/src/codex/normalize.js"
 import { CoreCodexAdapter } from "./core-adapter"
+import { createCodexCoreHost } from "./core-host"
 
 function attachCodexNormalizer(runtime: AgentRuntime): AgentRuntime {
   const normalizer = createCodexNormalizer()
@@ -100,25 +100,50 @@ function fakeAgentDriver(options: { configure?: boolean; nativeId?: string; stee
 }
 
 const dirs: string[] = []
-const cores: ReturnType<typeof createCore>[] = []
+const hosts: Host[] = []
 const adapters: CoreCodexAdapter[] = []
 
-async function harness(driver: AgentDriver = fakeAgentDriver().driver) {
+async function harness(fake: { driver: AgentDriver } | AgentDriver = fakeAgentDriver()) {
   const workdir = await mkdtemp(join(tmpdir(), "codex-wd-"))
   const stateDirectory = await mkdtemp(join(tmpdir(), "codex-core-"))
   dirs.push(workdir, stateDirectory)
-  const core = createCore({
+  const driver = "driver" in fake ? fake.driver : fake
+  const host = createCodexCoreHost({
     stateDirectory,
-    agents: [driver],
+    driverFactory: () => driver,
     limits: { interruptTimeoutMs: 40, maxPending: 128, outstandingActivity: 256 },
   })
-  cores.push(core)
-  return { core, workdir, stateDirectory }
+  hosts.push(host)
+  return { host, workdir, stateDirectory }
+}
+
+function makeAdapter(host: Host, opts: {
+  id: string
+  sessionName: string
+  workdir: string
+  persistThreadId: (nativeId: string) => Promise<void>
+  initialThreadId?: string
+  model?: string
+  effort?: string
+  resolveAttachment?: (file_id: string) => Promise<string>
+  onUsageUpdate?: CoreCodexAdapter["onUsageUpdate"]
+  getPrevUsage?: CoreCodexAdapter["getPrevUsage"]
+}): CoreCodexAdapter {
+  const extra: Record<string, unknown> = {
+    cwd: opts.workdir,
+    workdir: opts.workdir,
+    sessionHome: opts.workdir,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+  }
+  if (opts.initialThreadId) extra.nativeSessionId = opts.initialThreadId
+  const handle = host.register({ id: opts.id, env: {}, extra })
+  return new CoreCodexAdapter({ handle, core: host.core, ...opts })
 }
 
 afterEach(async () => {
   await Promise.all(adapters.splice(0).map((a) => a.stop().catch(() => {})))
-  await Promise.all(cores.splice(0).map((c) => c.close({ agents: "shutdown" }).catch(() => {})))
+  await Promise.all(hosts.splice(0).map((h) => h.close({ agents: "shutdown" }).catch(() => {})))
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })))
 })
 
@@ -132,9 +157,9 @@ function listen(adapter: CoreCodexAdapter) {
 
 test("idle send waits for one completion and emits one turn-start/turn-complete", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -149,9 +174,9 @@ test("idle send waits for one completion and emits one turn-start/turn-complete"
 
 test("mid-turn send uses steer not a second prompt", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   await adapter.start()
@@ -168,9 +193,9 @@ test("mid-turn send uses steer not a second prompt", async () => {
 
 test("ambiguous steer surfaces an error and does not queue a second prompt", async () => {
   const fake = fakeAgentDriver({ steerBusy: true })
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -188,9 +213,9 @@ test("ambiguous steer surfaces an error and does not queue a second prompt", asy
 
 test("autonomous native turn emits turn-start/turn-complete without a send", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -208,9 +233,9 @@ test("autonomous native turn emits turn-start/turn-complete without a send", asy
 
 test("item/completed agentMessage emits one assistant-message; deltas are ignored", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -223,9 +248,9 @@ test("item/completed agentMessage emits one assistant-message; deltas are ignore
 
 test("webSearch defers blank start until completed snapshot", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -244,10 +269,10 @@ test("webSearch defers blank start until completed snapshot", async () => {
 
 test("rate-limit notify maps through onUsageUpdate", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const usage: unknown[] = []
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
     onUsageUpdate: (data) => { usage.push(data) },
   })
   adapters.push(adapter)
@@ -269,13 +294,13 @@ test("rate-limit notify maps through onUsageUpdate", async () => {
 
 test("image attachment becomes a Core image block; non-image is folded into text", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const img = join(workdir, "pic.png")
   await writeFile(img, Buffer.from("PNGDATA"))
   const note = join(workdir, "note.txt")
   await writeFile(note, "hello")
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir,
     persistThreadId: async () => {},
     resolveAttachment: async (id) => id === "img" ? img : note,
   })
@@ -295,9 +320,9 @@ test("image attachment becomes a Core image block; non-image is folded into text
 
 test("interrupt confirmed vs unconfirmed", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -339,9 +364,9 @@ test("stop during start closes the late-opened session", async () => {
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const started = adapter.start()
@@ -370,9 +395,9 @@ test("failed close is retained then retry succeeds", async () => {
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   await adapter.start()
@@ -406,9 +431,9 @@ test("setConfiguration rolls adapter fields back on failure", async () => {
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
     model: "gpt-5", effort: "low",
   })
   adapters.push(adapter)
@@ -422,9 +447,9 @@ test("setConfiguration rolls adapter fields back on failure", async () => {
 
 test("rpc passthrough refuses turn/* methods", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   await adapter.start()
@@ -439,10 +464,10 @@ test("rpc passthrough refuses turn/* methods", async () => {
 
 test("adopt uses exact resume id; existing record mismatch is rejected", async () => {
   const fake = fakeAgentDriver({ nativeId: "native-prior" })
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const persisted: string[] = []
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir,
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir,
     initialThreadId: "native-prior",
     persistThreadId: async (id) => { persisted.push(id) },
   })
@@ -450,11 +475,12 @@ test("adopt uses exact resume id; existing record mismatch is rejected", async (
   await adapter.start()
   expect(fake.opens[0]?.resumeId).toBe("native-prior")
   expect(persisted).toEqual(["native-prior"])
+  await adapter.stop()
 
   const other = await mkdtemp(join(tmpdir(), "codex-wd-"))
   dirs.push(other)
-  const bad = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir: other, persistThreadId: async () => {},
+  const bad = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir: other, persistThreadId: async () => {},
   })
   adapters.push(bad)
   await expect(bad.start()).rejects.toThrow(/cwd mismatch/)
@@ -462,9 +488,9 @@ test("adopt uses exact resume id; existing record mismatch is rejected", async (
 
 test("overlapping native activities close the latch only when Core goes idle", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -487,9 +513,9 @@ test("overlapping native activities close the latch only when Core goes idle", a
 
 test("owned prompt completion does not close the latch while native activity continues", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -523,9 +549,9 @@ test("two consecutive failing idle sends each emit an error", async () => {
       }
     },
   }
-  const { core, workdir } = await harness(driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(driver)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -538,9 +564,9 @@ test("two consecutive failing idle sends each emit an error", async () => {
 
 test("session.failed plus failed completion in one turn emit a single error", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   const events = listen(adapter)
@@ -556,9 +582,9 @@ test("session.failed plus failed completion in one turn emit a single error", as
 
 test("idle snapshot then native activity retries send once as steer", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const { host, workdir } = await harness(fake)
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
   })
   adapters.push(adapter)
   await adapter.start()
@@ -577,10 +603,10 @@ test("idle snapshot then native activity retries send once as steer", async () =
 
 test("replays real codex-turn.ndjson through Core normalizer into broker events", async () => {
   const fake = fakeAgentDriver()
-  const { core, workdir } = await harness(fake.driver)
+  const { host, workdir } = await harness(fake)
   const usage: unknown[] = []
-  const adapter = new CoreCodexAdapter({
-    core, id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
+  const adapter = makeAdapter(host, {
+    id: "sess-1", sessionName: "s1", workdir, persistThreadId: async () => {},
     onUsageUpdate: (data) => { usage.push(data) },
   })
   adapters.push(adapter)

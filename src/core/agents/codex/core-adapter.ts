@@ -11,15 +11,18 @@ import type {
   ContentBlock,
   Core,
   CoreEvent,
+  HostHandle,
   InterruptResult,
   Session,
   SessionConfiguration,
   SessionState,
 } from "../../../../packages/supermux-core/src/index.js"
+import { detachCodexRuntimeAdapter } from "./core-host"
 
 const log = makeLogger("agents/codex/core-adapter")
 
 export type CoreCodexAdapterOpts = {
+  handle: HostHandle
   core: Core
   id: string
   sessionName: string
@@ -40,13 +43,6 @@ type JsonRpcLike = {
 
 function asError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
-}
-
-function withCleanupError(original: unknown, cleanup: unknown): Error {
-  const primary = asError(original)
-  if (cleanup == null) return primary
-  const secondary = asError(cleanup)
-  return new Error(`${primary.message}; cleanup failed: ${secondary.message}`, { cause: primary })
 }
 
 function once<T extends (...args: never[]) => void>(fn: T): T {
@@ -85,6 +81,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   onUsageUpdate?: (data: CodexUsage) => void
   getPrevUsage?: () => CodexUsage | null
 
+  private readonly handle: HostHandle
   private readonly core: Core
   private readonly persistThreadId: (nativeId: string) => Promise<void>
   private readonly resolveAttachment?: (file_id: string) => Promise<string>
@@ -120,6 +117,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
 
   constructor(opts: CoreCodexAdapterOpts) {
     super()
+    this.handle = opts.handle
     this.core = opts.core
     this.id = opts.id
     this.sessionName = opts.sessionName
@@ -196,7 +194,7 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
       }
       this.stopped = false
       const epoch = ++this.startEpoch
-      const work = this.openSession(epoch)
+      const work = this.openViaHandle(epoch)
       this.starting = work
       try {
         await work
@@ -234,24 +232,12 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private async performStop(): Promise<void> {
-    const inflight = this.starting
-    let startError: unknown
-    if (inflight) {
-      try {
-        await inflight
-      } catch (err) {
-        startError = err
-      }
-    }
-    try {
-      await this.core.sessions.close(this.id, { mode: "shutdown" })
-    } catch (err) {
-      throw startError != null ? withCleanupError(startError, err) : asError(err)
-    }
+    await this.handle.stop({ mode: "shutdown" })
     this.session = undefined
     this.unsubscribe?.()
     this.unsubscribe = undefined
     this.runtimeRequest = undefined
+    detachCodexRuntimeAdapter(this.id)
     this.completeStoppedTurn()
   }
 
@@ -336,95 +322,38 @@ export class CoreCodexAdapter extends EventEmitter implements AgentAdapter {
     this.continueAfterConfirmedInterrupt = true
   }
 
-  private async openSession(epoch: number): Promise<void> {
+  private async openViaHandle(epoch: number): Promise<void> {
     this.unsubscribe?.()
     this.unsubscribe = this.core.subscribe((event) => this.onCoreEvent(event, epoch))
-    let session: Session | undefined
     try {
       const existing = await this.core.sessions.get(this.id)
+      if (existing) this.assertCompatibleRecord(existing)
       if (this.abandoned(epoch)) {
         this.unsubscribe?.()
         this.unsubscribe = undefined
         return
       }
-      const configuration = this.desiredConfiguration()
-      if (existing) {
-        this.assertCompatibleRecord(existing)
-        session = await this.core.sessions.resume(this.id, { configuration })
-      } else if (this.initialThreadId) {
-        await this.core.sessions.adopt({
-          id: this.id,
-          agent: "codex",
-          agentSessionId: this.initialThreadId,
-          cwd: this.workdir,
-          configuration,
-        })
-        if (this.abandoned(epoch)) {
-          return
-        }
-        session = await this.core.sessions.resume(this.id, { configuration })
-      } else {
-        session = await this.core.sessions.create({ id: this.id, agent: "codex", cwd: this.workdir, configuration })
-      }
+      this.session = await this.handle.start({
+        cwd: this.workdir,
+        configuration: this.desiredConfiguration(),
+        nativeSessionId: this.initialThreadId,
+        onOpened: async (session) => {
+          const nativeId = session.snapshot().agentSessionId
+          this.lastNativeId = nativeId
+          await this.persistThreadId(nativeId)
+        },
+      })
       if (this.abandoned(epoch)) {
-        await this.closeOrRetain(session)
+        await this.handle.stop({ mode: "shutdown" })
+        this.session = undefined
         this.unsubscribe?.()
         this.unsubscribe = undefined
-        return
-      }
-      this.session = session
-      if (this.abandoned(epoch)) {
-        await this.dropOpened(session)
-        return
-      }
-      const nativeId = session.snapshot().agentSessionId
-      this.lastNativeId = nativeId
-      try {
-        await this.persistThreadId(nativeId)
-      } catch (err) {
-        try {
-          await this.dropOpened(session)
-        } catch (cleanup) {
-          throw withCleanupError(err, cleanup)
-        }
-        throw asError(err)
-      }
-      if (this.abandoned(epoch)) {
-        await this.dropOpened(session)
       }
     } catch (err) {
-      if (session && this.session === session) {
-        try {
-          await this.dropOpened(session)
-        } catch (cleanup) {
-          throw withCleanupError(err, cleanup)
-        }
-      } else if (!this.session) {
-        this.unsubscribe?.()
-        this.unsubscribe = undefined
-      }
+      this.unsubscribe?.()
+      this.unsubscribe = undefined
       throw asError(err)
     }
-  }
-
-  private async closeOrRetain(session: Session): Promise<void> {
-    if (session.snapshot().state === "closed") {
-      if (this.session === session) this.session = undefined
-      return
-    }
-    try {
-      await session.close({ mode: "shutdown" })
-    } catch (err) {
-      this.session = session
-      throw asError(err)
-    }
-    if (this.session === session) this.session = undefined
-  }
-
-  private async dropOpened(session: Session): Promise<void> {
-    this.unsubscribe?.()
-    this.unsubscribe = undefined
-    await this.closeOrRetain(session)
   }
 
   private abandoned(epoch: number): boolean {

@@ -94,7 +94,7 @@ async function makeHost(factory: ReturnType<typeof fakeChildFactory>["factory"])
 }
 
 afterEach(async () => {
-  for (const h of hosts.splice(0)) await h.close().catch(() => {})
+  for (const h of hosts.splice(0)) await h.close({ agents: "shutdown" }).catch(() => {})
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
   if (prevKey === undefined) delete process.env.OPENAI_API_KEY
   else process.env.OPENAI_API_KEY = prevKey
@@ -255,27 +255,6 @@ describe("codex core spawn/resume dialect", () => {
     expect(child.codexCalls[0]?.options.command).toBeTruthy()
   })
 
-  test("failed start + failed cleanup retains host registration; retry stop then create", async () => {
-    process.env.OPENAI_API_KEY = "test-key"
-    const child = fakeChildFactory({ failCloses: 1 })
-    const host = await makeHost(child.factory)
-    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
-    dirs.push(workdir)
-    const home = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
-    dirs.push(home)
-    const session = {
-      id: "retry-id",
-      name: "cx-retry",
-      workdir,
-      agent_home: home,
-    }
-    await expect(resumeCodexSession({
-      codexHost: host,
-      onThreadId: () => { throw new Error("persist failed") },
-    }, session)).rejects.toThrow(/persist failed; cleanup failed/)
-    await expect(resumeCodexSession({ codexHost: host }, session)).resolves.toMatchObject({ adapter: expect.any(CoreCodexAdapter) })
-  })
-
   test("held first open: concurrent same-id resume rejects without closing first or opening second", async () => {
     process.env.OPENAI_API_KEY = "test-key"
     let releaseOpen!: () => void
@@ -296,7 +275,7 @@ describe("codex core spawn/resume dialect", () => {
     writeFileSync(join(home, "SENTINEL"), "SENTINEL", "utf8")
 
     const second = resumeCodexSession({ codexHost: host }, session)
-    await expect(second).rejects.toThrow(/already starting/)
+    await expect(second).rejects.toThrow(/already starting|already live/)
     expect(readFileSync(join(home, "SENTINEL"), "utf8")).toBe("SENTINEL")
     expect(child.closeAttempts).toBe(0)
     expect(child.openAttempts).toBe(1)
@@ -306,6 +285,143 @@ describe("codex core spawn/resume dialect", () => {
     expect(child.opens).toHaveLength(1)
     expect(child.opens[0]?.resumeId).toBe("native-keep")
     await adapter.stop()
+  })
+
+  test("user stop of a healthy adapter permits a later resume with a new handle", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const child = fakeChildFactory()
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
+    dirs.push(workdir)
+    const home = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
+    dirs.push(home)
+    const session = { id: "reuse-id", name: "cx-reuse", workdir, agent_home: home, agent_session_id: "native-keep" }
+    const first = await resumeCodexSession({ codexHost: host }, session)
+    await first.adapter.stop()
+    const second = await resumeCodexSession({ codexHost: host }, session)
+    expect(second.adapter).not.toBe(first.adapter)
+    expect(child.opens).toHaveLength(2)
+    expect(child.opens[1]?.resumeId).toBe("native-keep")
+    await second.adapter.stop()
+  })
+
+  test("failed start + failed cleanup retry does not rewrite config until cleanup succeeds", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const child = fakeChildFactory({ failCloses: 5 })
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
+    dirs.push(workdir)
+    const home = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
+    dirs.push(home)
+    const session = { id: "cleanup-order", name: "cx-order", workdir, agent_home: home }
+    await expect(resumeCodexSession({
+      codexHost: host,
+      onThreadId: () => { throw new Error("persist failed") },
+    }, session)).rejects.toThrow(/persist failed; cleanup failed/)
+    const toml = join(home, "config.toml")
+    writeFileSync(toml, "SENTINEL", "utf8")
+    await expect(resumeCodexSession({ codexHost: host }, session)).rejects.toThrow(/close failed/)
+    expect(readFileSync(toml, "utf8")).toBe("SENTINEL")
+  })
+
+  test("registry failure after allocation allows retry of the same id", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const child = fakeChildFactory()
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
+    dirs.push(workdir)
+    const reg = registry()
+    const orig = reg.register.bind(reg)
+    let blows = 1
+    reg.register = ((row: Parameters<Registry["register"]>[0]) => {
+      if (blows-- > 0) throw new Error("register exploded")
+      return orig(row)
+    }) as typeof reg.register
+    await expect(spawn({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      codexHost: host,
+    }, {
+      workdir,
+      requestedName: "cx-reg",
+      agent: AgentKind.Codex,
+      id: "fixed-id",
+    })).rejects.toThrow(/register exploded/)
+    const result = await spawn({
+      registry: reg,
+      bind: async () => {},
+      tmuxSession: "mux",
+      codexHost: host,
+    }, {
+      workdir,
+      requestedName: "cx-reg2",
+      agent: AgentKind.Codex,
+      id: "fixed-id",
+    })
+    expect(result.session_id).toBe("fixed-id")
+    expect(child.opens).toHaveLength(1)
+  })
+
+  test("concurrent failed-cleanup retries cannot both recover or overwrite private home", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const child = fakeChildFactory({ failCloses: 1 })
+    const host = await makeHost(child.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
+    dirs.push(workdir)
+    const home = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
+    dirs.push(home)
+    const session = { id: "race-id", name: "cx-race", workdir, agent_home: home }
+    await expect(resumeCodexSession({
+      codexHost: host,
+      onThreadId: () => { throw new Error("persist failed") },
+    }, session)).rejects.toThrow(/persist failed; cleanup failed/)
+    const toml = join(home, "config.toml")
+    writeFileSync(toml, "SENTINEL", "utf8")
+    const [a, b] = await Promise.allSettled([
+      resumeCodexSession({ codexHost: host }, session),
+      resumeCodexSession({ codexHost: host }, session),
+    ])
+    const fulfilled = [a, b].filter((r) => r.status === "fulfilled")
+    const rejected = [a, b].filter((r) => r.status === "rejected")
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/already awaiting failed-start cleanup|already starting|already live/)
+    const winner = (fulfilled[0] as PromiseFulfilledResult<{ adapter: CoreCodexAdapter }>).value
+    expect(readFileSync(toml, "utf8")).not.toBe("SENTINEL")
+    await winner.adapter.stop()
+    const replacement = await resumeCodexSession({ codexHost: host }, session)
+    const closesBeforeStale = child.closeAttempts
+    await winner.adapter.stop()
+    expect(child.closeAttempts).toBe(closesBeforeStale)
+    await replacement.adapter.stop()
+  })
+
+  test("independent hosts and sibling ids are unaffected by another session's admission", async () => {
+    process.env.OPENAI_API_KEY = "test-key"
+    const a = fakeChildFactory()
+    const b = fakeChildFactory()
+    const hostA = await makeHost(a.factory)
+    const hostB = await makeHost(b.factory)
+    const workdir = mkdtempSync(join(tmpdir(), "mux-codex-wd-"))
+    dirs.push(workdir)
+    const home1 = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
+    const home2 = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
+    const home3 = mkdtempSync(join(tmpdir(), "mux-codex-home-"))
+    dirs.push(home1, home2, home3)
+    const s1 = { id: "id-shared", name: "cx-a", workdir, agent_home: home1, agent_session_id: "n-a" }
+    const s2 = { id: "id-shared", name: "cx-b", workdir, agent_home: home2, agent_session_id: "n-b" }
+    const s3 = { id: "id-sibling", name: "cx-sib", workdir, agent_home: home3, agent_session_id: "n-c" }
+    const [r1, r2, r3] = await Promise.all([
+      resumeCodexSession({ codexHost: hostA }, s1),
+      resumeCodexSession({ codexHost: hostB }, s2),
+      resumeCodexSession({ codexHost: hostA }, s3),
+    ])
+    expect(a.opens).toHaveLength(2)
+    expect(b.opens).toHaveLength(1)
+    await r1.adapter.stop()
+    await r2.adapter.stop()
+    await r3.adapter.stop()
   })
 
   test("commandContext returns adapter.rpc", () => {

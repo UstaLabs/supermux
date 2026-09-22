@@ -1,23 +1,19 @@
 import { deriveName, ensureUnique } from "../../session-manager/naming"
-import { shimSpawnSpec } from "../../session-manager/shim-spawn"
-import { captureBaseCommits, HOME } from "../../session-manager/spawn-helper"
+import { captureBaseCommits } from "../../session-manager/spawn-helper"
 import type { SpawnDeps, SpawnArgs, SpawnResult } from "../../session-manager/spawn-helper"
 import type { CommandContextCtx, ResumeCtx, ResumeRow, ApplyConfigCtx, ApplyConfigRow, ApplyConfigChange, ApplyConfigResult } from "../session-types"
 import type { CodexRpc } from "../../slash-commands/types"
-import { resolveCodexAuth } from "./auth"
-import { writeCodexConfig } from "./config-writer"
-import { writeCodexPreamble } from "./preamble-writer"
 import { CodexAdapter } from "./adapter"
 import { CoreCodexAdapter } from "./core-adapter"
 import { getCodexCoreHost } from "./core-host-provider"
-import type { CodexCoreHost } from "./core-host"
-import { codexSpawnArgs, codexPrepareSessionHome } from "../../plugins"
+import { attachCodexRuntimeAdapter, type CodexCoreHost, type CodexPrepareExtra } from "./core-host"
+import { codexSpawnArgs } from "../../plugins"
 import { resolveCommand } from "../../process/launcher"
 import { join } from "path"
-import { mkdirSync } from "fs"
 import { randomUUID } from "crypto"
-import { STATE_DIR, SOCKETS_DIR } from "../../../shared/paths"
+import { STATE_DIR } from "../../../shared/paths"
 import { AgentKind } from "../../../shared/agents"
+import type { Core, HostHandle } from "../../../../packages/supermux-core/src/index.js"
 
 /** Slash-command discovery context: the live app-server JSON-RPC client.
  * A session uses its own adapter's client; a launcher preview (no session of
@@ -41,12 +37,6 @@ function asError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err))
 }
 
-function withCleanupError(original: unknown, cleanup: unknown): Error {
-  const primary = asError(original)
-  const secondary = asError(cleanup)
-  return new Error(`${primary.message}; cleanup failed: ${secondary.message}`, { cause: primary })
-}
-
 function isSessionBusy(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && (err as { code: unknown }).code === "session_busy"
 }
@@ -64,23 +54,6 @@ function resolveCodexCommand(env: Record<string, string>): string {
   return resolveCommand(["codex"], env, process.platform) ?? "codex"
 }
 
-async function startOrCleanup(host: CodexCoreHost, adapter: CoreCodexAdapter, mode: "start" | "resume"): Promise<void> {
-  try {
-    if (mode === "resume") await adapter.resume()
-    else await adapter.start()
-    markReady(host, adapter)
-  } catch (startErr) {
-    try {
-      await adapter.stop()
-      dropOwned(host, adapter)
-    } catch (stopErr) {
-      markFailedCleanup(host, adapter)
-      throw withCleanupError(startErr, stopErr)
-    }
-    throw startErr
-  }
-}
-
 function persistNativeId(
   onThreadId: ((name: string, sid: string) => void) | undefined,
   name: string,
@@ -88,171 +61,54 @@ function persistNativeId(
   return async (sid) => { onThreadId?.(name, sid) }
 }
 
-type SlotState = "admission" | "recovering" | "starting" | "ready" | "failed-cleanup"
-type OwnedSlot =
-  | { state: "admission"; token: symbol; adapter?: undefined }
-  | { state: "recovering"; token: symbol; adapter: CoreCodexAdapter }
-  | { state: "starting" | "ready" | "failed-cleanup"; adapter: CoreCodexAdapter }
-const ownedByHost = new WeakMap<CodexCoreHost, Map<string, OwnedSlot>>()
-const admissionTokenByHostId = new WeakMap<CodexCoreHost, Map<string, symbol>>()
-
-function ownedMap(host: CodexCoreHost): Map<string, OwnedSlot> {
-  let map = ownedByHost.get(host)
-  if (!map) {
-    map = new Map()
-    ownedByHost.set(host, map)
-  }
-  return map
-}
-
-function tokenMap(host: CodexCoreHost): Map<string, symbol> {
-  let map = admissionTokenByHostId.get(host)
-  if (!map) {
-    map = new Map()
-    admissionTokenByHostId.set(host, map)
-  }
-  return map
-}
-
-function alreadyOwnedError(id: string, state: SlotState): Error {
-  const phase = state === "ready"
-    ? "live"
-    : state === "failed-cleanup" || state === "recovering"
-      ? "awaiting failed-start cleanup"
-      : "starting"
-  return new Error(`codex session ${id} is already ${phase}`)
-}
-
-function dropOwned(host: CodexCoreHost, adapter: CoreCodexAdapter): void {
-  const map = ownedMap(host)
-  const slot = map.get(adapter.id)
-  if (slot?.adapter === adapter && slot.state !== "recovering") {
-    map.delete(adapter.id)
-    tokenMap(host).delete(adapter.id)
-  }
-}
-
-function releaseOwnAdmission(host: CodexCoreHost, id: string, token: symbol): void {
-  const map = ownedMap(host)
-  const slot = map.get(id)
-  if (slot?.state === "admission" && slot.token === token) {
-    map.delete(id)
-    tokenMap(host).delete(id)
-  }
-}
-
-function markReady(host: CodexCoreHost, adapter: CoreCodexAdapter): void {
-  const slot = ownedMap(host).get(adapter.id)
-  if (slot?.adapter === adapter && slot.state === "starting") {
-    ownedMap(host).set(adapter.id, { state: "ready", adapter })
-    tokenMap(host).delete(adapter.id)
-  }
-}
-
-function markFailedCleanup(host: CodexCoreHost, adapter: CoreCodexAdapter): void {
-  const slot = ownedMap(host).get(adapter.id)
-  if (slot?.adapter === adapter) {
-    ownedMap(host).set(adapter.id, { state: "failed-cleanup", adapter })
-    tokenMap(host).delete(adapter.id)
-  }
-}
-
-function attachStarting(host: CodexCoreHost, adapter: CoreCodexAdapter): void {
-  const map = ownedMap(host)
-  const slot = map.get(adapter.id)
-  const token = tokenMap(host).get(adapter.id)
-  if (!slot || slot.state !== "admission" || slot.token !== token) {
-    throw alreadyOwnedError(adapter.id, slot?.state ?? "ready")
-  }
-  map.set(adapter.id, { state: "starting", adapter })
-}
-
-function wrapStopToRelease(host: CodexCoreHost, adapter: CoreCodexAdapter): void {
-  const original = adapter.stop.bind(adapter)
-  adapter.stop = async () => {
-    await original()
-    dropOwned(host, adapter)
-  }
-}
-
-async function stopAllocatedThenRelease(host: CodexCoreHost, adapter: CoreCodexAdapter, cause: unknown): Promise<never> {
-  try {
-    await adapter.stop()
-    dropOwned(host, adapter)
-  } catch (stopErr) {
-    markFailedCleanup(host, adapter)
-    throw withCleanupError(cause, stopErr)
-  }
-  throw asError(cause)
-}
-
-/** Retry a proven failed-start cleanup, then reserve admission before any
- * credential/config/home writes. Concurrent same-host/id starts reject. */
-async function reserveAdmission(host: CodexCoreHost, id: string): Promise<symbol> {
-  const map = ownedMap(host)
-  const tokens = tokenMap(host)
-  const prior = map.get(id)
-  if (prior?.state === "failed-cleanup") {
-    const recoverToken = Symbol("codex-recover")
-    const failedOwner = prior.adapter
-    map.set(id, { state: "recovering", token: recoverToken, adapter: failedOwner })
-    try {
-      await failedOwner.stop()
-    } catch (stopErr) {
-      const cur = map.get(id)
-      if (cur?.state === "recovering" && cur.token === recoverToken && cur.adapter === failedOwner) {
-        map.set(id, { state: "failed-cleanup", adapter: failedOwner })
-      }
-      throw asError(stopErr)
-    }
-    const cur = map.get(id)
-    if (cur?.state !== "recovering" || cur.token !== recoverToken || cur.adapter !== failedOwner) {
-      throw alreadyOwnedError(id, cur?.state ?? "ready")
-    }
-    const token = Symbol("codex-admission")
-    map.set(id, { state: "admission", token })
-    tokens.set(id, token)
-    return token
-  }
-  if (prior) throw alreadyOwnedError(id, prior.state)
-  const token = Symbol("codex-admission")
-  map.set(id, { state: "admission", token })
-  tokens.set(id, token)
-  return token
-}
-
 function createBoundAdapter(opts: {
-  host: CodexCoreHost
+  handle: HostHandle
+  core: Core
   id: string
   sessionName: string
   workdir: string
   model?: string
   effort?: string
-  env: Record<string, string>
-  command: string
-  args: string[]
   initialSessionId?: string
   persistSessionId: (sid: string) => Promise<void>
   resolveAttachment?: (file_id: string) => Promise<string>
 }): CoreCodexAdapter {
-  const adapter = opts.host.createAdapter({
+  const adapter = new CoreCodexAdapter({
+    handle: opts.handle,
+    core: opts.core,
     id: opts.id,
     sessionName: opts.sessionName,
     workdir: opts.workdir,
     model: opts.model,
     effort: opts.effort,
-    env: opts.env,
-    command: opts.command,
-    args: opts.args,
     initialThreadId: opts.initialSessionId,
     persistThreadId: opts.persistSessionId,
     resolveAttachment: opts.resolveAttachment,
   })
-  attachStarting(opts.host, adapter)
-  wrapStopToRelease(opts.host, adapter)
+  attachCodexRuntimeAdapter(opts.id, adapter)
   return adapter
 }
 
+function prepareExtra(opts: {
+  id: string
+  sessionName: string
+  sessionHome: string
+  workdir: string
+  nativeSessionId?: string
+}): CodexPrepareExtra {
+  return {
+    sessionHome: opts.sessionHome,
+    sessionName: opts.sessionName,
+    sessionId: opts.id,
+    workdir: opts.workdir,
+    cwd: opts.workdir,
+    nativeSessionId: opts.nativeSessionId,
+  }
+}
+
+/** Codex's worker is an in-process CoreCodexAdapter driving app-server via a
+ * process-owned CodexCoreHost. Private-home writes (auth, config.toml, preamble)
+ * run in the host prepare hook, after admission. */
 export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResult> {
   const base = args.requestedName ?? deriveName(args.workdir)
   const name = args.pa ? base : ensureUnique(base, deps.registry.takenNames())
@@ -260,49 +116,33 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
   if (!args.pa) deps.registry.reserveName(name)
 
   const host = resolveHost(deps.codexHost)
-  const admissionToken = await reserveAdmission(host, id)
   const sessionHome = join(STATE_DIR, "agents", "codex", name)
+  const handle = host.register({
+    id,
+    env: {},
+    command: resolveCodexCommand({}),
+    args: brokerCodexArgs(name),
+    extra: prepareExtra({ id, sessionName: name, sessionHome, workdir: args.workdir }),
+  })
   let adapter: CoreCodexAdapter | undefined
   try {
-    mkdirSync(sessionHome, { recursive: true, mode: 0o700 })
-
-    const auth = await resolveCodexAuth({
-      apiKey: process.env.OPENAI_API_KEY,
-      userCodexHome: join(HOME, ".codex"),
-      sessionCodexHome: sessionHome,
-    })
-    writeCodexConfig({
-      codexHome: sessionHome,
-      ...shimSpawnSpec(),
-      sessionName: name,
-      socketsDir: SOCKETS_DIR,
-      sessionId: id,
-    })
-    writeCodexPreamble({ codexHome: sessionHome, sessionName: name, workdir: args.workdir })
     await deps.bind(id)
-    await codexPrepareSessionHome(sessionHome)
 
-    const env = { ...auth.env, CODEX_HOME: sessionHome }
     adapter = createBoundAdapter({
-      host,
+      handle,
+      core: host.core,
       id,
       sessionName: name,
       workdir: args.workdir,
       model: args.model,
       effort: args.effort,
-      env,
-      command: resolveCodexCommand(env),
-      args: brokerCodexArgs(name),
       persistSessionId: persistNativeId(deps.onThreadId, name),
       resolveAttachment: deps.resolveAttachment,
     })
-  } catch (err) {
-    if (adapter) await stopAllocatedThenRelease(host, adapter, err)
-    releaseOwnAdmission(host, id, admissionToken)
-    throw err
-  }
 
-  try {
+    // Register BEFORE adapter.start(): start() completes the native handshake, which
+    // fires persistThreadId — that callback resolves the row by name, so the row
+    // must already exist or the thread id is lost (breaking resume).
     if (args.pa) {
       if (!args.pa.skipRegister) {
         deps.registry.registerPA({
@@ -330,17 +170,27 @@ export async function spawn(deps: SpawnDeps, args: SpawnArgs): Promise<SpawnResu
         internal: args.internal,
       } as any)
     }
-  } catch (err) {
-    await stopAllocatedThenRelease(host, adapter, err)
-  }
 
-  await startOrCleanup(host, adapter, "start")
+    await adapter.start()
+  } catch (err) {
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
+    }
+    throw err
+  }
 
   deps.registerAdapter?.(name, adapter, { onExit: () => {} })
 
   return { name, session_id: id, model: args.model, pid: 0 }
 }
 
+/** Rebuild a Codex session's adapter after a broker restart. Native history
+ * lives under the session-private home; resume adopts the existing broker id
+ * and native session id, then exact-resumes. A failed load does not mint a
+ * new conversation. Self-heals private config, credentials and preamble. */
 export async function resumeCodexSession(
   deps: {
     resolveAttachment?: (file_id: string) => Promise<string>
@@ -350,50 +200,45 @@ export async function resumeCodexSession(
   session: { id: string; name: string; workdir: string; agent_home: string; model?: string; effort?: string; agent_session_id?: string },
 ): Promise<{ adapter: CoreCodexAdapter }> {
   const host = resolveHost(deps.codexHost)
-  const admissionToken = await reserveAdmission(host, session.id)
   const sessionHome = session.agent_home
+  const initialSessionId = session.agent_session_id || undefined
+  const handle = host.register({
+    id: session.id,
+    env: {},
+    command: resolveCodexCommand({}),
+    args: brokerCodexArgs(session.name),
+    extra: prepareExtra({
+      id: session.id,
+      sessionName: session.name,
+      sessionHome,
+      workdir: session.workdir,
+      nativeSessionId: initialSessionId,
+    }),
+  })
   let adapter: CoreCodexAdapter | undefined
   try {
-    const auth = await resolveCodexAuth({
-      apiKey: process.env.OPENAI_API_KEY,
-      userCodexHome: join(HOME, ".codex"),
-      sessionCodexHome: sessionHome,
-    })
-    await codexPrepareSessionHome(sessionHome)
-    writeCodexConfig({
-      codexHome: sessionHome,
-      ...shimSpawnSpec(),
-      sessionName: session.name,
-      socketsDir: SOCKETS_DIR,
-      sessionId: session.id,
-    })
-    writeCodexPreamble({ codexHome: sessionHome, sessionName: session.name, workdir: session.workdir })
-
-    const env = { ...auth.env, CODEX_HOME: sessionHome }
-    const initialSessionId = session.agent_session_id || undefined
     adapter = createBoundAdapter({
-      host,
+      handle,
+      core: host.core,
       id: session.id,
       sessionName: session.name,
       workdir: session.workdir,
       model: session.model,
       effort: session.effort,
-      env,
-      command: resolveCodexCommand(env),
-      args: brokerCodexArgs(session.name),
       initialSessionId,
       persistSessionId: persistNativeId(deps.onThreadId, session.name),
       resolveAttachment: deps.resolveAttachment,
     })
-    if (initialSessionId) await startOrCleanup(host, adapter, "resume")
-    else await startOrCleanup(host, adapter, "start")
+    if (initialSessionId) await adapter.resume()
+    else await adapter.start()
     return { adapter }
   } catch (err) {
-    const slot = adapter ? ownedMap(host).get(adapter.id) : undefined
-    if (adapter && slot?.adapter === adapter && slot.state === "starting") {
-      await stopAllocatedThenRelease(host, adapter, err)
+    try {
+      if (adapter) await adapter.stop()
+      else await handle.stop({ mode: "shutdown" })
+    } catch {
+      // Failed stop leaves failed-cleanup on the host; the original error is the one to report.
     }
-    releaseOwnAdmission(host, session.id, admissionToken)
     throw err
   }
 }
