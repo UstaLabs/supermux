@@ -237,12 +237,7 @@ export interface WebChannelOpts {
     changes: (id: string) => Promise<unknown>
     forWorkdir: (workdir: string) => Promise<unknown | undefined>
     remove: (ids: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
-    reclaim: (workdirs: string[]) => Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>>
   }
-  /** Workdirs an archive would release: the session's / the workspace's chat sessions' / the chat view's. */
-  sessionWorkdirs?: (sessionId: string) => string[]
-  workspaceWorkdirs?: (workspaceId: string) => string[]
-  viewWorkdirs?: (viewId: string) => string[]
   renameSession?: (oldName: string, newName: string) => Promise<void>
   reorderSessions?: (orderedIds: string[]) => void
   listWorkspaces?: () => import("../../core/workspace/dto").WorkspaceDto[]
@@ -1322,6 +1317,22 @@ export class WebChannel implements Channel {
       }
     }
     return undefined
+  }
+
+  /** After an archive the user confirmed with "also delete": delete EXACTLY the worktree ids
+   *  the dialog displayed (the repeatable `deleteWorktree=<id>` query param) — never ids derived
+   *  from the archived rows, which would include worktrees the user deliberately kept. A live
+   *  owner still refuses per id (in_use). The archive already succeeded: a failed delete is
+   *  reported per id, never undone and never a failed request.
+   *  Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3 */
+  private async deleteConfirmedWorktrees(ids: string[]): Promise<Array<{ id: string; ok: boolean; error?: string; inUseBy?: string[] }>> {
+    if (!this.opts.worktrees) return ids.map((id) => ({ id, ok: false, error: "not configured" }))
+    try {
+      return await this.opts.worktrees.remove(ids)
+    } catch (e: any) {
+      const error = String(e?.message ?? e)
+      return [...new Set(ids)].map((id) => ({ id, ok: false, error }))
+    }
   }
 
   private json(body: unknown, status = 200): Response {
@@ -2779,18 +2790,14 @@ export class WebChannel implements Channel {
     if (method === "DELETE" && path.match(/^\/sessions\/[^/]+$/)) {
       const id = decodeURIComponent(path.split("/")[2]!)
       if (!this.opts.killSession) return this.json({ error: "not configured" }, 503)
-      const deleteWorktree = url.searchParams.get("deleteWorktree") === "1"
-      // Read BEFORE the archive: afterwards the row is archived but its workdir is what we need.
-      const workdirs = deleteWorktree ? (this.opts.sessionWorkdirs?.(id) ?? []) : []
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.killSession(id)
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
-      if (!deleteWorktree) return new Response(null, { status: 204 })
-      // The archive already succeeded; a failed delete is reported, never undone.
-      const worktree = await this.opts.worktrees?.reclaim(workdirs).catch((e: any) => [{ id: "", ok: false, error: String(e?.message ?? e) }]) ?? []
-      return this.json({ worktree })
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "PATCH" && path === "/sessions/reorder") {
       const body = await req.json().catch(() => ({})) as { orderedIds?: unknown }
@@ -2886,19 +2893,15 @@ export class WebChannel implements Channel {
     if (method === "DELETE" && path.match(/^\/workspaces\/[^/]+$/)) {
       if (!this.opts.archiveWorkspace) return this.json({ error: "not configured" }, 503)
       const id = decodeURIComponent(path.split("/")[2]!)
-      const deleteWorktree = url.searchParams.get("deleteWorktree") === "1"
-      // Read BEFORE the archive: afterwards the row is archived but its workdirs are what we need.
-      const workdirs = deleteWorktree ? (this.opts.workspaceWorkdirs?.(id) ?? []) : []
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.archiveWorkspace(id)
         this.broadcastToAll({ type: "workspace_removed", id })
-        if (!deleteWorktree) return new Response(null, { status: 204 })
-        // The archive already succeeded; a failed delete is reported, never undone.
-        const worktree = await this.opts.worktrees?.reclaim(workdirs).catch((e: any) => [{ id: "", ok: false, error: String(e?.message ?? e) }]) ?? []
-        return this.json({ worktree })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "POST" && path.match(/^\/workspaces\/[^/]+\/restore$/)) {
       if (!this.opts.restoreWorkspace) return this.json({ error: "not configured" }, 503)
@@ -2970,21 +2973,17 @@ export class WebChannel implements Channel {
       const parts = path.split("/")
       const workspaceId = decodeURIComponent(parts[2]!)
       const viewId = decodeURIComponent(parts[4]!)
-      const deleteWorktree = url.searchParams.get("deleteWorktree") === "1"
-      // Read BEFORE the close: afterwards the view row is gone.
-      const workdirs = deleteWorktree ? (this.opts.viewWorkdirs?.(viewId) ?? []) : []
+      const worktreeIds = url.searchParams.getAll("deleteWorktree")
       try {
         await this.opts.closeWorkspaceView(viewId)
         this.broadcastToAll({ type: "view_removed", workspaceId, viewId })
         const ws = this.opts.getWorkspace?.(workspaceId)
         if (ws) this.broadcastToAll({ type: "workspace_changed", workspace: ws })
-        if (!deleteWorktree) return new Response(null, { status: 204 })
-        // The close already succeeded; a failed delete is reported, never undone.
-        const worktree = await this.opts.worktrees?.reclaim(workdirs).catch((e: any) => [{ id: "", ok: false, error: String(e?.message ?? e) }]) ?? []
-        return this.json({ worktree })
       } catch (err: any) {
         return this.json({ error: err?.message ?? String(err) }, 500)
       }
+      if (!url.searchParams.has("deleteWorktree")) return new Response(null, { status: 204 })
+      return this.json({ worktree: await this.deleteConfirmedWorktrees(worktreeIds) })
     }
     if (method === "POST" && path.match(/^\/views\/[^/]+\/move$/)) {
       if (!this.opts.moveWorkspaceView) return this.json({ error: "not configured" }, 503)

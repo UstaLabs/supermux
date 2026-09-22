@@ -55,29 +55,29 @@ test("list returns summaries and then broadcasts worktree_sizes", async () => {
   expect(sizes.map((s: any) => s.id)).toEqual(["repo-abc/u1"])
 })
 
-test("reclaim keeps a worktree that still has a live owner", async () => {
+test("remove keeps a worktree that still has a live owner", async () => {
   const { dir, rows, svc } = setup()
   rows.push(r("parent", dir, "active"), r("child", dir, "archived"))
-  const out = await svc.reclaim([dir])
+  const out = await svc.remove(["repo-abc/u1"])
   expect(out).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["parent"] }])
   expect(existsSync(dir)).toBe(true)
 })
 
-test("reclaim deletes once the last owner is archived and broadcasts worktrees_removed", async () => {
+test("remove deletes once the last owner is archived and broadcasts worktrees_removed", async () => {
   const { dir, rows, svc, frames } = setup()
   rows.push(r("only", dir, "archived"))
-  const out = await svc.reclaim([dir])
+  const out = await svc.remove(["repo-abc/u1"])
   expect(out).toEqual([{ id: "repo-abc/u1", ok: true }])
   expect(existsSync(dir)).toBe(false)
   expect(frames).toContainEqual({ type: "worktrees_removed", ids: ["repo-abc/u1"] })
 })
 
-test("reclaim treats a subfolder workdir as its enclosing worktree, reporting in_use for another live owner", async () => {
+test("remove reports in_use for a live session working in a subfolder", async () => {
   const { dir, rows, svc } = setup()
   const sub = join(dir, "nested")
   mkdirSync(sub)
-  rows.push(r("other", dir, "active"))
-  const out = await svc.reclaim([sub])
+  rows.push(r("other", sub, "active"))
+  const out = await svc.remove(["repo-abc/u1"])
   expect(out).toEqual([{ id: "repo-abc/u1", ok: false, error: "in_use", inUseBy: ["other"] }])
   expect(existsSync(dir)).toBe(true)
 })
@@ -91,9 +91,4 @@ test("forWorkdir returns id, all owners, changes and size; undefined for non-wor
   expect(f!.changes.files).toEqual([])
   expect(f!.bytes).toBeGreaterThan(0)
   expect(await svc.forWorkdir("/nope")).toBeUndefined()
-})
-
-test("reclaim ignores workdirs that are not worktrees", async () => {
-  const { svc } = setup()
-  expect(await svc.reclaim(["/home/x/project"])).toEqual([])
 })

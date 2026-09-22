@@ -1,7 +1,8 @@
 // Integration tests for the explicit-worktree-cleanup routes (mirrors
 // usage-route.test.ts / reasoning-levels-route.test.ts): GET /worktrees,
 // GET /worktrees/:id/changes, GET /worktrees/by-workdir, DELETE /worktrees,
-// and the deleteWorktree=1 flag on the session/workspace/view archive routes.
+// and the repeatable deleteWorktree=<worktreeId> param on the session/workspace/view archive
+// routes (delete exactly the ids the user confirmed in the dialog, after the archive).
 // Spec: docs/superpowers/specs/2026-09-22-explicit-worktree-cleanup-design.md §3.3
 import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync } from "fs"
@@ -44,7 +45,6 @@ function fakeWorktrees() {
       },
       forWorkdir: async (w: string) => (w === "/r/s/u" ? { id: "s/u", owners: [], changes: { id: "s/u", files: [], commits: [], ignored: [], truncated: { files: 0, commits: 0, ignored: 0 } } } : undefined),
       remove: async (ids: string[]) => { calls.push(`remove:${ids.join(",")}`); return ids.map((id) => ({ id, ok: true })) },
-      reclaim: async (dirs: string[]) => { calls.push(`reclaim:${dirs.join(",")}`); return dirs.map(() => ({ id: "s/u", ok: true })) },
     },
   }
 }
@@ -122,95 +122,54 @@ test("GET /worktrees 503s when not configured", async () => {
   expect(res.status).toBe(503)
 })
 
-test("DELETE /sessions/:id without the flag never reclaims (behaviour unchanged)", async () => {
-  const w = fakeWorktrees()
-  const made = makeChannel({
-    worktrees: w.api,
-    killSession: async () => {},
-    sessionWorkdirs: () => ["/r/s/u"],
-  })
-  channel = made.channel
-  await channel.start()
-  const res = await request(channel, made.devicesFile, "DELETE", "/sessions/abc")
-  expect(res.status).toBe(204)
-  expect(w.calls.some((c) => c.startsWith("reclaim"))).toBe(false)
-})
+/** The three archive routes, each with its archive fake and the name it records. */
+const ARCHIVE_ROUTES = [
+  { name: "session", path: "/sessions/abc", step: "kill", opts: (order: string[]) => ({ killSession: async () => { order.push("kill") } }) },
+  { name: "workspace", path: "/workspaces/ws1", step: "archive", opts: (order: string[]) => ({ archiveWorkspace: async () => { order.push("archive") } }) },
+  { name: "view", path: "/workspaces/ws1/views/v1", step: "close", opts: (order: string[]) => ({ closeWorkspaceView: async () => { order.push("close") } }) },
+] as const
 
-test("DELETE /sessions/:id?deleteWorktree=1 archives THEN reclaims the session's workdir", async () => {
-  const w = fakeWorktrees()
-  const order: string[] = []
-  const made = makeChannel({
-    worktrees: { ...w.api, reclaim: async (d: string[]) => { order.push("reclaim"); return w.api.reclaim(d) } },
-    killSession: async () => { order.push("kill") },
-    sessionWorkdirs: () => ["/r/s/u"],
+for (const r of ARCHIVE_ROUTES) {
+  test(`DELETE ${r.name} archive without deleteWorktree stays 204 and deletes nothing (behaviour unchanged)`, async () => {
+    const w = fakeWorktrees()
+    const made = makeChannel({ worktrees: w.api, ...r.opts([]) })
+    channel = made.channel
+    await channel.start()
+    const res = await request(channel, made.devicesFile, "DELETE", r.path)
+    expect(res.status).toBe(204)
+    expect(w.calls.some((c) => c.startsWith("remove"))).toBe(false)
   })
-  channel = made.channel
-  await channel.start()
-  const res = await request(channel, made.devicesFile, "DELETE", "/sessions/abc?deleteWorktree=1")
-  expect(res.status).toBe(200)
-  expect(order).toEqual(["kill", "reclaim"])
-  expect((await res.json() as { worktree: unknown }).worktree).toEqual([{ id: "s/u", ok: true }])
-})
 
-test("DELETE /workspaces/:id without the flag stays 204 (behaviour unchanged)", async () => {
-  const w = fakeWorktrees()
-  const made = makeChannel({
-    worktrees: w.api,
-    archiveWorkspace: async () => {},
-    workspaceWorkdirs: () => ["/r/s/u"],
+  test(`DELETE ${r.name} archive ?deleteWorktree=<id>&deleteWorktree=<id> archives THEN removes exactly those ids`, async () => {
+    const w = fakeWorktrees()
+    const order: string[] = []
+    const seen: string[][] = []
+    const made = makeChannel({
+      worktrees: { ...w.api, remove: async (ids: string[]) => { order.push("remove"); seen.push(ids); return w.api.remove(ids) } },
+      ...r.opts(order),
+    })
+    channel = made.channel
+    await channel.start()
+    const q = `deleteWorktree=${encodeURIComponent("s/u")}&deleteWorktree=${encodeURIComponent("t/v")}`
+    const res = await request(channel, made.devicesFile, "DELETE", `${r.path}?${q}`)
+    expect(res.status).toBe(200)
+    expect(order).toEqual([r.step, "remove"])
+    expect(seen).toEqual([["s/u", "t/v"]])
+    expect((await res.json() as { worktree: unknown }).worktree).toEqual([{ id: "s/u", ok: true }, { id: "t/v", ok: true }])
   })
-  channel = made.channel
-  await channel.start()
-  const res = await request(channel, made.devicesFile, "DELETE", "/workspaces/ws1")
-  expect(res.status).toBe(204)
-  expect(w.calls.some((c) => c.startsWith("reclaim"))).toBe(false)
-})
 
-test("DELETE /workspaces/:id?deleteWorktree=1 archives THEN reclaims the workspace's workdirs", async () => {
-  const w = fakeWorktrees()
-  const order: string[] = []
-  const made = makeChannel({
-    worktrees: { ...w.api, reclaim: async (d: string[]) => { order.push("reclaim"); return w.api.reclaim(d) } },
-    archiveWorkspace: async () => { order.push("archive") },
-    workspaceWorkdirs: () => ["/r/s/u"],
+  test(`DELETE ${r.name} archive: a failed remove is reported per id, the archive stands`, async () => {
+    const w = fakeWorktrees()
+    const order: string[] = []
+    const made = makeChannel({ worktrees: { ...w.api, remove: async () => { throw new Error("boom") } }, ...r.opts(order) })
+    channel = made.channel
+    await channel.start()
+    const res = await request(channel, made.devicesFile, "DELETE", `${r.path}?deleteWorktree=${encodeURIComponent("s/u")}`)
+    expect(res.status).toBe(200)
+    expect(order).toEqual([r.step])
+    expect((await res.json() as { worktree: unknown }).worktree).toEqual([{ id: "s/u", ok: false, error: "boom" }])
   })
-  channel = made.channel
-  await channel.start()
-  const res = await request(channel, made.devicesFile, "DELETE", "/workspaces/ws1?deleteWorktree=1")
-  expect(res.status).toBe(200)
-  expect(order).toEqual(["archive", "reclaim"])
-  expect((await res.json() as { worktree: unknown }).worktree).toEqual([{ id: "s/u", ok: true }])
-})
-
-test("DELETE /workspaces/:wid/views/:vid without the flag stays 204 (behaviour unchanged)", async () => {
-  const w = fakeWorktrees()
-  const made = makeChannel({
-    worktrees: w.api,
-    closeWorkspaceView: async () => {},
-    viewWorkdirs: () => ["/r/s/u"],
-  })
-  channel = made.channel
-  await channel.start()
-  const res = await request(channel, made.devicesFile, "DELETE", "/workspaces/ws1/views/v1")
-  expect(res.status).toBe(204)
-  expect(w.calls.some((c) => c.startsWith("reclaim"))).toBe(false)
-})
-
-test("DELETE /workspaces/:wid/views/:vid?deleteWorktree=1 closes THEN reclaims the view's workdir", async () => {
-  const w = fakeWorktrees()
-  const order: string[] = []
-  const made = makeChannel({
-    worktrees: { ...w.api, reclaim: async (d: string[]) => { order.push("reclaim"); return w.api.reclaim(d) } },
-    closeWorkspaceView: async () => { order.push("close") },
-    viewWorkdirs: () => ["/r/s/u"],
-  })
-  channel = made.channel
-  await channel.start()
-  const res = await request(channel, made.devicesFile, "DELETE", "/workspaces/ws1/views/v1?deleteWorktree=1")
-  expect(res.status).toBe(200)
-  expect(order).toEqual(["close", "reclaim"])
-  expect((await res.json() as { worktree: unknown }).worktree).toEqual([{ id: "s/u", ok: true }])
-})
+}
 
 test("GET /worktrees reaches the route even with a staticDir (not swallowed by the SPA fallback)", async () => {
   const w = fakeWorktrees()

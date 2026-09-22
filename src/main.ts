@@ -1861,21 +1861,6 @@ if (MUX_WEB_PORT && MUX_WEB_PUBLIC_URL) {
       changes: (id) => worktreeService.changes(id),
       forWorkdir: (w) => worktreeService.forWorkdir(w),
       remove: (ids) => worktreeService.remove(ids),
-      reclaim: (dirs) => worktreeService.reclaim(dirs),
-    },
-    sessionWorkdirs: (id) => {
-      const s = registry.get(id)
-      return s?.workdir ? [s.workdir] : []
-    },
-    workspaceWorkdirs: (id) => registry.workspaces.chatSessionIds(id)
-      .map((sid) => registry.get(sid)?.workdir)
-      .filter((w): w is string => !!w),
-    viewWorkdirs: (viewId) => {
-      const v = registry.workspaces.getView(viewId)
-      if (!v || v.kind !== "chat") return []
-      const sid = (v.state as { sessionId?: string }).sessionId
-      const w = sid ? registry.get(sid)?.workdir : undefined
-      return w ? [w] : []
     },
     renameSession: async (id, newName) => {
       const s = registry.get(id)

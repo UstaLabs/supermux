@@ -105,12 +105,4 @@ export class WorktreeService {
     if (removed.length) this.deps.broadcast({ type: "worktrees_removed", ids: removed })
     return results
   }
-
-  /** After an archive the user confirmed with "also delete": delete each affected
-   *  worktree that no live session still uses (a shared one reports in_use). */
-  async reclaim(workdirs: string[]): Promise<DeleteResult[]> {
-    const ids = [...new Set(workdirs.map((w) => this.idForWorkdir(w)).filter((x): x is string => !!x))]
-    if (!ids.length) return []
-    return this.remove(ids)
-  }
 }
