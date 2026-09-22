@@ -95,8 +95,9 @@ fun Terminal(
 
     val scope = rememberCoroutineScope()
     val scroll = remember(session, scope) {
-        // The ONLY thing scrolling asks of the session, and only once per row boundary.
-        ScrollController(scope) { row -> session.scrollTo(row) }
+        // The ONLY thing scrolling asks of the session, and only once per row boundary. The result
+        // matters: a refused enqueue means the request was NOT made, and the controller retries.
+        ScrollController(scope) { row -> session.scrollTo(row).accepted }
     }
     // The metrics decide what a pixel of scrolling means; they are known before the first paint.
     SideEffect { scroll.onCellHeight(metrics.height) }

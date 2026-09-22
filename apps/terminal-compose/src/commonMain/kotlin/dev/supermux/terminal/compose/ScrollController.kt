@@ -10,6 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import dev.supermux.terminal.TerminalRow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlin.concurrent.Volatile
 
 /**
  * Local shell history, scrolled at pixel resolution and without a single byte crossing the wire.
@@ -28,6 +29,14 @@ import kotlinx.coroutines.launch
  * about; it changes only [paintOffset], which the painter translates by. This keeps the engine's
  * frame rate independent of the gesture's, which is what makes the motion smooth.
  *
+ * **Rejected requests.** `scrollTo` is a NON-BLOCKING enqueue and it can be refused — a saturated
+ * mailbox or an exhausted input budget, which is exactly what a fast fling over a flooding pty
+ * produces. A refused request is therefore never recorded as sent: nothing is latched, the row is
+ * remembered as still owed, and the next frame (or the next pixel of the gesture) asks again. If it
+ * were latched, no frame would ever carry the row that was asked for, the eviction-adoption rule
+ * below would stay switched off forever and the surface would keep showing the wrong text with no
+ * way back.
+ *
  * **Gestures.** [scrollableState] is driven by `Modifier.scrollable`, so touch drags, the desktop
  * mouse wheel and a trackpad all arrive here as PIXELS that the platform's own event adapter
  * already normalized — a JVM wheel notch is converted by Compose's mouse-wheel node against the
@@ -40,12 +49,15 @@ import kotlinx.coroutines.launch
  * a transition into application mouse mode and on disposal. A new touch cancels it through the same
  * mutex, inside `Modifier.scrollable`.
  *
- * Not thread-safe, and not meant to be: everything here runs on the composition's own dispatcher.
+ * Every MUTATION happens on the composition's own dispatcher; the only thing the draw path reads is
+ * [paintOffset] and the overscan rows, which is why [ScrollStrip] keeps its frames in an immutable
+ * list it swaps wholesale rather than in a deque it edits in place.
  */
 @Stable
 class ScrollController(
     private val scope: CoroutineScope,
-    private val scrollTo: (Long) -> Unit,
+    /** Ask the engine to put [Long] at the top of the viewport; false = the session refused it. */
+    private val scrollTo: (Long) -> Boolean,
 ) {
     /** The top edge of the viewport: an absolute row plus a sub-row pixel displacement. */
     var position: ScrollPosition by mutableStateOf(ScrollPosition(0L, 0.0))
@@ -65,6 +77,9 @@ class ScrollController(
 
     private val strip = ScrollStrip()
     private var requestedRow: Long? = null
+
+    /** A row the session refused to be told about; retried until it is accepted. See the class KDoc. */
+    private var owedRow: Long? = null
 
     /** True once a frame has come back carrying [requestedRow]; see [onFrame]'s eviction rule. */
     private var answered = false
@@ -95,7 +110,14 @@ class ScrollController(
         return (next.absolutePx(cell) - before.absolutePx(cell)).toFloat()
     }
 
-    /** Interrupt a running fling (and any drag): a resize, a reset, mouse mode, disposal. */
+    /**
+     * Interrupt a running fling (and any drag): a resize, mouse mode, going inactive, disposal.
+     *
+     * ASYNCHRONOUS: taking the scroll mutex needs a coroutine, so a decay already in flight may post
+     * one or two more deltas before it actually stops. That is why [onCellHeight] and
+     * [onGridChanged] also drop the sub-row displacement outright instead of trusting the fling to
+     * have stopped measuring against the old cell box.
+     */
     fun cancelFling() {
         if (!scrollableState.isScrollInProgress) return
         scope.launch { scrollableState.scroll(MutatePriority.PreventUserInput) { } }
@@ -149,8 +171,11 @@ class ScrollController(
             // The engine follows the bottom by itself; nothing to ask for.
             requestedRow = null
             answered = false
+            owedRow = null
             return
         }
+        // A request the session refused is still owed; a frame is the tick that retries it.
+        retryOwedRequest()
         if (frame.viewportTop == requestedRow) {
             answered = true
         } else if (answered && !scrolling && frame.viewportTop != position.row) {
@@ -166,7 +191,12 @@ class ScrollController(
         following = position.row >= frame.historyRows
     }
 
-    /** The cell box changed (font, density). Pixels measured against the old one are meaningless. */
+    /**
+     * The cell box changed (font, density). Pixels measured against the old one are meaningless, so
+     * the sub-row displacement is dropped here and not merely left to [cancelFling] — that
+     * cancellation is asynchronous and a decay in flight can still post a delta or two, which would
+     * be measured against the NEW cell height.
+     */
     fun onCellHeight(cellHeightPx: Float) {
         val next = cellHeightPx.toDouble()
         if (!next.isFinite() || next <= 0.0 || next == this.cellHeightPx) return
@@ -189,18 +219,8 @@ class ScrollController(
         // engine happens to be sitting on.
         requestedRow = null
         answered = false
+        owedRow = null
         request(position.row)
-    }
-
-    /** The session was reset (RIS) or this surface was bound to another one. */
-    fun onReset() {
-        cancelFling()
-        strip.clear()
-        newestTop = 0L
-        following = true
-        position = ScrollPosition(0L, 0.0)
-        requestedRow = null
-        answered = false
     }
 
     // ----------------------------------------------------------------- painting ----
@@ -229,12 +249,34 @@ class ScrollController(
         request(next.row)
     }
 
-    /** `scrollTo` ONCE per row, never for the fractional part. */
+    /**
+     * `scrollTo` ONCE per row, never for the fractional part — and never recorded as sent when the
+     * session refused it.
+     */
     private fun request(row: Long) {
-        if (requestedRow == row) return
-        requestedRow = row
-        answered = false
-        scrollTo(row)
+        if (requestedRow == row && owedRow == null) return
+        if (scrollTo(row)) {
+            requestedRow = row
+            answered = false
+            owedRow = null
+        } else {
+            // Refused (a saturated mailbox). Nothing was sent, so nothing may be assumed: the row
+            // stays owed and the next frame or gesture tick asks again.
+            requestedRow = null
+            answered = false
+            owedRow = row
+        }
+    }
+
+    /** Re-ask for a row a previous [request] was refused; called on every published frame. */
+    private fun retryOwedRequest() {
+        val owed = owedRow ?: return
+        if (following) {
+            // The bottom follows itself; nothing is owed any more.
+            owedRow = null
+            return
+        }
+        request(owed)
     }
 }
 
@@ -253,19 +295,38 @@ class ScrollController(
  * rows would be the wrong width or from another screen entirely.
  */
 internal class ScrollStrip(private val depth: Int = DEPTH) {
-    private val frames = ArrayDeque<TerminalFrame>()
+    /**
+     * An IMMUTABLE list, replaced wholesale on every frame.
+     *
+     * The DRAW path reads this ([ScrollController.paintOffset], the overscan rows) while the frame
+     * collector writes it, and on some platforms those are not the same thread. Swapping a new
+     * three-element list in is atomic for the reader, where mutating a deque in place is a torn read
+     * at best and a `ConcurrentModificationException` mid-paint at worst. Rows are shared between
+     * frames, so the copy costs a list header.
+     */
+    @Volatile
+    private var frames: List<TerminalFrame> = emptyList()
 
     /** The most recently recorded frame, or null before the first one. */
     val newest: TerminalFrame? get() = frames.firstOrNull()
 
     fun record(frame: TerminalFrame) {
-        val newest = frames.firstOrNull()
-        if (newest != null && (newest.size != frame.size || newest.epoch != frame.epoch)) frames.clear()
-        frames.addFirst(frame)
-        while (frames.size > depth) frames.removeLast()
+        val current = frames
+        val newest = current.firstOrNull()
+        val kept = if (newest != null && (newest.size != frame.size || newest.epoch != frame.epoch)) {
+            emptyList()
+        } else {
+            current.take(depth - 1)
+        }
+        frames = buildList(kept.size + 1) {
+            add(frame)
+            addAll(kept)
+        }
     }
 
-    fun clear() = frames.clear()
+    fun clear() {
+        frames = emptyList()
+    }
 
     /** The row at ABSOLUTE index [absolute], from the newest frame that still carries it. */
     fun rowAt(current: TerminalFrame, absolute: Long): TerminalRow? {

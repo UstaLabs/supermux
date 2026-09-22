@@ -152,9 +152,21 @@ class ScrollControllerTest {
     // ----------------------------------------------------------------- the controller ----
 
     /** A controller fed hand-built frames: no engine, no Compose, no coroutines to wait for. */
-    private class Harness {
+    private class Harness(private val accept: (Long) -> Boolean = { true }) {
         val scrolls: MutableList<Long> = mutableListOf()
-        val controller = ScrollController(CoroutineScope(Dispatchers.Unconfined)) { scrolls += it }
+
+        /** Rows the session REFUSED: asked for, never delivered. */
+        val refused: MutableList<Long> = mutableListOf()
+
+        val controller = ScrollController(CoroutineScope(Dispatchers.Unconfined)) { row ->
+            if (accept(row)) {
+                scrolls += row
+                true
+            } else {
+                refused += row
+                false
+            }
+        }
         private val model = ViewportModel()
         private var generation = 0L
 
@@ -175,7 +187,8 @@ class ScrollControllerTest {
         }
     }
 
-    private fun harness(): Harness = Harness().also { it.controller.onCellHeight(16f) }
+    private fun harness(accept: (Long) -> Boolean = { true }): Harness =
+        Harness(accept).also { it.controller.onCellHeight(16f) }
 
     @Test fun fractionalMovementNeverReachesTheEngine() {
         val harness = harness()
@@ -279,6 +292,79 @@ class ScrollControllerTest {
         // And it stays there as output arrives.
         harness.publish(viewportTop = 120, historyRows = 120)
         assertEquals(ScrollPosition(120, 0.0), harness.controller.position)
+    }
+
+    @Test fun aRefusedRequestIsRetriedUntilTheViewReconciles() {
+        // The session's mailbox is saturated (a fast fling over a flooding pty): `scrollTo` returns
+        // Rejected and NOTHING was actually sent.
+        var accepting = false
+        val harness = harness { accepting }
+        harness.publish(viewportTop = 100, historyRows = 100)
+        harness.controller.consumePx(-32f)
+        assertEquals(98L, harness.controller.position.row)
+        assertEquals(emptyList(), harness.scrolls, "a refused request must not count as sent")
+        assertEquals(listOf(98L), harness.refused)
+
+        // Frames keep arriving for the row the engine is still sitting on. The controller must not
+        // believe its request was delivered — if it did, `answered` would never come back and the
+        // eviction-adoption rule below would stay off forever.
+        harness.publish(viewportTop = 100, historyRows = 100)
+        assertEquals(98L, harness.controller.position.row, "the anchor was dragged back by a stale frame")
+        assertEquals(listOf(98L), harness.refused.drop(1), "the owed row was not retried")
+
+        // The flood ends; the next retry is accepted and the engine answers it.
+        accepting = true
+        harness.publish(viewportTop = 100, historyRows = 100)
+        assertEquals(listOf(98L), harness.scrolls, "the owed row never reached the session")
+        harness.publish(viewportTop = 98, historyRows = 100)
+        assertEquals(98L, harness.controller.position.row)
+
+        // Reconciled: the adoption rule works again, so eviction still keeps the user's text.
+        harness.publish(viewportTop = 95, historyRows = 97)
+        assertEquals(95L, harness.controller.position.row, "the view never recovered from the refusal")
+    }
+
+    @Test fun aRefusedRequestIsForgottenOnceTheUserIsBackAtTheBottom() {
+        var accepting = false
+        val harness = harness { accepting }
+        harness.publish(viewportTop = 100, historyRows = 100)
+        harness.controller.consumePx(-32f)
+        assertTrue(harness.refused.isNotEmpty())
+
+        // The user types: back to the bottom — and that request is refused too.
+        harness.controller.followBottom()
+        accepting = true
+        harness.publish(viewportTop = 100, historyRows = 100)
+        assertTrue(harness.controller.following)
+        // The bottom follows itself, so there is nothing left to owe and nothing stale is replayed.
+        assertEquals(emptyList(), harness.scrolls)
+        harness.publish(viewportTop = 100, historyRows = 110)
+        assertEquals(emptyList(), harness.scrolls)
+        assertEquals(ScrollPosition(110, 0.0), harness.controller.position)
+    }
+
+    @Test fun aFrameThatArrivesMidGestureNeverDragsTheAnchorBackwards() = runBlocking {
+        val harness = harness()
+        harness.publish(viewportTop = 100, historyRows = 100)
+
+        // A genuine gesture: inside `scroll {}` the scrollable state reports a scroll in progress,
+        // which is the guard's actual precondition — driving `consumePx` directly never sets it.
+        harness.controller.scrollableState.scroll {
+            scrollBy(-32f)
+            assertTrue(harness.controller.scrolling, "the state does not report a gesture in flight")
+            assertEquals(98L, harness.controller.position.row)
+            // The engine is two rows behind the finger and publishes the frame it has.
+            harness.publish(viewportTop = 100, historyRows = 100)
+            assertEquals(98L, harness.controller.position.row, "a lagging frame moved the anchor mid-gesture")
+            scrollBy(-16f)
+            assertEquals(97L, harness.controller.position.row)
+            harness.publish(viewportTop = 99, historyRows = 100)
+            assertEquals(97L, harness.controller.position.row, "the frame caught up and overtook the finger")
+        }
+        // Once the finger is gone the engine's own pin is the truth again.
+        harness.publish(viewportTop = 97, historyRows = 100)
+        assertEquals(97L, harness.controller.position.row)
+        Unit
     }
 
     @Test fun aReflowKeepsTheLogicalRowAndDropsThePixels() {
