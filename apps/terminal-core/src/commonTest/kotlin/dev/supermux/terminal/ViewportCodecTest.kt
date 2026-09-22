@@ -46,7 +46,13 @@ class ViewportCodecTest {
         assertEquals("", v.row(2).text())
 
         assertEquals(TerminalCursor(5, 1, CursorShape.BLOCK, true), v.cursor)
-        assertEquals(TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false), v.modes)
+        assertEquals(
+            TerminalModes(
+                // 1007 is one of the modes the engine defaults to SET.
+                alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = true,
+            ),
+            v.modes,
+        )
         assertEquals(0L, v.historyRows)
         assertEquals(0L, v.viewportTop)
         assertEquals(listOf(TerminalLink(1, 0, 1, "https://x.y/z")), v.links)
@@ -63,7 +69,12 @@ class ViewportCodecTest {
         assertEquals("rev", v.row(2).text())
         v.row(2).cells.take(3).forEach { assertEquals(CellFlags.INVERSE, it.style.flags) }
         assertEquals(TerminalCursor(3, 2, CursorShape.BLOCK, true), v.cursor)
-        assertEquals(TerminalModes(alternateScreen = false, mouseTracking = true, bracketedPaste = true), v.modes)
+        assertEquals(
+            TerminalModes(
+                alternateScreen = false, mouseTracking = true, bracketedPaste = true, alternateScroll = false,
+            ),
+            v.modes,
+        )
         assertEquals(full.links, v.links)
         assertEquals(full.selection, v.selection)
         assertFalse(v.held)
@@ -121,7 +132,9 @@ class ViewportCodecTest {
         val g = CodecGolden.VIEWPORT_FULL
         assertFailsWith<TerminalCodecException>("trailing byte") { ViewportCodec.decodeViewport(g + byteArrayOf(0)) }
         assertFailsWith<TerminalCodecException>("magic") { ViewportCodec.decodeViewport(g.copyOf().also { it[0] = 0 }) }
-        assertFailsWith<TerminalCodecException>("abi") { ViewportCodec.decodeViewport(g.copyOf().also { it[4] = 2 }) }
+        assertFailsWith<TerminalCodecException>("abi") {
+            ViewportCodec.decodeViewport(g.copyOf().also { it[4] = (ViewportCodec.ABI + 1).toByte() })
+        }
         assertFailsWith<TerminalCodecException>("kind") { ViewportCodec.decodeEffects(g) }
         assertFailsWith<TerminalCodecException>("kind") { ViewportCodec.decodeViewport(CodecGolden.EFFECTS) }
         assertFailsWith<TerminalCodecException>("payload length") {

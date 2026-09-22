@@ -86,13 +86,17 @@ class EngineContractTest {
     }
 
     @Test fun resetClearsContent() = withEngine { engine ->
-        // Visible text on the PRIMARY screen, then mouse tracking (1000), bracketed paste (2004) and
-        // the alternate screen (1049) on top, so every piece of state reset must clear is really set.
+        // Visible text on the PRIMARY screen, then mouse tracking (1000), bracketed paste (2004), the
+        // alternate screen (1049) on top and alternate scroll (1007, on by default) turned OFF, so every
+        // piece of state a reset must put back is really away from its default.
         engine.feed("primary text".encodeToByteArray(), OutputOrigin.LIVE)
         assertEquals("primary text", engine.viewport(forceFull = true).rowText(0))
-        engine.feed("\u001b[?1000h\u001b[?2004h\u001b[?1049h\u001b[Halt text".encodeToByteArray(), OutputOrigin.LIVE)
+        engine.feed("\u001b[?1000h\u001b[?2004h\u001b[?1007l\u001b[?1049h\u001b[Halt text".encodeToByteArray(), OutputOrigin.LIVE)
         val before = engine.viewport(forceFull = true)
-        assertEquals(TerminalModes(alternateScreen = true, mouseTracking = true, bracketedPaste = true), before.modes)
+        assertEquals(
+            TerminalModes(alternateScreen = true, mouseTracking = true, bracketedPaste = true, alternateScroll = false),
+            before.modes,
+        )
         assertEquals("alt text", before.rowText(0))
 
         engine.reset()
@@ -102,7 +106,13 @@ class EngineContractTest {
         assertTrue(viewport.rows.all { row -> row.cells.all { it.text.isEmpty() } })
         assertEquals(0, viewport.cursor.column)
         assertEquals(0, viewport.cursor.row)
-        assertEquals(TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false), viewport.modes)
+        assertEquals(
+            // 1007 (alternate scroll) is on by default, so a reset restores it rather than clearing it.
+            TerminalModes(
+                alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = true,
+            ),
+            viewport.modes,
+        )
         // Leaving the alternate screen must not bring the primary text back either.
         engine.feed("\u001b[?1049l".encodeToByteArray(), OutputOrigin.LIVE)
         assertTrue(engine.viewport(forceFull = true).rows.all { row -> row.cells.all { it.text.isEmpty() } })

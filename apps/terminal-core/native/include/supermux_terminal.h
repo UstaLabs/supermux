@@ -1,6 +1,6 @@
 /*
  * supermux terminal-core: the owned, versioned C ABI over the pinned
- * libghostty-vt (see native/README.md, "st_* ABI v1").
+ * libghostty-vt (see native/README.md, "st_* ABI v2").
  *
  * This is the ONLY native surface the Kotlin bindings (JNI on Android/JVM,
  * cinterop on iOS, the wasm loader in the browser) call. All terminal
@@ -31,7 +31,7 @@
  *
  * Codec envelope (all integers little-endian):
  *
- *   u32 magic = 0x53545654   u16 abi = 1   u16 kind   u32 payloadBytes
+ *   u32 magic = 0x53545654   u16 abi = 2   u16 kind   u32 payloadBytes
  *   payload[payloadBytes]    (the buffer is exactly 12 + payloadBytes long)
  *
  *   kind 1 = viewport, 2 = effects, 3 = selected text. payloadBytes <= 8 MiB.
@@ -63,7 +63,7 @@ extern "C" {
 #endif
 
 /** ABI version implemented by this header. Bumped on any incompatible change. */
-#define ST_ABI_VERSION 1u
+#define ST_ABI_VERSION 2u
 
 /* ------------------------------------------------------------ status ---- */
 

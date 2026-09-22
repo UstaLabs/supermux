@@ -3,11 +3,11 @@
 This directory builds upstream Ghostty's `libghostty-vt` (the VT engine only:
 parser, screen/scrollback state, render state, input encoders) from a pinned
 commit, and proves with a native smoke test that the pinned C API does what
-supermux needs. On top of it sits the package-owned **`st_*` C ABI v1**
+supermux needs. On top of it sits the package-owned **`st_*` C ABI v2**
 ([`include/supermux_terminal.h`](include/supermux_terminal.h),
 [`src/terminal_bridge.c`](src/terminal_bridge.c)) — the single implementation
 of terminal semantics that JNI, cinterop and the wasm loader all call (see
-"st_* ABI v1" below).
+"st_* ABI v2" below).
 
 - Pin + toolchain: [`upstream.lock.json`](upstream.lock.json)
 - API summary for wrapper/binding design: [`API-NOTES.md`](API-NOTES.md)
@@ -70,7 +70,7 @@ What `native/build.sh` does, in order:
    member names `NNNN_<object>.o` (upstream's `zig ar -M` combine step names
    members by absolute Zig-cache paths). pkg-config files are dropped (they
    embed the absolute prefix).
-8. **Wrapper** (`WRAPPER_SOURCES`, `ST_ABI_VERSION=1`, must match the header):
+8. **Wrapper** (`WRAPPER_SOURCES`, `ST_ABI_VERSION=2`, must match the header):
    compile `src/terminal_bridge.c` (`-fvisibility=hidden -fPIC -Werror`), fold
    it and `libghostty-vt.a` into one static archive
    `lib/libsupermux_terminal.a` (`scripts/combine_archive.py`), link
@@ -161,7 +161,7 @@ features, `-Demit-xcframework` (macOS host) for an Apple xcframework.
 Environment: `ST_ZIG_JOBS` (default 2), `ST_ZIG_HOME`, `ST_ALLOW_UNVERIFIED_ZIG`, `ANDROID_NDK_HOME`,
 `ST_LLVM_OBJCOPY`; wasm: `ST_NODE`, `ST_CHROME`, `ST_NO_BROWSER=1`.
 
-## st_* ABI v1
+## st_* ABI v2
 
 The owned C ABI every binding calls. Header:
 [`include/supermux_terminal.h`](include/supermux_terminal.h) (the normative
@@ -176,7 +176,7 @@ All sizes are fixed-width; every fallible call returns `st_status` (`int32_t`);
 outputs are written only on `ST_OK`.
 
 ```c
-uint32_t  st_abi_version(void);                                  /* == 1 */
+uint32_t  st_abi_version(void);                                  /* == 2 */
 st_status st_create(uint32_t abi_version, uint32_t columns, uint32_t rows,
                     uint32_t cell_width_px, uint32_t cell_height_px,
                     uint32_t history_lines, uint64_t history_bytes,
@@ -220,7 +220,7 @@ value never issued fail with `ST_ERR_INVALID_HANDLE`: the table stores the
 issued handle next to the engine pointer and compares it atomically before
 dereferencing, so a stale handle never touches memory another thread may be
 freeing; `st_destroy` is idempotent. `st_create` rejects any `abi_version`
-other than 1 with `ST_ERR_ABI_MISMATCH`. No callback ever crosses the ABI.
+other than 2 with `ST_ERR_ABI_MISMATCH`. No callback ever crosses the ABI.
 
 **Threading.** The table is safe for *different* handles on different
 threads (create, every call and destroy may run concurrently as long as each
@@ -262,7 +262,7 @@ wasm), over-allocated by 64 bytes for 16-byte alignment + the free header.
 ### Codec
 
 ```text
-u32 magic = 0x53545654; u16 abi = 1; u16 kind; u32 payloadBytes; payload
+u32 magic = 0x53545654; u16 abi = 2; u16 kind; u32 payloadBytes; payload
 All integers little-endian. Buffer length is exactly 12 + payloadBytes.
 Limits: payload <= 8 MiB; columns/rows 1..4096 and columns*rows <= 100,000;
 cell text <= 32 bytes; strings fit the payload.
@@ -281,7 +281,7 @@ viewport (kind 1), TerminalViewport field order:
   u32 rowCount; rows[]:  i32 index (ascending), u32 cellCount (== columns),
                          cells[]: str text, i32 width (0/1/2), u64 fg, u64 bg, i32 flags, i32 underline
   i32 cursorColumn, i32 cursorRow, i32 shape, bool visible
-  bool alternateScreen, bool mouseTracking, bool bracketedPaste
+  bool alternateScreen, bool mouseTracking, bool bracketedPaste, bool alternateScroll
   i64 historyRows, i64 viewportTop, bool full
   u32 linkCount; links[]: i32 row, i32 firstColumn, i32 lastColumn, str uri
   bool hasSelection; [i64 startRow, i32 startColumn, i64 endRow, i32 endColumn]
@@ -315,6 +315,13 @@ them by `scripts/gen_codec_golden.py` and `build.sh` fails when it is stale.
 To change the encoding: bump the ABI, rerun the bridge test with
 `ST_WRITE_GOLDEN=1 ST_FIXTURES_DIR=apps/terminal-core/fixtures/codec`, then
 the generator.
+
+ABI history: **v2** added `bool alternateScroll` (DEC private mode 1007) to
+the viewport's mode block, right after `bracketedPaste`. That is a wire
+change, so `ST_ABI_VERSION`, `ViewportCodec.ABI`, `NativeStatus.ABI_VERSION`,
+`nativeAbiVersion` (build.gradle.kts), `ABI_VERSION` (`wasm/terminal-loader.mjs`)
+and every golden fixture moved together; a v1 library against a v2 binding is
+refused by `st_create` / the packaged manifest check rather than mis-decoded.
 
 ### Size cap: every accepted size renders
 
@@ -355,7 +362,7 @@ rejected at create, 4096×25 at resize; 1000×100 and 4096×24 render; a
   `Response ESC]52;c;BEL` effect follows the ClipboardRequest) and reports
   `ClipboardRequest(write=false)` for information only (the Kotlin KDoc says
   the same). Answering reads would
-  need an ABI addition (a pre-set clipboard policy/content); v1 does not.
+  need an ABI addition (a pre-set clipboard policy/content); v2 does not.
 - DA1/DA2 (`CSI c`, `CSI > c`) answer as a VT220-class terminal with ANSI
   colour (`ESC[?62;22c`); XTWINOPS size queries (`CSI 14/16/18 t`) and mode
   2048 reports use the current size; XTVERSION reports `libghostty`.

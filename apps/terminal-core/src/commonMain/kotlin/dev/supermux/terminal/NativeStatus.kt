@@ -5,7 +5,7 @@ package dev.supermux.terminal
  * shared by every native binding (JNI, cinterop) so all platforms fail identically.
  */
 internal object NativeStatus {
-    const val ABI_VERSION: Int = 1
+    const val ABI_VERSION: Int = 2
 
     const val OK: Int = 0
     const val INVALID_HANDLE: Int = -1

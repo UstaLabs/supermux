@@ -12,7 +12,7 @@ class TerminalCodecException(message: String, cause: Throwable? = null) : Runtim
  * st_selected_text). Shared by every binding so all platforms see identical types.
  *
  * ```
- * u32 magic = 0x53545654; u16 abi = 1; u16 kind; u32 payloadBytes; payload[payloadBytes]
+ * u32 magic = 0x53545654; u16 abi = 2; u16 kind; u32 payloadBytes; payload[payloadBytes]
  * ```
  * Little-endian; strings are u32 length + UTF-8; booleans u8 0/1; nullable = u8 presence + value;
  * Long = i64 except colours (u64 [TerminalColor]); Int = i32; collections = u32 count + elements.
@@ -23,7 +23,7 @@ class TerminalCodecException(message: String, cause: Throwable? = null) : Runtim
  */
 object ViewportCodec {
     const val MAGIC: Int = 0x53545654
-    const val ABI: Int = 1
+    const val ABI: Int = 2
     const val HEADER_BYTES: Int = 12
     const val MAX_PAYLOAD_BYTES: Int = 8 * 1024 * 1024
     const val MAX_DIMENSION: Int = TerminalSize.MAX_DIMENSION
@@ -82,7 +82,12 @@ object ViewportCodec {
         val shape = r.i32()
         if (shape !in CursorShape.BLOCK..CursorShape.BLOCK_HOLLOW) fail("cursor shape $shape")
         val cursor = TerminalCursor(cursorColumn, cursorRow, shape, r.bool())
-        val modes = TerminalModes(alternateScreen = r.bool(), mouseTracking = r.bool(), bracketedPaste = r.bool())
+        val modes = TerminalModes(
+            alternateScreen = r.bool(),
+            mouseTracking = r.bool(),
+            bracketedPaste = r.bool(),
+            alternateScroll = r.bool(),
+        )
         val historyRows = r.i64()
         val viewportTop = r.i64()
         if (historyRows < 0 || viewportTop < 0 || viewportTop > historyRows) {

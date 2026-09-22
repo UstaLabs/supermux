@@ -1,5 +1,5 @@
 /*
- * supermux terminal-core: the st_* ABI v1 implementation over the pinned
+ * supermux terminal-core: the st_* ABI v2 implementation over the pinned
  * libghostty-vt. The single implementation of terminal semantics shared by
  * every binding (JNI, cinterop, wasm). See include/supermux_terminal.h for
  * the contract and native/README.md for the wire format, ownership,
@@ -307,7 +307,7 @@ typedef struct {
   uint32_t cell_w, cell_h;
   int64_t history_rows;
   int64_t viewport_top;
-  bool alt_screen, mouse_tracking, bracketed_paste;
+  bool alt_screen, mouse_tracking, bracketed_paste, alt_scroll;
   bool has_selection;
   bool held; /* captured when a synchronized-output hold began */
   int64_t sel_start_row, sel_end_row;
@@ -768,6 +768,9 @@ static st_status st_capture_meta(st_engine *e, bool held) {
   ghostty_terminal_get(e->term, GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING, &tracking);
   s->mouse_tracking = tracking;
   s->bracketed_paste = st_mode(e, GHOSTTY_MODE_BRACKETED_PASTE);
+  /* Mode 1007: the program wants the wheel translated into cursor keys on the
+   * alternate screen. Reported only; the wrapper never encodes it itself. */
+  s->alt_scroll = st_mode(e, GHOSTTY_MODE_ALT_SCROLL);
 
   uint16_t cx = 0, cy = 0;
   ghostty_terminal_get(e->term, GHOSTTY_TERMINAL_DATA_CURSOR_X, &cx);
@@ -1471,6 +1474,7 @@ static st_status st_serialize(st_engine *e, bool full, st_buf *w) {
   st_put_bool(w, s->alt_screen);
   st_put_bool(w, s->mouse_tracking);
   st_put_bool(w, s->bracketed_paste);
+  st_put_bool(w, s->alt_scroll);
   st_put_i64(w, s->history_rows);
   st_put_i64(w, s->viewport_top);
   st_put_bool(w, full);

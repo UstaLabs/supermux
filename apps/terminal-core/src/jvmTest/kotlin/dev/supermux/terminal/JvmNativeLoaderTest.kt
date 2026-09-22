@@ -55,22 +55,22 @@ class JvmNativeLoaderTest {
 
     @Test fun manifestAbiMismatchIsTypedBeforeExtraction() {
         val cache = tempCache()
-        val e = factoryFailure(AbiFixtureLoader.abi2(cache))
+        val e = factoryFailure(AbiFixtureLoader.futureAbi(cache))
         assertEquals(Reason.ABI_MISMATCH, e.reason)
         assertTrue(cache.single().walk().none { it.isFile }, "nothing extracted for a mismatched ABI")
     }
 
     @Test fun loadedLibraryAbiMismatchIsTyped() {
-        // A binding expecting ABI 2 against the real packaged library (manifest abi=1,
-        // st_abi_version() == 1): rejected by the manifest check through the factory, and by the
+        // A binding expecting ABI 3 against the real packaged library (manifest abi=2,
+        // st_abi_version() == 2): rejected by the manifest check through the factory, and by the
         // post-load st_abi_version() check when asked directly.
-        val manifest = factoryFailure(JvmNativeLoader(libraryOverride = null, expectedAbi = 2, cacheRoots = tempCache()))
+        val manifest = factoryFailure(JvmNativeLoader(libraryOverride = null, expectedAbi = 3, cacheRoots = tempCache()))
         assertEquals(Reason.ABI_MISMATCH, manifest.reason)
         JvmNativeLibrary.loader = original
         JvmNativeLibrary.ensureLoaded()
-        val loaded = assertFailsWith<TerminalEngineUnavailableException> { NativeTerminal.verifyAbi(2, "libsupermux_terminal_jni") }
+        val loaded = assertFailsWith<TerminalEngineUnavailableException> { NativeTerminal.verifyAbi(3, "libsupermux_terminal_jni") }
         assertEquals(Reason.ABI_MISMATCH, loaded.reason)
-        assertTrue("implements st_* ABI 1" in loaded.message!!, loaded.message)
+        assertTrue("implements st_* ABI 2" in loaded.message!!, loaded.message)
     }
 
     @Test fun corruptArtifactIsTyped() {
@@ -226,9 +226,9 @@ class JvmNativeLoaderTest {
 
 /** Loaders over the jvmTest fixtures in resources/test-native (host-independent: os forced to linux-x64). */
 internal object AbiFixtureLoader {
-    fun abi2(cache: List<File>) = JvmNativeLoader(
+    fun futureAbi(cache: List<File>) = JvmNativeLoader(
         libraryOverride = null,
-        resourceRoot = "/test-native/abi2", osName = "Linux", osArch = "amd64", cacheRoots = cache,
+        resourceRoot = "/test-native/future-abi", osName = "Linux", osArch = "amd64", cacheRoots = cache,
     )
 
     fun corrupt(cache: List<File>) = JvmNativeLoader(

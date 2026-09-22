@@ -49,7 +49,7 @@ WORK_DIR="$BUILD_DIR/work/$TARGET"
 
 # Package-owned ABI version of the supermux wrapper (st_* functions); must
 # match ST_ABI_VERSION in include/supermux_terminal.h (checked below).
-ST_ABI_VERSION=1
+ST_ABI_VERSION=2
 
 # Wrapper sources: compiled and linked against the static libghostty-vt into
 # lib<WRAPPER_NAME> (static archive with libghostty-vt folded in, plus a
@@ -419,10 +419,10 @@ run_one_load_check() {
   ${RUN_PREFIX[@]+"${RUN_PREFIX[@]}"} /usr/bin/env python3 - "$1" <<'PY'
 import ctypes, sys
 lib = ctypes.CDLL(sys.argv[1])
-assert lib.st_abi_version() == 1, "abi"
+assert lib.st_abi_version() == 2, "abi"
 h = ctypes.c_uint32(0)
 lib.st_create.argtypes = [ctypes.c_uint32] * 6 + [ctypes.c_uint64, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
-assert lib.st_create(1, 80, 24, 8, 16, 100, 1 << 20, None, ctypes.byref(h)) == 0 and h.value, "create"
+assert lib.st_create(2, 80, 24, 8, 16, 100, 1 << 20, None, ctypes.byref(h)) == 0 and h.value, "create"
 data = b"\x1b[31mred\x1b[0m\x1b[6n"
 assert lib.st_feed(h, data, len(data), 0) == 0, "feed"
 buf, n = ctypes.POINTER(ctypes.c_uint8)(), ctypes.c_uint32(0)

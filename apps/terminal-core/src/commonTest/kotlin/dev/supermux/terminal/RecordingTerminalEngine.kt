@@ -253,7 +253,9 @@ class RecordingTerminalEngine(private var size: TerminalSize) : TerminalEngine {
         size = size,
         rows = rows.sorted().map { index -> TerminalRow(index, cellsOf(source.getOrElse(index) { "" })) },
         cursor = TerminalCursor(cursorColumn, cursorRow, CursorShape.BLOCK, visible = true),
-        modes = TerminalModes(alternateScreen = false, mouseTracking = false, bracketedPaste = false),
+        modes = TerminalModes(
+            alternateScreen = false, mouseTracking = false, bracketedPaste = false, alternateScroll = false,
+        ),
         historyRows = 0,
         viewportTop = 0,
         full = full,

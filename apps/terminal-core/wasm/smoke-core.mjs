@@ -33,6 +33,9 @@ export const REQUIRED_EXPORTS = [
   'ghostty_terminal_selection_format_alloc',
 ];
 
+/** The st_* ABI (and codec envelope) version this fixture expects; see native/README.md. */
+export const ST_CODEC_ABI = 2;
+
 export const ST_EXPORTS = [
   'st_abi_version', 'st_create', 'st_destroy', 'st_feed', 'st_reset', 'st_resize', 'st_colors',
   'st_read_viewport', 'st_acknowledge', 'st_scroll_to', 'st_key', 'st_mouse', 'st_paste', 'st_focus',
@@ -223,10 +226,11 @@ export async function runSmoke(wasmBytes, log = console.log) {
 
   // ---- the same fixture through the st_* ABI + codec -----------------------
   if (hasSt) {
-    check(x.st_abi_version() === 1, 'st_abi_version() === 1');
+    check(x.st_abi_version() === ST_CODEC_ABI, `st_abi_version() === ${ST_CODEC_ABI}`);
     const u32Slot = alloc(8);
     const lenSlot = alloc(4);
-    require(x.st_create(1, 80, 24, 8, 16, 100, 1n << 20n, 0, u32Slot) === 0, 'st_create(ABI 1, 80x24)');
+    require(x.st_create(ST_CODEC_ABI, 80, 24, 8, 16, 100, 1n << 20n, 0, u32Slot) === 0,
+      `st_create(ABI ${ST_CODEC_ABI}, 80x24)`);
     const h = dv().getUint32(u32Slot, true);
     const stFeed = (str, origin = 0) => {
       const data = new TextEncoder().encode(str);
@@ -245,7 +249,7 @@ export async function runSmoke(wasmBytes, log = console.log) {
       return new DataView(bytes.buffer);
     };
     const envelope = (v, kind) =>
-      v.getUint32(0, true) === 0x53545654 && v.getUint16(4, true) === 1 && v.getUint16(6, true) === kind &&
+      v.getUint32(0, true) === 0x53545654 && v.getUint16(4, true) === ST_CODEC_ABI && v.getUint16(6, true) === kind &&
       v.getUint32(8, true) === v.byteLength - 12;
     check(stFeed('\x1b[31mred\x1b[0m') === 0, 'st_feed red fixture');
     const vp = take(x.st_read_viewport(h, 1, u32Slot, lenSlot, 0), 'st_read_viewport(FORCE_FULL)');

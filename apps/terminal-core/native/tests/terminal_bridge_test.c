@@ -242,7 +242,7 @@ static bool rd_envelope(Rd *r, const uint8_t *buf, size_t len, uint16_t kind) {
   uint32_t payload = rd_u32(r);
   if (!r->ok) return false;
   if (magic != ST_CODEC_MAGIC) rd_fail(r, "bad magic");
-  else if (abi != 1) rd_fail(r, "bad abi");
+  else if (abi != ST_ABI_VERSION) rd_fail(r, "bad abi");
   else if (k != kind) rd_fail(r, "wrong kind");
   else if (payload > ST_MAX_PAYLOAD) rd_fail(r, "payload > 8 MiB");
   else if ((size_t)payload != len - ST_ENVELOPE_HEADER) rd_fail(r, "payload length mismatch");
@@ -272,7 +272,7 @@ typedef struct {
   Row *rows_v;
   int32_t cur_col, cur_row, shape;
   bool cur_visible;
-  bool alt, mouse, bracketed;
+  bool alt, mouse, bracketed, alt_scroll;
   int64_t history, top;
   bool full;
   uint32_t nlinks;
@@ -347,6 +347,7 @@ static bool decode_view(const uint8_t *buf, size_t len, View *v, const char **wh
     v->alt = rd_bool(&r);
     v->mouse = rd_bool(&r);
     v->bracketed = rd_bool(&r);
+    v->alt_scroll = rd_bool(&r);
     v->history = rd_i64(&r);
     v->top = rd_i64(&r);
     if (r.ok && (v->history < 0 || v->top < 0 || v->top > v->history)) rd_fail(&r, "bad scroll position");
@@ -571,9 +572,10 @@ static void fixture_colors(uint64_t *c) {
 
 static void test_handles(void) {
   printf("# handles, ABI, arguments\n");
-  CHECK(st_abi_version() == 1, "st_abi_version() == 1");
+  CHECK(st_abi_version() == 2, "st_abi_version() == 2");
   st_handle h = 0;
-  CHECK(st_create(2, 80, 24, 8, 16, 100, 1 << 20, NULL, &h) == ST_ERR_ABI_MISMATCH && h == 0, "wrong ABI version rejected");
+  CHECK(st_create(ST_ABI_VERSION + 1, 80, 24, 8, 16, 100, 1 << 20, NULL, &h) == ST_ERR_ABI_MISMATCH && h == 0,
+        "wrong ABI version rejected");
   CHECK(st_create(ST_ABI_VERSION, 0, 24, 8, 16, 100, 1 << 20, NULL, &h) == ST_ERR_INVALID_ARGUMENT, "0 columns rejected");
   CHECK(st_create(ST_ABI_VERSION, 80, 4097, 8, 16, 100, 1 << 20, NULL, &h) == ST_ERR_INVALID_ARGUMENT, "4097 rows rejected");
   CHECK(st_create(ST_ABI_VERSION, 80, 24, 0, 16, 100, 1 << 20, NULL, &h) == ST_ERR_INVALID_ARGUMENT, "0 px cell rejected");
@@ -652,8 +654,9 @@ static void test_red_cells_and_wide(void) {
             r0->cells[3].width == 1,
         "cell 3 empty: text \"\", fg/bg DEFAULT");
   CHECK(v.cur_col == 3 && v.cur_row == 0 && v.cur_visible && v.shape == 0, "cursor (3,0) visible block");
-  CHECK(!v.alt && !v.mouse && !v.bracketed && v.history == 0 && v.top == 0 && v.nlinks == 0 && !v.has_sel,
-        "default modes, no history, links or selection");
+  /* 1007 (alternate scroll) is one of the modes Ghostty defaults to SET. */
+  CHECK(!v.alt && !v.mouse && !v.bracketed && v.alt_scroll && v.history == 0 && v.top == 0 && v.nlinks == 0 && !v.has_sel,
+        "default modes (1007 on), no history, links or selection");
   view_free(&v);
 
   feed(h, "\r\n\xe4\xb8\x96!\x1b[1;3;4;9;53m\x1b[4:3mS\x1b[0m");
@@ -905,18 +908,20 @@ static void test_reset_resize_modes(void) {
   fixture_colors(colors);
   st_colors(h, colors, ST_COLOR_COUNT);
   feed(h, "primary text");
-  feed(h, "\x1b[?1000h\x1b[?2004h\x1b[?1049h\x1b[Halt text");
+  feed(h, "\x1b[?1000h\x1b[?2004h\x1b[?1007l\x1b[?1049h\x1b[Halt text");
   View v;
   must_view(h, ST_READ_FORCE_FULL, &v);
-  CHECK(v.alt && v.mouse && v.bracketed && strcmp(row_text(&v, 0), "alt text") == 0, "alt screen + mouse + bracketed on");
+  CHECK(v.alt && v.mouse && v.bracketed && !v.alt_scroll && strcmp(row_text(&v, 0), "alt text") == 0,
+        "alt screen + mouse + bracketed on, alternate scroll (1007) turned off");
   view_free(&v);
   CHECK(st_reset(h) == ST_OK, "reset");
   must_view(h, 0, &v);
   bool empty = true;
   for (uint32_t i = 0; i < v.nrows; i++)
     for (uint32_t j = 0; j < v.rows_v[i].ncells; j++) empty = empty && v.rows_v[i].cells[j].text_len == 0;
-  CHECK(v.full && v.nrows == 24 && empty && !v.alt && !v.mouse && !v.bracketed && v.cur_col == 0 && v.cur_row == 0,
-        "after reset: full frame, all cells empty, modes off, cursor home");
+  CHECK(v.full && v.nrows == 24 && empty && !v.alt && !v.mouse && !v.bracketed && v.alt_scroll &&
+            v.cur_col == 0 && v.cur_row == 0,
+        "after reset: full frame, all cells empty, modes back to their defaults, cursor home");
   view_free(&v);
   feed(h, "\x1b[?1049l\x1b[31mX");
   must_view(h, ST_READ_FORCE_FULL, &v);
@@ -1250,8 +1255,9 @@ static void test_framing(void) {
   CHECK(decode_view(buf, len, &v, &why), "decodes whole");
   view_free(&v);
   CHECK(len >= 12 && (uint32_t)(buf[8] | buf[9] << 8 | buf[10] << 16 | (uint32_t)buf[11] << 24) == len - 12 &&
-            buf[0] == 0x54 && buf[1] == 0x56 && buf[2] == 0x54 && buf[3] == 0x53 && buf[4] == 1 && buf[5] == 0 && buf[6] == 1,
-        "envelope header: magic 0x53545654 LE, abi 1, kind 1, payloadBytes = len-12");
+            buf[0] == 0x54 && buf[1] == 0x56 && buf[2] == 0x54 && buf[3] == 0x53 && buf[4] == ST_ABI_VERSION &&
+            buf[5] == 0 && buf[6] == 1,
+        "envelope header: magic 0x53545654 LE, abi %u, kind 1, payloadBytes = len-12", ST_ABI_VERSION);
   int accepted = 0;
   for (uint32_t cut = 0; cut < len; cut++) {
     uint8_t *t = malloc(cut ? cut : 1);
@@ -1279,9 +1285,9 @@ static void test_framing(void) {
   t[0] ^= 1;
   CHECK(!decode_view(t, len, &v, &why), "bad magic rejected");
   t[0] ^= 1;
-  t[4] = 2;
-  CHECK(!decode_view(t, len, &v, &why), "abi 2 rejected");
-  t[4] = 1;
+  t[4] = ST_ABI_VERSION + 1;
+  CHECK(!decode_view(t, len, &v, &why), "a foreign codec ABI is rejected");
+  t[4] = ST_ABI_VERSION;
   t[6] = 2;
   CHECK(!decode_view(t, len, &v, &why), "wrong kind rejected");
   t[6] = 1;
@@ -1295,7 +1301,7 @@ static void test_framing(void) {
   /* payload > 8 MiB rejected even when the length is consistent */
   size_t big = 12 + ST_MAX_PAYLOAD + 1;
   uint8_t *bb = calloc(big, 1);
-  bb[0] = 0x54, bb[1] = 0x56, bb[2] = 0x54, bb[3] = 0x53, bb[4] = 1, bb[6] = 2;
+  bb[0] = 0x54, bb[1] = 0x56, bb[2] = 0x54, bb[3] = 0x53, bb[4] = ST_ABI_VERSION, bb[6] = 2;
   uint32_t pl = ST_MAX_PAYLOAD + 1;
   bb[8] = (uint8_t)pl, bb[9] = (uint8_t)(pl >> 8), bb[10] = (uint8_t)(pl >> 16), bb[11] = (uint8_t)(pl >> 24);
   Effect *e;
@@ -1735,11 +1741,12 @@ static void test_golden(void) {
   st_acknowledge(h, v.gen);
   view_free(&v);
   st_free_buffer(b);
-  feed(h, "\x1b[3;1H\x1b[7mrev\x1b[0m\x1b[?1000h\x1b[?2004h");
+  feed(h, "\x1b[3;1H\x1b[7mrev\x1b[0m\x1b[?1000h\x1b[?2004h\x1b[?1007l");
   REQUIRE(st_read_viewport(h, 0, &b, &l, NULL) == ST_OK, "read partial");
   View pv;
   REQUIRE(decode_view(b, l, &pv, NULL), "decode partial");
-  CHECK(!pv.full && pv.nrows == 2 && find_row(&pv, 1) && find_row(&pv, 2), "golden partial frame carries rows 1-2 only");
+  CHECK(!pv.full && pv.nrows == 2 && find_row(&pv, 1) && find_row(&pv, 2) && pv.mouse && pv.bracketed && !pv.alt_scroll,
+        "golden partial frame: rows 1-2 only, mouse + bracketed on, alternate scroll off");
   view_free(&pv);
   golden("viewport_partial", b, l);
   st_free_buffer(b);

@@ -16,7 +16,7 @@ Design and contracts: [`native/README.md`](native/README.md). Consumer checks:
 |---|---|
 | Package | `dev.supermux.terminal:terminal-core:0.1.0-dev.1` (MIT — [`LICENSE`](LICENSE), notices in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)) |
 | Upstream | Ghostty `22391ed6491f2924361dcad1f9a9176a390fd20f` (2026-09-21), app `1.3.2-dev`, `libghostty-vt` `0.1.0-dev`, built with `-Demit-lib-vt=true -Doptimize=ReleaseFast` (wasm: `ReleaseSmall`) |
-| Owned ABI | **st_\* ABI v1** (`ST_ABI_VERSION=1`): 18 `st_*` functions; JNI libraries additionally export exactly 17 `Java_dev_supermux_terminal_NativeTerminal_*` + `JNI_OnLoad`, and the export check fails on anything else |
+| Owned ABI | **st_\* ABI v2** (`ST_ABI_VERSION=2`): 18 `st_*` functions; JNI libraries additionally export exactly 17 `Java_dev_supermux_terminal_NativeTerminal_*` + `JNI_OnLoad`, and the export check fails on anything else |
 | Zig | `0.16.0`, tarball sha256 `70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00`, minisign-verified (bundled clang 21.1.0) |
 | Android NDK | `28.2.13676358` (r28c, clang 19.0.1); `llvm-objcopy` 19.0.1 from it |
 | Browser / Node | Google Chrome `148.0.7778.178` headless, Node `v24.16.0` |

@@ -31,7 +31,7 @@ version = providers.gradleProperty("terminal.version").orNull?.takeIf { it.isNot
 layout.buildDirectory = layout.projectDirectory.dir("build/gradle")
 
 val nativeBuildDir: File = layout.projectDirectory.dir("build/native").asFile
-val nativeAbiVersion = 1
+val nativeAbiVersion = 2
 // Desktop JVM: build.sh target (== resource key <os>-<arch>) -> JNI library file name.
 val jvmNativeTargets = linkedMapOf(
     "linux-x64" to "libsupermux_terminal_jni.so",

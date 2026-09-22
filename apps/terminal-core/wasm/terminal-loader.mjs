@@ -1,4 +1,4 @@
-// supermux terminal-core: browser loader for supermux-terminal.wasm (libghostty-vt + the st_* ABI v1,
+// supermux terminal-core: browser loader for supermux-terminal.wasm (libghostty-vt + the st_* ABI v2,
 // see native/README.md). Plain ES module, no dependencies, no Node APIs; shipped as a resource of the
 // wasmJs artifact next to the wasm binary and imported by the Kotlin/Wasm binding
 // (src/wasmJsMain/.../WasmTerminalLoader.kt).
@@ -15,7 +15,7 @@
 //   or a URL the host app configures once in initialize(). It is never derived from user input.
 //   Only http(s) URLs (and same-document relative ones) are accepted.
 
-export const ABI_VERSION = 1;
+export const ABI_VERSION = 2;
 
 /** Startup failure reasons; names match TerminalEngineUnavailableException.Reason. */
 export const Reason = Object.freeze({

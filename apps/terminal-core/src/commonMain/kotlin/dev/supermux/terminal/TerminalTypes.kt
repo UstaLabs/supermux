@@ -62,7 +62,22 @@ data class TerminalRow(val index: Int, val cells: List<TerminalCell>)
 /** Cursor in viewport cell coordinates; [shape] is one of [CursorShape]. */
 data class TerminalCursor(val column: Int, val row: Int, val shape: Int, val visible: Boolean)
 
-data class TerminalModes(val alternateScreen: Boolean, val mouseTracking: Boolean, val bracketedPaste: Boolean)
+/**
+ * The negotiated modes a renderer has to route input by.
+ * - [alternateScreen]: mode 1047/1049, the full-screen program's own screen (no scrollback).
+ * - [mouseTracking]: any of 9/1000/1002/1003 — the program asked for the mouse.
+ * - [bracketedPaste]: mode 2004; the engine wraps pastes itself, this only says the program knows.
+ * - [alternateScroll]: mode 1007. On the alternate screen, with mouse tracking OFF, the wheel is
+ *   conventionally translated into cursor-key presses so a pager scrolls. The mode says the program
+ *   wants that; it produces NO bytes of its own (the engine's KEY encoder does, from
+ *   [TerminalKeys.ARROW_UP] / [TerminalKeys.ARROW_DOWN], so application-cursor mode is respected).
+ */
+data class TerminalModes(
+    val alternateScreen: Boolean,
+    val mouseTracking: Boolean,
+    val bracketedPaste: Boolean,
+    val alternateScroll: Boolean,
+)
 
 /**
  * Default colours ([TerminalColor] encoding, never [TerminalColor.DEFAULT]) and the 256-entry

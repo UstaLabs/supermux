@@ -28,7 +28,7 @@ class JniBindingTest {
 
     private fun newHandle(): Int {
         val out = IntArray(1)
-        assertEquals(NativeStatus.OK, NativeTerminal.create(1, 80, 24, 8, 16, 100, 1L shl 20, out))
+        assertEquals(NativeStatus.OK, NativeTerminal.create(NativeStatus.ABI_VERSION, 80, 24, 8, 16, 100, 1L shl 20, out))
         assertTrue(out[0] != 0)
         return out[0]
     }
@@ -130,11 +130,11 @@ class JniBindingTest {
 
     @Test fun unusableOutHandleCreatesNothing() {
         val before = counters()
-        assertFailsWith<IllegalArgumentException> { NativeTerminal.create(1, 80, 24, 8, 16, 0, 0, IntArray(0)) }
+        assertFailsWith<IllegalArgumentException> { NativeTerminal.create(NativeStatus.ABI_VERSION, 80, 24, 8, 16, 0, 0, IntArray(0)) }
         assertBalanced(before)
         // ABI mismatch from st_create itself is typed through the engine factory path.
         val e = assertFailsWith<TerminalEngineUnavailableException> {
-            NativeTerminalEngine.open(TerminalSize(80, 24, 8, 16), TerminalLimits(), abiVersion = 2)
+            NativeTerminalEngine.open(TerminalSize(80, 24, 8, 16), TerminalLimits(), abiVersion = NativeStatus.ABI_VERSION + 1)
         }
         assertEquals(TerminalEngineUnavailableException.Reason.ABI_MISMATCH, e.reason)
     }
