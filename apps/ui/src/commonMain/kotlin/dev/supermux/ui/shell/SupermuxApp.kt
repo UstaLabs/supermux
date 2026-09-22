@@ -158,6 +158,7 @@ import dev.supermux.ui.usage.UsagePopover
 import dev.supermux.ui.usage.UsageScreen
 import dev.supermux.ui.usage.rememberUsageActions
 import dev.supermux.ui.widgets.IosBackSwipe
+import dev.supermux.ui.widgets.IosPushIn
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.iosStyleBackSwipe
 import dev.supermux.ui.widgets.iosSwipeUnderLayer
@@ -1234,7 +1235,10 @@ private fun ShellHome(
     }
     SharedTransitionLayout {
         Box(Modifier.fillMaxSize()) {
-            // iOS: the list is already underneath while the chat is swiped off it.
+            // iOS: opening a chat pushes it in from the right over the list (the list parallaxes
+            // away underneath); switching chats inside an open one is not a push.
+            IosPushIn(iosSwipe, key = if (ui.selectedId != null) Unit else null, animateInitial = false)
+            // iOS: the list is already underneath while the chat is swiped off it (or pushed on).
             if (iosSwipe.revealing && ui.selectedId != null) {
                 Box(Modifier.fillMaxSize().iosSwipeUnderLayer(iosSwipe)) {
                     sidebarList(true, listState)
@@ -1289,8 +1293,9 @@ private fun ShellHome(
             AnimatedContent(
                 targetState = ui.selectedId == null,
                 transitionSpec = {
-                    // A finished iOS swipe already moved the list into place.
-                    if (iosSwipe.landed) {
+                    // A finished iOS swipe already moved the list into place, and an iOS open is
+                    // the chat's own push-in over the list underneath.
+                    if (iosSwipe.landed || (iosStyleBackSwipe && !targetState)) {
                         EnterTransition.None togetherWith ExitTransition.None
                     } else {
                         val showList = targetState

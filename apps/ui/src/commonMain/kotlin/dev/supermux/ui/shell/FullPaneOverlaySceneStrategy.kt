@@ -24,6 +24,7 @@ import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
 import dev.supermux.ui.widgets.IosBackSwipe
+import dev.supermux.ui.widgets.IosPushIn
 import dev.supermux.ui.widgets.LocalIosBackSwipe
 import dev.supermux.ui.widgets.SwipeBackHandler
 import dev.supermux.ui.widgets.iosStyleBackSwipe
@@ -99,6 +100,8 @@ private data class FullPaneOverlayScene<T : Any>(
                     .windowInsetsPadding(WindowInsets.systemBars)
                     .consumeWindowInsets(WindowInsets.systemBars),
             ) {
+                // iOS: the route pushes in from the right over Home, the pop's motion in reverse.
+                if (swipe != null) IosPushIn(swipe)
                 CompositionLocalProvider(LocalIosBackSwipe provides swipe) {
                     // Deeper than NavDisplay's own handler, so it wins; a screen's handler deeper
                     // still (a pushed sub-page, a guarded close) wins over this one.
