@@ -40,3 +40,7 @@ include(":terminal-core")
 // Depends on nothing else here either, so the pair can be published together
 // (dev.supermux.terminal:terminal-compose).
 include(":terminal-compose")
+// The standalone terminal sample + benchmark harness. Depends on :terminal-compose (and through it
+// :terminal-core) and on NOTHING else here — that independence IS the check, and it is what lets
+// the pair be published on its own.
+include(":terminal-sample")

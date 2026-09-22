@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>terminal-sample</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #101311; color: #d8ded3;
+      font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+    canvas { outline: none; }
+  </style>
+</head>
+<body>
+  <!--
+    Serve `supermux-terminal.wasm` with `Content-Type: application/wasm` (the loader falls back to a
+    buffered compile otherwise) and allow `script-src 'wasm-unsafe-eval'` in any CSP — a Kotlin/Wasm
+    app needs that anyway. `./gradlew :terminal-sample:wasmJsBrowserDevelopmentRun` serves both
+    correctly out of the box.
+  -->
+  <script src="terminal-sample.js"></script>
+</body>
+</html>
