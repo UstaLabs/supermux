@@ -3,6 +3,7 @@ import java.security.MessageDigest
 plugins {
     alias(libs.plugins.multiplatform)
     alias(libs.plugins.android.library)
+    `maven-publish`
 }
 
 // terminal-core: the ONE shared terminal engine (upstream Ghostty's libghostty-vt behind an owned
@@ -109,7 +110,9 @@ kotlin {
     }
 
     jvm()
-    androidTarget()
+    // publishLibraryVariants: the Maven publication carries the RELEASE aar only (the debug aar
+    // holds the same natives and nothing consumes it).
+    androidTarget { publishLibraryVariants("release") }
     // Apple targets: their compile/link/cinterop tasks are disabled on this Linux host
     // (kotlin.native.ignoreDisabledTargets) and run on the Mac, against the static
     // libsupermux_terminal.a that `native/build.sh ios-*` builds there.
@@ -337,39 +340,266 @@ androidComponents {
     }
 }
 
-// Release gate: every target present and matching its manifest. Local builds skip missing ones.
-tasks.register("verifyNativeArtifacts") {
-    group = "verification"
-    description = "Fail unless every release target's native library is built and matches its manifest."
-    val root = nativeBuildDir
-    val jvm = jvmNativeTargets
-    val android = androidNativeTargets
-    val ios = iosNativeTargets
-    val wasmDir = wasmBuildDir
-    val wasmName = wasmModuleName
-    doLast {
-        val problems = mutableListOf<String>()
-        fun check(target: String, lib: String) {
+// ---------------------------------------------------------------- verification gates --------
+
+/** Every native artifact the package can carry: target -> the library file that must exist. */
+val allNativeTargets: Map<String, String> = buildMap {
+    putAll(jvmNativeTargets)
+    androidNativeTargets.keys.forEach { put(it, "libsupermux_terminal_jni.so") }
+    iosNativeTargets.keys.forEach { put(it, "libsupermux_terminal.a") }
+}
+
+/** The host that must have built a target (which host can produce its library at all). */
+val targetBuildHost: Map<String, String> = mapOf(
+    "linux-x64" to "linux", "linux-arm64" to "linux", "windows-x64" to "linux",
+    "android-arm64" to "linux", "android-x64" to "linux",
+    // macOS dylibs are linked by ld64 and the iOS archives need Xcode's SDK: Mac only.
+    "macos-x64" to "macos", "macos-arm64" to "macos",
+    "ios-arm64" to "macos", "ios-simulator-arm64" to "macos",
+)
+
+val buildHostKind: String = System.getProperty("os.name").orEmpty().lowercase().let {
+    when {
+        it.startsWith("mac") || it.startsWith("darwin") -> "macos"
+        it.startsWith("windows") -> "windows"
+        else -> "linux"
+    }
+}
+
+/**
+ * Publication profile. `release` demands **every** target — which no single machine can produce,
+ * so a release jar is assembled from a Linux build tree plus the Mac-built `macos-*` dylibs and
+ * `ios-*` archives copied into it (see VERIFICATION.md). `dev` (the default for a `-dev` version)
+ * demands everything THIS host can build and lets the rest be absent; the artifacts then carry an
+ * ABI manifest that names exactly which targets are inside. Override: `-Pterminal.publishProfile=`.
+ */
+val publishProfile: String = (
+    providers.gradleProperty("terminal.publishProfile").orNull
+        ?: if (version.toString().contains("-dev")) "dev" else "release"
+    ).lowercase().also {
+    require(it == "dev" || it == "release") { "terminal.publishProfile must be 'dev' or 'release', not '$it'" }
+}
+
+/** Targets a publish of [profile] must contain; wasm32 is always required (it is host-independent). */
+fun requiredTargets(profile: String): Map<String, String> =
+    if (profile == "release") allNativeTargets
+    else allNativeTargets.filterKeys { targetBuildHost[it] == buildHostKind }
+
+fun registerVerifyTask(name: String, profile: String, extraDescription: String) =
+    tasks.register(name) {
+        group = "verification"
+        description = extraDescription
+        val root = nativeBuildDir
+        val required = requiredTargets(profile)
+        val optional = allNativeTargets - required.keys
+        val wasmDir = wasmBuildDir
+        val wasmName = wasmModuleName
+        doLast {
+            val problems = mutableListOf<String>()
+            fun check(target: String, lib: String, mandatory: Boolean) {
+                try {
+                    if (verifiedNativeLib(root, target, lib) == null && mandatory) {
+                        problems += "$target: lib/$lib or manifest.json missing"
+                    }
+                } catch (e: GradleException) {
+                    // A stale/ABI-wrong artifact is a problem even when the target is optional.
+                    problems += e.message.orEmpty()
+                }
+            }
+            required.forEach { (t, lib) -> check(t, lib, mandatory = true) }
+            optional.forEach { (t, lib) -> check(t, lib, mandatory = false) }
             try {
-                if (verifiedNativeLib(root, target, lib) == null) problems += "$target: lib/$lib or manifest.json missing"
+                if (verifiedWasmModule(wasmDir, wasmName) == null) problems += "wasm32: build/wasm/$wasmName or manifest.json missing"
             } catch (e: GradleException) {
                 problems += e.message.orEmpty()
             }
-        }
-        jvm.forEach { (t, lib) -> check(t, lib) }
-        android.keys.forEach { t -> check(t, "libsupermux_terminal_jni.so") }
-        ios.keys.forEach { t -> check(t, "libsupermux_terminal.a") }
-        try {
-            if (verifiedWasmModule(wasmDir, wasmName) == null) problems += "wasm32: build/wasm/$wasmName or manifest.json missing"
-        } catch (e: GradleException) {
-            problems += e.message.orEmpty()
-        }
-        if (problems.isNotEmpty()) {
-            throw GradleException(
-                "terminal-core native artifacts incomplete (run native/build.sh <target> on the right host):\n  " +
-                    problems.joinToString("\n  "),
+            if (problems.isNotEmpty()) {
+                throw GradleException(
+                    "terminal-core native artifacts incomplete for the '$profile' profile " +
+                        "(run native/build.sh <target> on the right host):\n  " + problems.joinToString("\n  "),
+                )
+            }
+            logger.lifecycle(
+                "terminal-core: '$profile' profile satisfied — ${required.size + 1} required targets " +
+                    "(${required.keys.sorted().joinToString()}, wasm32) present and verified",
             )
         }
-        logger.lifecycle("terminal-core: all ${jvm.size + android.size + ios.size + 1} native targets (incl. wasm32) present and verified")
+    }
+
+// Release gate: every target present and matching its manifest. Local builds skip missing ones.
+val verifyNativeArtifacts = registerVerifyTask(
+    "verifyNativeArtifacts", "release",
+    "Fail unless EVERY release target's native library is built and matches its manifest.",
+)
+
+// Dev gate: everything this host can build (plus wasm32); Mac-only targets may be absent, but any
+// artifact that IS present must still match its manifest.
+val verifyNativeArtifactsForHost = registerVerifyTask(
+    "verifyNativeArtifactsForHost", "dev",
+    "Fail unless every native library THIS host can build is present and matches its manifest.",
+)
+
+// ---------------------------------------------------------------- publishing ----------------
+
+// The ABI manifest that ships inside the artifacts: which st_* ABI they speak, which Ghostty/Zig
+// built them, and exactly which targets are inside THIS build. Derived only from the per-target
+// manifest.json files (no timestamps or host paths), so it is reproducible.
+val abiManifestFile = layout.buildDirectory.file("generated/packageMetadata/dev/supermux/terminal/abi-manifest.json")
+val generateAbiManifest by tasks.registering {
+    group = "documentation"
+    description = "Generate the ABI/pin manifest packaged as dev/supermux/terminal/abi-manifest.json."
+    val root = nativeBuildDir
+    val wasmDir = wasmBuildDir
+    val wasmName = wasmModuleName
+    val targets = allNativeTargets
+    val pkgVersion = project.version.toString()
+    val pkgGroup = project.group.toString()
+    val pkgName = project.name
+    val abiVersion = nativeAbiVersion
+    val profile = publishProfile
+    val required = requiredTargets(publishProfile).keys
+    val out = abiManifestFile
+    inputs.files(targets.flatMap { (t, lib) -> listOf(File(root, "$t/lib/$lib"), File(root, "$t/manifest.json")) })
+    inputs.files(File(wasmDir, wasmName), File(wasmDir, "manifest.json"))
+    inputs.property("version", pkgVersion)
+    inputs.property("profile", profile)
+    outputs.file(out)
+    doLast {
+        fun manifestOf(file: File): Map<String, Any?>? {
+            if (!file.isFile) return null
+            @Suppress("UNCHECKED_CAST")
+            return groovy.json.JsonSlurper().parse(file) as Map<String, Any?>
+        }
+        val entries = mutableListOf<Map<String, Any?>>()
+        val missing = mutableListOf<String>()
+        for ((target, lib) in targets) {
+            val manifest = manifestOf(File(root, "$target/manifest.json"))
+            val verified = verifiedNativeLib(root, target, lib)
+            if (manifest == null || verified == null) { missing += target; continue }
+            entries += linkedMapOf(
+                "target" to target,
+                "library" to lib,
+                "sha256" to verified.second,
+                "size" to verified.first.length(),
+                "zig_target" to manifest["zig_target"],
+                "build_host" to manifest["build_host"],
+                "runtime_tested" to manifest["runtime_tested"],
+                "test_host" to manifest["test_host"],
+            )
+        }
+        val wasmManifest = manifestOf(File(wasmDir, "manifest.json"))
+        val wasmModule = verifiedWasmModule(wasmDir, wasmName)
+        if (wasmManifest != null && wasmModule != null) {
+            @Suppress("UNCHECKED_CAST")
+            val file = (wasmManifest["files"] as List<Map<String, Any?>>).first { it["path"] == wasmName }
+            entries += linkedMapOf(
+                "target" to "wasm32",
+                "library" to wasmName,
+                "sha256" to file["sha256"],
+                "size" to file["size"],
+                "zig_target" to wasmManifest["zig_target"],
+                "build_host" to wasmManifest["build_host"],
+                "runtime_tested" to wasmManifest["runtime_tested"],
+                "test_host" to wasmManifest["test_runtimes"],
+            )
+        } else {
+            missing += "wasm32"
+        }
+        val reference = entries.firstOrNull()?.let { manifestOf(File(root, "${it["target"]}/manifest.json")) }
+            ?: wasmManifest
+        val doc = linkedMapOf(
+            "schema" to 1,
+            "package" to "$pkgGroup:$pkgName",
+            "version" to pkgVersion,
+            "abi_version" to abiVersion,
+            "profile" to profile,
+            "ghostty_commit" to reference?.get("ghostty_commit"),
+            "libghostty_vt_version" to reference?.get("libghostty_vt_version"),
+            "zig_version" to reference?.get("zig_version"),
+            "required_targets" to (required.sorted() + "wasm32"),
+            "targets" to entries.sortedBy { it["target"].toString() },
+            "missing_targets" to missing.sorted(),
+            "licenses" to listOf("META-INF/dev.supermux.terminal/LICENSE", "META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md"),
+        )
+        val file = out.get().asFile
+        file.parentFile.mkdirs()
+        file.writeText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(doc)) + "\n")
     }
 }
+// The manifest is a resource of the two targets whose artifacts a consumer can read it from at
+// run time: the desktop jar and the wasm klib. (The AAR carries the licence files below but not
+// the manifest — an Android app reads the natives it got through jniLibs, not through resources.)
+val packageMetadataDir = layout.buildDirectory.dir("generated/packageMetadata")
+kotlin.sourceSets.getByName("jvmMain").resources.srcDir(files(packageMetadataDir).builtBy(generateAbiManifest))
+kotlin.sourceSets.getByName("wasmJsMain").resources.srcDir(files(packageMetadataDir).builtBy(generateAbiManifest))
+
+val licenseFiles = files(layout.projectDirectory.file("LICENSE"), layout.projectDirectory.file("THIRD-PARTY-NOTICES.md"))
+// Every jar (jvm, sources, javadoc/empty) carries our MIT licence and the third-party notices for
+// the Ghostty + deps object code inside the native libraries. Namespaced under META-INF so it can
+// never collide with another dependency's META-INF/LICENSE.
+tasks.withType<Jar>().configureEach {
+    from(licenseFiles) { into("META-INF/dev.supermux.terminal") }
+}
+// The AAR is a zip: put the same two files at META-INF/ inside it (AGP does not merge library
+// java-resources into the aar's classes.jar in a way we can rely on).
+tasks.matching { it.name.startsWith("bundle") && it.name.endsWith("Aar") }.configureEach {
+    if (this is Zip) from(licenseFiles) { into("META-INF/dev.supermux.terminal") }
+}
+
+publishing {
+    repositories {
+        // LOCAL ONLY. Nothing here uploads anywhere: the one repository is a directory inside
+        // build/ (ignored by git) that the consumer-smoke build resolves from.
+        maven {
+            name = "localTest"
+            url = uri(layout.projectDirectory.dir("build/test-repository"))
+        }
+    }
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name.set("supermux terminal-core")
+            description.set(
+                "The shared supermux terminal engine: upstream Ghostty's libghostty-vt behind an owned " +
+                    "st_* C ABI, with Kotlin Multiplatform bindings for Android, the desktop JVM, iOS and " +
+                    "the browser. Ships prebuilt native libraries; see META-INF/dev.supermux.terminal/ " +
+                    "THIRD-PARTY-NOTICES.md for the licences of the bundled object code.",
+            )
+            url.set("https://github.com/UstaLabs/supermux")
+            licenses {
+                license {
+                    name.set("MIT License")
+                    url.set("https://github.com/UstaLabs/supermux/blob/main/LICENSE")
+                    distribution.set("repo")
+                }
+                license {
+                    name.set("MIT License (bundled Ghostty / libghostty-vt)")
+                    url.set("https://github.com/ghostty-org/ghostty/blob/main/LICENSE")
+                    distribution.set("repo")
+                    comments.set(
+                        "The published artifacts contain compiled Ghostty code and its dependencies " +
+                            "(uucode, Wuffs, simdutf, Google Highway, Zig compiler_rt). Full notices: " +
+                            "META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md",
+                    )
+                }
+            }
+            developers {
+                developer {
+                    id.set("ahmethuseyindok")
+                    name.set("Ahmet Hüseyin Dok")
+                }
+            }
+            scm {
+                url.set("https://github.com/UstaLabs/supermux")
+                connection.set("scm:git:https://github.com/UstaLabs/supermux.git")
+                developerConnection.set("scm:git:git@github.com:UstaLabs/supermux.git")
+            }
+        }
+    }
+}
+
+// Publishing NEVER produces a package whose native artifacts are missing or stale: every publish
+// task runs the gate of its profile first (release = all targets, dev = everything this host can
+// build). The ABI manifest inside the artifacts then names exactly what is in them.
+val publicationGate = if (publishProfile == "release") verifyNativeArtifacts else verifyNativeArtifactsForHost
+tasks.withType<AbstractPublishToMaven>().configureEach { dependsOn(publicationGate) }
+tasks.withType<GenerateModuleMetadata>().configureEach { dependsOn(publicationGate) }
