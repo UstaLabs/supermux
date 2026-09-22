@@ -36,3 +36,7 @@ include(":web")
 // The shared terminal engine (libghostty-vt + Kotlin contract). Self-contained: depends on no other
 // module here, so it can be published on its own later (dev.supermux.terminal:terminal-core).
 include(":terminal-core")
+// The shared Compose terminal surface (grid painting, geometry, input) on top of :terminal-core.
+// Depends on nothing else here either, so the pair can be published together
+// (dev.supermux.terminal:terminal-compose).
+include(":terminal-compose")

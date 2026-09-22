@@ -33,12 +33,16 @@ cannot have quietly used a project dependency, a cached snapshot or a remote art
 | check | source set | proves | runs here |
 |---|---|---|---|
 | `PackagedJvmEngineTest.theApiComesFromThePublishedJar` | jvmTest | the classes come from `terminal-core-jvm-<version>.jar` in the test repository, not from a project | yes |
-| `…noPartOfTheTerminalCoreBuildTreeIsOnTheClasspath` | jvmTest | no `terminal-core/src`, `build/gradle`, `build/native` or `build/wasm` entry is on the classpath, and `-Dsupermux.terminal.nativeLibrary` (the dev override) is unset | yes |
+| `…noPartOfTheTerminalCoreBuildTreeIsOnTheClasspath` | jvmTest | no `terminal-core/src`, `build/gradle`, `build/native` or `build/wasm` entry is on the classpath, and `-Dsupermux.terminal.nativeLibrary` (the dev override) is unset. **Tripwire, not proof**: Gradle can hand the JVM one synthetic jar whose manifest carries the real `Class-Path`, and then `java.class.path` shows only that jar | yes |
 | `…theNativeLibraryIsAPackagedResource` | jvmTest | the JNI library is a `jar:file:` resource of that jar and its bytes match the packaged `native.properties` (sha256 + size + ABI + version) | yes |
 | `…engineRunsTheSemanticFixtureFromTheExtractedPackagedLibrary` | jvmTest | the semantic fixture passes, and `/proc/self/maps` shows the ONLY `supermux_terminal` mapping is the file the loader extracted into this build's `build/terminal-native-cache/supermux-terminal/<version>/<sha256>/` | yes |
 | `PackagedAndroidArtifactTest` | jvmTest | the `…-android` AAR resolves by coordinates and carries `jni/arm64-v8a` + `jni/x86_64`, `classes.jar` with the Android binding, and the licence files. **Packaging only** — nothing Android is executed | yes |
 | `PackagedWasmEngineTest` | wasmJsTest | `TerminalRuntime.initialize()` + the semantic fixture in headless Chrome, against the `supermux-terminal.wasm` unpacked from the published klib | yes |
 | `PackagedIosEngineTest` | iosTest | the fixture on the iOS simulator, linked against the static archive inside the published Apple klib | no — Mac only, and needs a publish made on a Mac |
+
+The other three JVM checks do not read `java.class.path` at all — a class's code source, the
+`jar:file:` URL of the packaged resource and the `/proc/self/maps` mapping are all taken from what
+the JVM really loaded — so the synthetic-classpath caveat above does not weaken them.
 
 The fixture itself (`ConsumerFixture`, commonMain) is the same red-cell / wide-char / CSI 6n /
 resize sequence terminal-core's own `EngineContractTest` uses, so a green run means the *packaged*

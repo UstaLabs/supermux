@@ -21,7 +21,9 @@ plugins {
 // `:terminal-core:verifyNativeArtifacts` fails unless every release target is present and matches
 // its manifest (publishing depends on it).
 group = "dev.supermux.terminal"
-version = "0.1.0-dev.1"
+// `-Pterminal.version=` overrides it (a release build stamps the release number; the publish-guard
+// check uses it to exercise the release path without editing this file).
+version = providers.gradleProperty("terminal.version").orNull?.takeIf { it.isNotBlank() } ?: "0.1.0-dev.1"
 
 // `build/` is shared with the native scripts (native/build.sh, wasm/build.sh), which keep the
 // pinned Ghostty checkout, Zig caches and staged libraries there. Gradle gets its own
@@ -366,18 +368,74 @@ val buildHostKind: String = System.getProperty("os.name").orEmpty().lowercase().
     }
 }
 
+/** A version that is explicitly not final: only such a version may be published incomplete. */
+val versionIsPrerelease: Boolean = Regex("-(dev|snapshot)", RegexOption.IGNORE_CASE)
+    .containsMatchIn(version.toString())
+
+/** `-Pterminal.allowIncompleteReleasePublish=true`: the loud, deliberate escape hatch (see below). */
+val allowIncompleteReleasePublish: Boolean =
+    providers.gradleProperty("terminal.allowIncompleteReleasePublish").orNull?.toBoolean() == true
+
 /**
  * Publication profile. `release` demands **every** target — which no single machine can produce,
  * so a release jar is assembled from a Linux build tree plus the Mac-built `macos-*` dylibs and
- * `ios-*` archives copied into it (see VERIFICATION.md). `dev` (the default for a `-dev` version)
- * demands everything THIS host can build and lets the rest be absent; the artifacts then carry an
- * ABI manifest that names exactly which targets are inside. Override: `-Pterminal.publishProfile=`.
+ * `ios-*` archives copied into it (see VERIFICATION.md). `dev` (the default for a `-dev` /
+ * `-SNAPSHOT` version) demands everything THIS host can build and lets the rest be absent; the
+ * artifacts then carry an ABI manifest that names exactly which targets are inside.
+ * Override: `-Pterminal.publishProfile=dev|release`.
+ *
+ * **A release NUMBER may not quietly get the lenient gate.** Asking for `dev` on a version without
+ * a `-dev`/`-SNAPSHOT` qualifier fails the build, because it would mint real release coordinates
+ * whose missing targets are only visible inside abi-manifest.json. The escape hatch
+ * `-Pterminal.allowIncompleteReleasePublish=true` exists for a deliberate partial rebuild, and it
+ * is not quiet: a banner goes into the build log, the POM gets
+ * `<terminal.incompleteTargets>` + a description suffix, and the ABI manifest gets
+ * `incomplete_release: true` with the missing targets — so the ARTIFACT identifies itself.
  */
-val publishProfile: String = (
-    providers.gradleProperty("terminal.publishProfile").orNull
-        ?: if (version.toString().contains("-dev")) "dev" else "release"
-    ).lowercase().also {
-    require(it == "dev" || it == "release") { "terminal.publishProfile must be 'dev' or 'release', not '$it'" }
+val publishProfile: String = run {
+    val requested = providers.gradleProperty("terminal.publishProfile").orNull?.lowercase()
+    if (requested != null && requested != "dev" && requested != "release") {
+        throw GradleException("terminal.publishProfile must be 'dev' or 'release', not '$requested'")
+    }
+    val profile = requested ?: if (versionIsPrerelease) "dev" else "release"
+    if (profile == "dev" && !versionIsPrerelease && !allowIncompleteReleasePublish) {
+        throw GradleException(
+            "terminal-core: refusing the 'dev' publication profile for version '$version', which has no " +
+                "-dev/-SNAPSHOT qualifier. The dev profile only requires the targets THIS host can build, so " +
+                "it would publish release coordinates with missing native libraries.\n" +
+                "  * publish a release: drop -Pterminal.publishProfile (or pass =release) and have every " +
+                "target present (see verifyReleaseArtifacts)\n" +
+                "  * publish a pre-release: use a -dev / -SNAPSHOT version (-Pterminal.version=...)\n" +
+                "  * really want an incomplete build under this number: add " +
+                "-Pterminal.allowIncompleteReleasePublish=true, which stamps the POM and the ABI manifest " +
+                "so the artifact says so itself",
+        )
+    }
+    profile
+}
+
+/** True when the escape hatch above is actually in use (release number + lenient gate). */
+val incompleteReleasePublish: Boolean = publishProfile == "dev" && !versionIsPrerelease
+
+/**
+ * Targets with no staged library, by file existence only (no hashing) — enough to stamp the POM at
+ * configuration time. The authoritative, hash-checked list is in the ABI manifest.
+ */
+fun absentTargets(): List<String> {
+    val missing = allNativeTargets.filterNot { (t, lib) -> File(nativeBuildDir, "$t/lib/$lib").isFile }.keys.toMutableList()
+    if (!File(wasmBuildDir, wasmModuleName).isFile) missing += "wasm32"
+    return missing.sorted()
+}
+
+if (incompleteReleasePublish) {
+    logger.warn(
+        "\n" + "=".repeat(100) +
+            "\nterminal-core: INCOMPLETE RELEASE PUBLISH. Version '$version' has no -dev/-SNAPSHOT qualifier, " +
+            "but -Pterminal.allowIncompleteReleasePublish=true selected the host-only gate." +
+            "\n  Targets with no native library in this build: ${absentTargets().joinToString().ifEmpty { "(none)" }}" +
+            "\n  The POM and dev/supermux/terminal/abi-manifest.json are stamped accordingly." +
+            "\n" + "=".repeat(100),
+    )
 }
 
 /** Targets a publish of [profile] must contain; wasm32 is always required (it is host-independent). */
@@ -439,6 +497,36 @@ val verifyNativeArtifactsForHost = registerVerifyTask(
     "Fail unless every native library THIS host can build is present and matches its manifest.",
 )
 
+/**
+ * THE entry point for release packaging (Plan 4 and any hand-assembled artifact tree must call it).
+ *
+ * Why it exists: the gates below hang off the `publish*` tasks, so anyone who runs `jvmJar` /
+ * `bundleReleaseAar` / `assemble` and copies the outputs by hand gets NO verification at all —
+ * plain `assemble` happily produces a jar with three of five desktop targets in it. This task
+ * verifies the full release set FIRST and only then builds the artifacts, so "assemble the release"
+ * and "prove the release is complete" are one command.
+ */
+val verifyReleaseArtifacts = tasks.register("verifyReleaseArtifacts") {
+    group = "verification"
+    description = "Release packaging entry point: verify ALL targets, then assemble the artifacts."
+    dependsOn(verifyNativeArtifacts)
+    dependsOn("assemble")
+    val profile = publishProfile
+    val pkgVersion = version.toString()
+    doLast {
+        // The artifacts just built were stamped with whatever profile is in effect; a release tree
+        // must not be stamped `dev`.
+        if (profile != "release") {
+            throw GradleException(
+                "terminal-core: verifyReleaseArtifacts built artifacts stamped with the '$profile' profile " +
+                    "(version '$pkgVersion'). Release packaging must run with the release profile: use a " +
+                    "release version number, or pass -Pterminal.publishProfile=release.",
+            )
+        }
+        logger.lifecycle("terminal-core: release artifacts assembled from a fully verified native tree.")
+    }
+}
+
 // ---------------------------------------------------------------- publishing ----------------
 
 // The ABI manifest that ships inside the artifacts: which st_* ABI they speak, which Ghostty/Zig
@@ -457,6 +545,7 @@ val generateAbiManifest by tasks.registering {
     val pkgName = project.name
     val abiVersion = nativeAbiVersion
     val profile = publishProfile
+    val incompleteRelease = incompleteReleasePublish
     val required = requiredTargets(publishProfile).keys
     val out = abiManifestFile
     inputs.files(targets.flatMap { (t, lib) -> listOf(File(root, "$t/lib/$lib"), File(root, "$t/manifest.json")) })
@@ -518,7 +607,13 @@ val generateAbiManifest by tasks.registering {
             "zig_version" to reference?.get("zig_version"),
             "required_targets" to (required.sorted() + "wasm32"),
             "targets" to entries.sortedBy { it["target"].toString() },
+            // `complete` = every target this package can carry is inside this build.
+            "complete" to missing.isEmpty(),
             "missing_targets" to missing.sorted(),
+            // Only true when a release-numbered version was published with the host-only gate via
+            // -Pterminal.allowIncompleteReleasePublish: the artifact says so about itself.
+            "incomplete_release" to incompleteRelease,
+            "incomplete_targets" to if (incompleteRelease) missing.sorted() else emptyList(),
             "licenses" to listOf("META-INF/dev.supermux.terminal/LICENSE", "META-INF/dev.supermux.terminal/THIRD-PARTY-NOTICES.md"),
         )
         val file = out.get().asFile
@@ -568,12 +663,27 @@ publishing {
     publications.withType<MavenPublication>().configureEach {
         pom {
             name.set("supermux terminal-core")
-            description.set(
+            val baseDescription =
                 "The shared supermux terminal engine: upstream Ghostty's libghostty-vt behind an owned " +
                     "st_* C ABI, with Kotlin Multiplatform bindings for Android, the desktop JVM, iOS and " +
                     "the browser. Ships prebuilt native libraries; see META-INF/dev.supermux.terminal/ " +
-                    "THIRD-PARTY-NOTICES.md for the licences of the bundled object code.",
-            )
+                    "THIRD-PARTY-NOTICES.md for the licences of the bundled object code."
+            // Self-identifying artifacts: the profile is always stamped, and an incomplete release
+            // build (the escape hatch) also names its missing targets in the POM itself, not only
+            // inside abi-manifest.json.
+            properties.put("terminal.publishProfile", publishProfile)
+            properties.put("terminal.abiVersion", nativeAbiVersion.toString())
+            if (incompleteReleasePublish) {
+                val absent = absentTargets()
+                properties.put("terminal.incompleteTargets", absent.joinToString(","))
+                description.set(
+                    "$baseDescription INCOMPLETE BUILD: this release-numbered artifact was published with " +
+                        "-Pterminal.allowIncompleteReleasePublish and carries NO native library for " +
+                        "${absent.joinToString()} — see dev/supermux/terminal/abi-manifest.json.",
+                )
+            } else {
+                description.set(baseDescription)
+            }
             url.set("https://github.com/UstaLabs/supermux")
             licenses {
                 license {

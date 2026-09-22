@@ -23,7 +23,7 @@ wasm module has **no imports at all**.
 | `base64.o`, `codepoint_width.o`, `index_of.o`, `vt.o`, `libghostty-vt-static_zcu.o` | Ghostty (`libghostty-vt`) | MIT |
 | (inside `libghostty-vt-static_zcu.o`) | uucode 0.2.0 | MIT |
 | `wuffs-v0.4.o` | Wuffs | MIT *or* Apache-2.0 (MIT taken here) |
-| `simdutf.o` | simdutf 5.2.8 | Apache-2.0 *or* MIT |
+| `simdutf.o` | simdutf 5.2.8 | MIT *or* Apache-2.0 (MIT taken here) |
 | `libhighway_zcu.o`, `per_target.o`, `targets.o`, `abort.o` | Google Highway 1.2.0 | Apache-2.0 (some files BSD-3-Clause) |
 | `compiler_rt.o` | Zig 0.16.0 `compiler_rt` | MIT |
 | `w00_terminal_bridge.o` | this package (`native/src/terminal_bridge.c`) | MIT |
@@ -144,14 +144,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-## 4. simdutf 5.2.8 — Apache-2.0 or MIT
+## 4. simdutf 5.2.8 — MIT or Apache-2.0
 
 <https://github.com/simdutf/simdutf>, vendored inside the Ghostty checkout at
 `pkg/simdutf/vendor/simdutf.{h,cpp}` (amalgamated, auto-generated 2026-04-21).
-Ghostty's vendored copy carries no separate `LICENSE` file; upstream simdutf is
-dual-licensed Apache-2.0 / MIT ("Copyright 2021 The simdutf authors"). The Apache-2.0
-text is reproduced in the appendix below; the MIT text is identical in substance to the
-ones above.
+Ghostty's vendored copy carries no `LICENSE` file of its own; upstream simdutf at tag
+`v5.2.8` ships **both** `LICENSE-MIT` and `LICENSE-APACHE`, so it is dual-licensed and
+this distribution takes the MIT option (text below, verbatim from that tag). simdutf's
+copy of the Apache-2.0 appendix fills the boilerplate in with "Copyright 2020 The simdutf
+authors"; its MIT file says 2021 — both are upstream's own wording.
+
+```
+Copyright 2021 The simdutf authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ## 5. Google Highway 1.2.0 — Apache-2.0 (parts BSD-3-Clause)
 
@@ -191,11 +213,56 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## 6. Zig 0.16.0 `compiler_rt` — MIT
 
-<https://ziglang.org>. `compiler_rt.o` (compiler intrinsics) comes from the Zig
-standard library, which is MIT ("The MIT License (Expat), Copyright (c) Zig
-contributors"); parts of Zig's `compiler_rt` are derived from LLVM's compiler-rt, which
-is licensed Apache-2.0 **with** the LLVM exception. The Zig toolchain itself is only a
-build tool and is not redistributed here.
+<https://ziglang.org>. `compiler_rt.o` (compiler intrinsics) comes from the Zig standard
+library. Parts of Zig's `compiler_rt` are derived from LLVM's compiler-rt, which is
+licensed Apache-2.0 **with** the LLVM exception. The Zig toolchain itself is only a build
+tool and is not redistributed here; only these intrinsics are.
+
+```
+The MIT License (Expat)
+
+Copyright (c) Zig contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+---
+
+## Provenance of these texts
+
+Every licence text above was taken from the pinned source that actually went into the
+build (the Ghostty checkout at its pinned commit, or the content-hash-verified tarball in
+Zig's package cache), and then **independently re-fetched from upstream and diffed** on
+2026-09-22. All five quoted blocks are byte-identical to upstream; no discrepancy was
+found.
+
+| text | upstream revision it was verified against | how |
+|---|---|---|
+| Ghostty MIT | `ghostty-org/ghostty@22391ed6491f2924361dcad1f9a9176a390fd20f` | raw.githubusercontent at the pinned SHA — identical to the local checkout |
+| uucode MIT | `jacobsandlund/uucode@9d55524551411b493cca41ca06363625d90aff1e` | raw.githubusercontent at the pinned SHA — identical to the packaged tarball |
+| Wuffs MIT | `google/wuffs`, `LICENSE` on `main` | GitHub has no raw view for the pinned snapshot commit `7411f488fe2e2c205c3d3b3d28638b7356522930`; the branch text is identical to the pinned tarball's `LICENSE`, which is what the build used |
+| simdutf MIT | `simdutf/simdutf@v5.2.8`, `LICENSE-MIT` | fetched at the exact tag; the tag also carries `LICENSE-APACHE`, which is what makes the dual licence verifiable |
+| Google Highway Apache-2.0 + BSD-3 | `google/highway@66486a10623fa0d72fe91260f96c892e41aceb06` | raw.githubusercontent at the pinned SHA — identical to the packaged tarball; Highway's `LICENSE` **is** the Apache-2.0 appendix reproduced below |
+| Zig MIT | `ziglang/zig`, `LICENSE` on `master` | GitHub has no `0.16.0` tag yet; the text is identical to `LICENSE` inside the installed, sha256+minisign-verified Zig 0.16.0 toolchain |
+
+Re-running the check: fetch each URL above and `diff` it against the corresponding fenced
+block in this file (the Apache appendix is Highway's `LICENSE`).
 
 ---
 

@@ -775,6 +775,19 @@ of publishing a package that cannot start an engine.
 | `dev` (default while the version contains `-dev`) | `verifyNativeArtifactsForHost` | every target THIS host can build, plus `wasm32`. On Linux: `linux-x64`, `linux-arm64`, `windows-x64`, `android-arm64`, `android-x64`, `wasm32`. Targets it cannot build may be absent — but any artifact that IS present must still match its manifest |
 | `release` (a version without `-dev`, or `-Pterminal.publishProfile=release`) | `verifyNativeArtifacts` | ALL ten: the five desktop JVM libraries, both Android ABIs, both iOS archives and `wasm32` |
 
+`-Pterminal.publishProfile=dev` on a version **without** a `-dev`/`-SNAPSHOT` qualifier is refused:
+the lenient gate may not be forced onto release coordinates. The deliberate escape hatch
+`-Pterminal.allowIncompleteReleasePublish=true` prints a banner, stamps the POM
+(`<terminal.incompleteTargets>` + a description suffix) and sets `incomplete_release: true` in the
+ABI manifest, so the artifact says so itself. All four scenarios are asserted by
+`bash scripts/check-publish-guard.sh`.
+
+The gates hang off the `publish*` tasks only, so running `jvmJar` / `bundleReleaseAar` /
+`assemble` and copying the outputs by hand **bypasses them**. Release packaging must therefore go
+through **`./gradlew :terminal-core:verifyReleaseArtifacts`**, which verifies all ten targets,
+then assembles, then refuses a tree stamped with the `dev` profile. Full runbook:
+[`../VERIFICATION.md`](../VERIFICATION.md) §4.
+
 **A release publication cannot be produced by one machine.** `macos-x64` / `macos-arm64`
 dylibs are linked by ld64 and the `ios-*` archives need Xcode's SDK, so they only exist on
 a Mac; `windows-x64` and the Android ABIs are cross-built on Linux. A release therefore

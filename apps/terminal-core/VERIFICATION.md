@@ -4,7 +4,8 @@ What has actually been built, run and measured for `dev.supermux.terminal:termin
 `0.1.0-dev.1`, and — just as important — what has **not**. A target is called *supported* only
 where a test executed on it. Everything else says "built, not runtime-tested" with the reason.
 
-Recorded **2026-09-22** at commit `d9927005` on branch `mux/supermux-54`.
+Recorded **2026-09-22** on branch `mux/supermux-54` (base commit `d9927005`; the follow-up
+review fixes of §4 are included).
 Design and contracts: [`native/README.md`](native/README.md). Consumer checks:
 [`consumer-smoke/README.md`](consumer-smoke/README.md).
 
@@ -21,6 +22,7 @@ Design and contracts: [`native/README.md`](native/README.md). Consumer checks:
 | Linux build host | x86_64, Ubuntu, glibc 2.43, kernel 7.0.0-31; JDK 17.0.20 |
 | Mac build host | `aarch64-macos` (macOS 26.6 / Darwin 25.6.0), Xcode 26.5, JDK 17 |
 | Pin enforcement | `native/upstream.lock.json` + `build.sh` refuse a checkout that is not exactly the pinned commit or that has local modifications; every dependency is content-hash verified by Zig |
+| Licences | `LICENSE` (MIT) + `THIRD-PARTY-NOTICES.md`, whose five quoted texts were **re-fetched from upstream at the pinned revisions on 2026-09-22 and diffed — all byte-identical**; the provenance table in that file records the exact revision and method per text |
 
 Per-artifact provenance ships **inside** the package as
 `dev/supermux/terminal/abi-manifest.json` (jvm jar + wasm klib): ABI version, Ghostty commit, Zig
@@ -54,15 +56,15 @@ Not verified anywhere yet: **Safari/WebKit** (Plan 4), any **Android device**, a
 
 | coordinate | artifact | bytes | sha256 (first 16) |
 |---|---|---|---|
-| `dev.supermux.terminal:terminal-core:0.1.0-dev.1` | `.jar` (metadata klib) | 21,281 | `6d0d22bd1b49a13c` |
-| | `-sources.jar` | 31,206 | `b1ad03a7827b586b` |
-| | `.module` / `.pom` | 11,711 / 2,636 | — |
-| `…:terminal-core-jvm:0.1.0-dev.1` | `.jar` | **2,864,845** | `48d5dcb4d9b160bf` |
-| | `-sources.jar` | 33,783 | `d2a988b4bb9cdfaa` |
-| `…:terminal-core-android:0.1.0-dev.1` | `.aar` | **1,801,129** | `75a4205b1f0d876d` |
-| | `-sources.jar` | 29,206 | `91fb1737658e810d` |
-| `…:terminal-core-wasm-js:0.1.0-dev.1` | `.klib` | **426,201** | `14bcf525f0aec6fa` |
-| | `-sources.jar` | 29,894 | `603cb0804fd00fdb` |
+| `dev.supermux.terminal:terminal-core:0.1.0-dev.1` | `.jar` (metadata klib) | 22,099 | `fbcab0e444c5d841` |
+| | `-sources.jar` | 31,993 | `0038c748a4fe2a0d` |
+| | `.module` / `.pom` | 11,711 / 2,775 | — |
+| `…:terminal-core-jvm:0.1.0-dev.1` | `.jar` | **2,866,147** | `47ccb7e410e6c65e` |
+| | `-sources.jar` | 34,570 | `958b89d8d16cbe86` |
+| `…:terminal-core-android:0.1.0-dev.1` | `.aar` | **1,802,416** | `aba960a6b95107ee` |
+| | `-sources.jar` | 29,993 | `2fbc8abd8cfc7157` |
+| `…:terminal-core-wasm-js:0.1.0-dev.1` | `.klib` | **427,960** | `c6761d2fda430a5a` |
+| | `-sources.jar` | 30,681 | `0d9f03f2b3cdc98f` |
 
 Those hashes are **stable**: two full `--rerun-tasks` publishes of the identical tree produced
 byte-identical jars, aar and klib. That needed `isPreserveFileTimestamps = false` +
@@ -70,8 +72,9 @@ byte-identical jars, aar and klib. That needed `isPreserveFileTimestamps = false
 of the same tree differed in every archive except the metadata jar.
 
 Every jar and the AAR carry `META-INF/dev.supermux.terminal/LICENSE` (1,075 B) and
-`THIRD-PARTY-NOTICES.md` (20,938 B); the jvm jar and the wasm klib also carry
-`dev/supermux/terminal/abi-manifest.json` (3,189 B).
+`THIRD-PARTY-NOTICES.md` (25,015 B); the jvm jar and the wasm klib also carry
+`dev/supermux/terminal/abi-manifest.json` (3,289 B). Every POM carries
+`<terminal.publishProfile>` and `<terminal.abiVersion>` (§4).
 
 ### Native payload inside those artifacts (this dev publish)
 
@@ -106,6 +109,58 @@ build failure rather than an artifact.
 A *stale* artifact (bytes not matching its `manifest.json`, or a different `abi_version`) fails
 **both** profiles, even for an optional target.
 
+### The lenient gate cannot be forced onto a release number
+
+`-Pterminal.publishProfile=dev` on a version WITHOUT a `-dev`/`-SNAPSHOT` qualifier is refused
+outright — otherwise real release coordinates could be minted with missing targets, visible only
+deep inside `abi-manifest.json`. The deliberate escape hatch
+`-Pterminal.allowIncompleteReleasePublish=true` is not quiet: it prints a banner in the build log,
+stamps the POM (`<terminal.incompleteTargets>` plus an "INCOMPLETE BUILD: … carries NO native
+library for …" suffix on the description) and sets `incomplete_release: true` +
+`incomplete_targets: [...]` in the ABI manifest, so the **artifact identifies itself**. Every POM
+also carries `<terminal.publishProfile>` and `<terminal.abiVersion>`.
+
+Checked by `bash apps/terminal-core/scripts/check-publish-guard.sh` (log:
+`build/publish-guard-check.log`), which drives the real build through four scenarios and asserts
+the outcome, the log text and the manifest fields:
+
+| scenario | expected | actual |
+|---|---|---|
+| `0.1.0-dev.1`, no profile property | dev profile, host gate passes | **OK**, manifest `profile: dev`, `incomplete_release: false` |
+| `-Pterminal.version=1.0.0 -Pterminal.publishProfile=dev` | **refused** | **OK** — "refusing the 'dev' publication profile for version '1.0.0'" |
+| `-Pterminal.version=1.0.0`, default profile | release gate, fails here | **OK** — names the missing Mac-only targets |
+| `1.0.0` + `-Pterminal.allowIncompleteReleasePublish=true` | allowed, loud, stamped | **OK** — banner printed; manifest `incomplete_release: true`, `incomplete_targets: [ios-arm64, ios-simulator-arm64, macos-arm64, macos-x64]` |
+
+### Where the gate does NOT reach
+
+The gates hang off the publication tasks (`AbstractPublishToMaven`, `GenerateModuleMetadata`).
+**Running `jvmJar`, `bundleReleaseAar` or `assemble` and copying the outputs by hand bypasses them
+entirely** — plain `assemble` will happily build a jar holding three of the five desktop targets,
+and nothing complains. That matters because release packaging is exactly a hand-assembled tree.
+
+The entry point that closes it is `:terminal-core:verifyReleaseArtifacts`: it verifies the **full**
+release set first, then runs `assemble`, and finally fails if the artifacts it just built were
+stamped with the `dev` profile. Plan 4's packaging (and any other process that ships these
+artifacts without going through `publish*`) must call that task rather than `assemble`.
+
+### Release runbook (not yet exercised end to end)
+
+1. On the **Linux** host: `native/build.sh` for `linux-x64`, `linux-arm64`, `windows-x64`,
+   `android-arm64`, `android-x64`, and `wasm/build.sh`.
+2. On the **Mac**: `native/build.sh` for `macos-x64`, `macos-arm64`, `ios-arm64`,
+   `ios-simulator-arm64` (dylibs need ld64, the iOS archives need Xcode's SDK).
+3. Copy the Mac's `build/native/{macos-x64,macos-arm64,ios-arm64,ios-simulator-arm64}/` directories
+   (library + `manifest.json`) into the Linux tree. Every copied file's sha256 is re-checked
+   against its manifest on arrival by the gate — a truncated or mismatched copy fails.
+4. `./gradlew :terminal-core:verifyReleaseArtifacts -Pterminal.version=<release>` — verifies all
+   ten targets, then assembles.
+5. `./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository -Pterminal.version=<release>`
+   (the release profile is implied by a version without `-dev`), then run `consumer-smoke` against
+   that repository.
+6. Apple publications only exist when step 5 runs on a **Mac** (their Kotlin targets are disabled
+   on Linux), so a complete set of coordinates needs the Mac to publish too. That asymmetry is
+   untested — see §9.
+
 **A release package cannot be produced on one machine.** macOS dylibs must be linked by ld64 and
 the iOS archives need Xcode's SDK; Windows and Android are cross-built on Linux. A release
 therefore means: build the Linux-side targets here, build `macos-*` + `ios-*` on the Mac, copy the
@@ -135,7 +190,7 @@ consumer-smoke: packaged linux-x64/libsupermux_terminal_jni.so = 2395600 bytes,
 consumer-smoke: red/wide/DSR/resize OK (frame gen 7, 10x40)
 consumer-smoke: mapped native library = …/consumer-smoke/build/terminal-native-cache/
                 supermux-terminal/0.1.0-dev.1/2bf7b385…ab243/libsupermux_terminal_jni.so
-consumer-smoke(android): aar = …/terminal-core-android-0.1.0-dev.1.aar (1801129 bytes)
+consumer-smoke(android): aar = …/terminal-core-android-0.1.0-dev.1.aar (1802416 bytes)
 consumer-smoke(android): jni/arm64-v8a/libsupermux_terminal_jni.so = 1906880 bytes
 consumer-smoke(android): jni/x86_64/libsupermux_terminal_jni.so = 2076992 bytes
 ```
@@ -146,6 +201,11 @@ inside it; `terminal-core/src`, `build/gradle`, `build/native` and `build/wasm` 
 the classpath and `-Dsupermux.terminal.nativeLibrary` is unset; and `/proc/self/maps` shows the
 only `supermux_terminal` mapping is the file the loader extracted into the consumer's own
 `build/terminal-native-cache/supermux-terminal/<version>/<sha256>/`.
+
+Caveat on the third of those: it reads `java.class.path`, which Gradle may collapse into a single
+synthetic jar whose manifest holds the real `Class-Path` — the list would then look clean whether
+or not it is. Treat it as a tripwire. The other three read what the JVM actually loaded (a class's
+code source, the resource URL, the process's own memory map) and are not affected.
 
 The Android row is a **packaging** check (AAR contents), not a runtime one — nothing Android
 executes; android-arm64 / android-x64 stay "not runtime-tested" until a device run (Plan 3).
@@ -203,8 +263,8 @@ under the 8 MiB envelope cap that `_Static_assert` guarantees.
 | `:terminal-core:jvmTest` | macOS arm64 (JDK 17) | **60** | 0 | 2026-09-22 19:38 — **Task-5 tree, no `TerminalSession` suites** |
 | `:terminal-core:iosSimulatorArm64Test` | iOS simulator (arm64) | **38** | 0 | 2026-09-22 19:37 — same gap |
 | `:terminal-core:testDebugUnitTest` / `testReleaseUnitTest` | Android host JVM | **disabled** | — | `System.loadLibrary` cannot find a `.so` that only exists inside an APK; the same JNI binding is covered by `jvmTest` |
-| `consumer-smoke:jvmTest` | linux-x64, published artifacts | **5** | 0 | 2026-09-22 22:00 |
-| `consumer-smoke:wasmJsBrowserTest` | headless Chrome 148, published klib | **1** | 0 | 2026-09-22 22:01 |
+| `consumer-smoke:jvmTest` | linux-x64, published artifacts | **5** | 0 | 2026-09-22 23:19 |
+| `consumer-smoke:wasmJsBrowserTest` | headless Chrome 148, published klib | **1** | 0 | 2026-09-22 23:20 |
 
 Linux 86 = EngineContractTest 12, TerminalSessionTest 23, TerminalSessionStressTest 3,
 JvmNativeLoaderTest 13, ViewportCodecTest 11, TerminalTypesTest 8, TerminalConstantsTest 7,
@@ -221,6 +281,8 @@ Build outputs are under `apps/terminal-core/build/` (git-ignored, i.e. local to 
 | `./gradlew :terminal-core:jvmTest` | `build/task7-jvmTest.log`, `build/gradle/test-results/jvmTest/*.xml` |
 | `./gradlew :terminal-core:wasmJsBrowserTest` | `build/task7-wasmTest.log`, `build/gradle/test-results/wasmJsBrowserTest/*.xml` |
 | `./gradlew :terminal-core:verifyNativeArtifacts[ForHost]` | console (both outcomes quoted in §4) |
+| `./gradlew :terminal-core:verifyReleaseArtifacts` | console; the release packaging entry point (§4) |
+| `bash scripts/check-publish-guard.sh` | `build/publish-guard-check.log` (four scenarios, §4) |
 | `./gradlew :terminal-core:publishAllPublicationsToLocalTestRepository` | `build/test-repository/`, `build/gradle/generated/packageMetadata/dev/supermux/terminal/abi-manifest.json` |
 | `./gradlew -p terminal-core/consumer-smoke jvmTest` | `build/consumer-smoke-jvm.log`, `consumer-smoke/build/test-results/jvmTest/*.xml` |
 | `./gradlew -p terminal-core/consumer-smoke wasmJsBrowserTest` | `build/consumer-smoke-wasm.log`, `consumer-smoke/build/test-results/wasmJsBrowserTest/*.xml` |
@@ -239,8 +301,10 @@ All Gradle runs on this shared host use
 3. **macos-x64 from Java**: no x86_64 JVM exists here; the packaged dylib is Rosetta-tested from C
    only. There is also no `macos-x64` manifest in `build/mac-evidence/manifests/` (only
    `macos-arm64`, `ios-arm64`, `ios-simulator-arm64`), so a release assembly must fetch it fresh.
-4. **No release publication has ever been assembled**: the combined Linux + Mac artifact tree and
-   `-Pterminal.publishProfile=release` are specified (§4) and gated, but untried end to end.
+4. **No release publication has ever been assembled**: the runbook in §4 (combined Linux + Mac
+   artifact tree, `verifyReleaseArtifacts`, a release version number) is specified, gated and its
+   guards are tested, but the full sequence has never been run — in particular the fact that the
+   Apple publications can only be produced by a publish run ON the Mac.
 5. **Safari/WebKit untested** (Plan 4). The loader only needs `fetch`, `WebAssembly.compile*`,
    BigInt and `Uint8Array`, but Kotlin/Wasm itself requires WasmGC (Safari 18.2+).
 6. **Browser consumers need the two-file re-export** (§5). Until a host app does it, bundling fails.

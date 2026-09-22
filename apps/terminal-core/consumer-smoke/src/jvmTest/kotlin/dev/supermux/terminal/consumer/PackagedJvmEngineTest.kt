@@ -18,6 +18,14 @@ import kotlin.test.assertTrue
  *
  * The provenance assertions are the point of this suite: without them a green semantic fixture
  * could just as well have loaded `build/native/linux-x64/lib/libsupermux_terminal_jni.so`.
+ *
+ * CAVEAT on one of the four: [noPartOfTheTerminalCoreBuildTreeIsOnTheClasspath] reads
+ * `java.class.path`, which Gradle may replace with a single synthetic jar whose manifest holds the
+ * real Class-Path (it does that when the command line would be too long). The list would then look
+ * empty of build-tree entries even if it were not, so treat that check as a tripwire, not a proof.
+ * The other three do not depend on it: the code source of a loaded class, the `jar:file:` URL of
+ * the packaged resource, and the mapping in `/proc/self/maps` are all read from what the JVM
+ * actually loaded.
  */
 class PackagedJvmEngineTest {
     private val version = System.getProperty("consumerSmoke.expectedVersion") ?: "0.1.0-dev.1"
